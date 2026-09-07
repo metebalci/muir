@@ -158,6 +158,36 @@ impl Turn {
         self.frames.retain(|&(_, _, e)| e + CBLBSY_OFF_NS >= t);
         starts
     }
+
+    /// Every terminal count due at or before `now` at once, when a count
+    /// can do nothing but arithmetic: returns whether it took any.
+    ///
+    /// With no frame on the cable there is nothing to load the counter
+    /// from and `-CBLBSY` is down, and with nothing ready to send a carry
+    /// out of the low byte starts nothing.  So all a count does is toggle
+    /// `Q` and, on the counts that leave it set, take the low byte down
+    /// one --- which over a run of `n` counts is `Q` toggled `n` times and
+    /// the byte down by however many of them left `Q` set.  Nothing can
+    /// observe the counts in between: what the counter holds is read only
+    /// through when a frame starts, and a frame cannot start from here.
+    ///
+    /// This is worth doing because the count is due most of the time.
+    /// [`TURN_TC_NS`] is 500 ns against a microcycle of about 180, so an
+    /// engine calling [`Interface::advance`] every microcycle takes a
+    /// terminal count about twice every five of them whatever else is
+    /// happening.  The unit tests below hold a batched run to a stepped
+    /// one and hold the refusals to refusing.
+    fn idle_run(&mut self, now: u64) -> bool {
+        if !self.frames.is_empty() || self.ready.is_some() || self.next_tc() > now {
+            return false;
+        }
+        let n = (now - self.next_tc()) / TURN_TC_NS + 1;
+        let down = if self.q { n / 2 } else { n.div_ceil(2) };
+        self.low = self.low.wrapping_sub(down as u8);
+        self.q ^= n % 2 == 1;
+        self.taken += n;
+        true
+    }
 }
 
 pub struct Interface {
@@ -189,6 +219,14 @@ pub struct Interface {
     turn: Turn,
     /// When the cable was last looked at.
     polled: u64,
+    /// The earliest instant anything this interface keeps time for can
+    /// happen, as [`Interface::advance`] last worked it out: its turn
+    /// timer's next terminal count, the cable's next due instant, the
+    /// next frame landing, Transmit Done, and the next look at the cable.
+    /// An `advance` short of it has nothing to do and says so at once,
+    /// rather than asking all five again.  `None` is "not known", which
+    /// is what everything that can bring an event forward leaves it as.
+    next_event: Option<u64>,
     /// The time as last advanced to, for what the registers show of the
     /// cable at the instant they are read.
     now: u64,
@@ -221,6 +259,7 @@ impl Clone for Interface {
             turn: self.turn.clone(),
             polled: self.polled,
             now: self.now,
+            next_event: None,
             ether: None,
             trace: self.trace,
         }
@@ -258,6 +297,7 @@ impl Interface {
             turn: Turn::new(powered_at),
             polled: powered_at,
             now: powered_at,
+            next_event: None,
             ether,
             trace,
         }
@@ -274,6 +314,7 @@ impl Interface {
     /// The cable, to be configured: [`Ether::keep_log`] is off by default,
     /// and a test that reads the log turns it on through here.
     pub fn ether_mut(&mut self) -> Option<&mut Ether> {
+        self.invalidate();
         self.ether.as_deref_mut()
     }
 
@@ -282,6 +323,7 @@ impl Interface {
     pub fn plug(&mut self, mut ether: Ether) {
         ether.attach_board(self.address);
         self.ether = Some(Box::new(ether));
+        self.invalidate();
     }
 
     /// The CSR as read: AIM-628 §7's bits.
@@ -327,8 +369,17 @@ impl Interface {
     /// Time passes to `now`, an event at a time in their order: the
     /// cable's, the turn timer's terminal counts, frames landing, Transmit
     /// Done; then a look at the cable when one is owed.
+    ///
+    /// The engines call this every microcycle, so it says as early as it
+    /// can that there is nothing to do: `next_event` is the
+    /// earliest of the five instants below as they last stood, and an
+    /// `advance` short of it returns without asking any of them again.
+    /// Everything that can bring one of the five forward leaves it `None`.
     pub fn advance(&mut self, now: u64) {
         self.now = self.now.max(now);
+        if self.next_event.is_some_and(|t| now < t) {
+            return;
+        }
         loop {
             let tc = self.turn.next_tc();
             let cable = self.ether.as_ref().and_then(|e| e.next_due());
@@ -339,6 +390,16 @@ impl Interface {
                 .filter(|&t| t <= now)
                 .min();
             let Some(t) = due else { break };
+            // A run of terminal counts is arithmetic and nothing else:
+            // [`Turn::idle_run`] takes it whole, stopping short of
+            // whatever else is coming.  Another event at `t` itself
+            // leaves nothing to batch --- the run would have to end at
+            // `t - 1`, before the count --- so `idle_run` refuses and the
+            // arms below take the instant as they always did.
+            let others = [cable, landing, self.tdone_at].into_iter().flatten().min();
+            if tc == t && self.turn.idle_run(others.map_or(now, |u| u.saturating_sub(1).min(now))) {
+                continue;
+            }
             if cable == Some(t)
                 && let Some(e) = self.ether.as_mut()
             {
@@ -366,6 +427,23 @@ impl Interface {
             self.polled = now;
             self.take_from_cable();
         }
+        // The five, as they stand now.  The look at the cable is one of
+        // them: it is how a node with a frame to send is asked, so an
+        // interface with a cable is never left with nothing due.
+        let cable = self.ether.as_ref().and_then(|e| e.next_due());
+        let poll = self.ether.as_ref().map(|_| self.polled + POLL_NS);
+        self.next_event = [Some(self.turn.next_tc()), cable, poll, self.tdone_at]
+            .into_iter()
+            .flatten()
+            .chain(self.incoming.front().map(|&(t, _)| t))
+            .min();
+    }
+
+    /// Whatever the interface last worked out about when it is next due is
+    /// no longer to be trusted: something outside [`Interface::advance`]
+    /// has touched the cable, the buffers or the turn timer.
+    fn invalidate(&mut self) {
+        self.next_event = None;
     }
 
     /// What the cable has for this interface: frames that started, for the
@@ -508,6 +586,7 @@ impl Interface {
     /// A read of one of the registers at `now`.
     pub fn read(&mut self, uaddr: u32, now: u64) -> u16 {
         self.advance(now);
+        self.invalidate();
         match uaddr {
             interface::CSR => self.csr(),
             interface::MY_ADDRESS => self.address,
@@ -530,6 +609,7 @@ impl Interface {
     /// A write of one of the registers at `now`.
     pub fn write(&mut self, uaddr: u32, v: u16, now: u64) {
         self.advance(now);
+        self.invalidate();
         match uaddr {
             interface::CSR => {
                 self.csr = v & WRITABLE;
@@ -571,6 +651,7 @@ impl Interface {
     /// power up and Unibus Initialize."  The turn timer is not in it: the
     /// counter's clear is grounded and the divider runs free.
     pub fn reset(&mut self) {
+        self.invalidate();
         self.csr = 0;
         self.transmit_done = true;
         self.transmit_abort = false;
@@ -620,6 +701,7 @@ impl Interface {
             turn,
             polled,
             now: _,
+            next_event: _,
             ether: _,
             trace: _,
         } = self;
@@ -684,6 +766,7 @@ impl Interface {
         self.incoming = incoming;
         self.turn.load(r)?;
         self.polled = r.u64()?;
+        self.next_event = None;
         Ok(())
     }
 }
@@ -718,5 +801,79 @@ impl Turn {
             (0..n).map(|_| Ok((r.u64()?, r.u16()?, r.u64()?))).collect::<std::io::Result<_>>()?;
         self.ready = if r.bool()? { Some((r.u64()?, r.u16s()?)) } else { None };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quiet(q: bool, low: u8) -> Turn {
+        Turn { powered_at: 0, taken: 0, q, low, frames: Vec::new(), ready: None }
+    }
+
+    /// **A batched run of terminal counts is a stepped one.**
+    /// [`Turn::idle_run`] takes at once what [`Turn::tc`] takes one at a
+    /// time, and the two must leave `Q`, the counter's low byte and the
+    /// count taken exactly where the other does.  Held over both phases
+    /// of `Q`, the counter values either side of its wrap, and runs from
+    /// one count to a thousand --- more than the byte's own period, so
+    /// the wrap is crossed several times over.
+    #[test]
+    fn a_batched_run_of_terminal_counts_is_a_stepped_one() {
+        for q in [false, true] {
+            for low in [0u8, 1, 2, 127, 128, 254, 255] {
+                for n in [1u64, 2, 3, 4, 5, 17, 254, 255, 256, 257, 511, 512, 1_000] {
+                    let mut stepped = quiet(q, low);
+                    for _ in 0..n {
+                        let t = stepped.next_tc();
+                        assert_eq!(stepped.tc(t, 0o1440), None, "nothing ready, so nothing starts");
+                    }
+                    let mut batched = quiet(q, low);
+                    let until = batched.next_tc() + TURN_TC_NS * (n - 1);
+                    assert!(batched.idle_run(until), "{n} counts are due at {until}");
+                    assert_eq!(
+                        (batched.q, batched.low, batched.taken),
+                        (stepped.q, stepped.low, stepped.taken),
+                        "Q {q}, counter {low}, {n} counts"
+                    );
+                    assert!(batched.next_tc() > until, "and the run is over");
+                }
+            }
+        }
+    }
+
+    /// **A count that could do more than arithmetic is not batched.**
+    /// With a frame on the cable a count loads the counter from its
+    /// source and holds `Q` set rather than toggling it, and with a packet
+    /// ready a carry out of the low byte starts the transmitter: neither
+    /// is what [`Turn::idle_run`] does, so it must refuse and leave the
+    /// count to [`Turn::tc`].  A run refused changes nothing at all.
+    #[test]
+    fn a_run_is_refused_when_a_count_could_do_more_than_arithmetic() {
+        let far = TURN_FIRST_TC_NS + TURN_TC_NS * 1_000;
+        let heard = {
+            let mut t = quiet(false, 0);
+            t.frames.push((5_000, 0o3040, 15_000));
+            t
+        };
+        let ready = {
+            let mut t = quiet(false, 0);
+            t.ready = Some((5_000, vec![1, 2, 0o3040]));
+            t
+        };
+        for (what, start) in [("a frame on the cable", heard), ("a packet ready", ready)] {
+            let mut turn = start.clone();
+            assert!(!turn.idle_run(far), "{what}: the run must be refused");
+            assert_eq!(
+                (turn.q, turn.low, turn.taken),
+                (start.q, start.low, start.taken),
+                "{what}: and change nothing"
+            );
+        }
+        // And a count that is not due yet is not taken early.
+        let mut turn = quiet(false, 0);
+        assert!(!turn.idle_run(turn.next_tc() - 1));
+        assert_eq!(turn.taken, 0);
     }
 }

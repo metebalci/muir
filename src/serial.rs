@@ -624,7 +624,30 @@ impl Pci {
     }
 
     /// Time passes to `now`: characters finish leaving and arriving.
+    ///
+    /// A port with neither half in flight is left alone. With nothing in
+    /// the shift or holding registers, nothing being assembled, nothing
+    /// waiting on the cable and the modem lines where they were, there is
+    /// no character for the transmitter or the receiver to move and
+    /// `transmit` and `receive` can only reach their first
+    /// `break`. Saying so here rather than there is what matters: the
+    /// engines call this every microcycle, and working the frame's length
+    /// out --- [`Framing::frame_ns`], a multiply and a divide --- to
+    /// discover there is nothing to send was the largest single cost of a
+    /// port with nothing plugged into it. That the skipping changes
+    /// nothing is held by `tests/idle_polling.rs`, which runs a port at
+    /// two grains and compares, and by `tests/serial_cable.rs`, which
+    /// holds the model to the netlist board over the modem lines moving.
     pub fn advance(&mut self, now: u64) {
+        if self.shifting.is_none()
+            && self.thr.is_none()
+            && self.assembling.is_none()
+            && self.cable.inbound.is_empty()
+            && self.dsr() == self.dsr_was
+            && self.dcd() == self.dcd_was
+        {
+            return;
+        }
         let (dsr, dcd) = (self.dsr(), self.dcd());
         if dsr != self.dsr_was || dcd != self.dcd_was {
             self.dschg = true;
