@@ -254,12 +254,16 @@ fn mits_dip_censuses_agree() {
         ("memory", CADRM, ["cadrm", "mem.wls"]),
         ("I/O board", CADRIO, ["cadrio", "iob.wls"]),
         ("LISPM TV", LISPMTV, ["cadrtv", "lmtv4b.wls"]),
-        // The disk controller is the one board whose two MIT documents
-        // disagree: its census counts four devices its parts list does not
-        // stuff and the sheets do not draw. `dc.prt` and the drawings agree
-        // with each other at 171, so they are what muir follows, and the
-        // census is held here at its own figure rather than averaged away
-        // --- discrepancy 70.
+        // The disk controller's four are not a disagreement between MIT's
+        // documents. They are eight 75452 drivers in four sockets: `dc.prt`
+        // and `dc.stf` list `A02` and `A02@03`, `B01` and `B01@03`, `B03`
+        // and `B03@03`, `B05` and `B05@03`, and the netlist's designators
+        // drop MIT's `@nn`, so a count of board sites comes to four less
+        // than a count of devices. `dc.wls`'s own trailer settles it:
+        // `GRAND TOTAL = 188(171)` over `NUMBER IN PARENS IS REAL (.GE.14
+        // PINS) DIPS`, the same 171 `dc.prt` stuffs and the netlist has.
+        // The census also gives the 75452 as "15 sections, 8 dips, 1
+        // spare", which is those four sites again.
         ("disk controller", CADRDC, ["cadrdc", "dc.wls"]),
     ];
     let parsed: Vec<_> =
@@ -271,6 +275,8 @@ fn mits_dip_censuses_agree() {
         let census = support::dip_census(&support::mit_text(&list));
         let theirs: usize =
             census.iter().filter(|(kind, _)| !is_passive(kind)).map(|(_, n)| n).sum();
+        // The disk controller counts eight 75452s where the netlist has four
+        // sites; see the note above.
         let slack = usize::from(board == "disk controller") * 4;
         assert_eq!(
             theirs + switches,
