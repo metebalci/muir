@@ -234,6 +234,73 @@ fn the_time_is_asked_and_answered_on_both_alike() {
     assert_eq!(both(&mut b, &mut m, chaos::BIT_COUNT, None, "the count read out"), 0o7777);
 }
 
+/// **A collision aborts the transmission on both alike.** Both interfaces
+/// send the same packet; once both frames are on the cable, a transmitter
+/// that has not heard either cable starts the same frame on each, at the
+/// same instant. Both read Transmit Done with Transmit Abort, at the same
+/// poll, and neither received anything.
+#[test]
+fn a_collision_aborts_the_transmission_on_both_alike() {
+    let n = cadrio();
+    let mut b = board(&n);
+    let ether_for = || {
+        let mut e = Ether::new();
+        e.keep_log(true);
+        e.attach(Box::new(Capture::new(SERVER)));
+        e
+    };
+    b.plug_chaos(ether_for());
+    let mut m = Model::new(Some(ether_for()));
+    both(&mut b, &mut m, chaos::CSR, Some(csr::RESET), "reset");
+    b.run(b.now + 2_000);
+    m.run(b.now);
+    both(&mut b, &mut m, chaos::CSR, Some(csr::CLEAR_RECEIVER), "clear receiver");
+    let words = rfc_time(MY_ADDRESS, SERVER);
+    for &w in &words {
+        both(&mut b, &mut m, chaos::WRITE_BUFFER, Some(w), "a word in");
+    }
+    both(&mut b, &mut m, chaos::START, None, "START");
+    let t0 = b.now;
+    loop {
+        b.run(b.now + 1_000);
+        m.run(b.now);
+        let on_b = b.chaos.as_ref().unwrap().ether.busy(b.now);
+        let on_m = m.io.chaos.as_ref().unwrap().ether().unwrap().busy(b.now);
+        if on_b && on_m {
+            break;
+        }
+        assert!(b.now < t0 + 3_000_000, "both transmitted: board {on_b}, model {on_m}");
+    }
+    let at = b.now;
+    eprintln!("both frames on the cable {} ns after START", at - t0);
+    // For a third host, so that neither receiver has a say in this.
+    let other = rfc_time(SERVER, 0o3070);
+    b.chaos.as_mut().unwrap().ether.send_now(at, SERVER, other.clone());
+    m.io.chaos.as_mut().unwrap().ether_mut().unwrap().send_now(at, SERVER, other);
+    let ((tb, cb), (tm, cm)) = wait_for(&mut b, &mut m, csr::TRANSMIT_DONE, 3_000_000);
+    eprintln!("Transmit Done: board after {tb} ns ({cb:#08o}), model after {tm} ns ({cm:#08o})");
+    for ev in &m.io.chaos.as_ref().unwrap().ether().unwrap().log {
+        eprintln!("  model ether: {ev:?}");
+    }
+    assert!(cb & csr::TRANSMIT_ABORT != 0, "the board's transmission was aborted: {cb:#08o}");
+    // CRC Error is "only valid at two times: when the incoming packet
+    // buffer contains a fresh packet, and when the packet has been
+    // completely read out"; at this instant the board's receiver is in
+    // the wreckage and its check register says so, which the model does
+    // not keep, so the bit is left out of the comparison here.
+    let valid = !csr::CRC_ERROR;
+    assert_eq!(cm & valid, cb & valid, "the CSR at Transmit Done");
+    assert_eq!(tm, tb, "at the same poll on both");
+    // The other frame runs out; neither took it, and the CSRs agree whole.
+    b.run(b.now + 300_000);
+    m.run(b.now);
+    let c = both(&mut b, &mut m, chaos::CSR, None, "the CSR with the cable idle again");
+    assert_eq!(
+        c & (csr::RECEIVE_DONE | csr::TRANSMIT_DONE | csr::TRANSMIT_ABORT),
+        csr::TRANSMIT_DONE | csr::TRANSMIT_ABORT
+    );
+}
+
 /// **After Reset alone, before any Clear Receiver, does a packet for this
 /// address land?**  AIM-628 says the clear-receiver bit "enables the
 /// receiver to receive another packet"; whether a reset interface's

@@ -120,9 +120,12 @@ impl Decoder {
     }
 
     /// When the decoder next needs to be told the time: the sample due,
-    /// or the moment the line will have been idle long enough.
+    /// or the moment the line will have been idle long enough. A line
+    /// held high --- an abort signal --- is not idle and has no such
+    /// moment until it falls.
     pub fn next_due(&self) -> Option<u64> {
-        let idle = self.last_edge.filter(|_| self.cell.is_some()).map(|e| e + IDLE_NS);
+        let idle =
+            self.last_edge.filter(|_| self.cell.is_some() && !self.level).map(|e| e + IDLE_NS);
         match (self.sample, idle) {
             (Some(s), Some(i)) => Some(s.min(i)),
             (s, i) => s.or(i),

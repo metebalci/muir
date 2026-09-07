@@ -712,6 +712,108 @@ fn the_board_asks_the_time_and_is_answered() {
     assert!(!log.iter().any(|e| matches!(e, Event::Collision(_))), "no collision: {log:?}");
 }
 
+/// **The board aborts its transmission on interference.** With its frame
+/// on the cable, a transmitter that has not heard the cable starts
+/// another: the model's, at its own instant. The transceiver reports
+/// interference the moment both drive high, `COLLISION` is `TBUSY` with
+/// it (the 74S02 at LMMODU 0B08), the `ABORT` flip-flop at 0A09 takes it
+/// on `-FCLK^`, and from there the driver is off, `TABORTED` is up and
+/// Transmit Done comes: the CSR reads Transmit Done and Transmit Abort.
+/// The model transmitter stops too, [`ABORT_NS`] after the interference,
+/// and nothing whole was on the cable. The board's nets are watched
+/// through it, for the instants the behavioural interface is held to.
+#[test]
+fn the_board_aborts_its_transmission_on_interference() {
+    use muir::chaos::ether::{ABORT_NS, Capture, Ether, Event};
+    let n = cadrio();
+    let mut b = board(&n);
+    let mut ether = Ether::new();
+    ether.keep_log(true);
+    ether.attach(Box::new(Capture::new(0o3060)));
+    b.plug_chaos(ether);
+    on_the_cable(&mut b);
+    let words = rfc_time(MY_ADDRESS, 0o3060);
+    for &w in &words {
+        b.cycle(chaos::WRITE_BUFFER, Some(w));
+    }
+    let started = b.now;
+    b.cycle(chaos::START, None);
+    // Until the board's frame is on the cable.
+    while !b.chaos.as_ref().unwrap().ether.busy(b.now) {
+        b.run(b.now + 250);
+        assert!(b.now < started + 3_000_000, "the board transmitted");
+    }
+    let on = b.now;
+    eprintln!("the board's frame on the cable {} ns after START", on - started);
+    b.run(on + 5_000);
+    let at = b.now;
+    // For a third host, so that the board's receiver has no say in this.
+    b.chaos.as_mut().unwrap().ether.send_now(at, 0o3060, rfc_time(0o3060, 0o3070));
+    // The board's nets from there, as they change.
+    let names = ["'INTERFERENCE IN'", "COLLISION", "ABORT", "TBUSY", "TABORTED", "TDONE"];
+    let nets: Vec<_> = names.iter().map(|name| b.net(name)).collect();
+    let read = |b: &UnibusMaster| -> Vec<Level> { nets.iter().map(|&id| b.chip.net(id)).collect() };
+    let mut last = read(&b);
+    let mut driving = b.chaos.as_ref().unwrap().board_tx(&b.chip);
+    let mut seen = Vec::new();
+    while b.now < at + 20_000 {
+        b.run(b.now + 25);
+        let now = read(&b);
+        for (k, (was, is)) in last.iter().zip(&now).enumerate() {
+            if was != is {
+                eprintln!("  +{:>6} ns: {} {:?}", b.now - at, names[k], is);
+                seen.push((b.now - at, names[k], *is));
+            }
+        }
+        last = now;
+        let d = b.chaos.as_ref().unwrap().board_tx(&b.chip);
+        if d != driving {
+            eprintln!("  +{:>6} ns: the driver {}", b.now - at, if d { "on" } else { "off" });
+            driving = d;
+        }
+    }
+    for ev in &b.chaos.as_ref().unwrap().ether.log {
+        match ev {
+            Event::Sent(t, s, _) => eprintln!("  ether: {s:o} sent at +{}", *t as i64 - at as i64),
+            Event::Collision(t) => eprintln!("  ether: collision at +{}", *t as i64 - at as i64),
+            Event::Heard(t, f) => {
+                eprintln!("  ether: heard from {:o} at +{}", f.source, *t as i64 - at as i64)
+            }
+        }
+    }
+    let up = |name: &str| {
+        seen.iter().find(|&&(_, n, l)| n == name && l == Level::High).map(|&(t, _, _)| t)
+    };
+    let interference = up("'INTERFERENCE IN'").expect("the transceiver reported interference");
+    let abort = up("ABORT").expect("ABORT set");
+    let taborted = up("TABORTED").expect("TABORTED set");
+    let tdone = up("TDONE").expect("TDONE set");
+    eprintln!(
+        "interference at +{interference}, ABORT +{abort}, TABORTED +{taborted}, TDONE +{tdone}: \
+         TDONE {} ns after ABORT",
+        tdone - abort
+    );
+    assert!(
+        abort - interference <= 16 * ABORT_NS,
+        "ABORT within a few cells of the first interference: an edge of -FCLK^ found it"
+    );
+    let c = wait_for(&mut b, csr::TRANSMIT_DONE, 3_000_000);
+    assert!(c & csr::TRANSMIT_DONE != 0, "Transmit Done: {c:#08o}");
+    assert!(c & csr::TRANSMIT_ABORT != 0, "and Transmit Abort: {c:#08o}");
+    let log = &b.chaos.as_ref().unwrap().ether.log;
+    assert!(
+        log.iter().any(|e| matches!(e, Event::Collision(_))),
+        "a collision on the cable: {log:?}"
+    );
+    assert!(
+        !log.iter().any(|e| matches!(e, Event::Heard(_, f) if f.check_ok)),
+        "nothing whole was heard: {log:?}"
+    );
+    // The other transmitter, with no detector, runs its frame out alone.
+    b.run(b.now + 200_000);
+    assert!(!b.chaos.as_ref().unwrap().ether.busy(b.now), "the cable is idle again");
+}
+
 /// The turn timer's nets from START to Transmit Done under Loop Back, two
 /// packets running: `MY.TURN^`, the loads, the cable-busy line and the
 /// transmitter's start and end.  Run alone with `--ignored --nocapture`;

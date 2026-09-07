@@ -34,9 +34,12 @@
 //! **The meters here are zero, and that is not a placeholder.** Every one of
 //! the eight counts something a network interface does --- collisions, a
 //! packet lost because the host had not emptied the buffer, a CRC error. The
-//! Chaosnet server has no interface and no cable: none of those can happen to it,
-//! so nought is the true count. What it can answer truthfully is its name
-//! and which subnet it is on, and it does.
+//! Chaosnet server has no interface: a lost packet or a CRC error cannot
+//! happen to it, so nought is the true count of those. A transmission
+//! aborted on interference can, now that the ether collides
+//! ([`super::ether`]), and is not carried from the cable to this service:
+//! that meter's nought is a known omission. What the server can answer
+//! truthfully is its name and which subnet it is on, and it does.
 
 use super::server::{Response, Service};
 
