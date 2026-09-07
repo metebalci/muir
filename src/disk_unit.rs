@@ -620,6 +620,38 @@ pub const BIT_NS: u64 = 104;
 pub const SECTOR_PULSE_NS: u64 = 1_240;
 pub const INDEX_PULSE_NS: u64 = 4_000;
 
+/// When sector `k` of a revolution of `sectors` begins, from the index: the
+/// one definition of the boundary, so that the sector under the head and
+/// the time to the next one always agree.
+fn began_of(sectors: u64, k: u64) -> u64 {
+    k * REVOLUTION_NS / sectors
+}
+
+/// Where a spindle of `sectors` a revolution stands at `now`, its index
+/// pulse beginning at `phase` modulo a revolution: the sector under the
+/// head and how far into it, in nanoseconds. The drive on the cable turns
+/// by this, [`Trident::turn`], and so does the block counter of the
+/// behavioural controller, `disk_controller::Controller`, which has no
+/// drive on a cable to count pulses from.
+pub fn turn(sectors: u32, phase: u64, now: u64) -> (u32, u64) {
+    let n = sectors as u64;
+    let t = (now + REVOLUTION_NS - phase % REVOLUTION_NS) % REVOLUTION_NS;
+    let mut k = t * n / REVOLUTION_NS;
+    while k + 1 < n && began_of(n, k + 1) <= t {
+        k += 1;
+    }
+    while k > 0 && began_of(n, k) > t {
+        k -= 1;
+    }
+    (k as u32, t - began_of(n, k))
+}
+
+/// The width of the pulse at the start of a sector: the index's at sector
+/// 0, a sector pulse's at every other.
+pub fn pulse_ns(sector: u32) -> u64 {
+    if sector == 0 { INDEX_PULSE_NS } else { SECTOR_PULSE_NS }
+}
+
 /// What the controller has on the cable, as the drive reads it: `true`
 /// is asserted, which on every one of these lines is low.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -790,37 +822,21 @@ impl Trident {
         self.unit.geometry.blocks_per_track as u64
     }
 
-    /// When sector `k` of a revolution begins, from the index: the one
-    /// definition of the boundary, so that the sector under the head and
-    /// the time to the next one always agree.
+    /// When sector `k` of a revolution begins, from the index.
     fn began_of(&self, k: u64) -> u64 {
-        k * REVOLUTION_NS / self.sectors()
+        began_of(self.sectors(), k)
     }
 
     /// Where the spindle is at `now`: the sector under the head and how
-    /// far into it, in nanoseconds.
+    /// far into it, in nanoseconds. [`turn`], with this drive's phase.
     pub fn turn(&self, now: u64) -> (u32, u64) {
-        let t = (now + REVOLUTION_NS - self.phase) % REVOLUTION_NS;
-        let n = self.sectors();
-        let mut k = t * n / REVOLUTION_NS;
-        while k + 1 < n && self.began_of(k + 1) <= t {
-            k += 1;
-        }
-        while k > 0 && self.began_of(k) > t {
-            k -= 1;
-        }
-        (k as u32, t - self.began_of(k))
+        turn(self.unit.geometry.blocks_per_track, self.phase, now)
     }
 
     /// When the sector under the head at `now` began. Signed: the spindle
     /// was turning before time zero, so a sector can have begun before it.
     fn sector_began(&self, now: u64) -> i64 {
         now as i64 - self.turn(now).1 as i64
-    }
-
-    /// The width of the pulse at the start of a sector.
-    fn pulse_ns(sector: u32) -> u64 {
-        if sector == 0 { INDEX_PULSE_NS } else { SECTOR_PULSE_NS }
     }
 
     /// Which bit of the sector under the head the clock is on at `now`,
@@ -1052,7 +1068,7 @@ impl Trident {
             seek_incomplete: self.seek_incomplete,
             selected,
             attention: self.attention,
-            sector_index: into < Self::pulse_ns(sector),
+            sector_index: into < pulse_ns(sector),
             clock: Self::clock(now),
             data,
         }
@@ -1065,7 +1081,7 @@ impl Trident {
         let clock = (now / half + 1) * half;
         let (sector, into) = self.turn(now);
         let began = now as i64 - into as i64;
-        let pulse_end = began + Self::pulse_ns(sector) as i64;
+        let pulse_end = began + pulse_ns(sector) as i64;
         let length = (self.began_of(sector as u64 + 1) - self.began_of(sector as u64)) as i64;
         let pulse = if (now as i64) < pulse_end { pulse_end } else { began + length } as u64;
         let seek = self.seek.map_or(u64::MAX, |(_, at)| at.max(now + 1));
