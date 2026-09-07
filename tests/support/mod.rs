@@ -34,8 +34,10 @@ pub fn mit_text(parts: &[&str]) -> String {
 }
 
 /// The **System 304** pack, put there by `tools/fetch-system-304.sh`. That
-/// release boots here and has a test of its own; it is not what the machine
-/// tests run, because CC does not load on it --- see `tests/cc_harness`.
+/// release boots here and has tests of its own --- the band reaching the
+/// server at its own numbers, and `tests/cc_304.rs`, which compiles CC on
+/// it --- but it is not what the machine tests run: the target is System
+/// 100 and the acceptance test is its band's.
 pub fn pack_304() -> Option<PathBuf> {
     vendor(&["run", "disk-sys-304-0.img"])
 }
@@ -94,8 +96,9 @@ pub fn release_100_file(parts: &[&str]) -> Option<PathBuf> {
 
 /// A file of the System 304 sources, `vendor/system-304-0/sys-304-0/<file>`,
 /// or `None` with the skip line. The upstream release is the pack alone,
-/// so these are the project's own Fossil repository at branch
-/// `system-304`; `tools/fetch-system-304.sh` says how they are built.
+/// so these are built from the project's own Fossil repository, at the
+/// check-in that carries CC's rewritten `MAKE-ARRAY` calls;
+/// `tools/fetch-system-304.sh` says which one and how.
 pub fn release_304(parts: &[&str]) -> Option<PathBuf> {
     let mut p = vec!["system-304-0", "sys-304-0"];
     p.extend_from_slice(parts);

@@ -5,11 +5,19 @@
 #
 # System 304, microcode 323, is the release line that continues System 100,
 # developed in the LM-3 project. It boots here, and `tests/chaos.rs` holds it
-# to booting, but it is **not** what this project targets: CC does not load
-# on it, and the acceptance test runs through CC. `tools/fetch-system-100.sh`
-# fetches the target. It is not part of this repository --- `vendor/` is
-# fetched material and is in .gitignore --- and without it the tests that
-# want it skip cleanly and say so.
+# to booting; `tools/fetch-system-100.sh` fetches the target, System 100. It
+# is not part of this repository --- `vendor/` is fetched material and is in
+# .gitignore --- and without it the tests that want it skip cleanly and say
+# so.
+#
+# **CC did not load on this release until 7 September 2026.** `cc/lcadrd.lisp`,
+# `cc/diags.lisp` and `cc/ldbg.lisp` called `MAKE-ARRAY` in the old positional
+# form --- `(MAKE-ARRAY NIL 'ART-Q '(8))` --- seven times between them, and
+# the system had taken that form out, so the load of `LCADRD QFASL` stopped
+# at "ART-Q is not a known MAKE-ARRAY keyword". Upstream rewrote all seven
+# that day in three check-ins ending `1af7716f24`, which is why the sources
+# below are built from a check-in later than the branch the pack was cut
+# from, and why `tests/cc_304.rs` compiles and loads CC on this band.
 #
 # Two files are used, and this puts them where the tests look for them:
 #
@@ -26,13 +34,28 @@
 # https://tumbleweed.nu/system-304-0-release/ and fetched from there on
 # 7 September 2026. That release is the pack alone: no sources are
 # published with it. So the sources are built from the project's own
-# Fossil repository, https://tumbleweed.nu/r/sys/, at branch `system-304`,
-# check-in c576cb32425c8b17e56e908c7f64baa5e2ab47a4 of 27 May 2025 --- the
-# branch made at the version bump, the same day the pack was published ---
-# with `fossil tarball --name sys-304-0`, which gives the same bytes every
-# time it is run. Everything in both files is under the GNU Affero General
-# Public License, version 3 or later, as the sources' own `doc/sys100.msg`
-# says; muir's own licence is the same.
+# Fossil repository, https://tumbleweed.nu/r/sys/, on `trunk`, at check-in
+# 1af7716f24ba298fef22805ac41819bc330dbb6b2885a16d86ab5c55f4e62e2f of
+# 7 September 2026, with
+#
+#     fossil tarball --name sys-304-0 1af7716f24 sys-304-0.tar.gz -R sys.fossil
+#
+# which gives the same bytes every time it is run --- rebuilding the earlier
+# check-in reproduces the earlier tarball's sum exactly, which is how this
+# one is known to be the same build.
+#
+# **These sources are ahead of the pack's own band**, and deliberately.
+# The pack is System 304.0, cut at `c576cb3242` on 27 May 2025; this
+# check-in is that branch point plus five: the `TV:RH-GET-FUNCTION` hack of
+# 3 September 2025 and the System 304.1 patch that ships it, and the three
+# of 7 September 2026 that rewrite CC's seven `MAKE-ARRAY` calls. Nothing
+# else differs --- five text files and `window/rh.lisp` --- and the CC
+# files are the reason: with the branch point's sources CC cannot be
+# loaded on this band at all.
+#
+# Everything in both files is under the GNU Affero General Public License,
+# version 3 or later, as the sources' own `doc/sys100.msg` says; muir's own
+# licence is the same.
 #
 # It also makes the directory the Chaosnet server serves files from,
 # vendor/run/file-root, with `sys` pointing at the release's sources. This
@@ -62,7 +85,7 @@ run=$muir/vendor/run
 # 7 September 2026, the sources as `fossil tarball` writes them.
 sum_of() {
     case $1 in
-    sys-304-0.tar.gz) echo 9e9c2982e462383864d2ed393b80247a047298fb107fe7a43bfbf0bfa57ecc7d ;;
+    sys-304-0.tar.gz) echo c945a464bfbed337358e79ba4ace8ef73c331e3a3a6c94c2c053624a463dfab1 ;;
     disk-sys-304-0.img.gz) echo 87f0434b54dd86fa1df5251b04e0c48b86c804fa5c5fc6faba6dafa818e2e584 ;;
     esac
 }
