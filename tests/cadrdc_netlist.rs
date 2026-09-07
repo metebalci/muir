@@ -314,9 +314,13 @@ fn the_one_board_jumpers_join_the_attention_lines_and_ground_the_rest() {
 /// `data/SIMPLETV.netlist` does too (`tests/simpletv_netlist.rs`).
 ///
 /// Both VCO sections of the 74LS124 at DCTMOT 0B04 have their frequency now
-/// --- 12 ms for the timeout clock and 2 us for `-2USEC.CLK^`, each off the
-/// drawing's own property on that body --- so `chip::vco_period` answers for
-/// this board rather than refusing. What is still missing is at the cable:
+/// --- 20 ms for the timeout clock and 2 us for `-2USEC.CLK^` --- so
+/// `chip::vco_period` answers for this board rather than refusing. The
+/// second is the drawing's own property on that body; the first is not, and
+/// `chip::DISK_TIMEOUT_VCO_PERIOD` says why: the drawing's `;Period = 12 ms`
+/// is one capacitor and the board carries two, so the LS124's own formula
+/// gives 20 ms and `disk.text`'s 2.5 second timeout rather than the
+/// drawing's stale `;1.5 SEC`. What is still missing is at the cable:
 /// see `every_part_is_identified`.
 #[test]
 fn the_xbus_nets_are_all_on_the_board() {
