@@ -418,11 +418,31 @@ struct Delay {
 /// first transition at the pin. Where the two readings can be told apart is
 /// the first edge, and there MIT's measured figure is followed.
 ///
-/// The level while the section is disabled is **unverified** and cannot be
-/// observed from this board: the 74LS273 the output clocks is held cleared
-/// over exactly the interval the enable is high, so whatever the pin sits at
-/// then reaches nothing. It is driven low here because that is what makes
-/// enabling it an edge.
+/// **The level while the section is disabled is unobservable; the phase it
+/// implies is not.** Those are two claims and this comment used to run them
+/// together, arguing the first and then presenting the second as its
+/// consequence.
+///
+/// The level itself genuinely cannot be read from this board. The only load
+/// on the output is the clock of the 74LS273 at 0B01, and that register is
+/// held cleared over exactly the interval the enable is high: the enable is
+/// `INT BUSY` inverted at the 74S04 0B03, and the clear is `INT BUSY` at
+/// the 74S08 0B16, so whatever the pin sits at while disabled reaches
+/// nothing.
+///
+/// But the two signals come from `INT BUSY` and therefore release at the
+/// same instant, so the choice of level decides whether an edge coincides
+/// with the enable, and the count downstream can tell. Low while disabled
+/// gives a rising edge at the enable; high does not, and the first edge
+/// falls half a period later.
+///
+/// Low is chosen and it is **unverified**. The argument that used to be
+/// offered for it --- that `cadr1/reqtim.prom` labels state 5 at 10 uSec,
+/// which needs the sixth edge there and so an edge at the enable --- rests
+/// on the period being 2,000 ns, and [`VCO_PERIOD`] records the evidence
+/// that it is nearer 0.85 us. At that period the sixth edge is at about
+/// 4.3 us however it is counted, and the argument does not survive. What
+/// would settle it is a 74LS124 datasheet or a scope.
 ///
 /// The other way at it is the period, since the two readings of the first
 /// edge put it half a period apart. MIT's drawing does give the timing
@@ -457,9 +477,62 @@ pub fn toggle_at(period: (u64, u64), k: u64) -> u64 {
     k * period.0 / (2 * period.1)
 }
 
-/// MIT's "roughly 2 uSec", and exactly 2,000 ns here: see [`Oscillator`],
-/// where two figures of MIT's own pin it.
+/// The bus interface's request-timing oscillator, `reqtim` 0A01: MIT's
+/// "roughly 2 uSec", taken as exactly 2,000 ns.
+///
+/// **The figure is `cadr1/reqtim.prom`'s header and nothing else, and the
+/// evidence is against it.** Three routes put this oscillator between about
+/// 0.5 and 0.9 us:
+///
+/// - **MIT's own annotation on another board, needing no datasheet.**
+///   `mit/cadrdc/dctmot.drw` draws a 74LS124 section `PERIOD = 1.8 - 2.0
+///   usec.` --- [`DISK_2USEC_VCO_PERIOD`] --- and that section's capacitor
+///   is 220 pF against this one's 100 pF, given twice for this board by
+///   `cadr1/reqtim.drw` and by MIT's parts list. Scaling by capacitance,
+///   a factor well inside a decade, gives about 0.86 us at the same
+///   strapping; and this board straps both control pins to +5 where the
+///   disk controller's sit at a 2 V divider, which makes it faster still.
+/// - **MIT's own change record.** `cadr1/busint.eco` ECO 5 of 21 February
+///   1981: "Replace the 74LS124 at A-1 with a 74S124 and replace the
+///   capacitor in the 2-dummy at B-3@2 with a 1000pf (the intrinsic clock
+///   rates of the two chips are different)." So ten times the capacitance
+///   on the S part reproduces this one, and the S part's own curve puts
+///   1000 pF near 1 MHz.
+/// - The two agree to about 12 per cent and disagree with MIT's prose by a
+///   factor of about 2.4.
+///
+/// **It is left at 2,000 all the same**, because the evidence gives a band
+/// and not a point --- MIT's parts lists differ between themselves on the
+/// disk controller's capacitor, 330 pF in one and 220 pF in the other,
+/// which moves the estimate between about 0.50 and 0.75 us --- and because
+/// replacing one unverified number with another is not an improvement.
+/// **Unverified**, and what would settle it is a 74LS124 datasheet: none
+/// has reached this project, the S part's frequency-versus-capacitance
+/// curve is not the LS part's, and MIT says as much in ECO 5 above. A scope
+/// on a running board would do it too.
+///
+/// Note that the PROM's own state labels, which [`Oscillator`] walks out,
+/// only land where MIT wrote them if the period is 2,000. If it is really
+/// 0.85 us then those labels are wrong as well, and the two questions stand
+/// or fall together.
 const VCO_PERIOD: (u64, u64) = (2_000, 1);
+
+/// The disk controller's other VCO, `dctmot` 0B04 section 2, whose output
+/// is the net MIT calls `-2USEC.CLK^`: 2,000 ns.
+///
+/// The drawing's own property on that body is `PERIOD = 1.8 - 2.0 usec.`,
+/// a range rather than a figure, and the top of it is taken because MIT
+/// named the net for it. `tests/cadrdc_netlist.rs` walks the sequencer on
+/// this clock and is written to that number.
+///
+/// **Separate from the bus interface's `VCO_PERIOD` although both were
+/// once one constant.**
+/// They are different circuits: this one has 220 pF and both control pins
+/// on a 2 V divider, MIT annotates it directly, and the bus interface's has
+/// 100 pF with both control pins at +5 and no annotation of its own. Held
+/// together, a correction to either moved the other, which is why an
+/// earlier attempt to change the bus interface's broke this board's tests.
+pub const DISK_2USEC_VCO_PERIOD: (u64, u64) = (2_000, 1);
 
 /// The period of the memory board's DIP oscillator, `memctl` 0E08, which
 /// clocks the two 74S374 shift chains the board's timing is made of: a
@@ -526,7 +599,7 @@ fn vco_period(page: &str, reference: &str, section: u8) -> (u64, u64) {
     match (page, reference, section) {
         ("REQTIM", "0A01", 1) => VCO_PERIOD,
         ("DCTMOT", "0B04", 1) => DISK_TIMEOUT_VCO_PERIOD,
-        ("DCTMOT", "0B04", 2) => VCO_PERIOD,
+        ("DCTMOT", "0B04", 2) => DISK_2USEC_VCO_PERIOD,
         _ => panic!("no frequency known for VCO {section} of the 74LS124 at {page} {reference}"),
     }
 }
