@@ -845,12 +845,36 @@ fn codes_14_and_15_are_the_seek_and_at_ease_of_their_sectors() {
     );
 }
 
+/// **The two engines time out at the same instant, off the board's own
+/// clock.**
+///
+/// [`TIMEOUT_NS`] is not a figure of its own: it is the 74LS124 VCO at
+/// DCTMOT 0B04 section 1, whose period is the drawing's property on that
+/// body, counted down by the 74393 at 0C03. The netlist engine runs those
+/// two parts and reaches the instant by itself; this holds the behavioural
+/// model to the same arithmetic, so the two cannot drift apart again.
+///
+/// They did drift. This engine took `sys/doc/disk.text`'s 2.5 seconds and
+/// the netlist board ran at 1.536, and nothing in the code said which muir
+/// meant. Which of MIT's two figures is right is still open --- see
+/// [`TIMEOUT_NS`]'s own comment --- but they now disagree in one place
+/// instead of two.
+#[test]
+fn both_engines_take_the_timeout_from_the_same_two_facts() {
+    let (period, over) = muir::chip::DISK_TIMEOUT_VCO_PERIOD;
+    assert_eq!(over, 1, "the disk timeout clock's period is a whole number of ns");
+    assert_eq!(period, 12_000_000, "`dctmot.drw`'s own property on the body: 12 ms");
+    assert_eq!(muir::disk_controller::TIMEOUT_DIVIDER, 128, "the 74393 at 0C03 divides by 128");
+    assert_eq!(TIMEOUT_NS, period * 128, "the model times out on the board's own count");
+    // MIT wrote the answer on the same sheet: `|TIMEOUT    ;1.5 SEC`.
+    assert_eq!(TIMEOUT_NS, 1_536_000_000, "1.536 s, which is the drawing's `;1.5 SEC`");
+}
+
 /// **A reserved code hangs the controller until its timer stops it.**
 /// `xxx7` is sector 7, which `cadrdc/newdsk.31` leaves unwritten, so the
 /// sequencer starts and never finishes; MIT: it "will currently hang the
-/// controller, causing a timeout error (bit 11 in the status register)",
-/// and that error is "a disk operation took longer than 2.5 seconds". So
-/// the controller is active with no error for [`TIMEOUT_NS`], then
+/// controller, causing a timeout error (bit 11 in the status register)".
+/// So the controller is active with no error for [`TIMEOUT_NS`], then
 /// not-active with the error up; the next transfer clears it as it clears
 /// the other errors; and a reset stored in the meantime stops it clean.
 #[test]

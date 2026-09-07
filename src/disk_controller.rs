@@ -37,14 +37,53 @@
 
 use crate::disk_unit::{BLOCK_WORDS, Unit};
 
+/// The divider between the timeout clock and `TIMEOUT`, the 74393 at
+/// DCTMOT 0C03.
+///
+/// Read off `data/CADRDC.netlist` against the part's own datasheet: `p1` is
+/// `TIMEOUT.CLK`, `p2` and `p12` are both `-ACTIVE` --- the two clears ---
+/// `p6` (`1QD`) clocks `p13` (`2A`), and `TIMEOUT` is `p8` (`2QD`).  Both
+/// counters count on the falling edge, so `1QD` falls every 16 input
+/// periods and `2QD` first rises on the second counter's count of 8.
+pub const TIMEOUT_DIVIDER: u64 = 128;
+
 /// How long the board lets an operation run before stopping it with the
-/// timeout error, `STATUS<11>`: `sys/doc/disk.text`, "a disk operation
-/// took longer than 2.5 seconds".  The board's own timer is the 74LS124
-/// VCO at DCTMOT 0B04, its 12 ms period the drawing's own property on the
-/// body, counted by the 74393 at 0C03; the text's figure is used here and
-/// its agreement with the board is **unverified** --- a run of the netlist
-/// controller through a reserved code to the timeout would settle it.
-pub const TIMEOUT_NS: u64 = 2_500_000_000;
+/// timeout error, `STATUS<11>`.
+///
+/// **The board's own clock, so that this engine and the netlist agree.**
+/// The timer is the 74LS124 VCO at DCTMOT 0B04 section 1, whose period is
+/// [`crate::chip::DISK_TIMEOUT_VCO_PERIOD`] from the drawing's property on
+/// that body, counted down by [`TIMEOUT_DIVIDER`].  Both engines take the
+/// same two facts and reach the same instant; before, this was
+/// `sys/doc/disk.text`'s "a disk operation took longer than 2.5 seconds"
+/// and the netlist board ran at 1.536 s, and nothing said which muir meant.
+///
+/// **Which of MIT's two figures is right is unsettled**, and the drawing is
+/// followed because this project ranks a drawing above documentation:
+///
+/// - The drawing is self-consistent.  `mit/cadrdc/dctmot.drw` carries
+///   `;Period = 12 ms` on the body *and* labels the net
+///   `|TIMEOUT    ;1.5 SEC`; 12 ms x 128 is 1.536 s, so MIT did this
+///   arithmetic on their own sheet.
+/// - But it disagrees with its own other section.  The timing capacitor is
+///   **2 uF, not 1**: `dc.wlr` puts C04 pins 1 *and* 2 on `VCO.C1` and 15
+///   *and* 16 on `VCO.C2`, joined BARE, and MIT's parts list gives 1 uF on
+///   both those body positions.  Section 2 has one 220 pF body and is drawn
+///   `PERIOD = 1.8 - 2.0 usec.`.  Scaling within the one package,
+///   1.9 us x (2 uF / 220 pF) is 17.3 ms, which would make the timeout
+///   2.1-2.3 s and put `disk.text`'s 2.5 s nearer the mark than the
+///   drawing's own note.  The two properties are inconsistent by 1.44.
+///
+/// So the `12 ms` may be a design estimate off a log-log curve rather than
+/// the board.  Settling it needs a 74LS124 datasheet --- no LS sheet has
+/// reached this project, and the S part's curve is not the LS part's, which
+/// MIT says outright in `cadr1/busint.eco` ECO 5 --- or a scope.
+///
+/// The timeout is also optional hardware: `cadrdc/disk.hand` and `dc.eco`
+/// make it the hand jumper `J5-16 : J5-41`, and without it `-TIMEOUT ENB`
+/// is high and the section is disabled outright.
+pub const TIMEOUT_NS: u64 = crate::chip::DISK_TIMEOUT_VCO_PERIOD.0 * TIMEOUT_DIVIDER
+    / crate::chip::DISK_TIMEOUT_VCO_PERIOD.1;
 
 /// Physical address of the first of the four registers.  MIT: "These are
 /// normally at physical addresses 17377774-17377777, which is just below the
