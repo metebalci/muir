@@ -187,7 +187,7 @@ pub fn unframe(bits: &[bool]) -> Result<Framed, String> {
     if !bits.len().is_multiple_of(16) || bits.len() < 3 * 16 {
         return Err(format!("{} bits is not a packet", bits.len()));
     }
-    Ok(unframe_any(&bits).framed)
+    Ok(received(&bits).framed)
 }
 
 /// A run of bits off the cable, as a receiver takes it.
@@ -220,6 +220,13 @@ pub fn unframe_any(bits: &[bool]) -> Received {
     if bits.last() == Some(&false) {
         bits.pop();
     }
+    received(&bits)
+}
+
+/// The words of `bits`, the trailing zero already stripped, as the
+/// software reads them back.
+fn received(bits: &[bool]) -> Received {
+    let mut bits = bits.to_vec();
     let count = bits.len();
     let n = count.div_ceil(16);
     bits.resize(n * 16, false);
