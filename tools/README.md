@@ -5,6 +5,12 @@ Scripts that make the committed fixtures in `data/` from MIT's files in
 of the build; `data/README.md` says which test holds each output to its
 source.
 
+**The netlist scripts want a C compiler**, because each builds `soap4/` as it
+runs. Nothing else here does, and neither does muir: the fixtures these make
+are committed, so building, testing and running the simulator never reaches
+for one. `xcode-select --install` on macOS, `build-essential` on Debian and
+Ubuntu, `gcc` on Fedora --- and only when a netlist has to be made again.
+
 | Script | Makes |
 |---|---|
 | `fetch-system-100.sh` | `vendor/`: the System 100 release, and a directory for muir to serve it from. Nothing in `vendor/` is committed |

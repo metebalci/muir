@@ -362,18 +362,6 @@
       </li>
       <li>
         <div>
-          <h3>A C compiler</h3>
-          <p>Rust needs a system linker, and the netlist extraction script needs a C compiler. One package gives you both.</p>
-<pre class="cmd">
-xcode-select --install             <b># macOS</b>
-sudo apt install build-essential   <b># Debian, Ubuntu</b>
-sudo dnf install gcc               <b># Fedora</b>
-</pre>
-          <p>The scripts are POSIX shell. Windows is untested; use WSL.</p>
-        </div>
-      </li>
-      <li>
-        <div>
           <h3>Clone and build</h3>
 <pre class="cmd">git clone https://github.com/metebalci/muir
 cd muir
@@ -387,15 +375,15 @@ cargo build --release</pre>
           <h3>The System 100 release</h3>
           <p>This is what the engines boot from: the disk pack and the system sources. It is not part of muir; the script fetches it from muir&rsquo;s own mirror of the <a href="https://tumbleweed.nu/system-100-0-release/">original release</a> and checks every file against its SHA-256 sum.</p>
 <pre class="cmd">tools/fetch-system-100.sh</pre>
-          <p>It puts the system sources in <code>vendor/system-100-0/sys/</code> and the disk pack in <code>vendor/run/</code>, where the tests look for them. Running it again leaves whatever is already there alone.</p>
+          <p>It puts the system sources in <code>vendor/system-100-0/sys/</code> and the disk pack in <code>vendor/run/</code>, where the tests look for them. Running it again leaves whatever is already there alone. It is POSIX shell; Windows is untested, so use WSL.</p>
                   </div>
       </li>
       <li>
         <div>
           <h3>Run System 100</h3>
 <pre class="cmd">target/release/muir</pre>
-          <p>The simulator is the <code>muir</code> binary that step 3 built. It runs one engine from the boot PROM with the pack on the disk controller&rsquo;s cable, and reports microcycles per second against the machine&rsquo;s own rate. One engine at a time: <code>--rtl</code> is the default, implied when neither <code>--micro</code> nor <code>--chip</code> is given.</p>
-          <p>It wants the disk pack from step 4. Without one the engines wait on a drive that never answers.</p>
+          <p>The simulator is the <code>muir</code> binary that step 2 built. It runs one engine from the boot PROM with the pack on the disk controller&rsquo;s cable, and reports microcycles per second against the machine&rsquo;s own rate. One engine at a time: <code>--rtl</code> is the default, implied when neither <code>--micro</code> nor <code>--chip</code> is given.</p>
+          <p>It wants the disk pack from step 3. Without one the engines wait on a drive that never answers.</p>
 
           <figure class="fig screen">
             <img src="system-100.png" width="768" height="963" loading="lazy" alt="The CADR screen: MIT System, band 2 of MIT-LISPM-1; Experimental System 100.0; Microcode 323; MIT Lisp Machine One, with associated machine OZ; and a Lisp Listener reading at top level.">
@@ -406,7 +394,7 @@ cargo build --release</pre>
       <li>
         <div>
           <h3>Benchmark</h3>
-          <p>What the three engines cost, on two programs that need nothing fetched &mdash; so this one works straight after step 3. Six runs of five seconds each; pass a different number of seconds if you want them shorter or longer.</p>
+          <p>What the three engines cost, on two programs that need nothing fetched &mdash; so this one works straight after step 2. Six runs of five seconds each; pass a different number of seconds if you want them shorter or longer.</p>
 <pre class="cmd">cargo run --release --example benchmark</pre>
 <pre class="cmd">micro  datapath    532963970 cycles    5.001 s    106581585 cycles/s  15.45x hardware
 rtl    datapath     79913610 cycles    5.000 s     15982638 cycles/s   2.32x hardware
@@ -416,7 +404,7 @@ rtl    control      81158805 cycles    5.004 s     16219471 cycles/s   2.35x har
 chip   control         10101 cycles    5.042 s         2003 cycles/s    hardware/3443</pre>
           <p><code>datapath</code> is every one of the ALU&rsquo;s sixteen logic functions and four of its arithmetic ones, the output bus shifted both ways, the Q register loaded, shifted and read back, and the byte hardware, each operation taking the last one&rsquo;s answer. <code>control</code> is calls three deep and back, a call that returns on the POPJ bit, a dispatch through dispatch memory the program wrote itself, and branches taken and not taken. Both are loops with no memory in them, so what is timed is the processor and not a wait on the bus.</p>
           <p>The rate is against the machine&rsquo;s own 145&nbsp;ns microcycle. Nothing here is taken on trust: each program counts its own times round the loop and leaves the count where every engine can be read for it, and a run whose count does not match the microcycles it ran prints nothing at all &mdash; a machine that has stalled toggles fewer nets and would otherwise look <em>faster</em>.</p>
-          <p>The other examples &mdash; what is on a pack, what the machine is drawing, how much of microcode 323 the <code>chip</code>-against-<code>rtl</code> comparison covers, and the two-machine lashup by hand &mdash; are listed in <code>examples/README.md</code>. Most of them want the pack from step 4.</p>
+          <p>The other examples &mdash; what is on a pack, what the machine is drawing, how much of microcode 323 the <code>chip</code>-against-<code>rtl</code> comparison covers, and the two-machine lashup by hand &mdash; are listed in <code>examples/README.md</code>. Most of them want the pack from step 3.</p>
         </div>
       </li>
     </ol>
