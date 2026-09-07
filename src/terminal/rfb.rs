@@ -359,6 +359,11 @@ pub fn update_header(rectangles: u16) -> [u8; 4] {
     h
 }
 
+/// `Bell`, RFC 6143 section 7.6.3: the message type and nothing else, so
+/// the whole message is one byte.  A viewer decides for itself what to do
+/// with it, and the protocol carries neither a pitch nor a duration.
+pub const BELL: [u8; 1] = [2];
+
 /// The head of one rectangle in Raw encoding: where it is, how big, and
 /// encoding 0.
 pub fn rectangle_header(x: u16, y: u16, w: u16, h: u16) -> [u8; 12] {

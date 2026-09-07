@@ -33,9 +33,8 @@
 //!
 //! Where this is knowingly not the machine: the mouse's counters count what
 //! they are told rather than a quadrature pair ([`IoBoard::mouse_move`]);
-//! the beep is accepted and dropped; and the clocks are driven from
-//! simulated time rather than the computer's, which makes a run
-//! reproducible.
+//! and the clocks are driven from simulated time rather than the
+//! computer's, which makes a run reproducible.
 
 /// Keyboard, low sixteen bits of the scan code.  Reading either half clears
 /// [`csr::KBD_READY`].
@@ -79,7 +78,31 @@ pub mod mouse {
     pub const BUTTONS: u8 = 0o7;
 }
 /// The beep.  Written by `%BEEP`, and read by older code to the same effect.
+///
+/// **The register has no value in it.**  `-CLICK.AUDIO` is `Y4` of the
+/// 74LS138 at IOBKBD 0C22, whose enables are `-SELECT.764100` and
+/// `-SELECT KBD OR MOUSE` and neither is `-WRITE`, so a read clicks as a
+/// write does; it clocks the 74LS74 at 0C27 wired as a toggle, `Q` back to
+/// its own `D`, and that `Q` is `AUDIO` into the 75118 at 0F30 and off the
+/// board as `AUDIO+`/`AUDIO-`.  So one reference is one edge of a square
+/// wave, and the tone is the rate the microcode references it at:
+/// `uc-hacks.lisp`'s `XBEEP` is that loop, "First argument is
+/// half-wavelength, second is duration.  Both are in microseconds",
+/// writing `BEEP-HARDWARE-VIRTUAL-ADDRESS` once every half-wavelength.
+/// `tests/cadrio_netlist.rs` holds this model to the netlist board.
 pub const BEEP: u32 = 0o764110;
+
+/// How long the speaker must have been quiet for the next click to count
+/// as a new beep rather than more of the last one, for
+/// [`IoBoard::take_beep`]: 50 milliseconds.
+///
+/// This is the far end's arithmetic and not the board's --- the board has
+/// only the flip-flop --- but it is made here, where the machine's own
+/// clock is.  The lowest note anyone can hear is about 20 Hz, which is 25
+/// milliseconds a half cycle, so no audible tone is broken into two beeps;
+/// MIT's own `BEEP-WAVELENGTH` of `1350` octal is 744 microseconds, sixty
+/// times under it.
+pub const AUDIO_QUIET_NS: u64 = 50_000_000;
 /// The status register.  `uc-cadr.lisp`: "Unibus address 764112 (KBD CSR)".
 pub const CSR: u32 = 0o764112;
 /// Microsecond clock, low sixteen bits.  `MICROSECOND-CLOCK-UNIBUS-ADDRESS`.
@@ -318,6 +341,14 @@ pub struct IoBoard {
     /// The three switches, as the software's mask: left 1, middle 2,
     /// right 4.
     mouse_buttons: u8,
+    /// `AUDIO`, the 74LS74 at IOBKBD 0C27: the speaker's own flip-flop,
+    /// toggled by every reference to [`BEEP`].
+    audio: bool,
+    /// When it last toggled, on the machine's clock.
+    audio_click_ns: Option<u64>,
+    /// Whether the speaker has started up since [`IoBoard::take_beep`] was
+    /// last asked.
+    beep_started: bool,
     /// The Chaosnet interface, when one is plugged in.
     pub chaos: Option<crate::chaos::board::Interface>,
     /// The serial port's 2651, with its cable.
@@ -477,6 +508,37 @@ impl IoBoard {
         self.csr & csr::MOUSE_READY != 0
     }
 
+    /// `AUDIO`, the level the speaker's pair is being driven to.
+    pub fn audio(&self) -> bool {
+        self.audio
+    }
+
+    /// Whether the speaker has started up since this was last asked ---
+    /// handed out once, as the keys and the mouse's motion are.
+    ///
+    /// A run of clicks is one beep and a click after [`AUDIO_QUIET_NS`] of
+    /// silence starts another, because that is what a far end can use: the
+    /// board itself has no notion of a beep, only of edges.  RFC 6143's
+    /// `Bell` has no duration and no pitch in it either, so one bell for
+    /// one beep is the whole of what reaches a viewer.
+    ///
+    /// `(%BEEP 0 duration)` is reported as a beep though MIT means it for
+    /// silence: with no half-wavelength `XBEEP` clicks as fast as it can,
+    /// which on the real speaker is too high to hear.  Telling that from a
+    /// tone would mean modelling what the speaker can reproduce, which is
+    /// further than this goes.
+    pub fn take_beep(&mut self) -> bool {
+        std::mem::take(&mut self.beep_started)
+    }
+
+    /// `-CLICK.AUDIO`: one reference to [`BEEP`], read or write.
+    fn click_audio(&mut self, ns: u64) {
+        self.audio = !self.audio;
+        let quiet = self.audio_click_ns.is_none_or(|last| ns - last >= AUDIO_QUIET_NS);
+        self.beep_started |= quiet;
+        self.audio_click_ns = Some(ns);
+    }
+
     /// The buttons as the board holds them, as the software's mask. A
     /// look, not a read: the register read is what clears `MOUSE READY`.
     pub fn mouse_buttons_held(&self) -> u8 {
@@ -544,10 +606,15 @@ impl IoBoard {
             // The serial port: the 2651's register on the low byte, and
             // nothing driving the upper.
             SERIAL_FIRST..=SERIAL_LAST => csr::FLOATING | self.serial.read(r, ns) as u16,
-            // The beep, the GPIO and the two unnamed slots of the keyboard
-            // group answer with nothing behind them, and nothing driving
-            // the data lines reads as ones.
-            BEEP | GPIO | 0o764114 | 0o764116 => 0o177777,
+            // A read of the beep clicks it: the decoder that makes
+            // `-CLICK.AUDIO` is not gated by `-WRITE`.  It, the GPIO and the
+            // two unnamed slots of the keyboard group answer with nothing
+            // behind them, and nothing driving the data lines reads as ones.
+            BEEP => {
+                self.click_audio(ns);
+                0o177777
+            }
+            GPIO | 0o764114 | 0o764116 => 0o177777,
             _ => 0,
         }
     }
@@ -569,8 +636,8 @@ impl IoBoard {
             // The 2651 takes `D0`..`D7`, which are `UBI0`..`UBI7` through
             // the 74LS244 at IOBSER 0E29.
             SERIAL_FIRST..=SERIAL_LAST => self.serial.write(r, v as u8, ns),
-            // The keyboard and mouse registers are inputs, and writing the
-            // beep makes a noise we have nowhere to put.
+            BEEP => self.click_audio(ns),
+            // The keyboard and mouse registers are inputs.
             _ => {}
         }
     }
@@ -591,6 +658,9 @@ impl IoBoard {
             mouse_x,
             mouse_y,
             mouse_buttons,
+            audio,
+            audio_click_ns,
+            beep_started,
             chaos,
             serial,
         } = self;
@@ -603,6 +673,9 @@ impl IoBoard {
         w.u16(*mouse_x);
         w.u16(*mouse_y);
         w.u8(*mouse_buttons);
+        w.bool(*audio);
+        w.opt(*audio_click_ns, crate::checkpoint::Writer::u64);
+        w.bool(*beep_started);
         serial.save(w);
         w.bool(chaos.is_some());
         if let Some(c) = chaos {
@@ -626,6 +699,9 @@ impl IoBoard {
         self.mouse_x = r.u16()?;
         self.mouse_y = r.u16()?;
         self.mouse_buttons = r.u8()?;
+        self.audio = r.bool()?;
+        self.audio_click_ns = r.opt(crate::checkpoint::Reader::u64)?;
+        self.beep_started = r.bool()?;
         self.serial.load(r)?;
         match (r.bool()?, self.chaos.as_mut()) {
             (true, Some(c)) => c.load(r),
