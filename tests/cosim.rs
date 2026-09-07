@@ -28,17 +28,17 @@ use muir::micro::Micro;
 use muir::rtl::Rtl;
 
 mod support;
-use support::{machine_with_pack, vendor};
+use support::machine_with_pack;
 
-/// The System 100 pack, which these comparisons need for a reason worth
+/// The System 304 pack, which these comparisons need for a reason worth
 /// stating: they run past `PROM-DISABLE`, so the disk must have loaded
 /// microcode 323 by then. Without a pack both engines would spin in
 /// `DISK-RECALIBRATE` in step with each other and agree about nothing.
 fn pack() -> Option<PathBuf> {
-    vendor(&["run", "disk-sys-100-0.img"])
+    support::pack_304()
 }
 
-/// A machine with the System 100 pack, `pack`, on unit 0.
+/// A machine with the System 304 pack, `pack`, on unit 0.
 ///
 /// Both engines must have the same pack on the same unit, or they diverge on
 /// the first thing the boot PROM reads off it rather than on anything either
@@ -299,8 +299,8 @@ fn the_lc_shift_selects_the_byte_the_diagnostics_expect() {
 // --- micro against rtl, one construct at a time ------------------------------
 
 use muir::isa::asm::{
-    ALU, ALWAYS, BYTE, DISPATCH, JUMP, MD, POPJ, SETM, SETO, SETZ, SRC_MD, START_READ, a_dest,
-    a_src, d_addr, filler, m_src, src, target, width,
+    ALU, ALWAYS, BYTE, DISPATCH, JUMP, MD, N, P, POPJ, R, SETM, SETO, SETZ, SRC_MD, START_READ,
+    a_dest, a_src, d_addr, filler, m_src, src, target, width,
 };
 
 /// The functional destination `LOCATION-COUNTER`, 0o1, with the harmless
@@ -330,6 +330,43 @@ fn both(prom: &[Insn], set: &dyn Fn(&mut Machine), steps: usize) -> (Micro, Rtl)
         r.step().unwrap();
     }
     (e, r)
+}
+
+/// **A control-store write pushes and pops, leaving the pointer alone and
+/// a word above it.**
+///
+/// `P` and `R` together on a JUMP write the control store rather than
+/// jumping, and the board does not special-case the push. Page CONTRL: the
+/// 74S64 at 3E26 makes `-SPUSH` from four AND groups, the first
+/// `IRJUMP AND -IR6 AND IR8 AND JCOND`, and none of the four has `IWRITE`
+/// in it --- `IWRITE` is decoded alone at the 74S11 3E29 as
+/// `IRJUMP AND IR8 AND IR9`. A write is a jump-always with `P`, so the
+/// group is satisfied and the machine pushes; on the next cycle `IWRITED`
+/// off the 74S175 at 3D26 makes `POPJ` through the open-collector 74S08 at
+/// 3D21, and it pops.
+///
+/// So the stack pointer ends where it began with the pushed word still in
+/// the slot above it. That word is what a console reading the stack sees,
+/// and it is the whole observable difference. Read off `data/CADR.netlist`
+/// and confirmed against MIT's own wire list `cadrwd/cadr4.wlr`.
+///
+/// `micro` used to neither push nor pop here, which left a different word
+/// above the pointer from the one the board leaves.
+#[test]
+fn a_control_store_write_pushes_and_pops_on_both() {
+    // Write word 0o250 of the control store, then read the stack back.
+    let prom =
+        [filler(), Insn::new(JUMP | ALWAYS | P | R | target(0o250)), filler(), filler(), filler()];
+    let (e, r) = both(&prom, &|_| {}, 20);
+    let (em, rm) = (e.machine(), r.machine());
+    assert_eq!(em.spcptr, rm.spcptr, "the stack pointer ends in the same place");
+    let above = |p: u8| (p as usize + 1) & 0o37;
+    assert_eq!(
+        em.spc[above(em.spcptr)],
+        rm.spc[above(rm.spcptr)],
+        "and both leave the same word in the slot above it"
+    );
+    assert_eq!(em.imem[0o250].raw(), rm.imem[0o250].raw(), "both wrote the same word");
 }
 
 /// **A read the map refuses leaves MD alone.** On the board a cycle starts
