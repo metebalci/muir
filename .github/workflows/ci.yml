@@ -1,0 +1,117 @@
+# Build, lint and test on every push and pull request, twice over: on a
+# fresh clone with nothing fetched, and with the System 100 release.
+#
+# `check` fetches nothing and configures nothing: a fresh clone passes the
+# whole suite on its own, because everything the tests read is committed.
+# The tests that want the System 100 release find it absent and skip
+# cleanly, which is the behaviour this job also checks.
+#
+# `system-100` fetches the release with tools/fetch-system-100.sh --- the
+# pack the engines boot and the sources the Chaosnet server serves --- and
+# runs the same suite with it there, so the tests that boot the band run,
+# CC's own quick diagnostic of the machine among them. The two downloads,
+# some 34 MB, are cached on the script's hash; the pack is unpacked from
+# them on every run.
+#
+# The compiler version comes from rust-toolchain.toml, so it is pinned here
+# the same way it is pinned on a desk. `--locked` refuses to update
+# Cargo.lock, so a dependency added without regenerating it fails the build
+# --- which is what keeps "no crate dependencies" true rather than aspirational.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # A safety net, not a budget: the job takes far less. Without it a
+    # test that hangs runs until GitHub's six-hour limit.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+
+      # rust-toolchain.toml names the version and asks for clippy and rustfmt,
+      # so the first cargo command installs exactly what this repo builds with.
+      - name: Show the toolchain
+        run: cargo --version && cargo clippy --version && cargo fmt --version
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # The engines are the workload, and profile.test builds them at
+      # opt-level 2, so this is minutes rather than an hour.
+      - name: Tests
+        run: cargo test --locked
+
+      # The netlists in data/ are generated from MIT's drawings in mit/ by
+      # these scripts. Regenerating two of them here says the committed files
+      # and the drawings have not drifted apart, and that the scripts run on
+      # a machine that has only this repository.
+      - name: Netlists regenerate byte-identical
+        run: |
+          cp data/CADRM.netlist /tmp/CADRM.expected
+          cp data/BUSINT.netlist /tmp/BUSINT.expected
+          tools/cadrm-netlist.sh
+          tools/busint-netlist.sh
+          diff /tmp/CADRM.expected data/CADRM.netlist
+          diff /tmp/BUSINT.expected data/BUSINT.netlist
+
+  system-100:
+    runs-on: ubuntu-latest
+    # A safety net, not a budget: the job takes far less. Without it a
+    # test that hangs runs until GitHub's six-hour limit.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-system-100-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache the System 100 release
+        uses: actions/cache@v4
+        with:
+          path: vendor/system-100-0
+          key: system-100-${{ hashFiles('tools/fetch-system-100.sh') }}
+
+      - name: Fetch the System 100 release
+        run: tools/fetch-system-100.sh
+
+      # Everything, with the pack there: the engines boot the band, the
+      # Chaosnet server serves the sources, and CC checks the machine.
+      - name: Tests, with the release
+        run: cargo test --locked
