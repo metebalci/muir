@@ -164,8 +164,8 @@ A machine that stops *itself* is held at the prompt and says so. `(si:%halt)`
 in System 100 runs `HALT-CONS`, which under `ERRSTOP` drops `MACHRUN` with
 `RUN` still set: the screen stops and no microcycle runs from there. Nothing
 about stepping says so, so muir reads it off `FLAG-1` where a console would,
-and `boot` presses the button that starts it again. On `chip`, which has no
-prompt, it ends the run instead.
+and `boot` presses the button that starts it again. `chip` holds the same
+way, reading the nets those registers are buffered from.
 
 Every engine boots MIT's own PROM, System 100's `sys/ubin/promh.mcr`, which
 is built in, so nothing under `vendor/` is needed to start a machine.
@@ -237,9 +237,11 @@ not be. It is read before the command line, so a flag given there replaces
 the one in the file, and an engine named there replaces the file's. The
 start says which flags came from the file, and which file it was.
 
-The prompt is muir's own line on stdin while a `micro` or `rtl` machine
-runs on its own --- `chip` has none --- and a line typed at it is a command
-to muir, not to the machine. `muir: ` is written while
+The prompt is muir's own line on stdin while a machine runs on its own, on
+any of the three engines, and a line typed at it is a command to muir, not
+to the machine. On `chip` the registers and the memories are the parts'
+own cells rather than arrays, so `reg`, the five memory dumps and
+`checkpoint` say so there instead of answering; the rest work. `muir: ` is written while
 the machine is held, which is when muir is waiting to be told what to do
 next; a line typed while it runs is acted on all the same, there is just
 no prompt in front of it. `hold` holds the machine, `continue` runs on,

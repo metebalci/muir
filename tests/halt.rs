@@ -115,3 +115,49 @@ fn an_errstop_halt_stays_halted_and_shows_in_flag_1() {
     stays_halted("rtl", &mut Rtl::new(program(filler())));
     stays_halted("micro", &mut Micro::new(program(filler())));
 }
+
+/// **`MACHRUN` is made where the run loop thinks it is**, which is what
+/// the `chip` engine's reading of a self-halt rests on.
+///
+/// `Chip` is not an [`Engine`] and has no spy registers to read, so
+/// `time_chip` goes to the nets instead: `SRUN`, `-ERRHALT` and
+/// `-STATHALT` on the 9S42 at OLORD1 1A15, leaving out `-WAIT`, which is a
+/// stall the machine comes out of by itself. That only works while those
+/// are the names and the wiring, so this holds them --- a rename or a
+/// rewire fails here rather than quietly making the engine blind to a
+/// halt it can no longer see.
+#[test]
+fn machrun_is_made_from_the_nets_the_chip_engine_reads() {
+    let n = muir::netlist::parse(include_str!("../data/CADR.netlist")).unwrap();
+    // A quad gate is drawn as more than one group under the one
+    // designator, so these are found by the net they carry and then held
+    // to where they are, rather than found by position.
+    let pin = |p: &muir::netlist::Part, want: u8| {
+        p.pins.iter().find(|(x, _)| *x == want).map(|&(_, id)| n.net(id).to_string())
+    };
+    let carries =
+        |p: &muir::netlist::Part, net: &str| p.pins.iter().any(|&(_, id)| n.net(id) == net);
+
+    // `-ERRHALT` is `NAND(ERRSTOP, ERR)`: low exactly when an error is up
+    // and `ERRSTOP` says to stop for one.
+    let nand = n
+        .parts
+        .iter()
+        .find(|p| p.kind == "74S00" && carries(p, "-ERRHALT"))
+        .expect("the NAND that makes -ERRHALT");
+    assert_eq!((nand.page.as_str(), nand.reference.as_str()), ("OLORD2", "1C09"));
+    assert_eq!(pin(nand, 11).as_deref(), Some("-ERRHALT"), "its output");
+    let mut ins = [pin(nand, 12), pin(nand, 13)];
+    ins.sort();
+    assert_eq!(ins, [Some("ERR".into()), Some("ERRSTOP".into())], "its two inputs");
+
+    // And the 9S42 that makes `MACHRUN` from six.
+    let gate = n
+        .parts
+        .iter()
+        .find(|p| p.kind.starts_with("9S42") && pin(p, 7).as_deref() == Some("MACHRUN"))
+        .expect("the gate that makes MACHRUN");
+    assert_eq!((gate.page.as_str(), gate.reference.as_str()), ("OLORD1", "1A15"));
+    let ins: Vec<String> = (1..=6).map(|k| pin(gate, k).expect("an input")).collect();
+    assert_eq!(ins, ["SSTEP", "-SSDONE", "SRUN", "-ERRHALT", "-WAIT", "-STATHALT"]);
+}
