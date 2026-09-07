@@ -522,6 +522,10 @@ pub struct Terminal {
     viewers: Vec<Viewer>,
     keys: VecDeque<(u32, bool)>,
     pointers: VecDeque<(u8, u16, u16)>,
+    /// A `Bell` to send every viewer on the next poll.  One flag and not a
+    /// count: a viewer told twice that the machine beeped, when the polls
+    /// are further apart than the beeps, is worse off than one told once.
+    bell: bool,
     /// Every viewer coming and going, printed as it happens.
     pub trace: bool,
     /// How long a viewer has, from connecting, to finish the opening
@@ -544,6 +548,7 @@ impl Terminal {
             viewers: Vec::new(),
             keys: VecDeque::new(),
             pointers: VecDeque::new(),
+            bell: false,
             trace: false,
             handshake_timeout: Duration::from_secs(10),
         })
@@ -572,6 +577,16 @@ impl Terminal {
     /// the pointer, in screen pixels.
     pub fn take_pointers(&mut self) -> Vec<(u8, u16, u16)> {
         self.pointers.drain(..).collect()
+    }
+
+    /// The machine beeped: every viewer gets RFC 6143's `Bell` on the next
+    /// poll.  Nobody looking, nobody told --- it is not kept for a viewer
+    /// who connects afterwards.
+    ///
+    /// `muir` calls this when [`crate::ioboard::IoBoard::take_beep`] says
+    /// the speaker started up.
+    pub fn ring(&mut self) {
+        self.bell = true;
     }
 
     /// Accepts whoever has arrived, reads what has been said, and answers
@@ -610,6 +625,10 @@ impl Terminal {
             }
         }
         let (keys, pointers, trace) = (&mut self.keys, &mut self.pointers, self.trace);
+        // Rung or not, it is spent on this poll: a viewer still in the
+        // opening exchange has no message stream to put it in, and holding
+        // it would tell whoever connects next about a beep they missed.
+        let bell = std::mem::take(&mut self.bell);
         let handshake_timeout = self.handshake_timeout;
         self.viewers.retain_mut(|v| {
             // A viewer that has not finished the opening exchange in its
@@ -626,6 +645,12 @@ impl Terminal {
                 }
                 v.step(frame, keys, pointers)?;
                 v.answer(frame);
+                // Behind the frame, so a beep never delays what it is
+                // about: `Viewer::answer` queues nothing while anything is
+                // still draining.
+                if bell && v.stage == Stage::Running {
+                    v.outbox.extend(rfb::BELL);
+                }
                 v.drain().map_err(|e| e.to_string())?;
                 Ok(true)
             });

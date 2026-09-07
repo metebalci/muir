@@ -630,3 +630,34 @@ fn the_cable_refuses_a_word_beyond_its_backlog() {
     assert!(!k.send(keyboard::up_down(0o123, true)), "the word beyond the backlog is refused");
     assert!(k.busy());
 }
+
+/// **The machine's beep reaches the viewer as a Bell.** RFC 6143 section
+/// 7.6.3: message type 2 and nothing else, so there is no duration and no
+/// pitch to send --- one bell for one beep is the whole of what the
+/// protocol carries.
+#[test]
+fn a_beep_reaches_the_viewer_as_a_bell() {
+    let (mut v, _) = Viewer::connect();
+    v.terminal.ring();
+    assert_eq!(v.exchange(&[], 1), vec![2], "Bell, RFC 6143 7.6.3");
+}
+
+/// **A bell with nobody listening is not kept for whoever connects next.**
+/// A viewer arriving an hour later must not be told the machine beeped.
+#[test]
+fn a_bell_with_no_viewers_is_not_held() {
+    let mut terminal = Terminal::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+    let tv = SimpleTv::default();
+    terminal.ring();
+    terminal.poll(Frame::of(&tv));
+
+    let mut stream = TcpStream::connect(terminal.addr().unwrap()).unwrap();
+    stream.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+    let frame = Frame::of(&tv);
+    assert_eq!(&exchange_with(&mut terminal, &mut stream, frame, &[], 12)[..], rfb::VERSION);
+    assert_eq!(exchange_with(&mut terminal, &mut stream, frame, rfb::VERSION, 2), vec![1, 1]);
+    assert_eq!(exchange_with(&mut terminal, &mut stream, frame, &[1], 4), vec![0, 0, 0, 0]);
+    // `ServerInit` and nothing before it: no bell arrived first.
+    let head = exchange_with(&mut terminal, &mut stream, frame, &[1], 24);
+    assert_eq!(u16::from_be_bytes([head[0], head[1]]), simpletv::WIDTH as u16, "ServerInit");
+}

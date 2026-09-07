@@ -412,3 +412,48 @@ fn the_interval_timer_counts_down_and_clock_ready_comes_back() {
     assert!(!ready(&mut b, 1_000_000_000));
     assert!(ready(&mut b, 0xffff * ioboard::INTERVAL_TICK_NS));
 }
+
+/// **The beep leaves a trace.** The register has no value in it --- every
+/// reference toggles the 74LS74 at IOBKBD 0C27, and `tests/cadrio_netlist.rs`
+/// holds the model to the board on that --- so what a far end can be told is
+/// that the speaker started up. A run of clicks is one beep; a click after
+/// [`ioboard::AUDIO_QUIET_NS`] of silence starts another.
+#[test]
+fn a_run_of_clicks_is_reported_as_one_beep() {
+    let mut b = IoBoard::default();
+    assert!(!b.take_beep(), "nothing has beeped");
+
+    // MIT's own tone: `BEEP-WAVELENGTH` 1350 octal, 744 microseconds, which
+    // `XBEEP` takes as the half-wavelength, for `BEEP-DURATION` 400000
+    // octal microseconds --- 131 milliseconds of it.
+    let half = 744_000;
+    let mut ns = 1_000_000;
+    for _ in 0..176 {
+        b.write(ioboard::BEEP, 0, ns);
+        ns += half;
+    }
+    assert!(b.take_beep(), "the speaker started");
+    assert!(!b.take_beep(), "and it is handed out once");
+
+    // More of the same tone is the same beep.
+    for _ in 0..176 {
+        b.write(ioboard::BEEP, 0, ns);
+        ns += half;
+    }
+    assert!(!b.take_beep(), "still the same beep");
+
+    // Silence, then another.
+    ns += ioboard::AUDIO_QUIET_NS;
+    b.write(ioboard::BEEP, 0, ns);
+    assert!(b.take_beep(), "a second beep");
+
+    // The threshold is well clear of any tone a Lisp Machine can make: 20 Hz
+    // is about the lowest note anyone can hear, 25 milliseconds a half cycle,
+    // and even that does not break into a beep for every click.
+    b.take_beep();
+    for _ in 0..8 {
+        ns += 25_000_000;
+        b.write(ioboard::BEEP, 0, ns);
+    }
+    assert!(!b.take_beep(), "no audible tone breaks into two beeps");
+}

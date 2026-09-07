@@ -378,6 +378,9 @@ fn attend(
         for (buttons, x, y) in term.take_pointers() {
             mouse.pointer(buttons, x, y);
         }
+        if m.ioboard.take_beep() {
+            term.ring();
+        }
     }
     let board = &mut m.ioboard;
     if keyboard.pending() > 0 {
@@ -1109,6 +1112,9 @@ fn time_remote(name: &str, mut remote: Remote<Rtl>, stop: Stop, terminal: Option
                 for (buttons, x, y) in term.take_pointers() {
                     mouse.pointer(buttons, x, y);
                 }
+                if e.machine_mut().ioboard.take_beep() {
+                    term.ring();
+                }
                 last_poll = Instant::now();
             }
             let board = &mut e.machine_mut().ioboard;
@@ -1207,6 +1213,9 @@ fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>,
             }
             for (buttons, x, y) in term.take_pointers() {
                 mouse.pointer(buttons, x, y);
+            }
+            if e.machine_mut().ioboard.take_beep() {
+                term.ring();
             }
             last_poll = Instant::now();
         }
@@ -1887,6 +1896,13 @@ fn attend_chip(
         }
         for (buttons, x, y) in term.take_pointers() {
             mouse.pointer(buttons, x, y);
+        }
+        // The behavioural board under `--io-board model`. The netlist
+        // board's speaker is `AUDIO+`/`AUDIO-` out of the 75118 at IOBXCV
+        // 0F30 and nothing is plugged into that pair, so a beep on it is
+        // heard by nobody.
+        if far.buses.machine.ioboard.take_beep() {
+            term.ring();
         }
     }
     match far.unibus.as_mut().and_then(|u| u.mouse()) {

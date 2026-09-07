@@ -635,3 +635,54 @@ fn the_board_and_the_model_decode_the_block_alike() {
     assert!(answered > 40, "{answered} cycles answered");
     assert!(mismatches.is_empty(), "the board against the model:\n{}", mismatches.join("\n"));
 }
+
+/// **Every reference to the beep register toggles the speaker, and a read
+/// does it as surely as a write.**
+///
+/// `-CLICK.AUDIO` is `Y4` of the 74LS138 at IOBKBD 0C22, whose enables are
+/// `-SELECT.764100` and `-SELECT KBD OR MOUSE` --- the second stage of the
+/// 74LS74 at 0C23 on `1 USEC CLK` --- and neither is `-WRITE`. It clocks
+/// the 74LS74 at 0C27 wired as a toggle, `Q` back to its own `D`, whose
+/// `Q` is `AUDIO` into the 75118 at 0F30 and out of the board as
+/// `AUDIO+`/`AUDIO-`.
+///
+/// So the register carries no value: the tone is the rate the microcode
+/// writes it at. `uc-hacks.lisp`'s `XBEEP` is that loop --- "First
+/// argument is half-wavelength, second is duration. Both are in
+/// microseconds" --- writing `BEEP-HARDWARE-VIRTUAL-ADDRESS` once every
+/// half-wavelength.
+#[test]
+fn a_reference_to_the_beep_register_toggles_the_speaker() {
+    use muir::ioboard::{self, IoBoard};
+    use muir::unibus::UnibusMaster;
+    let n = cadrio();
+    let mut b = UnibusMaster::new(&n, 10_000, &quiet());
+    let mut model = IoBoard::default();
+
+    let high = |l| l == muir::part::Level::High;
+    let mut want = high(b.level("AUDIO"));
+    assert_eq!(model.audio(), want, "the model starts where the board does");
+
+    // A write, a read, and a write: three references, three toggles.
+    for (n, value) in [(1, Some(0)), (2, None), (3, Some(0o177777))] {
+        match value {
+            Some(v) => {
+                b.cycle(ioboard::BEEP, Some(v));
+                model.write(ioboard::BEEP, v, b.now);
+            }
+            None => {
+                b.cycle(ioboard::BEEP, None);
+                model.read(ioboard::BEEP, b.now);
+            }
+        }
+        want = !want;
+        assert_eq!(high(b.level("AUDIO")), want, "AUDIO after reference {n}");
+        assert_eq!(model.audio(), want, "the model against the board after reference {n}");
+    }
+
+    // And no other register touches it.
+    for uaddr in [ioboard::CSR, ioboard::KBD_LOW, ioboard::MOUSE_X, ioboard::GPIO] {
+        b.cycle(uaddr, None);
+        assert_eq!(high(b.level("AUDIO")), want, "{uaddr:o} is not the beep");
+    }
+}
