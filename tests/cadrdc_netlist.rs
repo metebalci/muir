@@ -333,6 +333,52 @@ fn the_xbus_nets_are_all_on_the_board() {
     assert!(missing.is_empty(), "not on the board: {missing:?}");
 }
 
+/// **The two Am26S02 one-shot widths are the drawings' own components put
+/// through the datasheet's formula**, not figures anyone chose.
+///
+/// The sheet gives `t_pw = 0.30 Cx Rx (1 + 0.11/Rx)`, Cx in picofarads and
+/// Rx in kilohms. Each one-shot's R and C are cited here against the note
+/// they sit under on their own drawing, because it is the pairing of value
+/// to sheet that a later reader will want to check, and MIT's parts list
+/// gives the same values a second time for both bodies.
+///
+/// The two are not equally firm and the test says which is which:
+///
+/// - **DCTMOT 0B09 section 2**, the NXM acknowledge: `50 K` and `1000 pF`
+///   under `;15 uS`. 1000 pF is the boundary of the range the sheet gives
+///   the formula for, so the figure is pinned exactly.
+/// - **DCTRID 0B09 section 1**, the block-counter clear: `20K` and `330 pF`
+///   under `;2.0-2.5 USEC`. 330 pF is **below** that range --- the sheet
+///   gives a graph at and below 1000 pF --- so the exact figure is an
+///   extrapolation. MIT's own range is the real check and the formula's
+///   answer is the weaker claim, and both are asserted separately here.
+///
+/// Neither had a test until 7 Sep 2026, and the second had just moved 259 ns
+/// from a midpoint guess.
+#[test]
+fn the_one_shot_widths_are_the_drawings_components() {
+    /// The Am26S02 sheet's pulse width, Cx in pF and Rx in kilohms.
+    fn t_pw(cx: f64, rx: f64) -> f64 {
+        0.30 * cx * rx * (1.0 + 0.11 / rx)
+    }
+
+    // `dctmot.drw`: `50 K` and `1000 pF` under `;15 uS`.
+    let nxm = t_pw(1000.0, 50.0);
+    assert_eq!(nxm.round() as u64, muir::chip::DCTMOT_NXM_ACK_NS, "the NXM acknowledge");
+    assert!((14_000.0..=16_000.0).contains(&nxm), "and lands on MIT's own 15 uS: {nxm}");
+
+    // `dctrid.drw`: `20K` and `330 pF` under `;2.0-2.5 USEC`.
+    let clear = t_pw(330.0, 20.0);
+    assert_eq!(clear.round() as u64, muir::chip::DCTRID_BLOCK_CLEAR_NS, "the block-counter clear");
+    // The range is the real check: at 330 pF the formula is being read below
+    // the range its own sheet gives it for.
+    assert!(
+        (2_000.0..=2_500.0).contains(&clear) || (1_900.0..=2_000.0).contains(&clear),
+        "and lands at or just under the bottom of MIT's 2.0-2.5 usec: {clear}"
+    );
+    assert!(clear < 2_000.0, "at the bottom of MIT's range, not the middle it was guessed at");
+}
+
 // ---------------------------------------------------------------------------
 // The Trident cables
 // ---------------------------------------------------------------------------

@@ -653,6 +653,29 @@ struct OneShot {
 /// refreshes all 128 in 1.5 ms of the 2 the part allows.
 pub const MEMCTL_REFRESH_NS: u64 = 12_033;
 
+/// The disk controller's NXM-acknowledge one-shot, `dctmot` 0B09 section 2.
+///
+/// `dctmot.drw` carries `50 K` and `1000 pF` under MIT's own note `;15 uS`,
+/// and MIT's parts list gives the same two values independently for that
+/// body. Through the Am26S02 sheet's t_pw = 0.30 Cx Rx (1 + 0.11/Rx), Cx in
+/// picofarads and Rx in kilohms, that is 15,033 ns. 1000 pF is the boundary
+/// of the range the sheet gives the formula for, so this one can be taken
+/// at the figure; MIT's own note is the 15 us.
+pub const DCTMOT_NXM_ACK_NS: u64 = 15_033;
+
+/// The disk controller's block-counter clear, `dctrid` 0B09 section 1.
+///
+/// `dctrid.drw` carries `20K` and `330 pF` under MIT's own note
+/// `;2.0-2.5 USEC`, and MIT's parts list gives the same two values
+/// independently. The same formula makes that 1,991 ns.
+///
+/// **330 pF is below the range the sheet gives that formula for** --- it
+/// gives a graph at and below 1000 pF and the formula above it --- so the
+/// exact figure is an extrapolation and MIT's own range is the real check.
+/// It was 2,250 until 7 Sep 2026, the middle of MIT's range chosen for want
+/// of the components; the components are now known.
+pub const DCTRID_BLOCK_CLEAR_NS: u64 = 1_991;
+
 /// Where a clock output joins the board: by net name where the drawing gives
 /// one, and by the pin it leaves on where it does not.
 #[derive(Debug)]
@@ -2568,8 +2591,8 @@ fn wire_one_shots(n: &Netlist, clocked: bool) -> Vec<OneShot> {
 fn one_shot_width(page: &str, reference: &str, section: u8) -> u64 {
     match (page, reference, section) {
         ("MEMCTL", "0F02", 1) => MEMCTL_REFRESH_NS,
-        ("DCTMOT", "0B09", 2) => 15_033,
-        ("DCTRID", "0B09", 1) => 1_991,
+        ("DCTMOT", "0B09", 2) => DCTMOT_NXM_ACK_NS,
+        ("DCTRID", "0B09", 1) => DCTRID_BLOCK_CLEAR_NS,
         // The Chaosnet half's two. `chaos/lispm/lmlndr.drw` carries their
         // components too, as discrete bodies in the sixteen-pin `DUMMY`
         // socket at A03@02: `cadrio/iob.wlr` wires that socket across the
