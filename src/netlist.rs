@@ -178,9 +178,14 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
 pub fn parse_wired(text: &str) -> Result<Netlist, String> {
     let mut n = parse_raw(text)?;
     n.merge_explicit_aliases();
-    n.apply_strap_pages();
     n.split_by_board();
     n.merge_anonymous_nets();
+    // After the anonymous merge, not before. A strap can join a name MIT
+    // wrote to a wire this reader had to invent a name for, and the merge
+    // picks its own representative: run first and the strap's name is buried
+    // under an `@REF,pN` one, leaving the net correctly wired and impossible
+    // to look up. `ECLVID`'s `-MECL VIDEO` is the case that showed it.
+    n.apply_strap_pages();
     Ok(n)
 }
 
@@ -378,6 +383,36 @@ impl Netlist {
             "NSYCLK",
             &[("CLK0 64B SR", "8B SR LOAD")],
         ),
+        (
+            // `eclvid.drw`, "MECL VIDEO". The two 10102 NOR outputs at F04
+            // pins 3 and 14 are tied together in a wired OR and the junction
+            // carries the sheet's `MECL VIDEO L`, which is `-MECL VIDEO` at
+            // the 10212 at F03 pin 7. MIT draws that junction as a point
+            // that is not a body pin, and soap4 does not follow it: the
+            // label parses and propagates to F03 alone, leaving the two
+            // outputs on an anonymous net and `-MECL VIDEO` with no driver.
+            // The SIP terminator at NECSIP F05 then holds it low and the
+            // video output is `NOR(MECL BLANK, low)` --- every unblanked dot
+            // lit, whatever the frame buffer holds.
+            //
+            // **The same page of the LISPM TV needs no strap**, and that is
+            // what identifies this as a reader limitation rather than a
+            // difference between the boards: soap4 leaves the junction
+            // anonymous there too, and `tools/lispmtv-netlist.sh` repairs it
+            // by reconciling against `cadrtv/lmtv4b.wlr`, which puts F04-3,
+            // F04-14 and F03-7 on one net named `-MECL VIDEO`. MIT left no
+            // wire list of the SIMPLE TV, so `tools/simpletv-netlist.sh` has
+            // nothing to reconcile against and the miss survives. The join
+            // below is that wire list's word, applied to the board it does
+            // not cover, as the `READ` join above is.
+            //
+            // The two boards' ECLVID sheets carry these gates identically,
+            // same references and same pins, so nothing is being carried
+            // across a design difference. `tests/simpletv_netlist.rs` holds
+            // the picture to the frame buffer.
+            "ECLVID",
+            &[("-MECL VIDEO", "@0F04,p3")],
+        ),
     ];
 
     /// The wires MIT added by hand after a board came back from wrapping,
@@ -542,6 +577,18 @@ impl Netlist {
                     x = up[x as usize];
                 }
                 pin.1 = x;
+            }
+        }
+        // Every name merged away now looks up the net its pins are on, so a
+        // lookup cannot land on the half left with none. Probing such a half
+        // reads `Z` for ever and looks like a signal that never asserts,
+        // which is how three of the four symptoms in the display's own
+        // discrepancy came to be recorded.
+        for id in 0..self.nets.len() as NetId {
+            let root = find(&mut up, id);
+            if root != id {
+                let name = self.nets[id as usize].clone();
+                self.by_name.insert(name, root);
             }
         }
     }
