@@ -1222,12 +1222,11 @@ fn a_transfer_with_no_drive_stops_by_error() {
 /// through again. The behavioural controller is held to the same words in
 /// `tests/disk.rs`.
 ///
-/// The three waits are for ever on this board: the timeout enable is the
-/// hand jumper `J5-16 : J5-41` of `cadrdc/disk.hand`, "Timeout Enable
-/// jumper (use red wire)", which `Netlist::HAND_JUMPERS` does not apply,
-/// so `-TIMEOUT ENB` floats high and the 74LS124 section at DCTMOT 0B04
-/// that clocks the 74393 at 0C03 is disabled. The behavioural controller
-/// has the jumper in, as `sys/doc/disk.text` does, and times them out.
+/// The three waits end at the watchdog, 2.56 seconds on --- the hand
+/// jumper `J5-16 : J5-41` of `cadrdc/disk.hand` grounds `-TIMEOUT ENB`
+/// (`Netlist::HAND_JUMPERS`) and the 74LS124 section at DCTMOT 0B04 clocks
+/// the 74393 at 0C03 --- which is four orders of magnitude past the 50 us
+/// this reads at. `a_hung_command_times_out` is where they are waited out.
 #[test]
 fn with_no_drive_only_the_miscellaneous_command_completes() {
     let n = cadrdc();
@@ -1261,6 +1260,107 @@ fn with_no_drive_only_the_miscellaneous_command_completes() {
         assert_eq!(status, word, "{cmd:o} with no drive: status {status:o}");
         assert_eq!((p.busy(&b), p.upc(&b)), (busy, upc), "{cmd:o} with no drive");
     }
+}
+
+/// **The timeout enable jumper starts the watchdog clock.** `-TIMEOUT ENB`
+/// is `J5-16` and pin 6, the enable, of the 74LS124 at DCTMOT 0B04 section
+/// 1, and nothing else on the board. `cadrdc/disk.hand` grounds it by hand
+/// --- "Timeout Enable jumper (use red wire): Add: J5-16 : J5-41 (the
+/// adjacent ground pin)", and `dc.eco` says the same --- and
+/// `Netlist::HAND_JUMPERS` does that, so the board as wrapped and the board
+/// as built differ here: on the list the enable is an open 74LS input,
+/// reads high, and by the part's own sheet holds the output high, which is
+/// a watchdog that cannot tick.
+///
+/// With the jumper the output follows the section's internal oscillator,
+/// which free-runs whatever the board is doing: `TIMEOUT.CLK` idles high
+/// and toggles every half of `chip::DISK_TIMEOUT_VCO_PERIOD`. The 74393 at
+/// 0C03 divides that by `disk_controller::TIMEOUT_DIVIDER` to reach
+/// `TIMEOUT`, which `a_hung_command_times_out` waits out in full.
+#[test]
+fn the_timeout_enable_jumper_starts_the_watchdog_clock() {
+    let n = cadrdc();
+    let ground = n.by_name_id("GND").expect("a ground net");
+    assert_eq!(n.by_name_id("'-TIMEOUT ENB'"), Some(ground), "J5-16 : J5-41");
+    let wired = netlist::parse_wired(CADRDC).unwrap();
+    assert_ne!(
+        wired.by_name_id("'-TIMEOUT ENB'"),
+        wired.by_name_id("GND"),
+        "the wire list is the board before the red wire"
+    );
+
+    let mut b = controller(&n);
+    let clk = b.net("TIMEOUT.CLK");
+    assert_eq!(b.chip.net(clk), Level::High, "the output idles high");
+
+    // A quarter of a period at a time is 45 ms of board, which is four
+    // edges; the counter needs 128 of them, and the resolution here is the
+    // step, a microsecond.
+    let (step, start) = (1_000, b.now);
+    let mut edges: Vec<(u64, Level)> = Vec::new();
+    let mut last = Level::High;
+    let mut t = start;
+    while t < start + 45_000_000 {
+        t += step;
+        b.run(t);
+        let level = b.chip.net(clk);
+        if level != last {
+            edges.push((t, level));
+            last = level;
+        }
+    }
+
+    let (num, den) = muir::chip::DISK_TIMEOUT_VCO_PERIOD;
+    let half = num / den / 2;
+    let levels: Vec<Level> = edges.iter().map(|&(_, l)| l).collect();
+    assert_eq!(levels, [Level::Low, Level::High, Level::Low, Level::High], "{edges:?}");
+    assert!(edges[0].0 - half < step, "the first fall half a period on: {edges:?}");
+    for w in edges.windows(2) {
+        assert_eq!(w[1].0 - w[0].0, half, "half a period apart: {edges:?}");
+    }
+}
+
+/// **A hung command times out.** Command 7 walks into the sequencer PROM's
+/// unwritten eighth sector and stops there, which `sys/doc/disk.text` says
+/// of it: it "will currently hang the controller, causing a timeout error".
+/// So the watchdog is what ends it. `-ACTIVE` holds both halves of the
+/// 74393 at DCTMOT 0C03 clear while the board is idle, and the count runs
+/// from the first fall of `TIMEOUT.CLK` after the START. That clock is
+/// free-running, so the first fall is anywhere in a period and the timeout
+/// lands between 127 and 128 periods after the command, 2.54 to 2.56
+/// seconds: still busy at 2.5, over by 2.6.
+///
+/// `TIMEOUT` is inverted at DCSTS 0A16 and latched as `TIMEOUT ERROR`,
+/// which is `STATUS<11>` through the 74LS273 at DCSTS 0C12 and an input of
+/// the 74S260 at 0B13, so it stops the sequencer as the other errors do:
+/// `STATUS<13>`, `STOPPED BY ERROR`, comes up with it and `BUSY` drops.
+/// The behavioural controller reaches the same word from
+/// `disk_controller::TIMEOUT_NS`, in `tests/disk.rs`.
+#[test]
+#[ignore = "2.56 seconds of board, twenty seconds of wall clock; run with --ignored"]
+fn a_hung_command_times_out() {
+    let n = cadrdc();
+    let mut b = controller(&n);
+    let busy = b.net("BUSY");
+    let busy = move |b: &XbusMaster| b.chip.net(busy) == Level::High;
+
+    b.cycle(REGS, Some(0o7));
+    b.cycle(REGS + 1, Some(0o777));
+    b.cycle(REGS + 2, Some(100 << 16));
+    b.cycle(REGS + 3, Some(0));
+    let started = b.now;
+    assert!(busy(&b), "the command is running");
+
+    b.run(started + 2_500_000_000);
+    let (_, status) = b.cycle(REGS, None);
+    assert!(busy(&b), "still busy at 2.5 s: status {status:o}");
+    assert_eq!(status & (1 << 11 | 1 << 13), 0, "no error yet: status {status:o}");
+
+    b.run(started + 2_600_000_000);
+    let (_, status) = b.cycle(REGS, None);
+    assert!(!busy(&b), "stopped by 2.6 s: status {status:o}");
+    assert_ne!(status & 1 << 11, 0, "timeout error: status {status:o}");
+    assert_ne!(status & 1 << 13, 0, "stopped by error: status {status:o}");
 }
 
 /// A drive on the cable that seeks fast: the settling and the stroke
