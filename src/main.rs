@@ -69,11 +69,19 @@
 //! screen for as long as a viewer is looking at it once the run has
 //! stopped. In the lashup the other machine is served a terminal too, the
 //! display above this machine's, and `--debuggee-terminal` puts that
-//! elsewhere. On an engine with no Chaosnet the boot stops in the debugger at the
-//! initialization that wants a host: `Super-B` there, then the date and
-//! time it asks for and `y`, finish it; `(si:setup-cpt)` then turns on the
-//! display's vertical interrupt, which the band's cold boot leaves off and
-//! without which the mouse is not tracked.
+//! elsewhere. On an engine with no Chaosnet the boot stops in the debugger
+//! at the initialization that wants a host: `Super-B` there, then the date
+//! and time it asks for and `y`, finish it.
+//!
+//! Separately, and on every engine: the band's cold boot leaves the
+//! display's vertical interrupt off, so the mouse is not tracked until
+//! `(si:setup-cpt)` is typed at the listener. That is the band's own ---
+//! `LISP-REINITIALIZE` guards its `SETUP-CPT` block with `(UNLESS (NOT
+//! CALLED-BY-USER) ...)`, which the cold boot's `(LISP-REINITIALIZE NIL)`
+//! does not satisfy --- so it is wanted just as much on a boot that
+//! reached the listener with no trouble. `tests/vertical.rs` holds that:
+//! it boots with a Chaosnet, gets to the prompt, and finds the interrupt
+//! still off.
 //!
 //! The prompt is muir's own line on stdin while a machine runs on its
 //! own: `boot`, `hold`, `continue`, `step`, `pc`, `reg`, `amem`, `mmem`,
@@ -628,9 +636,12 @@ A simulator of the MIT CADR Lisp Machine.
                                --- RFB's None security is the only type
                                offered, so a viewer needs no password.
                                Without a Chaosnet the boot stops in the
-                               debugger: Super-B, the date, y, and
-                               (si:setup-cpt) finish it and turn the mouse
-                               on. [default: 127.0.0.1:5900, VNC's display
+                               debugger: Super-B, the date and y finish
+                               it. On any engine the band's cold boot
+                               leaves the vertical interrupt off, so
+                               (si:setup-cpt) at the listener is what
+                               turns the mouse on. [default:
+                               127.0.0.1:5900, VNC's display
                                :0, or the first free display above it]
   --tv netlist|model           chip: the display. [default: netlist]
   --tv-board simple-tv|lispm-tv
