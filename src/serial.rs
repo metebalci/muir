@@ -350,27 +350,36 @@ fn crystal_rise_at_or_after(t: u64) -> u64 {
 /// registers, and "the device assumes the idle state and remains there
 /// until initialized with the appropriate control words" (Table 2).
 ///
-/// **What the holding registers hold through a reset is not a fact anyone
-/// can look up.** Signetics never specified it, and four independent routes
-/// say the same nothing: the 1985 SCN2651 product specification, the same
-/// text word for word in Philips' 1991 *Data Communication Products*
-/// (IC019), application note TN072 "Introducing the Signetics 2651 PCI",
-/// which is a block diagram of the part and no more, and the 1977
-/// *Bipolar & MOS Microprocessor* book. Every one of them enumerates the
-/// three registers `RESET` clears and stops there. A real part would come
-/// up with whatever its silicon settled into, which is not a specification
-/// either.
+/// **The holding registers are emptied here, and the sheet can be read
+/// against that.** Four independent routes say the same thing and none
+/// mentions them: the 1985 SCN2651 product specification, the same text
+/// word for word in Philips' 1991 *Data Communication Products* (IC019),
+/// application note TN072 "Introducing the Signetics 2651 PCI", which is a
+/// block diagram of the part and no more, and the 1977 *Bipolar & MOS
+/// Microprocessor* book. Each enumerates three registers and stops:
+/// `RESET` "clears the Mode, Command and Status registers. The device
+/// assumes the idle state and remains there until initialized with the
+/// appropriate control words".
 ///
-/// So this is not an unverified fact but an undefined state, and the model
-/// has to choose --- the same class as a memory at power-on, where
-/// `src/chip.rs` says "Real RAM comes up undefined and a model has to
-/// choose; this one zeroes, and says so". **Zero here, chosen and said.**
+/// **Four sources agreeing on a list of three is not silence.** The natural
+/// reading of an enumeration is that what is outside it is not cleared, so
+/// a character already in the transmit holding register would survive a
+/// reset and go out when the transmitter was next enabled. Against that,
+/// "the device assumes the idle state" is the whole-device claim, and a
+/// part with a character still queued is not obviously idle. The sheet
+/// supports both readings and settles neither, and no second source
+/// disambiguates it because all four carry the same paragraph.
 ///
-/// The choice is unobservable through the documented interface, and
-/// `tests/serial.rs` holds it that way: reset leaves `RxRDY` clear, and a
-/// program that reads the receive holding register without it is reading a
-/// register the chip has not filled. Making the choice unreachable is worth
-/// more than a value nobody can confirm.
+/// Emptying them is the reading that makes "assumes the idle state" true,
+/// and it is the choice here. It is a choice: at power-on there is no
+/// previous content to keep, so the question only has force for a reset
+/// during operation, and the release drives nothing through this port.
+///
+/// `tests/serial.rs` holds the consequence rather than the value: reset
+/// leaves `RxRDY` clear, so a program following the protocol never reads a
+/// register the chip has not filled. What would settle the transmit side is
+/// a real part --- load the holding register, reset, enable the
+/// transmitter, and see whether the character goes out.
 ///
 /// Not modelled, and what each would need: synchronous mode (`MR1` rate
 /// `00`), in which this transmits and receives nothing; the break the
