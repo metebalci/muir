@@ -156,7 +156,7 @@ fn the_sixty_cycle_clock_counts_at_sixty_hertz() {
 fn the_same_address_reads_a_clock_and_writes_a_timer() {
     let mut b = IoBoard::default();
     b.write(ioboard::CLOCK, 0o1350, 0);
-    assert_eq!(b.interval_timer(), 0o1350, "loaded, though nothing counts it down");
+    assert_eq!(b.interval_timer(), 0o1350, "loaded, and counting down from there");
     assert_eq!(b.read(ioboard::CLOCK, 0), 0, "reading it is still the 60-cycle clock");
 }
 
@@ -322,4 +322,93 @@ fn a_unibus_init_clears_the_enables_and_the_chaosnet_interface_and_keeps_the_res
         0,
         "the Chaosnet interface's read/write bits are cleared, as at power-up"
     );
+}
+
+/// **All four interrupt enables are acted on.** The three 74LS08s at IOBKBD
+/// 0D26 make `KBD.IREQ`, `MOUSE.IREQ` and `CLOCK.IREQ`, each a ready bit
+/// with its enable, and the 74LS32 at 0D25 ors the first two into
+/// `KBD/MOUSE.IREQ`.
+#[test]
+fn each_ready_bit_asks_for_an_interrupt_when_its_enable_is_set() {
+    let mut b = IoBoard::default();
+
+    // The keyboard.
+    b.press(0o123);
+    assert_eq!(b.interrupt_request(0), None, "ready, and no enable");
+    b.write(ioboard::CSR, csr::KBD_INT_ENABLE, 0);
+    assert_eq!(b.interrupt_request(0), Some(ioboard::KBD_VECTOR));
+    b.read(ioboard::KBD_LOW, 0);
+    assert_eq!(b.interrupt_request(0), None, "the read took KBD READY away");
+
+    // The mouse, on the keyboard's own vector.
+    b.write(ioboard::CSR, 0, 0);
+    b.mouse_move(1, 1);
+    assert_eq!(b.interrupt_request(0), None, "ready, and no enable");
+    b.write(ioboard::CSR, csr::MOUSE_INT_ENABLE, 0);
+    assert_eq!(b.interrupt_request(0), Some(ioboard::KBD_VECTOR), "260 is KBD/MOUSE.IREQ's");
+    b.read(ioboard::MOUSE_Y, 0);
+    assert_eq!(b.interrupt_request(0), None, "the read took MOUSE READY away");
+
+    // The clock, which comes up ready and is put down by a load.
+    b.write(ioboard::CSR, csr::CLOCK_INT_ENABLE, 0);
+    assert_eq!(b.interrupt_request(0), Some(ioboard::CLOCK_VECTOR), "ready from reset");
+    b.write(ioboard::CLOCK, 100, 0);
+    assert_eq!(b.interrupt_request(0), None, "-LOAD INTERVAL clears the 74LS279");
+    assert_eq!(b.interrupt_request(100 * ioboard::INTERVAL_TICK_NS), Some(ioboard::CLOCK_VECTOR));
+}
+
+/// **Who is named first.** The 74S175 at IOBINT 0F14 latches the four on
+/// the grant and the 74LS00s at 0E12 make the vector from what it holds:
+/// `V2 = (SER AND NOT CHAOS) OR CLOCK` and `V3 = CLOCK OR CHAOS`, so the
+/// clock is named before the Chaosnet before the serial port before the
+/// keyboard and mouse.
+#[test]
+fn the_clock_is_named_before_the_keyboard() {
+    let mut b = IoBoard::default();
+    b.press(0o123);
+    b.mouse_move(1, 1);
+    b.write(ioboard::CSR, csr::KBD_INT_ENABLE | csr::MOUSE_INT_ENABLE, 0);
+    assert_eq!(b.interrupt_request(0), Some(ioboard::KBD_VECTOR));
+
+    b.write(ioboard::CSR, csr::KBD_INT_ENABLE | csr::MOUSE_INT_ENABLE | csr::CLOCK_INT_ENABLE, 0);
+    assert_eq!(b.interrupt_request(0), Some(ioboard::CLOCK_VECTOR), "the clock, over both");
+
+    assert_eq!(ioboard::CLOCK_VECTOR, 0o274);
+    assert_eq!(ioboard::KBD_VECTOR, 0o260);
+}
+
+/// `INTERVAL-TIMER-VECTOR 274`, as microcode 323 assigns it.
+#[test]
+fn the_clock_vector_is_the_microcodes_own() {
+    let Some(interrupt) = release("ucadr/uc-interrupt.lisp") else { return };
+    assert_eq!(
+        ioboard::CLOCK_VECTOR as u32,
+        assign_octal(&interrupt, "INTERVAL-TIMER-VECTOR"),
+        "INTERVAL-TIMER-VECTOR"
+    );
+}
+
+/// **The interval timer counts down from what was written**, at 16 us a
+/// count, and `CLOCK READY` comes back when it runs out. MIT's `iob.text`:
+/// storing `n` "turns off clock ready CSR<6>, delays 16 x `n` microseconds,
+/// then turns clock ready back on". Discrepancy 74 is the microcode
+/// believing the opposite.
+#[test]
+fn the_interval_timer_counts_down_and_clock_ready_comes_back() {
+    let ready = |b: &mut IoBoard, ns| b.read(ioboard::CSR, ns) & csr::CLOCK_READY != 0;
+    let mut b = IoBoard::default();
+    assert!(ready(&mut b, 0), "the 74LS279 reads set until a load, as the netlist board does");
+
+    b.write(ioboard::CLOCK, 3, 0);
+    assert_eq!(b.interval_timer(), 3);
+    assert!(!ready(&mut b, 0), "-LOAD INTERVAL on the latch's R");
+    assert!(!ready(&mut b, 3 * ioboard::INTERVAL_TICK_NS - 1), "one nanosecond short");
+    assert!(ready(&mut b, 3 * ioboard::INTERVAL_TICK_NS), "-INTERVAL OVER");
+    assert!(ready(&mut b, 1_000_000_000), "and it stays set");
+
+    assert_eq!(ioboard::INTERVAL_TICK_NS, 16_000, "16 USEC CLK");
+    // The whole sixteen bits, "just over 1 second" in MIT's words.
+    b.write(ioboard::CLOCK, 0xffff, 0);
+    assert!(!ready(&mut b, 1_000_000_000));
+    assert!(ready(&mut b, 0xffff * ioboard::INTERVAL_TICK_NS));
 }
