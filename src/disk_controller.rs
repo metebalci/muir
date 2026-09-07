@@ -137,9 +137,10 @@ pub struct Controller {
     /// `STATUS<11>`, "Timeout Error.  Indicates that a disk operation took
     /// longer than 2.5 seconds.  This error stops the transfer."  Set at
     /// START for an operation that ends so, and shown once it has ended ---
-    /// at once for a command the model does not do, [`TIMEOUT_NS`] on for a
-    /// reserved code, which hangs the sequencer until the board's timer
-    /// stops it: `Controller::start`.
+    /// at once for a command the model does not do, [`TIMEOUT_NS`] on for
+    /// one that hangs the sequencer until the board's timer stops it, a
+    /// reserved code or a wait on a drive that is not there:
+    /// [`Controller::hang`].
     timeout: bool,
     /// Read back as register 1.  MIT puts it on the controller --- "Address
     /// of the last memory reference made by the disk control" --- so it is
@@ -176,13 +177,12 @@ impl Controller {
     /// The status word.  Every bit here is `DCSTS`'s own name for the signal
     /// on that Xbus line, and MIT's text says the same.
     ///
-    /// What is not modelled: `<23>` internal parity, `<19:12>` the
-    /// memory-parity, header, ECC, overrun, aborted and start-block errors,
-    /// `<8>` off-cylinder, `<5>` no unit selected and `<4>` multiple units
-    /// selected.  None of them can happen here,
-    /// and the boot PROM's `AWAIT-DRIVE-READY` requires bits 4, 5, 6, 8, 9
-    /// and 10 to be clear before it will go on.  `<11>`, the timeout error,
-    /// is what a command the model does not do ends with.
+    /// What is not modelled: `<23>` internal parity, `<19:14>` the
+    /// memory-parity, header, ECC and overrun errors, `<12>` the start-block
+    /// error and `<4>` multiple units selected.  None of them can happen
+    /// here, and the boot PROM's `AWAIT-DRIVE-READY` requires bits 4, 5, 6,
+    /// 8, 9 and 10 to be clear before it will go on.  `<11>`, the timeout
+    /// error, is what a command the model does not do ends with.
     pub fn status(&self) -> u32 {
         let mut v = self.block_counter() << 24;
         if self.read_compare_difference {
@@ -198,6 +198,11 @@ impl Controller {
         // for `TIMEOUT_NS` first.
         if self.timeout && self.not_active() {
             v |= 1 << 11;
+        }
+        // `<13>` "Transfer Aborted": `STOPPED BY ERROR`, preset while any
+        // lossage stands, `Controller::lossage`.
+        if self.lossage() {
+            v |= 1 << 13;
         }
         // `<3>` "Interrupt Request.  1 means the disk controller is asserting
         // -XBUS.INTR."
@@ -219,10 +224,16 @@ impl Controller {
                     v |= 1 << 2;
                 }
             }
-            // `<9>` "Selected Unit not On-line.  The heads are not loaded, the
-            // disk is not powered on, or there is no disk at the specified
-            // unit number."
-            None => v |= 1 << 9,
+            // Nothing on the cable: `<9>` "Selected Unit not On-line.  The
+            // heads are not loaded, the disk is not powered on, or there is
+            // no disk at the specified unit number"; `<8>` not on cylinder,
+            // `-ON CYL SYNC` never coming; and `<5>` "No Unit Selected ...
+            // Happens if no disk is plugged into the selected unit number",
+            // `NO SELECT` being `UNIT 0 SELECTED` through the 74LS14 at
+            // DCTRID 0A07.  All three are levels, there before any command:
+            // `a_transfer_with_no_drive_stops_by_error` in
+            // `tests/cadrdc_netlist.rs` reads them off the board.
+            None => v |= 1 << 9 | 1 << 8 | 1 << 5,
         }
         // `<1>` "Any Attention.  Some unit has an attention, you have to
         // select them one after another to find out which."
@@ -282,6 +293,42 @@ impl Controller {
         if into < crate::disk_unit::pulse_ns(k) { (k + n - 1) % n } else { k }
     }
 
+    /// `-LOSSAGE`, the level behind `STATUS<13>`: "Transfer Aborted.  This
+    /// bit comes on for any error that stops the operation prematurely.
+    /// Normally some other bit will also be on, but if this bit is the only
+    /// error bit on, some error condition came on then went away again."
+    ///
+    /// On the board the bit is `STOPPED BY ERROR`, the 74LS74 at DCBUSY
+    /// 0B06: `-LOSSAGE` on its preset, `-START` on its clear and `-RESET
+    /// ERR` clocking in a zero, [`Controller::reset_errors`].  So it is a
+    /// level while lossage stands, and a latch after the lossage goes,
+    /// until the next START or store into the command register --- MIT's
+    /// "came on then went away again".  `-LOSSAGE` is the 74LS21 at 0B15
+    /// over four: the transfer lossage, the 74S260 at 0B13 over `TIMEOUT
+    /// ERROR`, `NXM ERROR`, the two overruns and `MEM PARITY ERROR`; the
+    /// format and ECC lossages, which need a track format; and the disk
+    /// lossage, the other 74S260 at 0B13 over `NO SELECT`, `MULTIPLE
+    /// SELECT`, `SEL UNIT FAULT`, `SEL UNIT SEEK ERROR` and `-SEL UNIT ON
+    /// LINE`, which the 74LS32 at 0C16 lets through only with `CMD2` low:
+    /// a seek or a miscellaneous command runs with the drive in any state,
+    /// and a command that uses the memory channel does not start.
+    ///
+    /// Only the level is kept.  Every lossage this model can raise goes
+    /// away by a store into the command register --- the timeout and the
+    /// NXM cleared by it, the fault and the seek error by the recalibrate
+    /// or fault clear it stores, whose `CMD2` masks the disk lossage from
+    /// the store on --- and that store clocks the flop clear too, so the
+    /// latch never outlives the level here.
+    fn lossage(&self) -> bool {
+        let transfer = (self.timeout && self.not_active()) || self.nxm;
+        let disk = self.cmd & 0o4 == 0
+            && match &self.units[self.selected()] {
+                None => true,
+                Some(u) => u.fault || u.seek_error,
+            };
+        transfer || disk
+    }
+
     /// `-XBUS.INTR`, which the bus interface carries to the cpu as `INT`.
     ///
     /// A level, off the two enables in the command register.  "Done
@@ -334,6 +381,7 @@ impl Controller {
             // reset condition."
             0 => {
                 self.cmd = v;
+                self.reset_errors();
                 if v & 0o17 == 0o16 {
                     self.reset();
                 }
@@ -355,10 +403,11 @@ impl Controller {
     /// seek, 05 at ease, 1005 recalibrate, 405 fault clear, 06 offset clear,
     /// 16 stop/reset.
     fn start(&mut self, main: &mut [u32]) {
-        if self.units[self.selected()].is_none() {
-            // Start with no drive on that unit: nothing happens and the
-            // controller stays ready, so the microcode's on-line wait goes on
-            // reading `STATUS<9>`.
+        if self.units[self.selected()].is_none() && self.cmd & 0o4 == 0 {
+            // A command that uses the memory channel, with no drive on the
+            // unit: the disk lossage presets `BUSY` off before the sequencer
+            // runs, so nothing happens and the controller stays ready ---
+            // the microcode's on-line wait goes on reading `STATUS<9>`.
             return;
         }
         match self.cmd & 0o17 {
@@ -390,13 +439,24 @@ impl Controller {
             // through both.
             0o04 | 0o14 => {
                 let (cylinder, head, block) = decode_da(self.da);
-                let u = self.units[self.selected()].as_mut().unwrap();
-                u.seek(cylinder, head, block);
-                u.attention = true;
+                match self.units[self.selected()].as_mut() {
+                    Some(u) => {
+                        u.seek(cylinder, head, block);
+                        u.attention = true;
+                    }
+                    // Sector 4 waits for on-cylinder, which no drive gives:
+                    // the board sits at its first step, busy, with `CMD2`
+                    // masking the empty cable's lossage.
+                    None => self.hang(),
+                }
             }
             0o05 | 0o15 => {
                 // "0005 At ease.  Resets attention on the selected unit."
-                let u = self.units[self.selected()].as_mut().unwrap();
+                // Sector 5 "does not start by awaiting seek completion the
+                // way the other commands do" and runs on an empty cable to
+                // done with no error; with no drive there is nothing to
+                // reset.
+                let Some(u) = self.units[self.selected()].as_mut() else { return };
                 u.attention = false;
                 // "<9> Recalibrate.  In combination with command 5, causes
                 // the disk to return the heads to cylinder 0" --- "without
@@ -416,7 +476,9 @@ impl Controller {
                 }
             }
             // "0006 Offset clear.  Take the heads out of the offset state."
-            // There is no servo offset here to take them out of.
+            // There is no servo offset here to take them out of.  With no
+            // drive, sector 6 waits at its first step as the seek does.
+            0o06 if self.units[self.selected()].is_none() => self.hang(),
             0o06 => {}
             // Reset took effect in the store to the command register; a
             // START with it still there starts nothing.
@@ -431,10 +493,7 @@ impl Controller {
             // "will currently hang the controller, causing a timeout error
             // (bit 11 in the status register.)": active, with no error,
             // until the board's timer stops it `TIMEOUT_NS` on.
-            0o07 | 0o17 => {
-                self.timeout = true;
-                self.done_at = self.now + TIMEOUT_NS;
-            }
+            0o07 | 0o17 => self.hang(),
             // Read All and Write All move the bits of a track, headers and
             // all, and 01, 03 and 12 --- the other combinations MIT's table
             // leaves out --- enter the Write, Write All and Read All sectors
@@ -448,14 +507,40 @@ impl Controller {
         }
     }
 
+    /// A command the sequencer never finishes: active, with no error, until
+    /// the board's timer stops it [`TIMEOUT_NS`] on, with the timeout error
+    /// and, through the transfer lossage, `STOPPED BY ERROR`.  Which waits
+    /// the netlist board sits in with no drive is measured in
+    /// `tests/cadrdc_netlist.rs`; whether it then times out is the hand
+    /// jumper `J5-16 : J5-41` of `cadrdc/disk.hand`, "Timeout Enable
+    /// jumper", which this model has in, as MIT's text has it.
+    fn hang(&mut self) {
+        self.timeout = true;
+        self.done_at = self.now + TIMEOUT_NS;
+    }
+
+    /// `-RESET ERR`: the 74LS08 at DCCMD 0D14 pulls it for `-LOAD CMD` as
+    /// for `-XINIT`, so every store into the command register clears the
+    /// error flops --- the 74LS273s at 0C12 and 0D24 (NXM, CCW cycle, read
+    /// compare difference, memory parity, the overruns, header compare,
+    /// start block, ECC soft), the 74LS279 at 0B12 (timeout, header ECC,
+    /// ECC hard) and, clocked with a zero, `STOPPED BY ERROR` at 0B06.
+    /// `BUSY` is not among them: a hung sequencer stays hung and its timer
+    /// keeps counting, so a timeout still to come is kept.
+    fn reset_errors(&mut self) {
+        self.read_compare_difference = false;
+        self.ccw_cycle = false;
+        self.nxm = false;
+        if self.not_active() {
+            self.timeout = false;
+        }
+    }
+
     /// Reset: the transfer in flight stopped and the errors cleared, the
     /// registers left as they are.
     fn reset(&mut self) {
         self.done_at = self.now;
-        self.read_compare_difference = false;
-        self.ccw_cycle = false;
-        self.nxm = false;
-        self.timeout = false;
+        self.reset_errors();
     }
 
     /// `-XBUS INIT` on the backplane, `-XINIT` off the 26S10 at DCCHAN

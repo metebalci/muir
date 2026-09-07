@@ -22,9 +22,12 @@ mod status {
     pub const READ_COMPARE_DIFFERENCE: u32 = 1 << 22;
     pub const TIMEOUT: u32 = 1 << 11;
     pub const NXM: u32 = 1 << 20;
+    pub const ABORTED: u32 = 1 << 13;
     pub const SEEK_ERROR: u32 = 1 << 10;
     pub const NOT_ON_LINE: u32 = 1 << 9;
+    pub const NOT_ON_CYLINDER: u32 = 1 << 8;
     pub const FAULT: u32 = 1 << 6;
+    pub const NO_SELECT: u32 = 1 << 5;
     pub const INTERRUPT_REQUEST: u32 = 1 << 3;
     pub const ATTENTION: u32 = 1 << 2;
     pub const ANY_ATTENTION: u32 = 1 << 1;
@@ -32,6 +35,14 @@ mod status {
     /// What `AWAIT-DRIVE-READY` in the boot PROM demands be clear: "Bits
     /// 4,5,6,8,9,10", which it builds as `A-3560`.
     pub const DRIVE_NOT_READY: u32 = 0o3560;
+    /// What a controller with nothing on its cable reads, before any
+    /// command and after a transfer's START: not active, not on line, not
+    /// on cylinder, no unit selected, and transfer aborted --- the disk
+    /// lossage those three make presets `STOPPED BY ERROR` while the
+    /// command register holds a command with `CMD2` low, which a fresh
+    /// register does.  `0o21441` is the word off the netlist board in
+    /// `tests/cadrdc_netlist.rs`.
+    pub const NO_DRIVE: u32 = NOT_ACTIVE | NO_SELECT | NOT_ON_CYLINDER | NOT_ON_LINE | ABORTED;
 }
 
 /// The four registers, by their offsets from `REGS`.
@@ -81,32 +92,102 @@ fn read_block(d: &mut Controller, main: &mut [u32], block: u32, page: u32) {
 #[test]
 fn a_controller_with_no_drive_is_ready_and_off_line() {
     let d = Controller::default();
-    assert_eq!(d.read(reg::STATUS), status::NOT_ACTIVE | status::NOT_ON_LINE);
+    assert_eq!(status::NO_DRIVE, 0o21441, "the word the netlist board reads");
+    assert_eq!(d.read(reg::STATUS), status::NO_DRIVE);
 }
 
-/// **A transfer takes the disk's time when a run asks for it.** With
-/// `access_ns` set, a read started at one instant leaves the controller
-/// active, with no done interrupt, until that many nanoseconds later; the
-/// words are in memory from the start, as before. With it zero the
-/// controller is never active, as every run has had it.
+/// **With no drive, each command does what the board does.** Measured on
+/// the netlist controller after a reset before each,
+/// `with_no_drive_only_the_miscellaneous_command_completes` in
+/// `tests/cadrdc_netlist.rs`: a read stops before it starts, the disk
+/// lossage presetting `BUSY` off, and the word stays `NO_DRIVE`; at ease,
+/// recalibrate and fault clear run to done with no error, `CMD2` masking
+/// the lossage, so `<13>` is cleared by the START and stays clear; a seek
+/// or an offset clear runs and waits at its first step for a drive that
+/// never answers, `<13>` clear and the controller active, which on MIT's
+/// board with the timeout jumper in ends `TIMEOUT_NS` on with the timeout
+/// error and, through the transfer lossage, `<13>` again; and a reset
+/// puts the word back, the empty command register letting the lossage
+/// through.
 #[test]
-fn a_transfer_takes_the_access_time_when_asked() {
-    let Some((mut d, mut main)) = loaded() else { return };
-    d.access_ns = 38_300_000;
+fn with_no_drive_each_command_does_what_the_board_does() {
+    let mut d = Controller::default();
+    let mut main = vec![0; 1 << 16];
     d.advance(1_000);
-    d.write(reg::COMMAND, 1 << 11, &mut main); // read, done interrupt enabled
-    d.write(reg::CLP, CLP, &mut main);
-    main[CLP as usize] = 2 << 8;
-    d.write(reg::DISK_ADDRESS, 0, &mut main);
+    read_block(&mut d, &mut main, 0, 2);
+    assert_eq!(d.status(), status::NO_DRIVE, "a read stops before it starts");
+    for cmd in [0o5, 0o1005, 0o405] {
+        d.write(reg::COMMAND, cmd, &mut main);
+        d.write(reg::START, 0, &mut main);
+        assert_eq!(d.status(), status::NO_DRIVE & !status::ABORTED, "{cmd:o}: done, no error");
+    }
+    let mut t = 1_000;
+    for cmd in [0o4, 0o6] {
+        d.write(reg::COMMAND, cmd, &mut main);
+        d.write(reg::START, 0, &mut main);
+        let waiting = status::NO_DRIVE & !(status::ABORTED | status::NOT_ACTIVE);
+        assert_eq!(d.status(), waiting, "{cmd:o}: waiting on the drive");
+        d.advance(t + TIMEOUT_NS - 1);
+        assert_eq!(d.status(), waiting, "{cmd:o}: still waiting");
+        d.advance(t + TIMEOUT_NS);
+        assert_eq!(d.status(), status::NO_DRIVE | status::TIMEOUT, "{cmd:o}: timed out");
+        d.write(reg::COMMAND, 0o16, &mut main);
+        d.write(reg::COMMAND, 0, &mut main);
+        assert_eq!(d.status(), status::NO_DRIVE, "{cmd:o}: after a reset");
+        t += TIMEOUT_NS + 1_000;
+        d.advance(t);
+    }
+}
+
+/// **Transfer Aborted follows any lossage.** `STOPPED BY ERROR` is preset
+/// while a lossage stands and cleared by a START or a store into the
+/// command register.  The timeout is a transfer lossage, so a reserved
+/// code's timeout brings `<13>` with `<11>`, and the next command stored
+/// takes both away.  A fault is a disk lossage: writing a read-only pack
+/// faults the drive and `<13>` comes with `<6>`; the fault clear that
+/// takes `<6>` away is a command with `CMD2` up, which masks the disk
+/// lossage from the moment it is stored, so `<13>` goes with the store
+/// and `<6>` with the START.
+#[test]
+fn transfer_aborted_follows_any_lossage() {
+    let (mut d, mut main) = blank();
+    d.advance(1_000);
+    d.write(reg::COMMAND, 0o7, &mut main);
     d.write(reg::START, 0, &mut main);
-    assert_eq!(d.status() & status::NOT_ACTIVE, 0, "active while the transfer runs");
-    assert!(!d.interrupt(), "no done while active");
-    d.advance(1_000 + 38_299_999);
-    assert_eq!(d.status() & status::NOT_ACTIVE, 0, "still active a nanosecond short");
-    d.advance(1_000 + 38_300_000);
-    assert_ne!(d.status() & status::NOT_ACTIVE, 0, "done at the access time");
-    assert!(d.interrupt(), "and the done interrupt with it");
-    assert_ne!(main[2 << 8], 0, "the words were there from the start");
+    assert_eq!(d.status() & (status::ABORTED | status::TIMEOUT | status::NOT_ACTIVE), 0, "hung");
+    d.advance(1_000 + TIMEOUT_NS);
+    let s = d.status();
+    assert_eq!(s & (status::ABORTED | status::TIMEOUT | status::NOT_ACTIVE), 0o24001, "{s:o}");
+    d.write(reg::COMMAND, 0o5, &mut main);
+    assert_eq!(d.status() & (status::ABORTED | status::TIMEOUT), 0, "the next command clears both");
+    d.write(reg::START, 0, &mut main);
+    assert_eq!(
+        d.status() & (status::ABORTED | status::TIMEOUT),
+        0,
+        "and the START keeps them clear"
+    );
+
+    d.units[0].as_mut().unwrap().read_only = true;
+    main[CLP as usize] = 1 << 8;
+    d.write(reg::COMMAND, 0o11, &mut main);
+    d.write(reg::CLP, CLP, &mut main);
+    d.write(reg::DISK_ADDRESS, 5, &mut main);
+    d.write(reg::START, 0, &mut main);
+    let s = d.status();
+    assert_eq!(s & (status::FAULT | status::ABORTED), status::FAULT | status::ABORTED, "{s:o}");
+    d.write(reg::COMMAND, 0o405, &mut main);
+    let s = d.status();
+    assert_eq!(
+        s & (status::FAULT | status::ABORTED),
+        status::FAULT,
+        "CMD2 masks the lossage: {s:o}"
+    );
+    d.write(reg::START, 0, &mut main);
+    assert_eq!(
+        d.status() & (status::FAULT | status::ABORTED),
+        0,
+        "the fault clear clears the fault"
+    );
 }
 
 /// The four registers are where MIT says they are, and reach the controller
@@ -117,7 +198,7 @@ fn the_registers_are_just_below_the_unibus() {
     let mut m = Machine::new();
     assert_eq!(REGS, 0o17377774);
     // Status, with no drive.
-    assert_eq!(m.bus_read(0o17377774), status::NOT_ACTIVE | status::NOT_ON_LINE);
+    assert_eq!(m.bus_read(0o17377774), status::NO_DRIVE);
     // The disk address register is the one register that reads back what was
     // written to it.
     m.bus_write(0o17377776, 0o12345670);
