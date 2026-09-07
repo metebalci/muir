@@ -41,8 +41,8 @@
 //! alone among the boards, until a boot through it has been run to the
 //! end. The other engines run the models always.
 //! `--disk-pack` takes a pack image --- the System 100 release's
-//! `disk-sys-100-0.img` --- and without it the vendored copy is used when it
-//! is there. The image is the pack's blocks end to end, 256 words of 32 bits
+//! `disk-sys-100-0.img` --- and there is no default: no flag is a drive
+//! with no pack in it. The image is the pack's blocks end to end, 256 words of 32 bits
 //! each, in the geometry's order. It is opened read-write and written as a
 //! drive writes its pack. After the image, in either order, come the
 //! drive's unit --- only 0 until the disk multiplexor is modelled --- and
@@ -403,10 +403,6 @@ enum TvBoard {
     LispmTv,
 }
 
-/// The pack the cosim tests run, used when `--disk-pack` names none: under
-/// the directory `muir` is run from.
-const VENDORED_PACK: &str = "vendor/run/disk-sys-100-0.img";
-
 /// Where the Chaosnet server's FILE service serves from when no root is
 /// named, beside the vendored pack and used the same way: taken when it
 /// is there, and without it there is no FILE service.
@@ -414,15 +410,18 @@ const VENDORED_PACK: &str = "vendor/run/disk-sys-100-0.img";
 /// A directory of its own rather than `vendor/` or the release, because
 /// the service writes, renames and deletes under its root and fetched
 /// material should not be in reach of a running machine by accident.
-/// The band asks its file host for `/tree/...`, and the release's own
-/// `sys` directory is what that host had there, so
+/// Each band asks its file host under a name of its own --- System 100's
+/// translates `SYS: SYS2; FOO LISP` to `//TREE//SYS2//FOO LISP`, and
+/// System 304's to `OZ: //sys//sys2//foo.lisp` --- so
 ///
 /// ```text
 /// mkdir -p vendor/run/file-root
-/// ln -s ../../system-100-0/sys vendor/run/file-root/tree
+/// ln -s ../../system-100-0/sys       vendor/run/file-root/tree
+/// ln -s ../../system-304-0/sys-304-0 vendor/run/file-root/sys
 /// ```
 ///
-/// makes `SYS: SYS2; FOO LISP` resolve. Left empty it is harmless.
+/// makes `SYS:` resolve for either, one root serving both. The fetch
+/// script for each release makes its own link. Left empty it is harmless.
 const VENDORED_FILE_ROOT: &str = "vendor/run/file-root";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -480,11 +479,19 @@ A simulator of the MIT CADR Lisp Machine.
                                a root. Each address is the sixteen bits in
                                octal, 3050, or subnet:host with each in
                                octal, 6:50 --- the same number, subnet in
-                               the high byte. [default: 3050,3060]
+                               the high byte. Which pair a run wants is the
+                               band's own: System 100's host table has this
+                               machine at 3050 and its file and time host
+                               at 3060, System 304's at 4401 and 4403, and
+                               a server answering anywhere else is a server
+                               the band never calls. [default: 3050,3060,
+                               which is System 100's pair; the System 304
+                               pack wants 4401,4403]
   --chaos-file-root <dir>
                                rtl, chip: the directory the Chaosnet server
                                serves as its /; the band asks it for
-                               /tree/sys/... It may not be /: the service
+                               /tree/sys/... on System 100 and /sys/... on
+                               System 304. It may not be /: the service
                                writes, renames and deletes under it.
                                [default: vendor/run/file-root when present;
                                with no root the server answers no FILE at
@@ -576,9 +583,9 @@ A simulator of the MIT CADR Lisp Machine.
                                disk multiplexor is modelled, and ro for the
                                drive's read-only switch --- the status word
                                says so, and a write faults. [default: unit
-                               0; vendor/run/disk-sys-100-0.img when
-                               present, and with no pack the boot waits on
-                               a drive that never answers]
+                               0; no pack unless one is named, which is a
+                               drive with no pack in it and a boot that
+                               waits on it for ever]
   --io-board netlist|model     chip: the I/O board. [default: netlist]
   --main-memory netlist|model  chip: main memory as MIT's board or as
                                rtl's model of it. [default: netlist]
@@ -746,16 +753,13 @@ fn default_file_root() -> Option<PathBuf> {
     }
 }
 
-/// The pack a run gets: the one named, else `vendor/run/disk-sys-100-0.img`
-/// under the current directory if it is there, else none. The path, the
-/// unit and the drive's read-only switch.
+/// The pack a run gets: the one `--disk-pack` names, and nothing at all
+/// otherwise. There is no default, because which pack a drive holds is not
+/// something to guess: no flag is a drive with no pack in it, which the
+/// boot waits on for ever. The path, the unit and the drive's read-only
+/// switch.
 fn pack_choice(pack: Option<&Pack>) -> Option<(PathBuf, usize, bool)> {
-    let vendored = PathBuf::from(VENDORED_PACK);
-    match pack {
-        Some(p) => Some((p.path.clone(), p.unit, p.read_only)),
-        None if vendored.exists() => Some((vendored, 0, false)),
-        None => None,
-    }
+    pack.map(|p| (p.path.clone(), p.unit, p.read_only))
 }
 
 /// What a file of flags is called where muir looks for one.

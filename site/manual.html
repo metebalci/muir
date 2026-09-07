@@ -35,7 +35,7 @@
   <div class="band">
     <h2>Running it</h2>
     <div class="prose">
-      <p>muir builds to one binary. Run it with no flags and it starts an <code>rtl</code> machine, presses the boot button, and runs the boot PROM with whatever pack it finds &mdash; <code>vendor/run/disk-sys-100-0.img</code>, where <code>tools/fetch-system-100.sh</code> puts the System 100 pack.</p>
+      <p>muir builds to one binary. Run it with no flags and it starts an <code>rtl</code> machine, presses the boot button, and runs the boot PROM with no pack in the drive, which the boot waits on for ever. A pack is named: <code>--disk-pack vendor/run/disk-sys-100-0.img</code>, where <code>tools/fetch-system-100.sh</code> puts the System 100 pack. System 304&rsquo;s pack boots too and wants <code>--chaos-address 4401,4403</code> with it.</p>
 <pre class="cmd">target/release/muir</pre>
       <p>One engine at a time: <code>--micro</code>, <code>--rtl</code> or <code>--chip</code>, and <code>--rtl</code> is what you get without one. A run goes on until a stop, a halt or ^C.</p>
       <p>Every run says what it is before it starts a microcycle, one line a thing, on stderr. Nothing here is hidden state: if a run behaves oddly, the reason is usually in this block.</p>
@@ -76,7 +76,8 @@ stop: after 2000000 microcycles
         <dd>
         <p><b>rtl, chip:</b> this machine&rsquo;s Chaosnet address, always, and after a comma the Chaosnet server&rsquo;s &mdash; the address muir&rsquo;s server on the other end of the cable answers at.</p>
         <p>Each address is the sixteen bits in octal, <code>3050</code>, or subnet:host with each in octal, <code>6:50</code> &mdash; the same number, subnet in the high byte.</p>
-        <p>Default: <code>3050,3060</code>.</p>
+        <p>Which pair a run wants is the band&rsquo;s own, out of its host table: System 100&rsquo;s puts this machine at <code>3050</code> and its file and time host at <code>3060</code>, System 304&rsquo;s at <code>4401</code> and <code>4403</code>. A server answering anywhere else is one the band never calls, and the machine then boots but stops to ask for the date and reaches no files.</p>
+        <p>Default: <code>3050,3060</code>, which is System 100&rsquo;s pair. The System 304 pack wants <code>4401,4403</code>.</p>
         </dd>
       </div>
       <div>
@@ -160,7 +161,7 @@ stop: after 2000000 microcycles
         <p>The pack in a drive: its blocks end to end. The file is only ever read; a block the machine writes is kept in memory for the run, and goes into a checkpoint, so the image stays as fetched.</p>
         <p>After the image, in either order: the unit, only 0 until the disk multiplexor is modelled, and <code>ro</code> for the drive&rsquo;s read-only switch &mdash; the status word says so, and a write faults.</p>
         <p>Without <code>ro</code> the image is opened read-write and a written block goes into the file, as a drive writes its pack. With it the file is opened read-only and a written block stays in the run, so it reaches a checkpoint but not the image.</p>
-        <p>Default: unit 0; <code>vendor/run/disk-sys-100-0.img</code> when present, and with no pack the boot waits on a drive that never answers.</p>
+        <p>Default: unit 0; no pack unless one is named, which is a drive with no pack in it and a boot that waits on it for ever.</p>
         </dd>
       </div>
       <div>
@@ -293,7 +294,7 @@ engine: rtl</pre>
       <p>While a machine runs, on any of the three engines, a line on stdin is a command to <em>muir</em> rather than to the machine &mdash; the machine&rsquo;s own keyboard is <a href="#terminal">the terminal&rsquo;s</a>. It is read from a pipe, or from a terminal muir is in the foreground of, and acted on between two microcycles.</p>
       <p><code>muir: </code> is written while the machine is held, which is when muir is waiting to be told what to do next; it is not written down a pipe, where the answers alone are wanted. A line typed while the machine is running is acted on all the same &mdash; there is just no prompt in front of it, because muir is not waiting.</p>
       <p>^C holds the machine at the prompt, and says where it stopped. A second ^C while held, or a ^C with no prompt to go on from, ends the run as <code>quit</code> does, with the recording and the checkpoint written. A hold nothing can run on &mdash; stdin has ended, so no <code>continue</code> will ever come &mdash; ends the run the same way rather than standing there.</p>
-      <p>A machine that stops <em>itself</em> is held here too, and says why. <code>(si:%halt)</code> in System 100 runs <code>HALT-CONS</code>, which under <code>ERRSTOP</code> drops <code>MACHRUN</code> with <code>RUN</code> still set; the statistics counter under <code>STATHENB</code> does the same. From there no microcycle runs, and nothing about stepping says so &mdash; the screen simply stops &mdash; so muir reads it off <code>FLAG-1</code>, where a console reads it, and holds rather than spinning. <code>continue</code> and <code>step</code> say so as well; <code>boot</code> presses the button that starts it again. <code>chip</code> holds the same way, off the nets those registers are buffered from, it being a netlist and not an engine with registers to read.</p>
+      <p>A machine that stops <em>itself</em> is held here too, and says why. <code>(si:%halt)</code> in the band runs <code>HALT-CONS</code>, which under <code>ERRSTOP</code> drops <code>MACHRUN</code> with <code>RUN</code> still set; the statistics counter under <code>STATHENB</code> does the same. From there no microcycle runs, and nothing about stepping says so &mdash; the screen simply stops &mdash; so muir reads it off <code>FLAG-1</code>, where a console reads it, and holds rather than spinning. <code>continue</code> and <code>step</code> say so as well; <code>boot</code> presses the button that starts it again. <code>chip</code> holds the same way, off the nets those registers are buffered from, it being a netlist and not an engine with registers to read.</p>
     </div>
 
     <dl class="flags">
