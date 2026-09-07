@@ -201,6 +201,20 @@ pub const IDLE_OUT_PROMISE_NS: u64 = 440;
 /// `-MEMRQ` up at 970 ns after the debug request, `NPG1 IN` down and
 /// `DBUB MASTER` up at 1080.  With the grant already withdrawn the master
 /// sets the instant `-MEMRQ` rises.
+///
+/// **Held to the nanosecond** by
+/// `chip_and_rtl_arbitrate_a_debug_cycle_against_a_running_processor_alike`
+/// in `tests/chip.rs`, which runs a debug request against a processor whose
+/// own Unibus cycle is in flight: 109 fails there and so does 111.
+///
+/// Do not conclude from a sweep that deletes this arm that nothing checks
+/// it.  At 110 the arm is *behaviour-preserving*: `-MEMRQ` plus 110 is
+/// exactly the instant the long way round --- `Granted` to `Selected` at
+/// the next master clock edge --- reaches, so removing the arm leaves every
+/// sequence in that file passing while changing the constant by one
+/// nanosecond does not.  The two are different questions.  Whether the arm
+/// is distinguishable from the edge route at all is a question about some
+/// speed other than extra slow, which is the only one the board tests run.
 pub const GRANT_WITHDRAW_NS: u64 = 110;
 
 /// A mapped write into `MD`, [`Responder::MapMd`]: `-LOADMD ACK` and with
