@@ -183,8 +183,13 @@ pub struct Jump {
     pub target: u16,
     /// `IR<9>` --- return: pop the target off the microcode stack.
     pub r: bool,
-    /// `IR<8>` --- push the return address.  `p && r` on a JUMP instead means
-    /// "write the control store", not a jump at all.
+    /// `IR<8>` --- push the return address.  `p && r` on a JUMP means "write
+    /// the control store" rather than jumping, but the push is **not**
+    /// special-cased on the board: the 74S64 at CONTRL 3E26 makes `-SPUSH`
+    /// with no `IWRITE` in any of its four AND groups, so a write pushes
+    /// like any other call and the registered `IWRITED` pops it on the next
+    /// cycle.  The pointer ends where it began with the pushed word still
+    /// above it.
     pub p: bool,
     /// `IR<7>` --- inhibit the next instruction.
     pub n: bool,

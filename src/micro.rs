@@ -699,20 +699,36 @@ impl Micro {
         // P and R together on a JUMP is not a jump: it writes the control
         // store from the A and M sources.
         //
-        // **It really costs two microcycles, and this engine spends neither.**
-        // `IWRITED` at CONTRL 3D26 is the registered `IWRITE` and drives both
-        // `N` and `POPJ` in the microcycle after, so the board loses one
-        // cycle to this instruction's `N` and another to `IWRITED`'s, with
-        // the `POPJ` bringing the PC back. This engine special-cases the
-        // instruction and neither pushes nor pops.
+        // **The board pushes and then pops, and so does this.** Page CONTRL:
+        // the 74S64 at 3E26 makes `-SPUSH` from four AND groups, the first
+        // `IRJUMP AND -IR6 AND IR8 AND JCOND`, and **no group has `IWRITE`
+        // in it** --- `IWRITE` is decoded on its own at the 74S11 3E29,
+        // `IRJUMP AND IR8 AND IR9`, and never reaches 3E26. A control-store
+        // write is a jump-always with P, so that first group is satisfied
+        // and the machine pushes. On the next cycle the 74S175 at 3D26 has
+        // `IWRITED`, the open-collector 74S08 at 3D21 gives
+        // `-POPJ = -IPOPJ AND -IWRITED`, and it pops.
         //
-        // Inhibiting two cycles here is **not** the fix: it kills the two
-        // instructions after the write instead of returning to the first of
-        // them. Doing it properly
-        // means modelling the push and the `POPJ`, which is a change to the
-        // pipeline rather than to a counter.
+        // So the stack pointer ends where it began with the pushed word
+        // still in the slot above it, which is what a console reading the
+        // stack sees. Read off `data/CADR.netlist` and confirmed pin for pin
+        // against MIT's own wire list `cadrwd/cadr4.wlr`; no other
+        // implementation is cited, and none is needed.
+        //
+        // It really costs two microcycles and this engine spends neither in
+        // the pipeline: `IWRITED` drives `N` as well as `POPJ`, so the board
+        // loses one cycle to this instruction's `N` and another to
+        // `IWRITED`'s. Inhibiting two cycles here would kill the two
+        // instructions after the write rather than returning to the first of
+        // them, so the cycles are charged to the clock instead and the
+        // pipeline is left alone.
         if p && r {
             self.m.imem[target as usize & (crate::machine::IMEM_WORDS - 1)] = Insn::new(self.iwr);
+            if !invert && self.jump_condition() {
+                let ret = if n { self.npc.wrapping_sub(1) } else { self.npc } & 0o37777;
+                self.m.push_spc(ret as u32);
+                self.m.pop_spc();
+            }
             // The two microcycles the board spends on it, both nopped and
             // so never long, go on the clock at the next step, where the
             // board spends them: `micro_keeps_the_machines_periods` parted
