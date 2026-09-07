@@ -1,0 +1,354 @@
+/* SPDX-FileCopyrightText: 2026 Mete Balci */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* muir --- a 1-bit page for a 1-bit machine.
+   Tone comes from dither, emphasis from reverse video, never from a hue. */
+
+/* The two faces, served from this directory rather than from Google: a
+   visitor should not have to ask a third party for a page to be readable.
+   Only the latin subset is carried, which is every character these pages
+   use --- ASCII, the em dash, the curly quotes, the section sign and the
+   copyright sign. Archivo is one variable file for the whole weight range;
+   IBM Plex Mono is three static ones. Both are under the SIL Open Font
+   License 1.1; `fonts/README.md` says where they came from. */
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('fonts/archivo.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('fonts/ibm-plex-mono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('fonts/ibm-plex-mono-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('fonts/ibm-plex-mono-600.woff2') format('woff2');
+}
+
+:root {
+  --paper: #ffffff;
+  --ink:   #000000;
+  --sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --measure: 76ch;
+  --band: 1116px;
+
+  /* The whole page is five sizes.  Anything that is not a heading, the lede
+     or running text is --t-small, whatever it is; the differences between
+     15 and 16px that used to be spread over four rules were invisible and
+     told nobody which one to reach for. */
+  --t-display: clamp(3.4rem, 13vw, 6.5rem);
+  --t-head:  1.6rem;   /* 27.2px --- h2, and the step numerals */
+  --t-lede:  1.2rem;   /* 20.4px --- the one line under the wordmark */
+  --t-body:  1rem;     /* 17px   --- running text, and h3 at weight 600 */
+  --t-small: 0.92rem;  /* 15.6px --- captions, tables, code, nav, footer */
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #000000; --ink: #ffffff; }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Every rem here is a fraction of the body's own size.  Left alone, html
+   stays at the browser's 16px while body sets 17px, and every secondary
+   size --- captions, tables, the footer --- comes out 6% smaller than it
+   reads in the stylesheet. */
+html { font-size: 17px; -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 var(--t-body)/1.65 var(--sans);
+  font-synthesis-weight: none;
+}
+
+/* ---------------------------------------------------------------- shell */
+
+.band { max-width: var(--band); margin: 0 auto; padding: 0 28px; }
+.prose { max-width: var(--measure); }
+
+section { padding: 56px 0 60px; border-top: 1px solid var(--ink); }
+section:first-of-type { border-top: 0; }
+
+/* ------------------------------------------------------------ typography */
+
+h1, h2, h3 { font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+
+h2 {
+  font-size: var(--t-head);
+  line-height: 1.15;
+  margin-bottom: 22px;
+}
+
+h3 {
+  font-size: var(--t-body);
+  letter-spacing: 0;
+  margin: 38px 0 10px;
+}
+
+p { margin: 0 0 18px; }
+p:last-child { margin-bottom: 0; }
+
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+
+/* Inline code is one size, not a fraction of whatever it sits in: at 0.92em
+   it compounded against every context and produced sizes nobody chose. */
+code, kbd { font: 500 var(--t-small) var(--mono); }
+
+ul { margin: 0 0 18px; padding-left: 1.15em; }
+li { margin-bottom: 8px; }
+li::marker { font-size: 0.92em; }
+
+.lede { font-size: var(--t-lede); line-height: 1.5; }
+
+/* ------------------------------------------------------------------ nav */
+
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--paper);
+  border-bottom: 1px solid var(--ink);
+}
+.topbar .band {
+  display: flex; align-items: baseline; gap: 24px;
+  padding-top: 11px; padding-bottom: 11px;
+}
+.topbar b { font: 600 var(--t-body)/1 var(--mono); letter-spacing: 0.02em; }
+/* The wordmark is the way back to the front page, and stays a mark: no
+   underline, under the pointer or otherwise. */
+.topbar a.home { text-decoration: none; color: inherit; }
+.topbar nav { margin-left: auto; display: flex; gap: 20px; flex-wrap: wrap; }
+.topbar nav a { font-size: var(--t-small); text-decoration: none; }
+.topbar nav a:hover { text-decoration: underline; }
+
+/* ---------------------------------------------------------------- hero */
+
+.hero {
+  background: var(--ink);
+  color: var(--paper);
+  padding: 84px 0 68px;
+  border: 0;
+}
+.hero h1 {
+  font-size: var(--t-display);
+  line-height: 0.86;
+  letter-spacing: -0.045em;
+  margin-bottom: 34px;
+}
+.hero .lede { max-width: 36ch; margin-bottom: 20px; }
+.hero p.sub { max-width: 60ch; margin-bottom: 34px; }
+
+.wire {
+  border: 1px solid var(--paper);
+  padding: 14px 16px 12px;
+  margin: 0 0 30px;
+  overflow-x: auto;
+}
+.wire pre {
+  margin: 0;
+  font: 400 var(--t-small)/1.5 var(--mono);
+  white-space: pre;
+}
+.wire figcaption {
+  margin-top: 10px;
+  font-size: var(--t-small);
+  max-width: 76ch;
+}
+
+.actions { display: flex; gap: 14px; flex-wrap: wrap; }
+.actions a {
+  display: inline-block;
+  padding: 11px 20px;
+  font: 500 var(--t-small) var(--sans);
+  text-decoration: none;
+  border: 1px solid var(--paper);
+}
+.actions a.solid { background: var(--paper); color: var(--ink); }
+.actions a:hover { text-decoration: underline; text-underline-offset: 4px; }
+
+/* -------------------------------------------------------------- figures */
+
+/* The figures set the page's width: the band is sized so its content column
+   is exactly as wide as they are, and they simply fill it.  They used to
+   break out of a narrower band and hang off both its edges, which left the
+   prose starting 88px inside them. */
+figure.fig { margin: 34px 0 36px; }
+.scroll { overflow-x: auto; padding-bottom: 4px; }
+.fig svg { display: block; width: 100%; min-width: 660px; height: auto; }
+/* A picture at its own size, wider than the band: the page scrolls to it
+   rather than shrinking it, which is what a browser showing an image file
+   does and what makes 1-bit text unreadable. */
+.full { overflow-x: auto; padding: 8px 0 4px; }
+.full img { display: block; width: 1538px; max-width: none; height: auto; margin: 0 auto; }
+
+/* A recording, shown small enough to sit in the page and linked at its own
+   size: the CADR screen is 1-bit text, and scaling the file down rather
+   than the picture would make it mush. */
+figure.shot a { display: block; width: fit-content; }
+figure.shot img {
+  display: block;
+  width: 100%; max-width: 620px; height: auto;
+  border: 1px solid var(--ink);
+  /* Two pixels right of the band's edge, so the picture lines up with the
+     text beside it rather than with the box the text sits in: a letter
+     starts a little inside its own edge, and a hard border at the same x
+     reads as sticking out to the left. */
+  margin-left: 2px;
+}
+
+/* A screenshot at the size the machine drew it: one image pixel to one page
+   pixel, since scaling 1-bit text either way turns it to mush.  It is
+   narrower than the column it sits in, and that is as wide as it goes.  The
+   border is for the status line at the foot of the screen, which is white
+   where the page is. */
+figure.screen img {
+  display: block;
+  width: 768px; max-width: 100%; height: auto;
+  border: 1px solid var(--ink);
+  margin-left: 2px;
+}
+
+.fig figcaption {
+  margin-top: 14px;
+  max-width: var(--measure);
+  font-size: var(--t-small);
+  line-height: 1.6;
+}
+
+.d-box  { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.d-fill { fill: var(--paper); stroke: currentColor; stroke-width: 1.5; }
+.d-tex  { stroke: currentColor; stroke-width: 1.5; }
+.d-dash { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.d-bus  { fill: none; stroke: currentColor; stroke-width: 4; }
+.d-plate { fill: var(--paper); }
+.d-t { font: 500 13px var(--sans); fill: currentColor; }
+.d-s { font: 400 11px var(--sans); fill: currentColor; }
+.d-m { font: 500 13px var(--mono); fill: currentColor; }
+.d-n { font: 400 11px var(--mono); fill: currentColor; }
+
+/* --------------------------------------------------------------- tables */
+
+.tablewrap { overflow-x: auto; margin: 26px 0 0; }
+table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: var(--t-small); }
+th, td { text-align: left; padding: 10px 16px 10px 0; vertical-align: top; }
+thead th { border-bottom: 1px solid var(--ink); font-weight: 600; }
+tbody td { border-bottom: 1px solid var(--ink); }
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { font: 500 var(--t-small)/1.65 var(--mono); white-space: nowrap; }
+td.name { font: 500 var(--t-small)/1.65 var(--mono); white-space: nowrap; }
+
+/* ------------------------------------------------------------ code, dither */
+
+pre.cmd {
+  border: 1px solid var(--ink);
+  padding: 16px 18px;
+  margin: 18px 0;
+  overflow-x: auto;
+  font: 400 var(--t-small)/1.7 var(--mono);
+}
+pre.cmd b { font-weight: 400; }
+
+.note {
+  border-left: 4px solid var(--ink);
+  padding: 2px 0 2px 16px;
+  margin: 22px 0;
+  max-width: var(--measure);
+  font-size: var(--t-small);
+}
+
+.dither {
+  background-image: radial-gradient(currentColor 0.55px, transparent 0.6px);
+  background-size: 3px 3px;
+}
+
+/* ---------------------------------------------------------------- steps */
+
+ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+ol.steps > li {
+  counter-increment: step;
+  border-top: 1px solid var(--ink);
+  padding: 26px 0 4px 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 0 20px;
+}
+ol.steps > li::before {
+  content: counter(step);
+  font: 600 var(--t-head)/1 var(--mono);
+}
+ol.steps h3 { margin-top: 0; }
+/* The prose in a step keeps the reading measure; the command blocks do not,
+   because the longest of them is wider than it and would otherwise scroll
+   sideways inside a box with room to spare beside it. */
+ol.steps > li > div > p { max-width: var(--measure); }
+
+/* ---------------------------------------------------------------- credits */
+
+dl.credits { margin: 0; max-width: 76ch; }
+dl.credits div {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 0 24px;
+  padding: 12px 0;
+  border-top: 1px solid var(--ink);
+}
+dl.credits dt { font: 500 var(--t-small) var(--mono); }
+dl.credits dd { margin: 0; font-size: var(--t-small); }
+
+/* ------------------------------------------------------------ flag lists */
+
+/* The manual's flags and prompt commands. The name goes on its own line
+   above what it does rather than in a column beside it: the longest of them
+   is wider than a column that would leave the description room to read. */
+dl.flags { margin: 0; max-width: var(--measure); }
+dl.flags div { padding: 14px 0; border-top: 1px solid var(--ink); }
+dl.flags dt { font: 500 var(--t-small) var(--mono); margin-bottom: 6px; }
+dl.flags dd { margin: 0; font-size: var(--t-small); }
+dl.flags dd p { margin: 0 0 8px; }
+dl.flags dd p:last-child { margin-bottom: 0; }
+
+/* ---------------------------------------------------------------- footer */
+
+footer {
+  background: var(--ink);
+  color: var(--paper);
+  padding: 44px 0;
+  font-size: var(--t-small);
+}
+footer .band { display: flex; gap: 20px 40px; flex-wrap: wrap; align-items: baseline; }
+footer p { margin: 0; max-width: 48ch; }
+footer a { color: inherit; }
+
+/* ---------------------------------------------------------------- narrow */
+
+@media (max-width: 720px) {
+  html { font-size: 16px; }
+  .band { padding: 0 20px; }
+  section { padding: 42px 0 46px; }
+  .hero { padding: 60px 0 52px; }
+  .topbar nav { gap: 14px; }
+  ol.steps > li { grid-template-columns: 40px minmax(0, 1fr); gap: 0 14px; }
+  ol.steps > li::before { font-size: var(--t-lede); }
+  dl.credits div { grid-template-columns: 1fr; gap: 4px; }
+}

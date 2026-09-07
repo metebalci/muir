@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muir manual &mdash; running the CADR simulator</title>
+<meta name="description" content="The muir manual: what the simulator does, how to run it, every command-line flag, the prompt and its commands, the terminal, the Chaosnet server, the two-machine lashup, and how the three engines work.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="band">
+    <a class="home" href="index.html"><b>muir</b></a>
+    <nav>
+      <a href="index.html#what">What it is</a>
+      <a href="index.html#engines">Engines</a>
+      <a href="index.html#machine">The machine</a>
+      <a href="index.html#install">Install</a>
+      <a href="manual.html">Manual</a>
+      <a href="https://github.com/metebalci/muir">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="band">
+    <h1>Manual</h1>
+    <p class="lede">What muir does when you run it, every flag it takes, and what it is doing underneath.</p>
+    <p class="sub">This is the whole of the program: <a href="#running">running it</a>, <a href="#flags">the command line</a>, <a href="#rc">flags in a file</a>, <a href="#prompt">the prompt</a>, <a href="#terminal">the terminal</a>, <a href="#files">what a run can write</a>, <a href="#chaosnet">the Chaosnet server</a>, <a href="#lashup">the two-machine lashup</a>, and <a href="#internals">how the engines work</a>. <a href="index.html#install">Installing</a> is on the front page.</p>
+  </div>
+</section>
+
+<section id="running">
+  <div class="band">
+    <h2>Running it</h2>
+    <div class="prose">
+      <p>muir builds to one binary. Run it with no flags and it starts an <code>rtl</code> machine, presses the boot button, and runs the boot PROM with whatever pack it finds &mdash; <code>vendor/run/disk-sys-100-0.img</code>, where <code>tools/fetch-system-100.sh</code> puts the System 100 pack.</p>
+<pre class="cmd">target/release/muir</pre>
+      <p>One engine at a time: <code>--micro</code>, <code>--rtl</code> or <code>--chip</code>, and <code>--rtl</code> is what you get without one. A run goes on until a stop, a halt or ^C.</p>
+      <p>Every run says what it is before it starts a microcycle, one line a thing, on stderr. Nothing here is hidden state: if a run behaves oddly, the reason is usually in this block.</p>
+<pre class="cmd">$ muir --stop-after 2000000
+engine: rtl
+memory: 32 boards, 2 MW
+pack: vendor/run/disk-sys-100-0.img in unit 0
+chaosnet: 3050, the server at 3060, file root vendor/run/file-root
+terminal: vnc://127.0.0.1:5900 --- RFB, no password
+stop: after 2000000 microcycles
+^C holds the machine at the prompt; help lists muir&rsquo;s commands</pre>
+      <p>Paths under the directory muir was run from are written relative to it, so the block stays readable wherever the tree lives.</p>
+      <p>At the end it reports what it did: microcycles, wall time, the rate, and that rate against the machine&rsquo;s own 145&nbsp;ns microcycle &mdash; <code>2.42x hardware</code> is faster than a CADR, <code>hardware/3827</code> is that many times slower.</p>
+<pre class="cmd">rtl      2000000 microcycles    0.194 s     10328518 microcycles/s    1.50x hardware
+       ran out at 2000000; PC 27501</pre>
+      <p>Addresses in the flags and in what muir prints are octal, as MIT writes them.</p>
+    </div>
+  </div>
+</section>
+
+<section id="flags">
+  <div class="band">
+    <h2>The command line</h2>
+    <div class="prose">
+      <p>Every flag muir takes, in the order <code>muir --help</code> lists them: the engine first, then the rest by name. A flag that only means something on some engines says which.</p>
+    </div>
+
+    <dl class="flags">
+      <div>
+        <dt>--micro | --rtl | --chip</dt>
+        <dd>
+        <p>The engine: microinstruction, register transfer, or chip level. <a href="#internals">How the engines work</a> says what each computes.</p>
+        <p>Default: <code>--rtl</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--chaos-address &lt;this&gt;[,&lt;server&gt;]</dt>
+        <dd>
+        <p><b>rtl, chip:</b> this machine&rsquo;s Chaosnet address, always, and after a comma the Chaosnet server&rsquo;s &mdash; the address muir&rsquo;s server on the other end of the cable answers at.</p>
+        <p>Each address is the sixteen bits in octal, <code>3050</code>, or subnet:host with each in octal, <code>6:50</code> &mdash; the same number, subnet in the high byte.</p>
+        <p>Default: <code>3050,3060</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--chaos-file-root &lt;dir&gt;</dt>
+        <dd>
+        <p><b>rtl, chip:</b> the directory the Chaosnet server serves as its <code>/</code>; the band asks it for <code>/tree/sys/...</code>. It may not be <code>/</code>: the service writes, renames and deletes under it.</p>
+        <p>Default: <code>vendor/run/file-root</code> when present; with no root the server answers no <code>FILE</code> at all.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--checkpoint &lt;file&gt;</dt>
+        <dd>
+        <p><b>micro, rtl:</b> write the machine&rsquo;s whole state to the file when the run stops, for <code>--resume</code> to start from: the engine, the processor&rsquo;s memories and registers, main memory, the display, the I/O board, and the drive with every block written to its pack.</p>
+        <p>Home in the terminal writes one as the run goes, as <code>muir-yyyymmdd-hhmmss.chk</code> in the current directory, and the run goes on.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>-c, --config &lt;file&gt;</dt>
+        <dd>
+        <p>The file of flags to read before the command line, which must be there. Without it muir reads <code>.muirrc</code> in the directory it was run from, or failing that <code>.muirrc</code> in the home directory. <a href="#rc">Flags in a file</a> has the rest.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--debug-cable-connect [&lt;endpoint&gt;]</dt>
+        <dd>
+        <p><b>rtl:</b> this machine is the debugger: its DBGOUT connects to a debuggee listening at the endpoint, a port, an address or address:port. Either end may be another program that speaks the cable&rsquo;s frames.</p>
+        <p>Default: <code>127.0.0.1:7661</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--debug-cable-listen [&lt;endpoint&gt;]</dt>
+        <dd>
+        <p><b>rtl, chip:</b> this machine is the debuggee at the end of a debug cable over TCP: its DBGIN waits at the endpoint for the debugger to connect, and then the two run in step. On <code>chip</code> it is the board&rsquo;s own connector, run an event at a time.</p>
+        <p>Default: <code>127.0.0.1:7661</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--debug-in-process</dt>
+        <dd>
+        <p><b>rtl:</b> the two-machine lashup in one process. A second machine runs beside this one with both debug cables between them, each machine&rsquo;s DBGOUT to the other&rsquo;s DBGIN, so that CC here debugs the other &mdash; or the other this one &mdash; as MIT ran two CADRs.</p>
+        <p>The other boots the same PROM with no pack unless one is named, and its console is CC&rsquo;s alone. The window and the stops are this machine&rsquo;s; both machines get a terminal, the other&rsquo;s at the display above this one&rsquo;s.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--debuggee-chaos-address &lt;this&gt;[,&lt;server&gt;]</dt>
+        <dd>
+        <p><b>rtl:</b> the other machine&rsquo;s Chaosnet, as <code>--chaos-address</code> is this machine&rsquo;s. The other machine has a Chaosnet of its own: its own cable with its own server on it, since muir&rsquo;s cable carries one machine. The two cannot hear each other over it, and the only wire between them is the debug cable.</p>
+        <p>Default: the same addresses as this machine&rsquo;s, which collide with nothing, the two cables never meeting.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--debuggee-chaos-file-root &lt;dir&gt;</dt>
+        <dd>
+        <p><b>rtl:</b> the directory the other machine&rsquo;s Chaosnet server serves, as <code>--chaos-file-root</code> is this machine&rsquo;s. Two servers rooted at one directory are two hosts sharing a filesystem, with nothing between them to keep one from writing what the other is reading.</p>
+        <p>Default: none, so its server answers <code>STATUS</code>, <code>TIME</code> and <code>UPTIME</code> but no <code>FILE</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--debuggee-disk-pack &lt;image&gt;[,&lt;unit&gt;][,ro]</dt>
+        <dd>
+        <p><b>rtl:</b> the other machine&rsquo;s pack, as <code>--disk-pack</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--debuggee-terminal [&lt;endpoint&gt;]</dt>
+        <dd>
+        <p><b>rtl:</b> the other machine&rsquo;s terminal &mdash; its display, keyboard and mouse over RFB, as <code>--terminal</code> is this machine&rsquo;s. In the lashup both machines are served a terminal, the other machine&rsquo;s at the display above this one&rsquo;s; this puts it elsewhere.</p>
+        <p>Default: the display above this machine&rsquo;s, <code>127.0.0.1:5901</code> when it is at :0.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--disk-controller netlist|model</dt>
+        <dd>
+        <p><b>chip:</b> the disk controller, as MIT&rsquo;s board or as a model of it.</p>
+        <p>Default: <code>model</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--disk-pack &lt;image&gt;[,&lt;unit&gt;][,ro]</dt>
+        <dd>
+        <p>The pack in a drive: its blocks end to end. The file is only ever read; a block the machine writes is kept in memory for the run, and goes into a checkpoint, so the image stays as fetched.</p>
+        <p>After the image, in either order: the unit, only 0 until the disk multiplexor is modelled, and <code>ro</code> for the drive&rsquo;s read-only switch &mdash; the status word says so, and a write faults.</p>
+        <p>Without <code>ro</code> the image is opened read-write and a written block goes into the file, as a drive writes its pack. With it the file is opened read-only and a written block stays in the run, so it reaches a checkpoint but not the image.</p>
+        <p>Default: unit 0; <code>vendor/run/disk-sys-100-0.img</code> when present, and with no pack the boot waits on a drive that never answers.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--io-board netlist|model</dt>
+        <dd>
+        <p><b>chip:</b> the I/O board.</p>
+        <p>Default: <code>netlist</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--main-memory netlist|model</dt>
+        <dd>
+        <p><b>chip:</b> main memory as MIT&rsquo;s board or as <code>rtl</code>&rsquo;s model of it.</p>
+        <p>Default: <code>netlist</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--main-memory-boards &lt;n&gt;</dt>
+        <dd>
+        <p>How many 64K-word boards, 1 to 60: main memory on every engine, and on <code>chip</code> the boards on the backplane.</p>
+        <p>Default: 32, the two million words.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--no-auto-boot</dt>
+        <dd>
+        <p><b>micro, rtl:</b> leave the boot button unpressed, as a CADR is when the power comes on: <code>RUN</code> is clear, the machine is halted, and nothing runs.</p>
+        <p>The run starts held at the prompt, so that the machine can be looked at as it came up; <code>boot</code> there presses the button, and the machine runs from that. Nothing else starts it: <code>continue</code> and <code>step</code> say so.</p>
+        <p>Default: muir presses the button for you.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--resume &lt;file&gt;</dt>
+        <dd>
+        <p><b>micro, rtl:</b> start from a checkpoint instead of cold: the engine that wrote it, the same pack under it, the Chaosnet plugged in afresh, and as many memory boards as it had, which <code>--main-memory-boards</code> may not gainsay. The stops count from here.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--stop-after &lt;microcycles&gt;</dt>
+        <dd>
+        <p>How many to run, then stop.</p>
+        <p>Default: none; the run goes on until a <code>--stop-at</code>, a halt or ^C.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--stop-at &lt;pc&gt;</dt>
+        <dd>
+        <p>Stop when the PC reaches this address with the boot PROM disabled: in microcode loaded into the control store. Octal, as MIT writes it.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--stop-at-prom &lt;pc&gt;</dt>
+        <dd>
+        <p>The same with the PROM enabled: an address in the boot PROM, below <code>1000</code>. The PROM and the control store share their low addresses, so a PC alone names two places.</p>
+        <p>With <code>--stop-after</code>, whichever comes first.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--terminal [&lt;endpoint&gt;]</dt>
+        <dd>
+        <p>Where the display, keyboard and mouse are served over RFB, RFC 6143, for any VNC viewer to connect to: a port, an address or address:port. Every run serves a terminal, asked for or not &mdash; the machine has no other way in or out &mdash; and this says where instead. A port named here is bound as it stands and the run stops if it cannot be; an unnamed one is where the first free display is looked for. An address other than the loopback lets another machine in &mdash; RFB&rsquo;s None security is the only type offered, so a viewer needs no password. <a href="#terminal">The terminal</a> has the rest.</p>
+        <p>Default: <code>127.0.0.1:5900</code>, VNC&rsquo;s display :0, or the first free display above it.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--tv netlist|model</dt>
+        <dd>
+        <p><b>chip:</b> the display.</p>
+        <p>Default: <code>netlist</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--tv-board simple-tv|lispm-tv</dt>
+        <dd>
+        <p><b>chip:</b> which display board.</p>
+        <p>Default: <code>simple-tv</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--tv-capture &lt;gif&gt;</dt>
+        <dd>
+        <p>Record the display to the file as the run goes, an animated GIF: each frame the rectangle that changed since the last, over the one before it, two colours and LZW, timed by the machine&rsquo;s own clock so it plays at the machine&rsquo;s speed. It stays small while the screen stays still. There is no default path; one must be given.</p>
+        <p>In the lashup it is both machines on one canvas, the debugger&rsquo;s screen at the left and the debuggee&rsquo;s at the right with a rule between them, so that a frame is one instant on both: the two machines are one clock there, which two files could not keep. Not over the debug cable, where they are two.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--tv-capture-no-time</dt>
+        <dd>
+        <p>Leave the clocks off the recording. By default a line below the screen, hiding no part of the display, shows the machine&rsquo;s simulated time at the left and the wall clock, the local time of day, at the right, each hh:mm:ss; this drops that line.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>-V, --version</dt>
+        <dd>
+        <p>What this build calls itself, on stdout: the name, the version, and whether it was built with optimisations off &mdash; <code>muir 0.1.0-release</code> or <code>muir 0.1.0-dev</code>. Every run says the same line first, so a report of a run says which muir made it.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>-h, --help</dt>
+        <dd>
+        <p>The usage, then every flag with its default.</p>
+        </dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="rc">
+  <div class="band">
+    <h2>Flags in a file</h2>
+    <div class="prose">
+      <p>Flags that every run should have go in a file, one to a line: the flag, then after a space whatever it takes, which is the rest of the line &mdash; so a path with a space in it needs no quotes. A line that is blank or begins with <code>#</code> is a comment.</p>
+<pre class="cmd"># what every run of mine wants
+--rtl
+--terminal
+--disk-pack /Users/me/lispm packs/system-100.img</pre>
+      <p>The file is the one <code>--config</code> names, or <code>.muirrc</code> in the directory muir was run from, or <code>.muirrc</code> in the home directory: <b>the first of the three there, not all of them</b>, so a file beside the work is the whole of a run&rsquo;s flags rather than an addition to the home one. A file named with <code>--config</code> must be there; the two that are looked for need not be, and most runs have neither. <code>MUIR_RC</code> in the environment names a file in place of the two.</p>
+      <p>It is read before the command line, so <b>the command line wins</b>: a flag given there replaces the one in the file, and an engine named there replaces the file&rsquo;s &mdash; <code>--micro</code>, <code>--rtl</code> and <code>--chip</code> are exclusive of one another rather than last-wins, so the file&rsquo;s is dropped rather than refused. A file cannot name another with <code>--config</code>; which file to read is the command line&rsquo;s to say.</p>
+      <p>What came from the file is the first thing a run says, so that the lines under it are never a mystery.</p>
+<pre class="cmd">flags: --rtl --terminal, from /Users/me/.muirrc
+engine: rtl</pre>
+    </div>
+  </div>
+</section>
+
+<section id="prompt">
+  <div class="band">
+    <h2>The prompt</h2>
+    <div class="prose">
+      <p>While a <code>micro</code> or <code>rtl</code> machine runs, a line on stdin is a command to <em>muir</em> rather than to the machine &mdash; the machine&rsquo;s own keyboard is <a href="#terminal">the terminal&rsquo;s</a>. It is read from a pipe, or from a terminal muir is in the foreground of, and acted on between two microcycles.</p>
+      <p><code>muir: </code> is written while the machine is held, which is when muir is waiting to be told what to do next; it is not written down a pipe, where the answers alone are wanted. A line typed while the machine is running is acted on all the same &mdash; there is just no prompt in front of it, because muir is not waiting.</p>
+      <p>^C holds the machine at the prompt, and says where it stopped. A second ^C while held, or a ^C with no prompt to go on from, ends the run as <code>quit</code> does, with the recording and the checkpoint written. A hold nothing can run on &mdash; stdin has ended, so no <code>continue</code> will ever come &mdash; ends the run the same way rather than standing there.</p>
+    </div>
+
+    <dl class="flags">
+      <div>
+        <dt>boot</dt>
+        <dd>
+        <p>The boot button, which is what starts a CADR and all that starts one: it presets <code>RUN</code>, clears the console&rsquo;s registers so the PROM is back over the bottom of the control store, and the machine runs from address 0. muir presses it at the start of a run unless <a href="#flags"><code>--no-auto-boot</code></a> says not to.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>hold</dt>
+        <dd><p>No microcycle runs until <code>continue</code> or <code>step</code>. What ^C does.</p></dd>
+      </div>
+      <div>
+        <dt>continue, c</dt>
+        <dd><p>Run on. A halted machine, its <code>RUN</code> clear, says that this is not what starts one.</p></dd>
+      </div>
+      <div>
+        <dt>step [n]</dt>
+        <dd><p>Run n microcycles, one without n, then hold and say where the machine is.</p></dd>
+      </div>
+      <div>
+        <dt>pc</dt>
+        <dd><p>Where the machine is: the PC, whether the PROM is enabled, its microcycles and its clock.</p></dd>
+      </div>
+      <div>
+        <dt>reg</dt>
+        <dd><p>Every register in hex and as characters &mdash; PC, OPC, Q, VMA, MD, LC, SPCPTR, PDLPTR, PDLIDX, the dispatch constant and the interrupt control. The names are the boards&rsquo; own nets&rsquo;.</p></dd>
+      </div>
+      <div>
+        <dt>amem, mmem, dmem, pdl, spc [from [n]]</dt>
+        <dd>
+        <p>Dump one of the machine&rsquo;s memories: the A and M memories, the dispatch memory, the PDL buffer, the SPC stack. All of it, or n words from an address; both octal, as MIT writes them.</p>
+        <p>Four words to a line &mdash; the address, the words in hex, and the four characters each word holds, the first in the low byte, in the Lisp Machine&rsquo;s own character set. A line the same as the one above it is a <code>*</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>screenshot, ss [file]</dt>
+        <dd><p>The screen as it stands, as a PNG, to the file or to <code>muir-yyyymmdd-hhmmss.png</code> in the current directory.</p></dd>
+      </div>
+      <div>
+        <dt>startcapture, sc [file]</dt>
+        <dd><p>Record the display from here on, as a GIF, to the file or to <code>muir-yyyymmdd-hhmmss.gif</code>. It is written when <code>endcapture</code> closes it, and by the stop otherwise.</p></dd>
+      </div>
+      <div>
+        <dt>endcapture, ec</dt>
+        <dd><p>Write the recording that is going and stop recording, with the machine left running. A <code>startcapture</code> after it begins another.</p></dd>
+      </div>
+      <div>
+        <dt>checkpoint [file]</dt>
+        <dd><p>The machine&rsquo;s whole state to the file, or to <code>muir-yyyymmdd-hhmmss.chk</code> in the current directory, for <code>--resume</code> to start from.</p></dd>
+      </div>
+      <div>
+        <dt>info, i</dt>
+        <dd><p>What this run is, as the start said it.</p></dd>
+      </div>
+      <div>
+        <dt>quit, q</dt>
+        <dd><p>End the run, as a stop does: the recording and the checkpoint are written.</p></dd>
+      </div>
+      <div>
+        <dt>help, h, ?</dt>
+        <dd><p>The commands, with what each does.</p></dd>
+      </div>
+    </dl>
+
+    <div class="prose">
+      <p>So a machine can be looked at before it has done anything, and started by hand:</p>
+<pre class="cmd">$ muir --micro --no-auto-boot
+engine: micro
+memory: 32 boards, 2 MW
+pack: vendor/run/disk-sys-100-0.img in unit 0
+terminal: vnc://127.0.0.1:5900 --- RFB, no password
+stop: none; a halt or ^C
+start: held, and the boot button not pressed; boot at the prompt presses it
+^C holds the machine at the prompt; help lists muir&rsquo;s commands
+muir: reg
+PC                 00000000  ....
+OPC                00000000  ....
+Q                  00000000  ....
+<b>... and the rest of the registers ...</b>
+muir: continue
+the machine is halted, its RUN clear: boot presses the button that starts it
+muir: boot
+PC 0 in the PROM; 0 microcycles, 0 ns; 0 this run</pre>
+    </div>
+  </div>
+</section>
+
+<section id="terminal">
+  <div class="band">
+    <h2>The terminal</h2>
+    <div class="prose">
+      <p>The <b>terminal</b> is the far end of the machine: pixels out, keys and the mouse in. Every run serves one over RFB &mdash; the VNC protocol, RFC 6143 &mdash; so any VNC viewer is a CADR terminal, and the machine has no other way in or out. Only None security is offered, so a viewer needs no password; keep it on the loopback unless you mean to let another machine in.</p>
+<pre class="cmd">muir                       <b># then point a viewer at 127.0.0.1:5900</b>
+muir --terminal 5901       <b># or wherever you say</b></pre>
+      <p>The display is VNC&rsquo;s :0 unless <code>--terminal</code> says another, and the start says where it is. A display already taken &mdash; a second muir on the host, which is what the lashup over TCP is &mdash; moves it up to the first free one; a port you named yourself is bound as it stands, and the run stops rather than putting a viewer somewhere it was not told to look.</p>
+      <p>What it shows is the frame buffer, which is the screen on every engine. The keyboard is the CADR&rsquo;s own, with its key positions taken from MIT&rsquo;s tables, and the mouse is the machine&rsquo;s quadrature mouse; Home writes a checkpoint as the run goes. muir keeps serving the last screen for as long as a viewer is looking at it once the run has stopped.</p>
+      <p>On an engine with no <a href="#chaosnet">Chaosnet</a> the boot stops in the debugger at the initialization that wants a host. <kbd>Super-B</kbd> there, then the date and time it asks for and <kbd>y</kbd>, finish it; <code>(si:setup-cpt)</code> then turns on the display&rsquo;s vertical interrupt, which the band&rsquo;s cold boot leaves off and without which the mouse is not tracked.</p>
+    </div>
+  </div>
+</section>
+
+<section id="files">
+  <div class="band">
+    <h2>What a run can write</h2>
+    <div class="prose">
+      <p><b>Checkpoints.</b> <code>--checkpoint &lt;file&gt;</code> writes the machine&rsquo;s whole state when the run stops and <code>--resume &lt;file&gt;</code> starts from it instead of booting: the engine that wrote it, with the same pack under it. The prompt&rsquo;s <code>checkpoint</code> and Home in the terminal write one as the run goes. A pack is only ever read &mdash; a block the machine writes is kept in memory and goes into the checkpoint &mdash; so the image stays as fetched and a checkpoint can be resumed from any number of times. <code>micro</code> and <code>rtl</code> for now.</p>
+      <p><b>Screenshots.</b> The prompt&rsquo;s <code>screenshot</code> writes the screen as a PNG: 768 by 963, one bit a pixel, encoded by muir itself rather than by a library.</p>
+      <p><b>Recordings.</b> <code>--tv-capture &lt;gif&gt;</code> records the display for the whole run, and the prompt&rsquo;s <code>startcapture</code> and <code>endcapture</code> begin and end one as it goes. Each frame is the rectangle that changed since the last, over the one before it, two colours and LZW, timed by the machine&rsquo;s own clock so it plays at the machine&rsquo;s speed &mdash; and it stays small while the screen stays still. A line below the screen carries the machine&rsquo;s time and the wall clock unless <code>--tv-capture-no-time</code> drops it.</p>
+      <p>Without a file, all three write <code>muir-yyyymmdd-hhmmss</code> with the right extension in the current directory.</p>
+    </div>
+  </div>
+</section>
+
+<section id="chaosnet">
+  <div class="band">
+    <h2>The Chaosnet server</h2>
+    <div class="prose">
+      <p>The machine&rsquo;s Chaosnet interface is real &mdash; it is half the I/O board, and on <code>chip</code> it is that board&rsquo;s netlist. What is on the other end of the cable is not a machine but a <b>Chaosnet server</b>: an address that answers contact names, so the band has something to talk to. It is <code>MIT-OZ</code> at <code>3060</code> and the machine is <code>MIT-LISPM-1</code> at <code>3050</code>, octal, which are the band&rsquo;s own numbers from <code>sys/site/hosts.text</code>; <code>--chaos-address</code> changes them.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th class="name">Contact</th><th>What it answers</th></tr></thead>
+        <tbody>
+          <tr><td class="name">STATUS</td><td>The host&rsquo;s name and its subnet meters. AIM-628 &sect;5.1 requires every node to answer it, and it is how a machine decides another is up: <code>HOST-UP-P</code> asks for nothing else, and <code>(hostat)</code> prints what comes back. The meters are zero, which is the true count for a host with no interface.</td></tr>
+          <tr><td class="name">TIME</td><td>The universal time in four bytes, least significant first &mdash; seconds since midnight GMT, 1 January 1900. The tests fix it, so two runs of a boot do the same work.</td></tr>
+          <tr><td class="name">UPTIME</td><td>Seconds since the server came up, by the ether&rsquo;s clock.</td></tr>
+          <tr><td class="name">FILE</td><td>The file protocol the band loads <code>SYS:</code> over &mdash; a control connection and data connections beside it. Served only when <code>--chaos-file-root</code> gives it a directory, which it serves as the server&rsquo;s <code>/</code>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p><code>FILE</code> is what makes the acceptance test possible: CC is not in the band, so <code>sys/cc/*.qfasl</code> has to come over the network, the way it would have on a real machine.</p>
+    </div>
+  </div>
+</section>
+
+<section id="lashup">
+  <div class="band">
+    <h2>Two machines</h2>
+    <div class="prose">
+      <p>MIT debugged a CADR from another CADR, over a <b>debug cable</b>: 21 wires from one machine&rsquo;s DBGOUT connector to the other&rsquo;s DBGIN, through which the console program <b>CC</b> halts the other machine, reads its registers and drives its bus. muir runs that lashup, and it is the project&rsquo;s acceptance test.</p>
+      <p>Each machine has a Chaosnet of its own: muir&rsquo;s cable carries one machine, so the other gets its own cable with its own server on it. The two cannot hear each other over it &mdash; the only wire between them is the debug cable &mdash; and the other machine&rsquo;s server answers <code>STATUS</code>, <code>TIME</code> and <code>UPTIME</code> but no <code>FILE</code> unless <code>--debuggee-chaos-file-root</code> gives it a directory. Two servers rooted at one directory are two hosts sharing a filesystem, with nothing between them to keep one from writing what the other is reading.</p>
+      <p><code>--debug-in-process</code> puts both machines in one process with both cables between them. <code>--debug-cable-listen</code> and <code>--debug-cable-connect</code> put the same cable over TCP with one machine in each process, the listener being the debuggee; both take an endpoint the same way and meet at <code>127.0.0.1:7661</code> without one. The listener may be a <code>--chip</code> machine, and then the netlist board&rsquo;s own DBGIN answers the debugger, an event at a time, at the netlist&rsquo;s pace.</p>
+    </div>
+  </div>
+</section>
+
+<section id="internals">
+  <div class="band">
+    <h2>How the engines work</h2>
+    <div class="prose">
+      <p>The three engines differ in what they actually compute on the way to the next microcycle &mdash; no timing model, the timing model, the full netlist. This is what that means in each case, and it is the part of the project most easily mistaken for something it is not.</p>
+    </div>
+
+    <h3>What register-transfer level means here</h3>
+    <div class="prose">
+      <p>RTL is register-transfer level: the machine described as registers and the logic that moves data between them, clocked. The <code>rtl</code> engine is that written out directly — what drives each bus, what the ALU computes, which register takes what. It has no notion of a package, a pin or a net.</p>
+      <p>A microcycle there is two phases, because that is what the board has. <code>-CLK0</code> is <code>-TPCLK AND MACHRUN</code> at CLOCK2 1D10, so every edge-triggered register takes one edge per microcycle, at the cycle boundary. Between edges the clock is a level and the board reads it as one. With <code>CLK</code> high the source multiplexers select the instruction&rsquo;s own source fields, the 74S373 latches follow the memories, <code>-TSE1..4</code> let the sources drive, and the ALU settles. With <code>CLK</code> low the multiplexers select <code>WADR</code>, the latches hold what they caught, and <code>-WP1..4</code> write.</p>
+      <p>Time is real even though the parts are not. A memory cycle runs <code>MEMSTART</code>, <code>MEMRQ</code>, <code>MBUSY</code>, the acknowledgement back and <code>-LOADMD</code> 50 ns after it, with the clock held off by <code>WAIT</code> and <code>HANG</code> meanwhile — so a stall costs nanoseconds without costing a microcycle.</p>
+    </div>
+
+    <h3>The chip engine</h3>
+    <div class="prose">
+      <p>Every other engine collapses something. This one does not: it takes the packages out of the netlist, gives each one the behaviour recorded for its type, and resolves every net from what is actually driving it. It is the slowest of the three and the one the other two are checked against, so it is allowed no opinions.</p>
+      <p>A pin there is electrical rather than logical — totem-pole, open collector, open emitter, tri-state, a resistor pack, or passive. That is what lets an open-collector net behave like one, with the pull-up packs as the weak drivers a real one needs, and it is what makes a wrong pinout surface as two totem-pole outputs fighting over a net instead of as quietly wrong logic much later. The pinouts are read off the manufacturers&rsquo; datasheets, and a test checks all 1,243 gate records across the processor&rsquo;s 2,782 nets for exactly that conflict.</p>
+      <p>The ALU shows the difference most clearly. <code>rtl</code> computes the whole 33-bit array at once from the datasheet&rsquo;s function table. <code>chip</code> runs the nine 74S181 slices and the three 74S182 carry-lookaheads as parts, gate for gate. The two have to agree.</p>
+    </div>
+
+    <h3>Why this is not a VHDL simulator</h3>
+    <div class="prose">
+      <p>A VHDL CADR exists — <code>ams/cadr4</code> — and running it under a simulator such as nvc is a different thing from what <code>chip</code> does.</p>
+      <p>A VHDL simulator is general. It elaborates any design into processes and signals, drives them from an event queue, advances time to the next event, and resolves each signal through a resolution function. <code>chip</code> simulates one netlist and exploits it. Taken pin by pin — which output each input actually reaches — the CADR is acyclic, so its gates are sorted into levels once and then evaluated in that order, with no event queue at all. Taken package-wide the same dependencies appear to close loops the hardware does not have; the only real cycles are in the clock generator, which is modelled directly instead. Each pass recomputes only the gates something moved under.</p>
+      <p>Both run zero-delay: neither charges a gate for its propagation time, and in muir the nanoseconds come from the clock and bus models instead. So the two should agree, and that has been measured rather than assumed. Running cadr4&rsquo;s VHDL of the same three boards under nvc against <code>chip</code>, on the same PROM, every named net at every instruction: over the boot&rsquo;s first millisecond 2,014 nets agree at every sample, 830 differ only while the VHDL is still uninitialised, and 15 are the clock taps the behavioural clock leaves undriven. None agrees for a while and then parts. Over the whole boot PROM the two are on the same PC at every microcycle, and <code>chip</code> gets there about four times faster in wall time and ten times per core.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="band">
+    <p>&copy; 2026 Mete Balci</p>
+  </div>
+</footer>
+
+</body>
+</html>
