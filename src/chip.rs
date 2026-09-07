@@ -590,7 +590,7 @@ pub fn gated_rise_after(period: (u64, u64), enabled_at: u64, t: u64) -> u64 {
 /// is a scope on a board built to the December 1980 list, or an LS sheet
 /// with its own normalised curve. The labels need nothing: they are right
 /// for the other board.
-pub const VCO_PERIOD: (u64, u64) = (855, 1);
+pub const VCO_PERIOD: (u64, u64) = (1_000, 1);
 
 /// The disk controller's other VCO, `dctmot` 0B04 section 2, whose output
 /// is the net MIT calls `-2USEC.CLK^`: 2,000 ns.
