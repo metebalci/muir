@@ -104,8 +104,9 @@
 //! both drop `MACHRUN` with `RUN` still set, and no microcycle runs from
 //! there. Nothing about stepping says so, the screen simply stops, so the
 //! run loop reads it off `FLAG-1` where a console would. `boot` presses
-//! the button that starts it again. On `chip`, which has no prompt, it
-//! ends the run instead.
+//! the button that starts it again. `chip` holds at the prompt the same
+//! way, reading the nets the spy registers are buffered from, since it is
+//! not an `Engine` and has no registers to read.
 //!
 //! A run goes on until a stop, a halt or ^C. `--stop-after` ends it after
 //! that many microcycles, `--stop-at` when the PC reaches an address with
@@ -1440,6 +1441,15 @@ fn say_halted() {
     println!("the machine is halted, its RUN clear: boot presses the button that starts it");
 }
 
+/// Where a netlist machine is, for the prompt.  [`say_pc`]'s counterpart:
+/// `Chip` is not an [`Engine`] and keeps no microcycle count of its own ---
+/// `time_chip` counts them by the clock phase wrapping --- so this says the
+/// PC and the run's count and leaves the rest out.
+fn say_pc_chip(c: &Chip, pc_nets: &[netlist::NetId], ran: u64, prom_enabled: bool) {
+    let prom = if prom_enabled { " in the PROM" } else { "" };
+    println!("PC {:o}{prom}; {ran} microcycles this run", c.read(pc_nets) as u16);
+}
+
 /// **The machine has stopped itself with `RUN` still set**, and why, or
 /// `None` if it is running.  `MACHRUN` is low because `ERR` is up under
 /// `ERRSTOP` --- which is what `HALT-CONS` does, and so what System 100's
@@ -1767,6 +1777,8 @@ struct ChipMachine {
     srun: netlist::NetId,
     errhalt: netlist::NetId,
     stathalt: netlist::NetId,
+    /// `-BOOT1`, the button, for the prompt's `boot` to press again.
+    boot: netlist::NetId,
 }
 
 fn chip_machine(
@@ -1795,12 +1807,7 @@ fn chip_machine(
 
     // The button, then the few start-up microcycles before the PC moves.
     let boot = n.by_name_id("-BOOT1").unwrap();
-    c.set_net(boot, Level::Low);
-    c.settle();
-    for _ in 0..20 {
-        c.tick(&mut clk);
-    }
-    c.set_net(boot, Level::High);
+    press_boot(&mut c, &mut clk, boot);
     let pc_nets = c.bus_nets(&n, "PC", 14);
     // The mode register's bit, as `Machine::mode` has it on the other
     // engines.
@@ -1813,7 +1820,31 @@ fn chip_machine(
         c.microcycle(&mut clk);
         skipped += 1;
     }
-    ChipMachine { cpu: c, clk, far, bus: bus_n, pc_nets, promdisable, srun, errhalt, stathalt }
+    ChipMachine {
+        cpu: c,
+        clk,
+        far,
+        bus: bus_n,
+        pc_nets,
+        promdisable,
+        srun,
+        errhalt,
+        stathalt,
+        boot,
+    }
+}
+
+/// **The boot button on a netlist machine**: `-BOOT1` held down, the
+/// board settled with it down, and twenty master clock cycles before it
+/// comes back up.  It is all that starts a CADR, so the prompt's `boot`
+/// presses this and nothing else, as it does on the other two engines.
+fn press_boot(c: &mut Chip, clk: &mut Behavioural, boot: netlist::NetId) {
+    c.set_net(boot, Level::Low);
+    c.settle();
+    for _ in 0..20 {
+        c.tick(clk);
+    }
+    c.set_net(boot, Level::High);
 }
 
 /// One turn of the terminal for a netlist machine: the screen out and the
@@ -1885,6 +1916,8 @@ fn time_chip(
     chaos: muir::chaos::Config,
     terminal: Option<&mut Terminal>,
     capture: Option<(PathBuf, bool)>,
+    setup: &str,
+    clocks: bool,
 ) {
     let ChipMachine {
         mut cpu,
@@ -1895,6 +1928,7 @@ fn time_chip(
         srun,
         errhalt,
         stathalt,
+        boot,
         ..
     } = chip_machine(image, pack, boards, memory_boards, chaos);
     // One microcycle is however many clock transitions it takes for the phase
@@ -1904,8 +1938,8 @@ fn time_chip(
     let mut last = clk.phase_ns();
     let prom_enabled = |c: &Chip| c.net(promdisable) != Level::High;
     // As [`machrun_low`] is on the other two engines, off the nets rather
-    // than off `FLAG-1`. There is no prompt here to drop to, so a machine
-    // that stops itself ends the run and says so, the way a stop does.
+    // than off `FLAG-1`: `Chip` is not an `Engine` and has no spy registers
+    // to read, but it has the nets those registers are buffered from.
     let stopped_itself = |c: &Chip| {
         if c.net(srun) != Level::High {
             return None;
@@ -1918,43 +1952,192 @@ fn time_chip(
         }
         None
     };
-    let mut why_stopped = None;
     let mut terminal = terminal;
     let (mut keyboard, mut mouse) = (Keyboard::new(), Mouse::new());
     let mut last_poll = Instant::now();
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
+    let mut last_check = Instant::now();
+    let prompt = Prompt::open();
+    // The same hold the other two engines have: nothing is ticked while it
+    // is on, so the netlist stands where it stopped and can be looked at.
+    // `chip` is slow enough that this matters --- a run that has spent an
+    // hour getting somewhere should not have to be started again to be
+    // asked where it is.
+    let mut held = false;
+    let mut stepping: Option<u64> = None;
+    let mut quit = false;
     catch_interrupts();
     let mut interrupts_seen = 0;
-    while ran < stop.after
-        && !stop.reached(cpu.read(&pc_nets) as u16, prom_enabled(&cpu))
-        && !interrupted(&mut interrupts_seen)
+    while !quit && ran < stop.after && !stop.reached(cpu.read(&pc_nets) as u16, prom_enabled(&cpu))
     {
-        far.tick_with(&mut cpu, &mut clk);
-        let p = clk.phase_ns();
-        if p < last {
-            ran += 1;
-            if ran % TERMINAL_CHECK == 0 {
-                if let Some((_, rec)) = capture.as_mut() {
-                    rec.sample(&far.buses.machine.simpletv, clk.time_ns(), wall_clock());
-                }
-                let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
-                attend_chip(&mut far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse);
-                if poll {
-                    last_poll = Instant::now();
-                }
-                if let Some(why) = stopped_itself(&cpu) {
-                    why_stopped = Some(why);
-                    break;
+        let mut wrapped = false;
+        if held {
+            std::thread::sleep(TERMINAL_INTERVAL / 4);
+        } else {
+            far.tick_with(&mut cpu, &mut clk);
+            let p = clk.phase_ns();
+            if p < last {
+                ran += 1;
+                wrapped = true;
+                if let Some(left) = stepping.as_mut() {
+                    *left -= 1;
+                    if *left == 0 {
+                        stepping = None;
+                        held = true;
+                        say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+                    }
                 }
             }
+            last = p;
         }
-        last = p;
+        // The capture keeps its own cadence, in microcycles.
+        if wrapped
+            && ran % TERMINAL_CHECK == 0
+            && let Some((_, rec)) = capture.as_mut()
+        {
+            rec.sample(&far.buses.machine.simpletv, clk.time_ns(), wall_clock());
+        }
+        // Everything else goes by the wall clock, not by a microcycle
+        // count. `chip` runs about 1,800 microcycles a second, so
+        // `TERMINAL_CHECK` of them is two and a half seconds --- too long
+        // to wait on a typed line, and a run shorter than that never
+        // reaches a check at all. `Instant::now` once a microcycle costs
+        // nothing at this rate, which is the only reason the other engines
+        // count microcycles instead.
+        let check = held || (wrapped && last_check.elapsed() >= TERMINAL_INTERVAL);
+        if !check {
+            continue;
+        }
+        last_check = Instant::now();
+        let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
+        if poll || !held {
+            attend_chip(&mut far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse);
+            if poll {
+                last_poll = Instant::now();
+            }
+        }
+        // The machine stopping itself, held on once rather than spun on,
+        // exactly as `time_engine` does it off `FLAG-1`.
+        if !held && let Some(why) = stopped_itself(&cpu) {
+            held = true;
+            stepping = None;
+            say_machrun_low(why);
+            say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+        }
+        // ^C: the first holds the machine at the prompt, one more while
+        // held quits; with no prompt to go on from, one quits.
+        let seen = INTERRUPTS.load(Ordering::SeqCst);
+        while interrupts_seen < seen {
+            interrupts_seen += 1;
+            let at_prompt = prompt.as_ref().is_some_and(|p| !p.ended());
+            if held || !at_prompt {
+                quit = true;
+            } else {
+                held = true;
+                stepping = None;
+                if let Some(prompt) = prompt.as_ref() {
+                    prompt.past_interrupt();
+                }
+                println!("held at ^C; continue runs on, ^C again quits");
+                say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+            }
+        }
+        if stepping.is_none()
+            && let Some(prompt) = prompt.as_ref()
+        {
+            let ending = prompt.ended();
+            while let Some(line) = prompt.line() {
+                match muir::prompt::parse(&line) {
+                    Ok(None) => {}
+                    Ok(Some(Command::Boot)) => {
+                        press_boot(&mut cpu, &mut clk, boot);
+                        say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+                        held = false;
+                    }
+                    Ok(Some(Command::Hold)) => {
+                        held = true;
+                        say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+                    }
+                    Ok(Some(Command::Continue)) => match stopped_itself(&cpu) {
+                        Some(why) => say_machrun_low(why),
+                        None => held = false,
+                    },
+                    Ok(Some(Command::Step(n))) => match stopped_itself(&cpu) {
+                        Some(why) => say_machrun_low(why),
+                        None => {
+                            held = false;
+                            stepping = Some(n);
+                            break;
+                        }
+                    },
+                    Ok(Some(Command::Pc)) => say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu)),
+                    Ok(Some(Command::Info)) => print!("{setup}"),
+                    Ok(Some(Command::Screenshot(path))) => {
+                        let path = path.unwrap_or_else(|| timestamped("png"));
+                        write_screenshot(&path, &far.buses.machine.simpletv);
+                    }
+                    Ok(Some(Command::StartCapture(path))) => match capture.as_ref() {
+                        Some((going, _)) => println!(
+                            "capture: one is going already, to {}; endcapture closes it",
+                            going.display()
+                        ),
+                        None => {
+                            let path = path.unwrap_or_else(|| timestamped("gif"));
+                            println!(
+                                "capture: recording the display to {}{}; endcapture writes it, and so does the stop",
+                                path.display(),
+                                if clocks { "" } else { ", no clocks" }
+                            );
+                            capture = Some((path, Recorder::new(clocks)));
+                        }
+                    },
+                    Ok(Some(Command::EndCapture)) => match capture.take() {
+                        Some((path, mut rec)) => {
+                            rec.sample(&far.buses.machine.simpletv, clk.time_ns(), wall_clock());
+                            write_capture(&path, &rec);
+                        }
+                        None => println!("capture: none is going; startcapture begins one"),
+                    },
+                    // The scratchpads live in the RAM chips' own cells
+                    // here, not in arrays, and reading one back means
+                    // walking those cells and putting the board's word
+                    // order right. Until that is written these say so
+                    // rather than printing something that is not the
+                    // machine's.
+                    Ok(Some(Command::Registers | Command::Dump { .. })) => {
+                        println!("prompt: not on chip yet --- the registers and the scratchpads");
+                        println!("        are the parts' own cells here, not arrays to read off");
+                    }
+                    Ok(Some(Command::Checkpoint(_))) => {
+                        println!("prompt: not on chip yet --- checkpoints are the other engines'");
+                    }
+                    Ok(Some(Command::Quit)) => {
+                        quit = true;
+                        break;
+                    }
+                    Ok(Some(Command::Help)) => print!("{}", muir::prompt::HELP),
+                    Err(what) => println!("prompt: {what}"),
+                }
+            }
+            if held && ending && !quit {
+                println!("held, and stdin has ended: there is nothing to run the machine on");
+                quit = true;
+            }
+            if held && !quit && stepping.is_none() {
+                prompt.show();
+            }
+        }
+    }
+    if let Some(prompt) = prompt.as_ref() {
+        prompt.done();
     }
     report("chip", ran, t.elapsed().as_secs_f64());
-    if let Some(why) = why_stopped {
-        say_machrun_low(why);
+    if quit {
+        let prom = if prom_enabled(&cpu) { " in the PROM" } else { "" };
+        println!("       quit at PC {:o}{prom} after {ran}", cpu.read(&pc_nets) as u16);
+    } else {
+        stop.conclude(ran, cpu.read(&pc_nets) as u16, prom_enabled(&cpu), None);
     }
-    stop.conclude(ran, cpu.read(&pc_nets) as u16, prom_enabled(&cpu), None);
     if let Some((path, rec)) = capture.as_mut() {
         rec.sample(&far.buses.machine.simpletv, clk.time_ns(), wall_clock());
         write_capture(path, rec);
@@ -2730,6 +2913,8 @@ fn main() {
                     chaos,
                     terminal.as_mut(),
                     capture,
+                    &setup,
+                    capture_tv_time,
                 );
             }
         }
