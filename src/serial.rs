@@ -348,10 +348,29 @@ fn crystal_rise_at_or_after(t: u64) -> u64 {
 /// Held in reset by [`Pci::reset`] as the board's `RESET` holds it: the
 /// mode, command and status registers clear, the pointers at their first
 /// registers, and "the device assumes the idle state and remains there
-/// until initialized with the appropriate control words" (Table 2). What
-/// the holding registers hold through a reset the sheet does not say; they
-/// are zero here, **unverified**, and nothing reads them before writing
-/// them.
+/// until initialized with the appropriate control words" (Table 2).
+///
+/// **What the holding registers hold through a reset is not a fact anyone
+/// can look up.** Signetics never specified it, and four independent routes
+/// say the same nothing: the 1985 SCN2651 product specification, the same
+/// text word for word in Philips' 1991 *Data Communication Products*
+/// (IC019), application note TN072 "Introducing the Signetics 2651 PCI",
+/// which is a block diagram of the part and no more, and the 1977
+/// *Bipolar & MOS Microprocessor* book. Every one of them enumerates the
+/// three registers `RESET` clears and stops there. A real part would come
+/// up with whatever its silicon settled into, which is not a specification
+/// either.
+///
+/// So this is not an unverified fact but an undefined state, and the model
+/// has to choose --- the same class as a memory at power-on, where
+/// `src/chip.rs` says "Real RAM comes up undefined and a model has to
+/// choose; this one zeroes, and says so". **Zero here, chosen and said.**
+///
+/// The choice is unobservable through the documented interface, and
+/// `tests/serial.rs` holds it that way: reset leaves `RxRDY` clear, and a
+/// program that reads the receive holding register without it is reading a
+/// register the chip has not filled. Making the choice unreachable is worth
+/// more than a value nobody can confirm.
 ///
 /// Not modelled, and what each would need: synchronous mode (`MR1` rate
 /// `00`), in which this transmits and receives nothing; the break the
