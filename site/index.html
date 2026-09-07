@@ -65,7 +65,7 @@
 
       <p>Getting there means rebuilding the machine board by board from MIT&rsquo;s own drawings and wire lists, and that has an output of its own: netlists held pin for pin to MIT&rsquo;s lists, part models checked against their datasheets, and a record of which recovered files can be trusted and which cannot.</p>
 
-      <p>It is written in Rust and has no crate dependencies. The target is <a href="https://tumbleweed.nu/system-100-0-release/">System 100</a>, microcode 323 — the restored last MIT release, recovered from TID/671 in the MIT Tapes of Tech Square project. Alfred M. Szmidt has carried that work forward in <a href="https://tumbleweed.nu/lm-3/">LM-3</a>, which maintains the Lisp Machine system software and has gone on releasing systems well past this one.</p>
+      <p>It is written in Rust and has no crate dependencies. The target is <a href="https://tumbleweed.nu/system-100-0-release/">System 100</a>, microcode 323 — the restored last MIT release, recovered from TID/671 in the MIT Tapes of Tech Square project. Alfred M. Szmidt has carried that work forward in <a href="https://tumbleweed.nu/lm-3/">LM-3</a>, which maintains the Lisp Machine system software and has gone on releasing systems well past this one. <a href="https://tumbleweed.nu/system-304-0-release/">System 304</a>, the current of those, boots here too, with its own pack and its own Chaosnet numbers; microcode 323 is one file across the two. The target stays at System 100 for the console program CC, which calls <code>MAKE-ARRAY</code> in a form System 304 removed and so does not load there — and the two-machine lashup through CC is the acceptance test.</p>
     </div>
   </div>
 </section>
@@ -375,15 +375,15 @@ cargo build --release</pre>
           <h3>The System 100 release</h3>
           <p>This is what the engines boot from: the disk pack and the system sources. It is not part of muir; the script fetches it from muir&rsquo;s own mirror of the <a href="https://tumbleweed.nu/system-100-0-release/">original release</a> and checks every file against its SHA-256 sum.</p>
 <pre class="cmd">tools/fetch-system-100.sh</pre>
-          <p>It puts the system sources in <code>vendor/system-100-0/sys/</code> and the disk pack in <code>vendor/run/</code>, where the tests look for them. Running it again leaves whatever is already there alone. It is POSIX shell; Windows is untested, so use WSL.</p>
+          <p>It puts the system sources in <code>vendor/system-100-0/sys/</code> and the disk pack in <code>vendor/run/</code>, where the tests look for them. Running it again leaves whatever is already there alone. It is POSIX shell; Windows is untested, so use WSL. <code>tools/fetch-system-304.sh</code> beside it fetches System 304, which also boots here — its pack is a different machine and wants <code>--chaos-address 4401,4403</code>.</p>
                   </div>
       </li>
       <li>
         <div>
           <h3>Run System 100</h3>
-<pre class="cmd">target/release/muir</pre>
+<pre class="cmd">target/release/muir --disk-pack vendor/run/disk-sys-100-0.img</pre>
           <p>The simulator is the <code>muir</code> binary that step 2 built. It runs one engine from the boot PROM with the pack on the disk controller&rsquo;s cable, and reports microcycles per second against the machine&rsquo;s own rate. One engine at a time: <code>--rtl</code> is the default, implied when neither <code>--micro</code> nor <code>--chip</code> is given.</p>
-          <p>It wants the disk pack from step 3. Without one the engines wait on a drive that never answers.</p>
+          <p>It wants the disk pack from step 3, named: there is no default pack, and without one the engines wait on a drive that never answers. The Chaosnet addresses are the band&rsquo;s own, and this band&rsquo;s &mdash; <code>MIT-LISPM-1</code> at 3050 with <code>MIT-OZ</code> at 3060 &mdash; are what <code>--chaos-address</code> defaults to. System 304&rsquo;s pack is a different machine and wants <code>--chaos-address 4401,4403</code>; a server answering anywhere else is one that band never calls, so it boots but stops to ask for the date and reaches no files.</p>
 
           <figure class="fig screen">
             <img src="system-100.png" width="768" height="963" loading="lazy" alt="The CADR screen: MIT System, band 2 of MIT-LISPM-1; Experimental System 100.0; Microcode 323; MIT Lisp Machine One, with associated machine OZ; and a Lisp Listener reading at top level.">

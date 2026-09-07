@@ -28,9 +28,10 @@ its SHA-256 sum.
     tools/fetch-system-100.sh
 
 Start a machine. That is the `rtl` engine running MIT's own boot PROM, with
-the pack on the disk controller's cable.
+the pack on the disk controller's cable. There is no default pack --- no
+`--disk-pack` is a drive with no pack in it --- so it is named.
 
-    target/release/muir
+    target/release/muir --disk-pack vendor/run/disk-sys-100-0.img
 
 It prints where its terminal is, and boots. Point any VNC viewer at that
 address --- `vnc://127.0.0.1:5900` unless it says otherwise --- and you
@@ -60,6 +61,11 @@ Rust, no crate dependencies. The target is
 [System 100](https://tumbleweed.nu/system-100-0-release/), microcode 323 ---
 the restored last MIT release, recovered from TID/671 in the MIT Tapes of Tech
 Square project. It will not run with earlier microcode.
+[System 304](https://tumbleweed.nu/system-304-0-release/), the current release
+of the line that continues it, boots here too, with its own pack and its own
+Chaosnet numbers. The target stays where it is because of the console program
+CC: CC calls `MAKE-ARRAY` in a form System 304 removed, so it does not load
+there, and the two-machine lashup is the acceptance test.
 
 ## Three engines
 
@@ -126,18 +132,30 @@ build and the tests read is committed.
     cargo build --release
     cargo test                    # optional; passes with nothing fetched
 
-The engines boot from the System 100 pack, which is not part of the
-repository:
+The engines boot from a pack, which is not part of the repository:
 
-    tools/fetch-system-100.sh
+    tools/fetch-system-100.sh     # the target
+    tools/fetch-system-304.sh     # optional; the release after it
 
-That puts the pack and the system sources under `vendor/`, where the tests
-look, and checks each file against its SHA-256 sum. They come from muir's
-own GitHub release `system-100-0`, a byte-for-byte mirror of the
-[upstream release](https://tumbleweed.nu/system-100-0-release/) under its
-licence, the AGPL, so that the bytes the tests were written against stay
-the bytes. Without them, everything needing a pack skips and says so.
-Windows is untested; the scripts are POSIX shell, so use WSL.
+Each puts its pack and its system sources under `vendor/`, where the tests
+look, and checks every file against its SHA-256 sum. They come from muir's
+own GitHub releases, [`system-304-0`](https://github.com/metebalci/muir/releases/tag/system-304-0)
+and [`system-100-0`](https://github.com/metebalci/muir/releases/tag/system-100-0),
+so that the bytes the tests were written against stay the bytes: the packs
+byte for byte as [upstream](https://tumbleweed.nu/lm-3/) publishes them, and
+System 304's sources, which upstream ships no tarball of, built from the
+project's own Fossil repository at branch `system-304` --- each script says
+exactly what it fetched and from where. Everything in them is under the
+AGPL, muir's own licence. Without them, everything needing a pack skips and
+says so. Windows is untested; the scripts are POSIX shell, so use WSL.
+
+The two packs are different machines and want different flags. System 100's
+band is `MIT-LISPM-1`, whose host table puts it at 3050 with `MIT-OZ` at
+3060, which is what `--chaos-address` defaults to; System 304's is
+`AMS-LISPM-1` at 4401 with its file and time host `OZ` at 4403:
+
+    muir --disk-pack vendor/run/disk-sys-100-0.img
+    muir --disk-pack vendor/run/disk-sys-304-0.img --chaos-address 4401,4403
 
 ## Running it
 
@@ -161,14 +179,15 @@ One engine at a time, `--rtl` by default. A run goes on until a stop, a
 halt or ^C; `--stop-after` ends it after that many microcycles.
 
 A machine that stops *itself* is held at the prompt and says so. `(si:%halt)`
-in System 100 runs `HALT-CONS`, which under `ERRSTOP` drops `MACHRUN` with
+in the band runs `HALT-CONS`, which under `ERRSTOP` drops `MACHRUN` with
 `RUN` still set: the screen stops and no microcycle runs from there. Nothing
 about stepping says so, so muir reads it off `FLAG-1` where a console would,
 and `boot` presses the button that starts it again. `chip` holds the same
 way, reading the nets those registers are buffered from.
 
-Every engine boots MIT's own PROM, System 100's `sys/ubin/promh.mcr`, which
-is built in, so nothing under `vendor/` is needed to start a machine.
+Every engine boots MIT's own PROM, `sys/ubin/promh.mcr` --- one file across
+the releases --- which is built in, so nothing under `vendor/` is needed to
+start a machine.
 `--prom <file>` runs another one instead, out of an MCR microcode file as
 MIT's own is, and the start says how that file stands to MIT's: word for
 word, or how many words apart. That last is worth having --- recovered
@@ -349,7 +368,7 @@ PROM's --- so a pack that boots can be made from a fresh checkout with nothing
 fetched. Every other partition takes its file as it stands. Either way the
 partition's comment becomes what went into it --- the file's name, or
 `UCADR 323` for the built-in, which is MIT's own wording in that very field
-on the System 100 pack --- cut to the sixteen characters a descriptor holds,
+on both releases' packs --- cut to the sixteen characters a descriptor holds,
 because the file is not on the pack and the comment is the only place the
 pack says what a partition is. `load-from` is the same move between two
 packs --- `load-from LOD1 <pack> LOD1` --- with no

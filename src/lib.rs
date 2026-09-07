@@ -4,6 +4,8 @@
 //! A simulator for the MIT CADR Lisp Machine.
 //!
 //! Targets System 100 (microcode 323), the restored last MIT release.
+//! System 304, the current release of the line that continues it, boots here
+//! too; microcode 323 is one file across the two.
 //!
 //! The netlists in `data/` are extracted from MIT's own drawings in `mit/`
 //! and held to MIT's own wire lists; `data/README.md` and `mit/README.md` say
