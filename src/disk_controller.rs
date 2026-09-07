@@ -34,7 +34,7 @@
 //! modelled, as the level MIT describes: microcode 323 enables it on every
 //! transfer and takes it in `DISK-SWAP-HANDLER`.
 
-use crate::disk_unit::{BLOCK_WORDS, Unit};
+use crate::disk_unit::{self, BLOCK_WORDS, Unit, format};
 
 /// The divider between the timeout clock and `TIMEOUT`, the 74393 at
 /// DCTMOT 0C03.
@@ -499,16 +499,52 @@ impl Controller {
             // (bit 11 in the status register.)": active, with no error,
             // until the board's timer stops it `TIMEOUT_NS` on.
             0o07 | 0o17 => self.hang(),
-            // Read All and Write All move the bits of a track, headers and
-            // all, and 01, 03 and 12 --- the other combinations MIT's table
-            // leaves out --- enter the Write, Write All and Read All sectors
-            // with the memory channel pointed the other way.  None of them
-            // times out on the board, which runs whatever sector `<2:0>`
-            // names.  This model has no track format for any of the five;
-            // the netlist controller and its drive have.  They are answered
-            // with a timeout at once: the error up, the words untouched, the
-            // controller ready.
-            _ => self.timeout = true,
+            // "0002 Read All.  Reads all bits of the disk starting at the
+            // specified rotational position" --- the format and the data
+            // both, headers, checkwords, preambles and all, which is what
+            // [`Controller::track_bytes`] lays out.  "It will not
+            // automatically advance heads and cylinders", so it is the one
+            // track, round and round.
+            0o02 => {
+                self.transfer_all(true, main);
+                self.done_at = self.now + self.access_ns;
+            }
+            // "0013 Write All.  Writes all bits of the disk starting at the
+            // specified rotational position.  This is intended for
+            // formatting the disk."
+            0o13 => {
+                let u = self.selected();
+                if self.units[u].as_ref().is_some_and(|u| u.read_only) {
+                    self.units[u].as_mut().unwrap().fault = true;
+                } else {
+                    self.transfer_all(false, main);
+                    self.done_at = self.now + self.access_ns;
+                }
+            }
+            // 01, 03 and 12: the Write, Write All and Read All sectors
+            // entered with the memory channel pointed the other way.  MIT's
+            // table leaves them out, but the command PROM "is divided into
+            // 8 sectors of 64 words each" and `<3>` reaches none of it ---
+            // `cadrdc/newdsk.31`, "Commands 4-7 do not use the memory
+            // channel" --- so the sequencer runs the sector `<2:0>` names
+            // and the command finishes like any other.  What it finishes
+            // having done is another matter: `<3>` steers the channel, so
+            // the fifo is filled from the end it is normally emptied at and
+            // emptied into the end it is normally filled from, and what
+            // reaches the disk or memory is whatever the fifo happened to
+            // hold.
+            //
+            // **Unverified**, and deliberately not guessed at: this model
+            // has no fifo, so it runs the command to done with no error and
+            // moves nothing.  The pack and memory are left as they were,
+            // which is certainly wrong for 01 and 03 --- the board writes
+            // *something* --- and probably right for 12, which stores
+            // nothing.  What would settle it is running the three through
+            // the netlist controller, which has the fifo and the channel,
+            // and reading what they leave: `tests/cadrdc_netlist.rs`.
+            0o01 | 0o03 | 0o12 => self.done_at = self.now + self.access_ns,
+            // `& 0o17` leaves four bits, and all sixteen are above.
+            0o20.. => unreachable!("a command code is four bits"),
         }
     }
 
@@ -588,6 +624,107 @@ impl Controller {
         self.units[i] = Some(unit);
     }
 
+    /// Read All and Write All: the same command list, with a track's bytes
+    /// on the disk side instead of a block's words.
+    ///
+    /// The two commands are the format itself --- "The format is
+    /// determined by the program that uses the Write All operation to
+    /// format the disk" --- so what crosses the channel is the bytes as
+    /// they lie under the head, low-order byte first, as everything on
+    /// this disk goes.
+    fn transfer_all(&mut self, read: bool, main: &mut [u32]) {
+        self.read_compare_difference = false;
+        self.dma_written.clear();
+        self.ccw_cycle = false;
+        self.nxm = false;
+        self.timeout = false;
+
+        let i = self.selected();
+        let mut unit = self.units[i].take().expect("the selected unit is online");
+        let (cylinder, head, block) = decode_da(self.da);
+        if unit.seek(cylinder, head, block) {
+            if read {
+                let bytes = track_bytes(&mut unit, cylinder, head, block);
+                self.read_all(&bytes, main);
+            } else {
+                let bytes = self.write_all_bytes(main);
+                lay_down_track(&mut unit, &bytes);
+            }
+            self.da = unit.da(i as u32);
+        }
+        self.units[i] = Some(unit);
+    }
+
+    /// Read All: the track's bytes into the pages the command list names,
+    /// four bytes to a word, low-order byte first.  The track is read
+    /// round and round --- the command does not advance the head --- so a
+    /// list longer than a track comes back to where it started.
+    fn read_all(&mut self, bytes: &[u8], main: &mut [u32]) {
+        let mut at = 0usize;
+        self.each_ccw(main, |d, page, main| {
+            if page + BLOCK_WORDS > main.len() {
+                d.nxm = true;
+                return false;
+            }
+            for w in &mut main[page..page + BLOCK_WORDS] {
+                let mut b = [0u8; 4];
+                for byte in &mut b {
+                    *byte = bytes[at % bytes.len()];
+                    at += 1;
+                }
+                *w = u32::from_le_bytes(b);
+            }
+            d.dma_written.push(page);
+            true
+        })
+    }
+
+    /// Write All: the pages the command list names, back into bytes.
+    fn write_all_bytes(&mut self, main: &mut [u32]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        self.each_ccw(main, |d, page, main| {
+            if page + BLOCK_WORDS > main.len() {
+                d.nxm = true;
+                return false;
+            }
+            bytes.extend(main[page..page + BLOCK_WORDS].iter().flat_map(|w| w.to_le_bytes()));
+            true
+        });
+        bytes
+    }
+
+    /// The command list walked, `page` by `page`, until a CCW arrives with
+    /// the More flag clear or `each` says to stop.  [`Controller::command_list`]
+    /// walks the same list a block at a time; this one has no block to
+    /// advance to, the track being one stream.
+    fn each_ccw(
+        &mut self,
+        main: &mut [u32],
+        mut each: impl FnMut(&mut Controller, usize, &mut [u32]) -> bool,
+    ) {
+        let mut n = 0u32;
+        loop {
+            let clp = self.clp & !0xffff | (self.clp.wrapping_add(n)) & 0xffff;
+            self.last_memory_address = clp;
+            self.ccw_cycle = true;
+            let Some(&ccw) = main.get(clp as usize) else {
+                self.nxm = true;
+                return;
+            };
+            self.ccw_cycle = false;
+            let page = (ccw & 0x003f_ff00) as usize;
+            let more = ccw & 1 != 0;
+            if !each(self, page, main) {
+                return;
+            }
+            self.last_memory_address = (page + BLOCK_WORDS - 1) as u32;
+            if !more {
+                return;
+            }
+            n += 1;
+        }
+    }
+
     /// The command list: one CCW per page, each naming where in physical
     /// memory the block goes, until one arrives with the More flag clear.
     fn command_list(&mut self, unit: &mut Unit, read: bool, compare: bool, main: &mut [u32]) {
@@ -663,6 +800,63 @@ impl Controller {
             }
             n += 1;
         }
+    }
+}
+
+/// The track under the heads as it lies on the pack, from `block` round to
+/// itself: each block's [`disk_unit::sector_image`] end to end, and the
+/// [`format::LEFTOVER`] at the end of the track as the ones every gap in
+/// this format is written with.
+///
+/// A block the pack has no data for reads as zeros, which is what a blank
+/// image gives; the format around it is there either way, because the
+/// format is what the drive would be carrying.
+fn track_bytes(unit: &mut Unit, cylinder: u32, head: u32, block: u32) -> Vec<u8> {
+    let g = unit.geometry;
+    let mut bytes = Vec::with_capacity(format::TRACK);
+    for k in 0..g.blocks_per_track {
+        let b = (block + k) % g.blocks_per_track;
+        let data = unit.block_at(cylinder, head, b).unwrap_or([0; BLOCK_WORDS]);
+        bytes.extend(disk_unit::sector_image(&g, cylinder, head, b, &data));
+        if b + 1 == g.blocks_per_track {
+            bytes.resize(bytes.len() + format::LEFTOVER, 0xff);
+        }
+    }
+    bytes
+}
+
+/// Write All: every sector the written bytes carry, put where its own
+/// header says.
+///
+/// The header is what decides: "HEADER - a 32-bit word ... `<27:16>`
+/// cylinder number, used to verify that the disk is positioned to the
+/// correct cylinder.  `<15:8>` head number ... `<7:0>` block number".  A
+/// formatter lays out a track and writes it, and the addresses it wrote
+/// into the headers are the addresses the blocks then have.
+///
+/// A sector whose bytes run out is not written: "it doesn't really write
+/// quite all of the last page; somewhere between zero and seventeen words
+/// will be lost", so the tail of the stream is expected to be short.
+fn lay_down_track(unit: &mut Unit, bytes: &[u8]) {
+    let mut at = 0usize;
+    while at + format::SECTOR <= bytes.len() {
+        let bits: Vec<bool> = bytes[at..at + format::SECTOR]
+            .iter()
+            .flat_map(|&b| (0..8).map(move |k| b >> k & 1 != 0))
+            .collect();
+        let Some(s) = disk_unit::parse_sector(&bits) else { break };
+        let (cylinder, head, block) =
+            ((s.header >> 16) & 0xfff, (s.header >> 8) & 0xff, s.header & 0xff);
+        // An address the geometry has no room for stops the track here.
+        // On the board a header that does not agree with where the heads
+        // are is `STATUS<18>`, Header Compare Error, "this error stops the
+        // transfer" --- which this model does not carry, so it stops
+        // without saying why rather than reporting an error it has not
+        // worked out.
+        if !unit.write_block_at(cylinder, head, block, &s.data) {
+            return;
+        }
+        at += format::SECTOR;
     }
 }
 
