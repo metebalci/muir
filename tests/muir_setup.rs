@@ -94,9 +94,16 @@ fn paths_under_the_run_directory_are_written_relative() {
 }
 
 /// **`info` says it again**, on stdout, as the start did on stderr.
+///
+/// `--no-auto-boot` rather than a cycle count: the run then starts held at
+/// the prompt and waits to be told what to do, so the line is certainly
+/// read. Timed against a `--stop-after` instead, this raced --- 20,000
+/// microcycles is about a millisecond, and on a loaded machine the run
+/// finished before the prompt's reader thread had the line, which is a
+/// test failing for want of a scheduler rather than for a reason.
 #[test]
 fn info_says_it_again() {
-    let mut child = muir().args(["--micro", "--stop-after", "20000"]).stdin(Stdio::piped()).start();
+    let mut child = muir().args(["--micro", "--no-auto-boot"]).stdin(Stdio::piped()).start();
     let mut stdin = child.stdin();
     writeln!(stdin, "info").unwrap();
     drop(stdin);

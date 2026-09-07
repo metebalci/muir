@@ -22,10 +22,10 @@ Hand-written files, no build step and no generator:
                   still sharp on a dense screen. Cut with
                   `magick lashup.gif -coalesce -resize 1240x -layers optimize -colors 16 lashup-small.gif`
     system-100.png
-                  the screenshot in step 5 of the install: System 100 at its
+                  the screenshot in step 4 of the install: System 100 at its
                   Lisp Listener, 768 x 963, which is the machine's own frame
                   buffer and the size the page shows it at. Made by starting
-                  `target/release/muir` as step 5 says, waiting for the boot,
+                  `target/release/muir` as step 4 says, waiting for the boot,
                   and typing `ss` at the prompt; then recompressed, since
                   `SimpleTv::png` writes stored deflate blocks and zlib -9
                   puts the same pixels in 2.4K rather than 93K.

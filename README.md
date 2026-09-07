@@ -13,11 +13,9 @@ Install `rustup`, then open a new shell so `cargo` is on the path:
 
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-You also need a C compiler, for the reader `tools/` builds for MIT's
-drawings: `xcode-select --install` on macOS, `build-essential` on Debian
-and Ubuntu, `gcc` on Fedora. Then build muir. The compiler version is
-pinned in `rust-toolchain.toml`, so the first `cargo` command here installs
-it, and nothing else is downloaded --- there are no crate dependencies.
+Then build muir. The compiler version is pinned in `rust-toolchain.toml`,
+so the first `cargo` command here installs it, and nothing else is
+downloaded --- there are no crate dependencies.
 
     git clone https://github.com/metebalci/muir
     cd muir
@@ -119,9 +117,9 @@ committed too, in `mit/`, so re-extracting one needs no fetching --- that is
 
 ## Install
 
-Needs a Rust toolchain and a C compiler --- the first for muir, the second
-because `tools/` builds a reader for MIT's drawings. The compiler version is
-pinned in `rust-toolchain.toml`, and nothing else is downloaded.
+Needs a Rust toolchain and nothing else: the version is pinned in
+`rust-toolchain.toml`, there are no crate dependencies, and everything the
+build and the tests read is committed.
 
     git clone https://github.com/metebalci/muir
     cd muir
