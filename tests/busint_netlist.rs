@@ -278,10 +278,22 @@ fn the_drawings_are_the_later_revision() {
     assert_eq!(grant.len(), 3, "pins on -LMUB GRANT");
 
     // Two parts MIT's December 1980 census, `busint.wls`, settles too: no
-    // `9S42`, and eight `74S51A` sections. That the earlier drawings carry
-    // four Fairchild 9S42s and three 74S51A sections is **unverified**
-    // here, the earlier set not being committed; a copy of the wire list
-    // of 3/4/79 would settle it.
+    // `9S42`, and eight `74S51A` sections.
+    //
+    // **The earlier board is settled as well, and its wire list of 3/4/79
+    // is committed**: it is `mit/cadr1/busint.ray`, which `busint.eco`
+    // heads `[WIRE LIST OF 3/4/79]` and whose wires are the ones that file's
+    // ECOs 1, 2, 3 and 6 delete, none of the ones they add. Its socket
+    // jumpers place 16-pin bodies at C06 and C14 where the December 1980
+    // list has 14-pin 74S51As, which is the package-size change.
+    //
+    // MIT's own parts list agrees and gives the counts outright:
+    // `cadrpt/parts.64` of 16 April 1980, between the two revisions, has
+    // `9S42 = 2` and `74S51 = 3` for this board against the later list's
+    // five 74S51 packages. So the earlier board carried **two** 9S42
+    // packages, at C06 and C14, and three 74S51s. The "four Fairchild
+    // 9S42s" of the older note here is a count of four drawn gates in those
+    // two packages, which is consistent and reads as four parts.
     let count = |kind: &str| n.parts.iter().filter(|p| p.kind == kind).count();
     assert_eq!(count("9S42-1"), 0, "no 9S42 on the board");
     assert_eq!(count("74S51A"), 8, "eight 74S51A sections");

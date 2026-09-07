@@ -76,14 +76,33 @@ fn the_release_prom_parses() {
     assert_eq!(m.amem.len(), 0o2000, "A memory words");
     assert_eq!(m.trailing_bytes, 4508, "bytes past the last section");
 
-    // **Unverified**: the A memory section the reader lands on is entirely
-    // zero, and where this file keeps the PROM's A memory is not
-    // established; the 4,508 bytes past its last section are the one place
-    // left. What would settle it is the boot PROM's own reader,
-    // `PROCESS-SECTION` in `mit/sys/ucadr/promh.text`, run over this
-    // file's sections, and the words it writes to A memory compared with
-    // the `A-MEM` names in `promh.sym`. Pinned so that a change in the
-    // reader shows here.
+    // **The A memory section is all zero because that is what the file
+    // holds, and the reader is right.** Settled by reading the boot PROM's
+    // own loader, `mit/sys/ucadr/promh.text`, which is what the earlier
+    // note here said would settle it.
+    //
+    // `PROCESS-A-MEM-SECTION` does not write A memory at all. It sets
+    // `PDL-BUFFER-POINTER` to the section's start less one and pushes each
+    // word onto the PDL buffer; when the count runs out it **falls into**
+    // `DONE-LOADING` rather than returning to `PROCESS-SECTION`, and
+    // `DONE-LOADING` copies the PDL buffer into M memory and then into A
+    // memory. So the A memory section is terminal by construction, it must
+    // be exactly start 0 and size 0o2000 to fill the 1K buffer, and the
+    // PROM never reads a byte past it. Breaking out of the loop at code 4,
+    // which `src/mcr.rs` does, is the PROM's own behaviour.
+    //
+    // The zeros are the assembler's too: in `promh.text`'s `(LOCALITY
+    // A-MEM)` every cell is declared `(0)` and the PROM builds its
+    // constants at run time with `CLEAR-A-MEMORY` and `MAKE-CONSTANTS`.
+    // Run over `sys/ubin/ucadr.mcr` instead, the same reader lands on 341
+    // non-zero words of 1024, so it finds data whenever there is data.
+    //
+    // The 4,508 trailing bytes are the microcode symbol area, not A memory.
+    // `sys/sys/qwmcr.lisp`'s `WRITE-MCR-FILE` writes the sections and then
+    // pads with zero halfwords to a 1024-byte page before the symbol image:
+    // the sections end at byte 15,972, 412 bytes of padding reach 16,384,
+    // and the code-3 header's own fields say 4 blocks at block 16. 412 plus
+    // 4,096 is 4,508, and the same arithmetic closes for `ucadr.mcr`.
     assert!(m.amem.iter().all(|&w| w == 0), "A memory read from the stream is not zero after all");
 
     // Hand-checked anchor: location 0 jumps to GO.
