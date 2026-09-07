@@ -308,8 +308,17 @@ fn control_c_holds_at_the_prompt_and_again_quits() {
     assert!(chk.exists(), "the checkpoint at the stop was written");
 }
 
-/// ^C with no one to type `continue` --- stdin ended --- ends the run at
-/// once, as `quit` does.
+/// ^C with no one to type `continue` --- stdin ended --- ends the run on
+/// that one interrupt, as `quit` does.
+///
+/// **Which way it gets there is a race, and not one muir can settle.** The
+/// reader thread hands over the `pc` line and sees the end of stdin just
+/// after it, and the ^C can land between the two. Seen first, the ^C is a
+/// quit outright; not seen, the ^C holds and the ended stdin ends the run
+/// at the very next check. So what is held to here is the guarantee ---
+/// one interrupt, and the run is over --- and, if it did go through a
+/// hold, that the hold was resolved rather than left standing. Asserting
+/// the path instead is what made this fail in CI on a loaded runner.
 #[test]
 fn control_c_with_no_prompt_quits() {
     let mut child =
@@ -326,6 +335,12 @@ fn control_c_with_no_prompt_quits() {
     let out = child.wait();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
-    assert!(!t.contains("held"), "{t}");
-    assert!(t.contains("quit at PC"), "{t}");
+    assert!(t.contains("quit at PC"), "the one ^C ended the run:\n{t}");
+    if t.contains("held at ^C") {
+        assert!(
+            t.contains("held, and stdin has ended"),
+            "the ^C landed before the end of stdin was seen, so it held --- and then\n\
+             the ended stdin had to end the run, rather than leave the hold standing:\n{t}"
+        );
+    }
 }
