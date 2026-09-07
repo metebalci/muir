@@ -57,7 +57,7 @@
 
 use super::packet::MAX_DATA;
 use super::server::{Out, Response, Service, Session};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -196,9 +196,20 @@ struct Control {
     user: Option<String>,
     /// Handles by name, each to its channel; the input and output
     /// handles of one data connection share a channel.
-    handles: HashMap<String, Arc<Mutex<Channel>>>,
-    /// What each input handle has open, for CLOSE.
-    transfers: HashMap<String, Transfer>,
+    ///
+    /// Ordered, and not for the order's own sake: the poll walks these,
+    /// and with a hashed map that walk is in a different order in every
+    /// process, so anything that depends on which handle comes first
+    /// happens in some runs and not others. One such bug took an
+    /// afternoon to catch. Ordering it does more than take the variation
+    /// away: it makes the order that used to lose data the only order
+    /// there is, so a test can hold it and fails every time rather than
+    /// half of them.
+    handles: BTreeMap<String, Arc<Mutex<Channel>>>,
+    /// What each handle has open, for CLOSE: a data connection can be
+    /// reading on its input handle and writing on its output handle at
+    /// the same time.
+    transfers: BTreeMap<String, Transfer>,
     pending: Vec<Pending>,
     out: VecDeque<Out>,
 }
@@ -274,8 +285,8 @@ impl Control {
             client,
             version,
             user: None,
-            handles: HashMap::new(),
-            transfers: HashMap::new(),
+            handles: BTreeMap::new(),
+            transfers: BTreeMap::new(),
             pending: Vec::new(),
             out: VecDeque::new(),
         }
@@ -1178,12 +1189,24 @@ impl Session for Control {
             self.reply(&tid, "", "DATA-CONNECTION", "");
         }
         // What the user end has sent up a data connection belongs to the
-        // write in progress on that handle. Both handles of a connection
-        // share the channel, so draining the one that has the transfer
-        // takes it all; the input handle is left alone, or it would steal
-        // its sibling's data.
-        let writing: Vec<String> =
-            self.handles.keys().filter(|h| self.transfers.contains_key(*h)).cloned().collect();
+        // **write** in progress on that connection, and to nothing else.
+        // Both handles of a connection share one channel, so draining the
+        // handle that is writing takes it all; the other is left alone,
+        // or it would steal its sibling's data --- and it will have a
+        // transfer of its own whenever the user end is reading a file and
+        // writing one at once, which is what the band does through every
+        // compile (`sys/qcfile.lisp`'s `QC-FILE` holds the source open
+        // around the QFASL it writes). Selecting on *a* transfer rather
+        // than a write is how a compiled file came to be written to no
+        // one: the read's drain took the write's bytes, dropped them for
+        // having nowhere to go, and the clear below finished the job.
+        // `tests/chaos.rs::a_read_and_a_write_on_one_data_connection_keep_their_own_bytes`.
+        let writing: Vec<String> = self
+            .handles
+            .keys()
+            .filter(|h| matches!(self.transfers.get(*h), Some(Transfer::Write { .. })))
+            .cloned()
+            .collect();
         for handle in writing {
             self.drain_incoming(&handle);
         }
