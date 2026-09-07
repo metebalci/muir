@@ -4,24 +4,42 @@
 //! The FILE service: the Chaosnet file protocol, as the band's file
 //! server spoke it.
 //!
-//! No specification of the protocol reached us --- the manual points at
-//! `SYS: DOC; FILE TEXT`, which the release does not carry --- so it is
-//! read from both ends of it: the Lisp Machine's client,
-//! `sys/network/chaos/qfile.lisp`, which says what the band sends, and
-//! the MIT/Symbolics Unix server of 1984, `FILE.c`, which says what it
-//! answered. The band's `SYS` host is `MIT-OZ`, and the release's
-//! `sys/site/hosts.text` declares it `HOST MIT-OZ, CHAOS 3060,SERVER,UNIX,
-//! VAX,[OZ]` --- so the file server the band talks to here answers as a
-//! Unix one, which is what `FILE.c` is. **Unverified** that the machine at
-//! that address ran `FILE.c` itself. The release contradicts its own host
-//! table: `sys/man/pathnm.text` works an example on `OZ:<FOO>A.LISP.5`,
-//! "where OZ is a TOPS-20", so one of the two is describing a different
-//! machine or a different year, and the release carries no file server of
-//! its own to compare against either. The client and `FILE.c` are the two
-//! ends that reached us, and they agree. What would settle it: a capture
-//! of the real OZ answering a `FILE` connection, or the `SYS: DOC; FILE
-//! TEXT` the manual points at, which would say what the protocol was
-//! rather than what one server made of it.
+//! **The specification is in the release**, and an earlier note here said
+//! it was not. `sys/doc/chfile.text`, 792 lines, "Description of the CHAOS
+//! FILE protocol designed by HIC": the control connection to contact
+//! `FILE`, the `tid <sp> [fh] <sp> cmd [args]` command form, the newline as
+//! `NL = 215`, the opcodes `%CODAT = 200` for ASCII, `300` for binary,
+//! `201` and `202` for the synchronous and asynchronous marks, `%COEOF =
+//! 014`, the error form and its code table. The manual points at `SYS:
+//! DOC; FILE TEXT` and the release ships it as `CHFILE TEXT`, which is why
+//! it was looked for and not found. It is byte for byte the same file in
+//! System 304, two independently restored releases.
+//!
+//! **And the release carries MIT's own server**, `sys/file/server.lisp`,
+//! 1,253 lines: `(chaos:listen "FILE")` and a dispatch of LOGIN, OPEN,
+//! OPEN-FOR-LISPM, DATA-CONNECTION, CLOSE, FILEPOS, DELETE, RENAME,
+//! EXPUNGE, COMPLETE, CONTINUE, DIRECTORY, CHANGE-PROPERTIES,
+//! CREATE-DIRECTORY and CREATE-LINK. So there are three ends to read
+//! against each other, not two, and the third is MIT's own.
+//!
+//! What this is read from, in the order the project ranks them: MIT's
+//! specification above, MIT's server, the Lisp Machine's client
+//! `sys/network/chaos/qfile.lisp`, and last the MIT/Symbolics Unix server
+//! of 1984, `FILE.c`.
+//!
+//! **The old question about the host had no answer because it had a false
+//! premise.** It asked whether the machine at Chaosnet address 3060 ran
+//! `FILE.c`, and took `sys/man/pathnm.text`'s "where OZ is a TOPS-20"
+//! against `sys/site/hosts.text`'s `HOST MIT-OZ, CHAOS 3060,SERVER,UNIX,
+//! VAX,[OZ]` as the release contradicting itself. It does not. The
+//! release's own `README`, under "Network Changes", says "] OZ is not
+//! really MIT-OZ --- MIT-OZ is identifies now a Unix machine (instead of
+//! TOPS-20), and has a new Chaosnet address." The manual describes MIT's
+//! historical machine and the host table describes the restoration's
+//! stand-in, which are different machines, and 3060 is the restorers'
+//! address. No MIT machine was ever there. `sys/site/site.lisp` confirms
+//! what the band expects of it: `OZ-SYS-PATHNAME-TRANSLATIONS` is Unix,
+//! `("SYS" "//TREE//SYS//")`, which is the tree `src/main.rs` serves.
 //!
 //! The shape: the user end opens a *control connection* to contact `FILE
 //! 1` and sends commands on it as data packets of text, one command a
