@@ -586,8 +586,8 @@ A simulator of the MIT CADR Lisp Machine.
                                memory on every engine, and on chip the
                                boards on the backplane. [default: 32, the
                                two million words]
-  --no-auto-boot               micro, rtl: leave the boot button unpressed,
-                               as a CADR is when the power comes on: RUN is
+  --no-auto-boot               leave the boot button unpressed, as a CADR
+                               is when the power comes on: RUN is
                                clear, the machine is halted, and nothing
                                runs. The run starts held at the prompt, so
                                that the machine can be looked at as it came
@@ -1787,6 +1787,7 @@ fn chip_machine(
     boards: Boards,
     memory_boards: usize,
     mut chaos: muir::chaos::Config,
+    auto_boot: bool,
 ) -> ChipMachine {
     let n = netlist::parse(NETLIST).unwrap();
     let mut c = Chip::new(&n);
@@ -1806,8 +1807,12 @@ fn chip_machine(
     far.join(&mut c, clk.time_ns());
 
     // The button, then the few start-up microcycles before the PC moves.
+    // `--no-auto-boot` leaves it unpressed, as a CADR is when the power
+    // comes on, for the prompt's `boot` to press.
     let boot = n.by_name_id("-BOOT1").unwrap();
-    press_boot(&mut c, &mut clk, boot);
+    if auto_boot {
+        press_boot(&mut c, &mut clk, boot);
+    }
     let pc_nets = c.bus_nets(&n, "PC", 14);
     // The mode register's bit, as `Machine::mode` has it on the other
     // engines.
@@ -1816,7 +1821,7 @@ fn chip_machine(
     let errhalt = n.by_name_id("-ERRHALT").unwrap();
     let stathalt = n.by_name_id("-STATHALT").unwrap();
     let mut skipped = 0;
-    while c.read(&pc_nets) == 0 && skipped < 40 {
+    while auto_boot && c.read(&pc_nets) == 0 && skipped < 40 {
         c.microcycle(&mut clk);
         skipped += 1;
     }
@@ -1918,6 +1923,7 @@ fn time_chip(
     capture: Option<(PathBuf, bool)>,
     setup: &str,
     clocks: bool,
+    hold: bool,
 ) {
     let ChipMachine {
         mut cpu,
@@ -1930,7 +1936,7 @@ fn time_chip(
         stathalt,
         boot,
         ..
-    } = chip_machine(image, pack, boards, memory_boards, chaos);
+    } = chip_machine(image, pack, boards, memory_boards, chaos, !hold);
     // One microcycle is however many clock transitions it takes for the phase
     // to wrap, not a fixed number of them.
     let t = Instant::now();
@@ -1963,7 +1969,7 @@ fn time_chip(
     // `chip` is slow enough that this matters --- a run that has spent an
     // hour getting somewhere should not have to be started again to be
     // asked where it is.
-    let mut held = false;
+    let mut held = hold;
     let mut stepping: Option<u64> = None;
     let mut quit = false;
     catch_interrupts();
@@ -2502,9 +2508,6 @@ fn main() {
     }
     let capture = capture_tv.map(|path| (path, capture_tv_time));
     if !auto_boot {
-        if which == Which::Chip {
-            usage("--no-auto-boot is micro and rtl, the engines with a prompt, not chip");
-        }
         if cabled == 1 {
             usage("--no-auto-boot is one machine on its own, not the lashup");
         }
@@ -2898,7 +2901,9 @@ fn main() {
                 // the cable, which is what CC is for, so the self-halt
                 // check `time_chip` makes is not made here.
                 let ChipMachine { cpu, clk, far, bus, pc_nets, promdisable, .. } =
-                    chip_machine(&image, pack, on_the_buses, boards, chaos);
+                    // The debuggee's button is the debugger's to press over
+                    // the cable, so this end always boots itself.
+                    chip_machine(&image, pack, on_the_buses, boards, chaos, true);
                 let (reader, stream) = accept_debugger(&listener, addr);
                 let end = DebugIn::new(&bus, cpu, clk, far);
                 let remote = Remote::debuggee(end, reader, stream);
@@ -2915,6 +2920,7 @@ fn main() {
                     capture,
                     &setup,
                     capture_tv_time,
+                    !auto_boot,
                 );
             }
         }
