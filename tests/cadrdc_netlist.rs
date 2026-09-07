@@ -1206,6 +1206,63 @@ fn a_transfer_with_no_drive_stops_by_error() {
     }
 }
 
+/// **With no drive only the miscellaneous command completes.** Each command
+/// code's low three bits pick a sector of the sequencer's PROM, and what
+/// an empty cable does to each is `CMD2`'s to say: with it low the disk
+/// lossage --- `NO SELECT` and `-SEL UNIT ON LINE` both up --- presets
+/// `BUSY` off before the sequencer runs, and `STOPPED BY ERROR` with it,
+/// so a read leaves the word as it found it, `0o21441`; with it high the
+/// lossage is masked at DCBUSY 0C16 and the START clears the flop, so at
+/// ease, recalibrate and fault clear (sector 5) run to done with no error,
+/// `0o1441`, while a seek (4) and an offset clear (6) run to their first
+/// step and wait there for a drive that never answers, and the reserved
+/// sector 7 walks into unwritten PROM and stays at `31`. A reset between
+/// each --- `16` then `0` into the command register --- puts the word
+/// back to `0o21441`, the empty command register letting the lossage
+/// through again. The behavioural controller is held to the same words in
+/// `tests/disk.rs`.
+///
+/// The three waits are for ever on this board: the timeout enable is the
+/// hand jumper `J5-16 : J5-41` of `cadrdc/disk.hand`, "Timeout Enable
+/// jumper (use red wire)", which `Netlist::HAND_JUMPERS` does not apply,
+/// so `-TIMEOUT ENB` floats high and the 74LS124 section at DCTMOT 0B04
+/// that clocks the 74393 at 0C03 is disabled. The behavioural controller
+/// has the jumper in, as `sys/doc/disk.text` does, and times them out.
+#[test]
+fn with_no_drive_only_the_miscellaneous_command_completes() {
+    let n = cadrdc();
+    let mut b = controller(&n);
+    let mut p = Probe::new(&b);
+    // (command, the status word 50 us after START, busy, micro-PC)
+    let cases = [
+        (0o0, 0o21441, false, 0),
+        (0o4, 0o1440, true, 1),
+        (0o5, 0o1441, false, 0),
+        (0o1005, 0o1441, false, 0),
+        (0o405, 0o1441, false, 0),
+        (0o6, 0o1440, true, 1),
+        (0o7, 0o1440, true, 0o31),
+    ];
+    for (cmd, word, busy, upc) in cases {
+        b.cycle(REGS, Some(0o16));
+        b.cycle(REGS, Some(0));
+        let until = b.now + 5_000;
+        p.run(&mut b, until);
+        let (_, status) = b.cycle(REGS, None);
+        assert_eq!(status, 0o21441, "after the reset before {cmd:o}");
+        assert!(!p.busy(&b) && p.upc(&b) == 0, "stopped before {cmd:o}");
+        b.cycle(REGS, Some(cmd));
+        b.cycle(REGS + 1, Some(0o777));
+        b.cycle(REGS + 2, Some(100 << 16));
+        p.cycle(&mut b, REGS + 3, Some(0));
+        let until = b.now + 50_000;
+        p.run(&mut b, until);
+        let (_, status) = b.cycle(REGS, None);
+        assert_eq!(status, word, "{cmd:o} with no drive: status {status:o}");
+        assert_eq!((p.busy(&b), p.upc(&b)), (busy, upc), "{cmd:o} with no drive");
+    }
+}
+
 /// A drive on the cable that seeks fast: the settling and the stroke
 /// scaled down so a test that waits on a seek waits microseconds.
 fn quick_drive(now: u64) -> Trident {
