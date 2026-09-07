@@ -1,0 +1,28 @@
+[package]
+name = "muir"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+authors = ["Mete Balci"]
+description = "A simulator of the MIT CADR Lisp Machine, at three fidelity levels down to its TTL parts."
+repository = "https://github.com/metebalci/muir"
+homepage = "https://muir.metebalci.com"
+documentation = "https://muir.metebalci.com"
+readme = "README.md"
+
+[dependencies]
+
+# The engines are the workload, so an unoptimised test run is dominated by
+# them. At this level the whole suite runs in about a minute with the System
+# 100 release in `vendor/`, the four-minute CC diagnostic being `#[ignore]`d.
+[profile.test]
+opt-level = 2
+
+# The engines are one crate and `chip` is a gate loop calling part behaviours
+# across its modules: one codegen unit and fat LTO let those inline, which
+# `examples/benchmark.rs` measured at 3% on the netlist. Opt-level is 3 already.
+# `-C target-cpu=native` measured nothing --- the target is `apple-m1` as it
+# is, and what a newer core adds is vector instructions the loop cannot use.
+[profile.release]
+lto = "fat"
+codegen-units = 1

@@ -1,0 +1,4 @@
+# Keep a call or a struct literal on one line whenever it fits. The pinout and
+# gate tables in `src/part.rs` are data laid out to be read as data, and the
+# default heuristics break them one field to a line.
+use_small_heuristics = "Max"

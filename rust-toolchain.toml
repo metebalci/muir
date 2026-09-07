@@ -1,0 +1,5 @@
+# Pinned so every machine builds muir with the same compiler.  The project has
+# no dependencies, so this file is the whole of its build environment.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]
