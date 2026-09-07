@@ -530,7 +530,7 @@ pub fn gated_rise_after(period: (u64, u64), enabled_at: u64, t: u64) -> u64 {
 }
 
 /// The bus interface's request-timing oscillator, `reqtim` 0A01, section 1:
-/// 1,000 ns.
+/// 850 ns.
 ///
 /// **From the part's own sheet and the board's own capacitor, not from
 /// MIT's prose.** Texas Instruments' *The TTL Data Book for Design
@@ -546,19 +546,38 @@ pub fn gated_rise_after(period: (u64, u64), enabled_at: u64, t: u64) -> u64 {
 /// `VCO CAP2`, pins 4 and 5 of the part; the same wire list straps the
 /// range input on pin 3 and the frequency-control input on pin 2 to
 /// `+5.0V`, which the drawing does not show because +5 is not a page
-/// signal. 1e-4 over 1e-10 is 1 MHz.
+/// signal. 1e-4 over 1e-10 is 1 MHz, a 1,000 ns period at the formula's
+/// conditions.
 ///
-/// **The figure is a band, and this is its slow end.** The formula holds
-/// "under the conditions used in Figure 3", both control inputs at 2 V.
-/// Figure 4, the frequency normalised against the two control voltages, is
-/// drawn for the S part and only to 4.5 V on the range input; every curve
-/// on it converges near 1.17 at 5 V on the frequency input, and the sheet
-/// says of the LS only that "the concept also applies". So both pins at +5
-/// puts the section somewhere between about 0.85 and 1.0 us, and the whole
-/// of that band is far from 2 us. 1,000 is taken as the one figure that is
-/// TI's own arithmetic for this part rather than a reading off a curve for
-/// another; the true period is probably nearer the band's fast end, and
-/// nothing in the simulation turns on the difference.
+/// **The figure is a band, 0.7 to 1.0 us, and 850 sits near its centre
+/// with one correction applied and another noted.** The formula holds
+/// "under the conditions used in Figure 3", both control inputs at 2 V, and
+/// this board straps both to +5, so 1,000 measures a bias point the board
+/// does not have. Figure 4, the frequency normalised against the two
+/// control voltages, is drawn for the S part and only to 4.5 V on the range
+/// input; every curve on it converges near 1.17 at 5 V on the frequency
+/// input, and the sheet says of the LS only that "the concept also
+/// applies". 1,000 over 1.17 is 855, rounded to 850, the precision a band
+/// of about fifteen per cent supports; that is the correction applied. The
+/// other is a calibration of the formula itself: on the disk
+/// controller, where all four control pins sit at the formula's own 2 V,
+/// it gives 2.2 us for the 220 pF section MIT drew as `PERIOD = 1.8 - 2.0
+/// usec.` --- [`DISK_2USEC_VCO_PERIOD`] --- 10 to 22 per cent slow. That
+/// points the same way, and being a single point from another board it is
+/// noted rather than multiplied in: the two stacked would say about 750,
+/// the band's fast end, and two soft corrections multiplied is precision
+/// the sheet does not give. All three lines of evidence put the true period
+/// below 1,000 and none above it. The cadr4 project reached the same
+/// figure by an independent reading of the same page, one project through
+/// Figure 4 and the other partly through the disk controller's
+/// calibration, which is the agreement by separate routes this project's
+/// rules ask for; the two clocks matching also makes the comparison between
+/// the projects easier where they disagree elsewhere. Nothing in the
+/// simulation turns on where in the band the board sits: the `rtl` boot's
+/// nanosecond count to the first disk read is the same at 850 as at 855,
+/// its two NXM cycles ending in the same microcycles either way, and it
+/// moved by 7.7 microseconds of 118 milliseconds when the period came
+/// down from 2,000.
 ///
 /// **MIT says "roughly 2 uSec", and the board MIT measured is not this
 /// one.** `cadr1/reqtim.prom`'s header says "This Assumes Roughly 2 uSec
@@ -579,10 +598,10 @@ pub fn gated_rise_after(period: (u64, u64), enabled_at: u64, t: u64) -> u64 {
 /// at half its label, which is what "marginal" would look like in service,
 /// and the change would then be the hardware being corrected to the PROM
 /// rather than the PROM written for new hardware. On this board the PROM's
-/// 10 microsecond NXM timeout is between 5.5 and 6.5, its 20 microsecond
-/// hung timeout between 10.5 and 11.5, and its 26 microsecond debug timeout
-/// between 13.5 and 14.5 --- the note on `Oscillator` has why each is a
-/// range ---
+/// 10 microsecond NXM timeout is between 5.5 and 6.5 periods, 4.7 to 5.5
+/// us; its 20 microsecond hung timeout 8.9 to 9.8; and its 26 microsecond
+/// debug timeout 11.5 to 12.3 --- the note on `Oscillator` has why each is
+/// a range ---
 /// which the microcode never notices, because nothing it does is timed
 /// against them. Discrepancy 73.
 ///
@@ -590,7 +609,7 @@ pub fn gated_rise_after(period: (u64, u64), enabled_at: u64, t: u64) -> u64 {
 /// is a scope on a board built to the December 1980 list, or an LS sheet
 /// with its own normalised curve. The labels need nothing: they are right
 /// for the other board.
-pub const VCO_PERIOD: (u64, u64) = (1_000, 1);
+pub const VCO_PERIOD: (u64, u64) = (850, 1);
 
 /// The disk controller's other VCO, `dctmot` 0B04 section 2, whose output
 /// is the net MIT calls `-2USEC.CLK^`: 2,000 ns.
