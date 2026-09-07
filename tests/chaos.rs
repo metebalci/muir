@@ -1930,17 +1930,12 @@ fn the_304_band_reaches_the_server_at_its_own_numbers() {
 /// acknowledged; this one is the server's, and it strikes a correct
 /// client intermittently, on the timing of two connections.
 ///
-/// **Ignored because the server does not keep this contract yet**, not
-/// because it needs anything the repository has not got: it fails on the
-/// first assertion, the file having gone into place on the CLOSE alone.
-/// `drain_incoming` throws the synchronous mark away without recording
-/// it, so `close` has nothing to await on. What would make it pass is
-/// the mark noted on the write as it arrives and `close` deferring until
-/// it has, the way the `stalled` arm already declines to put a short
-/// file into place. Run it with `cargo test -- --ignored`, and see
-/// issue 23.
+/// Holding the reply back cannot hold the mark back with it: the
+/// client writes the two without waiting between them ---
+/// `qfile.lisp`'s `:COMMAND` sends the command packet on the control
+/// connection and then, for an output stream, `(SEND STREAM
+/// :WRITE-SYNCHRONOUS-MARK)`, before it waits for the response.
 #[test]
-#[ignore = "the server renames on the CLOSE without awaiting the mark"]
 fn a_write_is_not_placed_until_the_synchronous_mark_has_come() {
     let root = std::env::temp_dir().join(format!("muir-chaos-mark-{}", std::process::id()));
     let dir = root.join("tree/sys");
@@ -1978,6 +1973,52 @@ fn a_write_is_not_placed_until_the_synchronous_mark_has_come() {
     assert!(r.starts_with("T4 O0001 CLOSE "), "{r:?}");
     assert_eq!(std::fs::read(&real).unwrap(), [0o215, 0o12, 0, 0o377], "every byte sent");
     assert!(!temporary(), "and the temporary is gone");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// **A CLOSE still waiting for its mark is answered when the transfer is
+/// taken away under it.**
+///
+/// A write's CLOSE is held until the synchronous mark comes, so a client
+/// that abandons the transfer instead of sending the mark --- an
+/// `UNDATA-CONNECTION` on the handle --- would otherwise wait for a
+/// reply that no longer had anything to come from. It gets `CNO`,
+/// `chfile.text`'s "CLOSE on non-open channel": by the time the CLOSE
+/// could be answered there was no channel left to close.
+///
+/// The band does not do this, and the test is here because the deferral
+/// is what makes it possible to hang. Its `:REAL-CLOSE` waits for the
+/// CLOSE's reply before freeing the data connection, and it only undoes
+/// a connection that has gone dormant.
+#[test]
+fn a_close_waiting_for_its_mark_is_answered_if_the_transfer_goes_away() {
+    let root = std::env::temp_dir().join(format!("muir-chaos-strand-{}", std::process::id()));
+    let dir = root.join("tree/sys");
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = Server::new(0o3060);
+    h.serve(Box::new(File::new(&root)));
+    let mut c = Client::new(0o3050, 0o3060);
+    c.connect(&mut h, 0);
+    let nl = NEWLINE as char;
+    c.command(&mut h, 10, "T1  LOGIN LISPM LISPM ");
+    c.listening = Some("O0001".into());
+    c.command(&mut h, 20, "T2  DATA-CONNECTION I0001 O0001");
+    let r =
+        c.command(&mut h, 30, &format!("T3 O0001 OPEN WRITE BINARY{nl}/tree/sys/gone.qfasl{nl}"));
+    assert!(r.starts_with("T3 O0001 OPEN "), "{r:?}");
+    c.send_data(&mut h, 40, file::BINARY_OP, &[1, 2, 3]);
+    c.send_command(&mut h, 50, "T4 O0001 CLOSE");
+    assert!(c.take_reply("T4").is_none(), "the CLOSE waits for the mark");
+
+    // The mark never comes; the data connection is undone instead.
+    let r = c.command(&mut h, 60, "T5 I0001 UNDATA-CONNECTION");
+    assert!(r.starts_with("T5 I0001 UNDATA-CONNECTION"), "{r:?}");
+    let r = c.take_reply("T4").expect("and the CLOSE is answered rather than left waiting");
+    assert!(r.starts_with("T4 O0001 ERROR CNO C "), "{r:?}");
+    assert!(!dir.join("gone.qfasl").exists(), "nothing went into place");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "and no temporary was left");
 
     std::fs::remove_dir_all(&root).ok();
 }
