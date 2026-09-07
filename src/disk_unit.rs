@@ -563,23 +563,34 @@ pub fn parse_sector(bits: &[bool]) -> Option<Sector> {
 // The drive as its cables see it
 // ---------------------------------------------------------------------------
 
-/// One revolution at 3,600 rpm, the speed generally given for the drive.
-/// **Unverified** as the T-300's own figure, and still open: the Century
-/// Data specification MIT calls "the Trident manual" --- `sys/doc/disk.text`
-/// and AIM-528 both send the reader to it and neither repeats its figures
-/// --- has not reached us, and its spindle speed would settle it.
+/// One revolution at 3,600 rpm.
 ///
-/// MIT does fix the product of this and [`BIT_NS`], though not either
-/// factor. `sys/doc/disk.text`: "A track contains (approximately) 20160.
-/// bytes (on a T-80 or a T-300)."  So a revolution carries about 20,160
-/// bytes, and 3,600 rpm against 1,209 KB/s satisfies that to a part in a
-/// hundred. Either figure settles the other; neither is MIT's.
+/// **Century Data's own figure.** The specification MIT calls "the Trident
+/// manual" --- `sys/doc/disk.text` and AIM-528 both send the reader to it
+/// and neither repeats its numbers --- is CalComp/Century Data 76205-902,
+/// *Performance Specification, Models T-25, T-50, T-80, T-200 and T-300*,
+/// November 1980, on bitsavers. Its Table 2-1, "Operational
+/// Specifications", gives `Rotational speed 3600 RPM` for all five models
+/// and `Average latency time 8.3ms`, which is half a revolution and agrees.
+///
+/// The same table gives `Bytes per track 20,160` for the T-300, which is
+/// what `sys/doc/disk.text` means by "A track contains (approximately)
+/// 20160. bytes (on a T-80 or a T-300)" --- MIT's approximation is Century
+/// Data's exact figure.
 pub const REVOLUTION_NS: u64 = 16_666_667;
 
-/// One bit on the cable. The T-300's rate is generally given as 1,209
-/// KB/s, which is 103.4 ns a bit --- **unverified** as the drive's own,
-/// the same way [`REVOLUTION_NS`] is and settled by the same document ---
-/// rounded to an even number so the clock's two halves are equal. At this
+/// One bit on the cable, at the T-300's 1,209 KByte/s.
+///
+/// **Century Data's own figure**, the same Table 2-1 as [`REVOLUTION_NS`]:
+/// `I/O Transfer rate ... 1209 KByte` for the T-80 and T-300, 806 KByte for
+/// the T-25, T-50 and T-200. That is 103.4 ns a bit, rounded up to an even
+/// number here so the clock's two halves are equal.
+///
+/// The rounding costs more than the figures do. 16,666,667 / 104 is 160,256
+/// bits, 20,032 bytes a track against Century Data's 20,160, which is 0.6
+/// per cent low; the unrounded pair gives 20,150, which is 0.05 per cent
+/// low. Nothing muir runs measures a track's length, so the even clock is
+/// kept. At this
 /// rate a sector's 1,164 bytes take 968 us of the 980 us between sector
 /// pulses, and MIT's own two figures for a track agree with that:
 /// `sys/doc/disk.text` says "Jumpers in the disk are set to give 17.
@@ -664,16 +675,27 @@ type SectorKey = (u32, u32, u32);
 /// board on the other read the same pack.
 pub struct Trident {
     pub unit: Unit,
-    /// A seek's time: settling plus so much a cylinder. **Unverified**
-    /// as the T-300's, and generous on purpose so a test that waits on a
-    /// seek is seen to wait; a test that does not want to can zero them.
-    /// Century Data's own track-to-track, average and maximum seek times
-    /// would settle it, and nothing MIT wrote gives them: the controller
-    /// waits on `ON CYLINDER` in a loop with no count (`cadrdc/newdsk.31`
-    /// at 203, 303, 400), and the only bound on how long that may take is
-    /// the controller's own watchdog --- `sys/doc/disk.text` on
-    /// `STATUS<11>`, "Timeout Error.  Indicates that a disk operation took
-    /// longer than 2.5 seconds."
+    /// A seek's time: settling plus so much a cylinder.
+    ///
+    /// **Century Data's own figures**, Table 2-1 of the performance
+    /// specification cited at [`REVOLUTION_NS`]: `Single track positioning
+    /// time 6ms`, `Average positioning time 30ms`, `Maximum positioning
+    /// time 55ms`, the same for all five Trident models. Nothing MIT wrote
+    /// gives them --- the controller waits on `ON CYLINDER` in a loop with
+    /// no count (`cadrdc/newdsk.31` at 203, 303, 400), and the only bound
+    /// on how long that may take is the controller's own watchdog.
+    ///
+    /// The two constants below are chosen so that this linear model hits
+    /// the first and last of those exactly: one cylinder takes 6 ms and the
+    /// full stroke of 814 takes 55 ms. **The average does not come out
+    /// right and cannot**, because a real drive's seek goes as roughly the
+    /// square root of the distance while this goes as the distance: the
+    /// linear model gives about 22 ms where Century Data says 30. Two of
+    /// three published figures exact is what a straight line can do, and
+    /// before this it matched none of them.
+    ///
+    /// Public and settable, so a test that does not want to wait can zero
+    /// them.
     pub seek_settle_ns: u64,
     pub seek_ns_per_cylinder: u64,
     /// The spindle's phase: when, modulo a revolution, an index pulse
@@ -717,8 +739,11 @@ impl Trident {
     pub fn new(unit: Unit, now: u64) -> Trident {
         Trident {
             unit,
-            seek_settle_ns: 5_000_000,
-            seek_ns_per_cylinder: 30_000,
+            // 6 ms for one cylinder and 55 ms for the full 814: a
+            // per-cylinder step of (55 - 6) / 813 ms, and the settle is
+            // what is left of the 6.
+            seek_settle_ns: 5_939_729,
+            seek_ns_per_cylinder: 60_271,
             phase: now % REVOLUTION_NS,
             cylinder: 0,
             head: 0,
@@ -841,28 +866,35 @@ impl Trident {
     /// Starts a seek to `target`, or reports it impossible. A seek to the
     /// cylinder the heads are on is complete at once: the heads do not
     /// move, on-cylinder holds, and attention says the seek is done.
-    /// **Unverified** as the T-300's own behaviour: whether a cylinder tag
-    /// for the cylinder the heads are already on drops `ON CYLINDER` at
-    /// all, and for how long, is Century Data's to say, and their
-    /// specification has not reached us.
+    /// **Century Data's own manual says both halves of this are right.**
+    /// The *TRIDENT T25/T50/T80 OEM Reference Manual* on bitsavers, in the
+    /// interface chapter:
     ///
-    /// **And MIT's own text points the other way on the attention.** This
-    /// raises `attention` for a same-cylinder seek, where `disk.text` on
-    /// `STATUS<2>` says it "indicates seek completion, recalibrate
-    /// completion, initial loading of the heads, seek incomplete error, or
-    /// an emergency head retract.  "Implicit" seeks do not cause
-    /// attention", and under command 0004 that "the controller always
-    /// initiates a seek **if necessary** at the start of a data transfer
-    /// command". What MIT counts as an implicit seek is defined nowhere in
-    /// that file, so this is not settled either way; it is the nearest
-    /// thing to a statement on it and it is against the choice made here.
-    /// The cost of being wrong is small: a spare attention, cleared by At
-    /// Ease, and a spurious interrupt only for a program that sets
-    /// Attention Interrupt Enable, which microcode 323 and the driver do
-    /// not.
+    /// - On the attention: it "will become active at the completion of a
+    ///   'First Seek', 'Rezero', 'Seek', 'Seek Incomplete', or when an
+    ///   emergency retract occurs". A cylinder tag for the cylinder the
+    ///   heads are on is still a Seek and still completes, so it raises
+    ///   attention. This does.
+    /// - On the position line: the drive asserts it "when the heads are
+    ///   loaded and not moving". For a same-cylinder seek the heads do not
+    ///   move, so it never drops. This holds it.
     ///
-    /// MIT's controller microcode does not decide it either way. Every
-    /// read, write, read-all and write-all begins with a cylinder tag ---
+    /// **MIT's own text reads the other way and is about the controller,
+    /// not the drive.** `disk.text` on `STATUS<2>` says "'Implicit' seeks
+    /// do not cause attention", and under command 0004 that "the controller
+    /// always initiates a seek **if necessary** at the start of a data
+    /// transfer command". MIT defines "implicit" nowhere, but the "if
+    /// necessary" is the reading that makes the two agree: an implicit seek
+    /// is one the controller does *not* issue because the cylinder is
+    /// already right, and a tag never sent raises nothing.
+    ///
+    /// The manual is the T-25 to T-80 book and the drive here is a T-300;
+    /// the interface is the family's, and the performance specification
+    /// cited at [`REVOLUTION_NS`] covers all five models in one table.
+    ///
+    /// MIT's controller microcode agrees, and shows where the tag is sent.
+    /// Every read, write, read-all and write-all begins with a cylinder tag
+    /// ---
     /// `cadrdc/newdsk.31` at 000, 100, 200 and 300, "Cylinder to DBUS,
     /// await completion of previous seek", then "Start seek", then "Hold
     /// DBUS, sync -ON CYLINDER", then "Await seek completion" --- and that
