@@ -9,7 +9,7 @@
 //! cable between it and the rest --- overlaps what is there; two driving
 //! high at once is interference, a transmitter whose clock edge finds it
 //! aborts and holds the cable high for [`ABORT_HOLD_NS`], and what was
-//! left on the cable fails its check and is heard by nobody.
+//! left on the cable reaches every receiver as wreckage, failing its check.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -144,21 +144,25 @@ fn two_frames_due_together_start_together_and_collide() {
     assert_eq!(collisions(&e), [t0], "and collided there: both first edges high");
     let stop = t0 + ABORT_NS;
     assert_eq!(
-        log_a.lock().unwrap()[..],
-        [Happened::Aborted(stop, packet(0o3060, 0o3062, 4))],
+        log_a.lock().unwrap()[0],
+        Happened::Aborted(stop, packet(0o3060, 0o3062, 4)),
         "3060 stopped and got its words back"
     );
     assert_eq!(
-        log_b.lock().unwrap()[..],
-        [Happened::Aborted(stop, packet(0o3061, 0o3062, 4))],
+        log_b.lock().unwrap()[0],
+        Happened::Aborted(stop, packet(0o3061, 0o3062, 4)),
         "and so did 3061"
     );
+    // What was left on the cable reaches every receiver as wreckage, its
+    // check bad, as a receiver takes it.
+    let whole = |log: &[Happened]| log.iter().any(|h| matches!(h, Happened::Heard(_, _, true)));
     assert!(
-        log_c.lock().unwrap().is_empty(),
+        !whole(&log_c.lock().unwrap()),
         "3062 heard nothing whole: {:?}",
         log_c.lock().unwrap()
     );
-    assert!(heard(&e).is_empty(), "nothing on the cable decoded: {:?}", heard(&e));
+    let h = heard(&e);
+    assert!(h.len() == 1 && !h[0].2, "the wreckage, once, its check bad: {h:?}");
     assert!(!e.level(), "the cable is low");
     assert!(!e.busy(100_000), "and idle");
 }
@@ -204,7 +208,6 @@ fn a_frame_put_on_a_busy_cable_collides_and_the_first_is_offered_again() {
     // 3060 offers its frame again at its turn once the cable is idle.
     let other_ends = at + 15 * 16 * wire::CELL_NS;
     run(&mut e, at + 5_000, other_ends);
-    assert!(heard(&e).is_empty(), "the wreckage decoded to nothing: {:?}", heard(&e));
     assert_eq!(sent(&e).len(), 2, "3060 waited for the cable: {:?}", sent(&e));
     run(&mut e, other_ends, at + 1_000_000);
     let again = sent(&e);
@@ -213,11 +216,15 @@ fn a_frame_put_on_a_busy_cable_collides_and_the_first_is_offered_again() {
     assert!(again[2].0 > other_ends, "after the other frame ran out: {again:?}");
     assert_eq!(collisions(&e).len(), 1, "with nothing in the way");
     let h = heard(&e);
-    assert_eq!(h.len(), 1, "and was heard: {h:?}");
-    assert_eq!((h[0].1, h[0].2), (0o3060, true), "whole, its check word good");
+    assert_eq!(h.len(), 2, "the wreckage was heard, then the frame: {h:?}");
+    assert!(!h[0].2, "the wreckage, its check bad");
+    assert_eq!((h[1].1, h[1].2), (0o3060, true), "the frame whole, its check word good");
     assert!(
-        matches!(log_c.lock().unwrap()[..], [Happened::Heard(_, 0o3060, true)]),
-        "3062 took it: {:?}",
+        matches!(
+            log_c.lock().unwrap()[..],
+            [Happened::Heard(_, _, false), Happened::Heard(_, 0o3060, true)]
+        ),
+        "3062 took the wreckage as such, then the frame: {:?}",
         log_c.lock().unwrap()
     );
 }
@@ -274,9 +281,12 @@ fn the_boards_frame_goes_at_its_instant_and_the_board_is_told() {
         Some((start, 0o3050)),
         "and it started, for the turn timer"
     );
-    assert!(matches!(log_a.lock().unwrap()[..], [Happened::Aborted(t, _)] if t == c + ABORT_NS));
-    assert!(heard(&e).is_empty());
-    assert_eq!(e.board_heard().map(|_| ()), None, "the board heard nothing whole");
+    assert!(matches!(log_a.lock().unwrap()[0], Happened::Aborted(t, _) if t == c + ABORT_NS));
+    run(&mut e, start + 5_000, start + 200_000);
+    let h = heard(&e);
+    assert!(h.len() == 1 && !h[0].2, "the wreckage, its check bad: {h:?}");
+    let (_, r) = e.board_heard().expect("the board heard the wreckage too");
+    assert!(!r.framed.check_ok, "and can judge it by its check, and by its {} bits", r.bits);
 }
 
 /// **Interference, for the netlist board, is its transceiver and a model

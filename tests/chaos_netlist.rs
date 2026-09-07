@@ -814,6 +814,94 @@ fn the_board_aborts_its_transmission_on_interference() {
     assert!(!b.chaos.as_ref().unwrap().ether.busy(b.now), "the cable is idle again");
 }
 
+/// **The board receives wreckage addressed to it, and says so.** A frame
+/// for the board is on the cable when a transmitter that has not heard
+/// it starts another, sixty-four cells in: the check, source and
+/// destination words are past and the rest is two frames over each
+/// other. The receiver matched the destination and takes what arrives:
+/// Receive Done with CRC Error, and the bit count as received, which the
+/// software reads back as it would a packet's. What the model makes of
+/// the same bits is held to this in `tests/chaos_rtl.rs`.
+#[test]
+fn the_board_receives_wreckage_addressed_to_it() {
+    use muir::chaos::ether::{Capture, Ether};
+    use muir::chaos::wire;
+    let n = cadrio();
+    let mut b = board(&n);
+    on_the_cable(&mut b);
+    let mut ether = Ether::new();
+    ether.keep_log(true);
+    ether.attach(Box::new(Capture::new(0o3060)));
+    b.plug_chaos(ether);
+    let at = b.now;
+    b.chaos.as_mut().unwrap().ether.send_now(at, 0o3060, rfc_time(0o3060, MY_ADDRESS));
+    b.run(at + 64 * wire::CELL_NS);
+    b.chaos.as_mut().unwrap().ether.send_now(b.now, 0o3061, rfc_time(0o3061, 0o3070));
+    let c = wait_for(&mut b, csr::RECEIVE_DONE, 1_000_000);
+    eprintln!("Receive Done after {} ns, CSR {c:#08o}", b.now - at);
+    assert!(c & csr::RECEIVE_DONE != 0, "the board took the wreckage: {c:#08o}");
+    assert!(c & csr::CRC_ERROR != 0, "with its check bad: {c:#08o}");
+    let (_, bits) = b.cycle(chaos::BIT_COUNT, None);
+    let words = (bits as usize + 1) / 16;
+    let mut back = Vec::new();
+    for _ in 0..words {
+        let (_, w) = b.cycle(chaos::READ_BUFFER, None);
+        back.push(w);
+    }
+    eprintln!(
+        "bit count {bits} ({words} whole words{}): {:?}",
+        if (bits as usize + 1).is_multiple_of(16) { "" } else { " and a part" },
+        back.iter().map(|w| format!("{w:#o}")).collect::<Vec<_>>()
+    );
+    assert!(bits as usize + 1 > 3 * 16, "more than the three header words came");
+    assert_ne!(bits, 0o7777);
+}
+
+/// **CRC Error reads set while a frame is coming in.** AIM-628 says the
+/// bit is "only valid at two times"; between them the board's check
+/// register is mid-packet and the bit reads 1, at every poll of a good
+/// packet for the board until it lands, and 0 then. The behavioural
+/// interface shows the same, which `tests/chaos_rtl.rs` holds it to.
+#[test]
+fn crc_error_while_a_frame_comes_in() {
+    use muir::chaos::ether::{Capture, Ether};
+    let n = cadrio();
+    let mut b = board(&n);
+    on_the_cable(&mut b);
+    let mut node = Capture::new(0o3060);
+    node.to_send.push_back(rfc_time(0o3060, MY_ADDRESS));
+    let mut ether = Ether::new();
+    ether.attach(Box::new(node));
+    let started = b.now;
+    b.plug_chaos(ether);
+    let mut seen = Vec::new();
+    loop {
+        b.run(b.now + 5_000);
+        let busy = b.chaos.as_ref().unwrap().ether.busy(b.now);
+        let (_, c) = b.cycle(chaos::CSR, None);
+        seen.push((b.now - started, busy, c & csr::CRC_ERROR != 0, c & csr::RECEIVE_DONE != 0));
+        if c & csr::RECEIVE_DONE != 0 || b.now > started + 1_000_000 {
+            break;
+        }
+    }
+    for &(t, busy, crc, done) in &seen {
+        eprintln!(
+            "  +{t:>7}: cable {}, CRC Error {}, Receive Done {}",
+            if busy { "busy" } else { "idle" },
+            crc as u8,
+            done as u8
+        );
+    }
+    let last = seen.last().unwrap();
+    assert!(last.3 && !last.2, "the packet landed with its check good");
+    let during: Vec<bool> = seen.iter().filter(|s| s.1 && !s.3).map(|s| s.2).collect();
+    eprintln!("CRC Error while the frame was on the cable: {during:?}");
+    assert!(
+        during.len() >= 5 && during.iter().all(|&c| c),
+        "set at every poll with the frame coming in"
+    );
+}
+
 /// The turn timer's nets from START to Transmit Done under Loop Back, two
 /// packets running: `MY.TURN^`, the loads, the cable-busy line and the
 /// transmitter's start and end.  Run alone with `--ignored --nocapture`;

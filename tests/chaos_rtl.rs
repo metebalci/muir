@@ -283,13 +283,8 @@ fn a_collision_aborts_the_transmission_on_both_alike() {
         eprintln!("  model ether: {ev:?}");
     }
     assert!(cb & csr::TRANSMIT_ABORT != 0, "the board's transmission was aborted: {cb:#08o}");
-    // CRC Error is "only valid at two times: when the incoming packet
-    // buffer contains a fresh packet, and when the packet has been
-    // completely read out"; at this instant the board's receiver is in
-    // the wreckage and its check register says so, which the model does
-    // not keep, so the bit is left out of the comparison here.
-    let valid = !csr::CRC_ERROR;
-    assert_eq!(cm & valid, cb & valid, "the CSR at Transmit Done");
+    // CRC Error is up on both: the receiver is in the wreckage.
+    assert_eq!(cm, cb, "the CSR at Transmit Done");
     assert_eq!(tm, tb, "at the same poll on both");
     // The other frame runs out; neither took it, and the CSRs agree whole.
     b.run(b.now + 300_000);
@@ -299,6 +294,67 @@ fn a_collision_aborts_the_transmission_on_both_alike() {
         c & (csr::RECEIVE_DONE | csr::TRANSMIT_DONE | csr::TRANSMIT_ABORT),
         csr::TRANSMIT_DONE | csr::TRANSMIT_ABORT
     );
+}
+
+/// **Wreckage addressed to the board lands on both alike.** The same two
+/// frames, from transmitters that heard neither cable, go on each at the
+/// same instants: one for the board, and sixty-four cells into it another
+/// over it. Both boards take what arrives --- Receive Done with CRC Error
+/// --- and read back the same bit count and the same words.
+#[test]
+fn wreckage_addressed_to_the_board_lands_on_both_alike() {
+    use muir::chaos::wire;
+    let n = cadrio();
+    let mut b = board(&n);
+    let ether_for = || {
+        let mut e = Ether::new();
+        e.keep_log(true);
+        e.attach(Box::new(Capture::new(SERVER)));
+        e
+    };
+    b.plug_chaos(ether_for());
+    let mut m = Model::new(Some(ether_for()));
+    both(&mut b, &mut m, chaos::CSR, Some(csr::RESET), "reset");
+    b.run(b.now + 2_000);
+    m.run(b.now);
+    both(&mut b, &mut m, chaos::CSR, Some(csr::CLEAR_RECEIVER), "clear receiver");
+    let at = b.now;
+    let first = rfc_time(SERVER, MY_ADDRESS);
+    b.chaos.as_mut().unwrap().ether.send_now(at, SERVER, first.clone());
+    m.io.chaos.as_mut().unwrap().ether_mut().unwrap().send_now(at, SERVER, first);
+    b.run(at + 64 * wire::CELL_NS);
+    m.run(b.now);
+    let over = rfc_time(0o3061, 0o3070);
+    b.chaos.as_mut().unwrap().ether.send_now(b.now, 0o3061, over.clone());
+    m.io.chaos.as_mut().unwrap().ether_mut().unwrap().send_now(b.now, 0o3061, over);
+    let ((tb, cb), (tm, cm)) = wait_for(&mut b, &mut m, csr::RECEIVE_DONE, 1_000_000);
+    eprintln!("Receive Done: board after {tb} ns ({cb:#08o}), model after {tm} ns ({cm:#08o})");
+    assert!(
+        cb & csr::RECEIVE_DONE != 0 && cb & csr::CRC_ERROR != 0,
+        "the board took wreckage: {cb:#08o}"
+    );
+    assert_eq!(cm, cb, "the CSR at Receive Done");
+    assert_eq!(tm, tb, "at the same poll on both");
+    let bits = both(&mut b, &mut m, chaos::BIT_COUNT, None, "the bit count");
+    // Every word the buffer holds, the partial one at the top included,
+    // and the count as it comes down with each.
+    let words = (bits as usize + 1).div_ceil(16);
+    eprintln!("bit count {bits}: {words} words, the top one partial");
+    let (mut from_board, mut from_model) = (Vec::new(), Vec::new());
+    for k in 0..words {
+        let (_, wb) = b.cycle(chaos::READ_BUFFER, None);
+        from_board.push(wb);
+        from_model.push(m.cycle(chaos::READ_BUFFER, None, b.now));
+        both(&mut b, &mut m, chaos::BIT_COUNT, None, &format!("the count after word {k}"));
+    }
+    let octal = |v: &[u16]| v.iter().map(|w| format!("{w:#o}")).collect::<Vec<_>>();
+    eprintln!("read back from the board: {:?}", octal(&from_board));
+    eprintln!("read back from the model: {:?}", octal(&from_model));
+    assert_eq!(from_model, from_board, "the words back, wreckage and all");
+    assert_eq!(both(&mut b, &mut m, chaos::BIT_COUNT, None, "the count read out"), 0o7777);
+    both(&mut b, &mut m, chaos::CSR, Some(csr::CLEAR_RECEIVER), "clear receiver");
+    let c = both(&mut b, &mut m, chaos::CSR, None, "the CSR cleared");
+    assert!(c & csr::RECEIVE_DONE == 0);
 }
 
 /// **After Reset alone, before any Clear Receiver, does a packet for this
