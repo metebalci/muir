@@ -601,14 +601,24 @@ pub const REVOLUTION_NS: u64 = 16_666_667;
 /// 1410 (octal) which is 1164. bytes."
 pub const BIT_NS: u64 = 104;
 
-/// The composite sector/index pulse widths, from the waveforms on
-/// Kossow's `tridentCables.pdf`: a sector pulse 1.23 us wide, the index
-/// pulse 5.5 us. **Secondary**, one copy; what the controller needs is
-/// that they fall on either side of the 2.25 us one-shot at DCTRID 0B09,
-/// which tells the index from a sector by holding the block counter's
-/// clear until the long pulse ends.
-pub const SECTOR_PULSE_NS: u64 = 1_230;
-pub const INDEX_PULSE_NS: u64 = 5_500;
+/// The composite sector/index pulse widths, **Century Data's own**.
+///
+/// The *TRIDENT T25/T50/T80 OEM Reference Manual* on the composite
+/// sector/index line: "The sector pulses are 1.24 +/- .24 uS wide and the
+/// index pulses are 4 +/- 1 uS wide", and the separate sector line is "a
+/// 1.24 +/- .24 us low going pulse at the beginning of each sector".
+///
+/// These were 1,230 and 5,500 ns, read off the waveforms on Al Kossow's
+/// `tridentCables.pdf`, a hand transcription of 1999. The sector figure was
+/// within Century Data's tolerance; **the index figure was outside it**,
+/// 5.5 us against a range of 3 to 5. Nothing turned on it, because what the
+/// controller needs is only that the two fall on either side of the
+/// one-shot at DCTRID 0B09 --- it tells an index from a sector by holding
+/// the block counter's clear until the long pulse ends --- and 1.24 and 4
+/// still straddle that one-shot's 1,991 ns as 1.23 and 5.5 did. The
+/// nominal figures are taken here and the tolerance is the manual's.
+pub const SECTOR_PULSE_NS: u64 = 1_240;
+pub const INDEX_PULSE_NS: u64 = 4_000;
 
 /// What the controller has on the cable, as the drive reads it: `true`
 /// is asserted, which on every one of these lines is low.
