@@ -6,9 +6,10 @@
 //! `764104`, the switches land in the Y register's bits 12 to 14, and a
 //! change raises `MOUSE READY`, which reading the Y register clears.
 
-use muir::ioboard::{self, csr, mouse};
+use muir::ioboard::{self, IoBoard, csr, mouse};
 use muir::part::Level;
 use muir::terminal::cable::MouseOnCable;
+use muir::terminal::mouse::MOUSE_STEP_NS;
 use muir::unibus::UnibusMaster;
 
 mod support;
@@ -94,4 +95,47 @@ fn the_switches_are_the_y_registers_top_bits() {
         mouse::MIDDLE | mouse::HEAD,
         "middle and right: {y:o}"
     );
+}
+
+/// **The behavioural board counts as the netlist board does.** The same
+/// motion into both --- ten to the right and five up, stepped out at the
+/// mouse's own pace --- lands the same deltas in the counters, and the
+/// four lines above the X count read the same before and after: the
+/// behavioural board's latches stand for the netlist's 74LS374s at IOBMSE
+/// 0A24 and 0A22, sampled on the same clock.
+#[test]
+fn the_behavioural_board_counts_as_the_netlist_board_does() {
+    let delta = |now: u16, was: u16| ((now.wrapping_sub(was) & mouse::COUNT) as i16) << 4 >> 4;
+    let n = cadrio();
+    let mut b = UnibusMaster::new(&n, 500_000, &quiet());
+    let mut m = MouseOnCable::of(&n).unwrap();
+    m.apply(&mut b.chip, b.now);
+    let until = b.now + 100_000;
+    run(&mut b, &mut m, until);
+    let (_, x0) = b.cycle(ioboard::MOUSE_X, None);
+    let (_, y0) = b.cycle(ioboard::MOUSE_Y, None);
+    let mut model = IoBoard::default();
+    let mut t = 100_000;
+    model.advance(t);
+    let mx0 = model.read(ioboard::MOUSE_X, t);
+    let my0 = model.read(ioboard::MOUSE_Y, t);
+    eprintln!("before: netlist X {x0:o} Y {y0:o}, behavioural X {mx0:o} Y {my0:o}");
+    assert_eq!(mx0 & !mouse::COUNT, x0 & !mouse::COUNT, "the lines before any motion");
+    assert_eq!(my0 & !mouse::COUNT, y0 & !mouse::COUNT, "no switches");
+
+    m.send(10, -5, 0);
+    let until = b.now + 20 * MOUSE_STEP_NS;
+    run(&mut b, &mut m, until);
+    assert!(!m.busy());
+    model.mouse_move(10, -5);
+    t += 20 * MOUSE_STEP_NS;
+    model.advance(t);
+    let (_, x) = b.cycle(ioboard::MOUSE_X, None);
+    let (_, y) = b.cycle(ioboard::MOUSE_Y, None);
+    let mx = model.read(ioboard::MOUSE_X, t);
+    let my = model.read(ioboard::MOUSE_Y, t);
+    eprintln!("after: netlist X {x:o} Y {y:o}, behavioural X {mx:o} Y {my:o}");
+    assert_eq!((delta(x, x0), delta(y, y0)), (10, -5), "the netlist board counted");
+    assert_eq!((delta(mx, mx0), delta(my, my0)), (10, -5), "and the behavioural board the same");
+    assert_eq!(mx & !mouse::COUNT, x & !mouse::COUNT, "the lines after, the same phase on both");
 }
