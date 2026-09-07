@@ -38,6 +38,7 @@
 
 use std::collections::VecDeque;
 
+use super::mouse::Encoders;
 use crate::chip::Chip;
 use crate::netlist::{NetId, Netlist};
 use crate::part::Level;
@@ -219,27 +220,11 @@ impl MouseNets {
     }
 }
 
-/// How long the mouse holds each quadrature phase: two of the board's 8
-/// us clocks, so that every step is latched into `NEW` and then into
-/// `OLD` before the next, and none is missed. A real mouse moved briskly
-/// steps faster than this, and the board would miss counts; a viewer's
-/// motion arrives in bursts that this spreads out.
-pub const MOUSE_STEP_NS: u64 = 16_000;
-
-/// The mouse on the cable: motion still to be stepped out, the phase each
-/// encoder stands at, and the switches.
+/// The mouse on the cable: its encoders, stepped, and the switches.
 pub struct MouseOnCable {
     nets: MouseNets,
-    /// Counts still to go, right and down.
-    dx: i32,
-    dy: i32,
-    /// Each encoder's phase, 0 to 3, stepped up for one direction and
-    /// down for the other: the Gray sequence 00, 01, 11, 10 on `A`, `B`.
-    x_phase: u8,
-    y_phase: u8,
+    encoders: Encoders,
     buttons: u8,
-    /// When the next step may go out.
-    next: u64,
     /// Whether the lines have been driven at all yet.
     driven: bool,
     /// Steps stepped out since plugged in, for a test.
@@ -252,29 +237,18 @@ impl MouseOnCable {
     }
 
     pub fn new(nets: MouseNets) -> MouseOnCable {
-        MouseOnCable {
-            nets,
-            dx: 0,
-            dy: 0,
-            x_phase: 0,
-            y_phase: 0,
-            buttons: 0,
-            next: 0,
-            driven: false,
-            steps: 0,
-        }
+        MouseOnCable { nets, encoders: Encoders::default(), buttons: 0, driven: false, steps: 0 }
     }
 
     /// Motion to step out and the buttons as they now stand. Motion
     /// accumulates; buttons replace.
     pub fn send(&mut self, dx: i32, dy: i32, buttons: u8) {
-        self.dx += dx;
-        self.dy += dy;
+        self.encoders.send(dx, dy);
         self.buttons = buttons & 0o7;
     }
 
     pub fn busy(&self) -> bool {
-        self.dx != 0 || self.dy != 0
+        self.encoders.busy()
     }
 
     /// The buttons as they stand on the lines.
@@ -284,14 +258,7 @@ impl MouseOnCable {
 
     /// When the next step is due, if there is motion to step out.
     pub fn next_change(&self, now: u64) -> Option<u64> {
-        self.busy().then_some(self.next.max(now))
-    }
-
-    /// A phase as the pair of levels on the cable, `A` then `B`: Gray, so
-    /// that one step changes one line.
-    fn levels(phase: u8) -> (bool, bool) {
-        let g = phase ^ (phase >> 1);
-        (g & 2 != 0, g & 1 != 0)
+        self.encoders.next_change(now)
     }
 
     /// Puts the seven lines where the state says. Through the inverting
@@ -300,8 +267,7 @@ impl MouseOnCable {
     /// and reads on the board as a high.
     fn drive(&mut self, board: &mut Chip) {
         let lv = |on: bool| if on { Level::High } else { Level::Low };
-        let (xa, xb) = Self::levels(self.x_phase);
-        let (ya, yb) = Self::levels(self.y_phase);
+        let [xa, xb, ya, yb] = self.encoders.lines();
         board.drive(self.nets.hora, lv(xa));
         board.drive(self.nets.horb, lv(xb));
         board.drive(self.nets.vera, lv(ya));
@@ -318,17 +284,8 @@ impl MouseOnCable {
     /// case the board was transitioned at `now`.
     pub fn apply(&mut self, board: &mut Chip, now: u64) -> bool {
         let mut moved = !self.driven;
-        if self.busy() && now >= self.next {
-            if self.dx != 0 {
-                self.x_phase = (self.x_phase as i8 + self.dx.signum() as i8).rem_euclid(4) as u8;
-                self.dx -= self.dx.signum();
-            }
-            if self.dy != 0 {
-                self.y_phase = (self.y_phase as i8 + self.dy.signum() as i8).rem_euclid(4) as u8;
-                self.dy -= self.dy.signum();
-            }
+        if self.encoders.step(now) {
             self.steps += 1;
-            self.next = now + MOUSE_STEP_NS;
             moved = true;
         }
         // The switches are level, and go out whenever they differ from

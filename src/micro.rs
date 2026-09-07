@@ -191,6 +191,9 @@ impl Micro {
     /// step synchronisers, and the two pulses a mode-register write can
     /// make.  See `Rtl::mclk_edge`, which this follows.
     fn mclk_edge(&mut self) {
+        // The I/O board's own clock runs on between the processor's
+        // references to it: the mouse's lines are sampled up to now.
+        self.m.ioboard.sample_mouse(self.m.ns);
         let boot = std::mem::take(&mut self.m.prog_boot);
         let reset = std::mem::take(&mut self.m.prog_reset) || boot;
         if reset {

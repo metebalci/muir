@@ -24,6 +24,12 @@
 //!    four interrupt enables are one **74LS175**, a quad D flip-flop, and
 //!    `KBD READY`, `MOUSE READY` and `CLOCK READY` come back through a
 //!    **74LS244**.  **primary**
+//! 4. **`cadrio/iobmse.drw` and `cadrio/iobms2.drw` in `mit/`**, the
+//!    mouse interface's two sheets (the IOBMSE and IOBMS2 pages of the
+//!    same netlist): the seven lines latched on `KB CLK^` into `NEW` and
+//!    then `OLD`, compared for `MOUSE STATUS CHANGE`, and each axis's
+//!    pair decoded into the direction and enable of three cascaded
+//!    **74LS569** counters.  **primary**
 //!
 //! This is the first thing microcode 323 touches after the boot PROM lets go.
 //! `uc-cadr.lisp` enters at `(LOC 6)`, reads the CSR, and takes the cold boot
@@ -31,10 +37,11 @@
 //! nothing answering there the read is an NXM and the machine cold-boots by
 //! accident rather than by decision.
 //!
-//! Where this is knowingly not the machine: the mouse's counters count what
-//! they are told rather than a quadrature pair ([`IoBoard::mouse_move`]);
-//! and the clocks are driven from simulated time rather than the
-//! computer's, which makes a run reproducible.
+//! Where this is knowingly not the machine: the clocks are driven from
+//! simulated time rather than the computer's, which makes a run
+//! reproducible.
+
+use crate::terminal::mouse::Encoders;
 
 /// Keyboard, low sixteen bits of the scan code.  Reading either half clears
 /// [`csr::KBD_READY`].
@@ -76,6 +83,151 @@ pub mod mouse {
     pub const HEAD: u16 = 1 << 14;
     /// The three, as the software's mask: left 1, middle 2, right 4.
     pub const BUTTONS: u8 = 0o7;
+}
+
+/// One period of `KB CLK^`, the board's own 125 kHz: `QC` of the 74LS163
+/// at IOBCLK 0D24 counting `1 USEC CLK`, out through the 74S37 at 0C25.
+/// It clocks the keyboard's cable ([`crate::terminal::cable`]) and samples
+/// the mouse's lines ([`IoBoard::sample_mouse`]).
+pub const KB_CLK_NS: u64 = 8_000;
+
+/// The mouse interface --- MIT's title for IOBMSE --- with the mouse on it.
+///
+/// The seven lines from the mouse come through the inverting Schmitt
+/// triggers, the 74LS14s at IOBMSE 0A25 and 0A27, and the 74LS374 at 0A24
+/// latches them on `KB CLK^` as `NEW`; the 74LS374 at 0A22 latches `NEW`
+/// on the same clock as `OLD`, so `OLD` is `NEW` a clock ago. The 25LS2521
+/// at 0A21 compares the two and any difference is `MOUSE STATUS CHANGE`,
+/// which sets `MOUSE READY`. IOBMS2 makes each axis's step from its four
+/// bits in the 74LS86s at 0A26 and 0B23: `OLD A xor NEW B` is the
+/// direction into the 74LS569s' `U/-D`, and their enable is `(NEW A xor
+/// OLD B) xnor` that, low --- counting --- when exactly one line of the
+/// pair changed. So a step is one line moving between two clocks: both
+/// moving, or neither, counts nothing, and a mouse that steps faster than
+/// the clock loses counts. The counters take the same clock, so `NEW` and
+/// the count move on one edge.
+///
+/// `tests/mouse_cable.rs` holds this to the netlist board: the same
+/// motion into both reads the same counts and the same lines.
+#[derive(Clone, Debug)]
+struct MouseInterface {
+    /// The mouse's encoders on the lines, stepping as
+    /// [`crate::terminal::mouse::MOUSE_STEP_NS`] lets them.
+    encoders: Encoders,
+    /// The three switches as the mouse holds them: left 1, middle 2,
+    /// right 4.
+    switches: u8,
+    /// The seven lines as last latched, and as latched the clock before:
+    /// bits 0 to 3 `HORA`, `HORB`, `VERA`, `VERB`, bits 4 to 6 `TAILSW`,
+    /// `MIDSW`, `HEADSW`, the order the 74LS244 at IOBMS2 0C24 puts them
+    /// in above the counts.
+    new: u8,
+    old: u8,
+    /// The two counters, twelve bits each: the 74LS569s at IOBMS2
+    /// 0B27-0B29 for X and 0B24-0B26 for Y.
+    x: u16,
+    y: u16,
+    /// The last rising edge of `KB CLK^` sampled, on the machine's clock.
+    sampled: u64,
+}
+
+impl Default for MouseInterface {
+    /// A mouse at rest on a board at rest: the latches hold what the lines
+    /// say, as they do two clocks after power-up, so nothing is a change
+    /// until the mouse moves.
+    fn default() -> Self {
+        let mut m = MouseInterface {
+            encoders: Encoders::default(),
+            switches: 0,
+            new: 0,
+            old: 0,
+            x: 0,
+            y: 0,
+            sampled: 0,
+        };
+        m.new = m.lines();
+        m.old = m.new;
+        m
+    }
+}
+
+impl MouseInterface {
+    /// Where the switches sit above the quadrature bits.
+    const SWITCHES: u32 = 4;
+
+    /// The seven lines as the latch sees them now: each encoder's pair
+    /// inverted by the 74LS14s, and a pressed switch --- its line to
+    /// ground --- inverted to a one.
+    fn lines(&self) -> u8 {
+        let quadrature: u8 =
+            self.encoders.lines().iter().enumerate().map(|(k, &high)| ((!high) as u8) << k).sum();
+        quadrature | self.switches << Self::SWITCHES
+    }
+
+    /// Every rising edge of `KB CLK^` up to `now`, the mouse stepping
+    /// between them as it is due: `OLD` takes `NEW`, `NEW` takes the
+    /// lines, and each axis counts if one line of its pair moved. Returns
+    /// whether any edge saw `MOUSE STATUS CHANGE`.
+    fn sample(&mut self, now: u64) -> bool {
+        let mut changed = false;
+        let mut edge = self.sampled + KB_CLK_NS;
+        while edge <= now {
+            if !self.encoders.busy() && self.new == self.old && self.new == self.lines() {
+                // Settled: every edge to `now` latches what is already held.
+                self.sampled = now - now % KB_CLK_NS;
+                break;
+            }
+            // The mouse's step is at its own time, and not before the last
+            // edge already sampled.
+            if let Some(due) = self.encoders.next_change(self.sampled)
+                && due <= edge
+            {
+                self.encoders.step(due);
+            }
+            self.old = self.new;
+            self.new = self.lines();
+            changed |= self.new != self.old;
+            self.x = Self::count(self.x, self.old, self.new);
+            self.y = Self::count(self.y, self.old >> 2, self.new >> 2);
+            self.sampled = edge;
+            edge += KB_CLK_NS;
+        }
+        changed
+    }
+
+    /// One axis's counter at the edge, `A` in bit 0 of `old` and `new`
+    /// and `B` in bit 1: IOBMS2's direction and enable.
+    fn count(q: u16, old: u8, new: u8) -> u16 {
+        let (a0, b0, a1, b1) = (old & 1, old >> 1 & 1, new & 1, new >> 1 & 1);
+        if (a0 ^ a1) ^ (b0 ^ b1) == 0 {
+            // Neither line moved, or both: the enable stays high.
+            return q;
+        }
+        let up = a0 ^ b1 != 0;
+        (if up { q + 1 } else { q.wrapping_sub(1) }) & mouse::COUNT
+    }
+
+    fn save(&self, w: &mut crate::checkpoint::Writer) {
+        let MouseInterface { encoders, switches, new, old, x, y, sampled } = self;
+        encoders.save(w);
+        w.u8(*switches);
+        w.u8(*new);
+        w.u8(*old);
+        w.u16(*x);
+        w.u16(*y);
+        w.u64(*sampled);
+    }
+
+    fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        self.encoders.load(r)?;
+        self.switches = r.u8()?;
+        self.new = r.u8()?;
+        self.old = r.u8()?;
+        self.x = r.u16()?;
+        self.y = r.u16()?;
+        self.sampled = r.u64()?;
+        Ok(())
+    }
 }
 /// The beep.  Written by `%BEEP`, and read by older code to the same effect.
 ///
@@ -335,12 +487,8 @@ pub struct IoBoard {
     /// When it was loaded, on the machine's clock, or `None` before any
     /// write of [`CLOCK`]: what [`IoBoard::clock_ready`] counts from.
     interval_loaded_at: Option<u64>,
-    /// The mouse's two counters, twelve bits each.
-    mouse_x: u16,
-    mouse_y: u16,
-    /// The three switches, as the software's mask: left 1, middle 2,
-    /// right 4.
-    mouse_buttons: u8,
+    /// The mouse interface, with the mouse on it.
+    mouse: MouseInterface,
     /// `AUDIO`, the 74LS74 at IOBKBD 0C27: the speaker's own flip-flop,
     /// toggled by every reference to [`BEEP`].
     audio: bool,
@@ -435,13 +583,27 @@ impl IoBoard {
     }
 
     /// Time passes to `now` for whatever on the board keeps time between
-    /// the processor's cycles: the Chaosnet cable, and the serial port's
-    /// characters going out and coming in.
+    /// the processor's cycles: the Chaosnet cable, the serial port's
+    /// characters going out and coming in, and the mouse's lines under
+    /// `KB CLK^`.
     pub fn advance(&mut self, now: u64) {
         if let Some(c) = self.chaos.as_mut() {
             c.advance(now);
         }
         self.serial.advance(now);
+        self.sample_mouse(now);
+    }
+
+    /// The mouse's lines sampled on every `KB CLK^` up to `now`, the
+    /// counters counting and `MOUSE READY` set on a change, as the mouse
+    /// interface has it. [`IoBoard::advance`] does this with the rest of
+    /// the board, and a read of the mouse's registers or the CSR does it
+    /// first, so that an engine that advances the board only when the
+    /// processor touches it still reads what the clock has done.
+    pub fn sample_mouse(&mut self, now: u64) {
+        if self.mouse.sample(now) {
+            self.csr |= csr::MOUSE_READY;
+        }
     }
 
     /// `-UB INIT` on the Unibus: `-INIT*` into the 8837 at IOBXCV 0F06 is
@@ -467,41 +629,35 @@ impl IoBoard {
         self.serial.reset();
     }
 
-    /// The mouse moved: `dx` counts to the right and `dy` down, into the
-    /// two twelve-bit counters. On the board the 74LS569s count one on
-    /// each valid change of a quadrature pair, sampled on `KB CLK^`; here
-    /// the counts arrive whole. `TRACK-MOUSE` adds the difference to its
-    /// internal position without inversion, so a count up is the screen's
-    /// x to the right and y down --- `io1/mouse.text`'s "NOTE Y-COORD
-    /// INVERTED" is that older program's own convention.
-    ///
-    /// Any change is `MOUSE STATUS CHANGE` off the 25LS2521 at IOBMSE
+    /// The mouse moved: `dx` counts to the right and `dy` down. The
+    /// encoders step it down the lines a phase at a time,
+    /// [`crate::terminal::mouse::MOUSE_STEP_NS`] apart, and the board
+    /// counts what it samples on `KB CLK^` ([`IoBoard::sample_mouse`]):
+    /// every step is `MOUSE STATUS CHANGE` off the 25LS2521 at IOBMSE
     /// 0A21, which sets `MOUSE READY`.
+    /// `TRACK-MOUSE` adds the difference to its internal position without
+    /// inversion, so a count up is the screen's x to the right and y down
+    /// --- `io1/mouse.text`'s "NOTE Y-COORD INVERTED" is that older
+    /// program's own convention.
     pub fn mouse_move(&mut self, dx: i32, dy: i32) {
-        if dx == 0 && dy == 0 {
-            return;
-        }
-        self.mouse_x = (self.mouse_x as i32 + dx).rem_euclid(1 << mouse::SHIFT) as u16;
-        self.mouse_y = (self.mouse_y as i32 + dy).rem_euclid(1 << mouse::SHIFT) as u16;
-        self.csr |= csr::MOUSE_READY;
+        self.mouse.encoders.send(dx, dy);
     }
 
-    /// The buttons as they now stand, as the software's mask. A change
-    /// sets `MOUSE READY` as a move does.
+    /// The switches as the mouse now holds them, as the software's mask.
+    /// The board sees them at its next clock, and a change is `MOUSE
+    /// STATUS CHANGE` as a step is.
     pub fn mouse_buttons(&mut self, mask: u8) {
-        let mask = mask & mouse::BUTTONS;
-        if mask != self.mouse_buttons {
-            self.mouse_buttons = mask;
-            self.csr |= csr::MOUSE_READY;
-        }
+        self.mouse.switches = mask & mouse::BUTTONS;
     }
 
+    /// The X counter as it stands.
     pub fn mouse_x(&self) -> u16 {
-        self.mouse_x
+        self.mouse.x
     }
 
+    /// The Y counter as it stands.
     pub fn mouse_y(&self) -> u16 {
-        self.mouse_y
+        self.mouse.y
     }
 
     pub fn mouse_ready(&self) -> bool {
@@ -539,23 +695,11 @@ impl IoBoard {
         self.audio_click_ns = Some(ns);
     }
 
-    /// The buttons as the board holds them, as the software's mask. A
-    /// look, not a read: the register read is what clears `MOUSE READY`.
+    /// The switches as the mouse holds them on its lines, as the
+    /// software's mask: what [`IoBoard::mouse_buttons`] last gave, whether
+    /// or not the board has sampled it yet.
     pub fn mouse_buttons_held(&self) -> u8 {
-        self.mouse_buttons
-    }
-
-    /// The four quadrature lines as the board would have latched them
-    /// for these counts: each axis a two-bit Gray code of its count, `A`
-    /// then `B`, which is what an encoder gives as it turns.
-    fn quadrature(&self) -> u16 {
-        let gray = |count: u16| {
-            let p = count & 3;
-            p ^ (p >> 1)
-        };
-        let (gx, gy) = (gray(self.mouse_x), gray(self.mouse_y));
-        // HORA, HORB, VERA, VERB in bits 12 to 15.
-        (gx >> 1 & 1) << 12 | (gx & 1) << 13 | (gy >> 1 & 1) << 14 | (gy & 1) << 15
+        self.mouse.switches
     }
 
     /// `ns` is the machine's simulated time, which the clocks here count:
@@ -583,12 +727,20 @@ impl IoBoard {
             }
             // Eight bits of scan code, and a floating upper byte.
             KBD_HIGH => csr::FLOATING | ((self.scancode >> 16) as u16 & 0xff),
+            // The read buffer at IOBMS2 0C24: `NEW`'s switches over the Y
+            // count, its four quadrature lines over the X count.
             MOUSE_Y => {
+                self.sample_mouse(ns);
                 self.csr &= !csr::MOUSE_READY;
-                (self.mouse_buttons as u16) << mouse::SHIFT | (self.mouse_y & mouse::COUNT)
+                (self.mouse.new as u16 >> MouseInterface::SWITCHES) << mouse::SHIFT
+                    | (self.mouse.y & mouse::COUNT)
             }
-            MOUSE_X => self.quadrature() | (self.mouse_x & mouse::COUNT),
+            MOUSE_X => {
+                self.sample_mouse(ns);
+                (self.mouse.new as u16 & 0o17) << mouse::SHIFT | (self.mouse.x & mouse::COUNT)
+            }
             CSR => {
+                self.sample_mouse(ns);
                 let clock = if self.clock_ready(ns) { csr::CLOCK_READY } else { 0 };
                 self.csr | clock | csr::FLOATING
             }
@@ -655,9 +807,7 @@ impl IoBoard {
             usec,
             interval,
             interval_loaded_at,
-            mouse_x,
-            mouse_y,
-            mouse_buttons,
+            mouse,
             audio,
             audio_click_ns,
             beep_started,
@@ -670,9 +820,7 @@ impl IoBoard {
         w.u16(*interval);
         w.bool(interval_loaded_at.is_some());
         w.u64(interval_loaded_at.unwrap_or(0));
-        w.u16(*mouse_x);
-        w.u16(*mouse_y);
-        w.u8(*mouse_buttons);
+        mouse.save(w);
         w.bool(*audio);
         w.opt(*audio_click_ns, crate::checkpoint::Writer::u64);
         w.bool(*beep_started);
@@ -696,9 +844,7 @@ impl IoBoard {
             let at = r.u64()?;
             loaded.then_some(at)
         };
-        self.mouse_x = r.u16()?;
-        self.mouse_y = r.u16()?;
-        self.mouse_buttons = r.u8()?;
+        self.mouse.load(r)?;
         self.audio = r.bool()?;
         self.audio_click_ns = r.opt(crate::checkpoint::Reader::u64)?;
         self.beep_started = r.bool()?;

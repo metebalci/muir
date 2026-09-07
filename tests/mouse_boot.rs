@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use muir::engine::Engine;
+use muir::ioboard::KB_CLK_NS;
 use muir::rtl::Rtl;
 use muir::simpletv::FRAME_NS;
 use muir::sym::{self, Space};
@@ -81,9 +82,15 @@ fn the_pointer_moves_the_machines_mouse() {
     let mut mouse = Mouse::new();
     mouse.pointer(0, 400, 400);
     mouse.pointer(0, 300, 350);
+    let before = e.machine().ioboard.mouse_x();
     mouse.deliver(&mut e.machine_mut().ioboard);
-    assert!(e.machine().ioboard.mouse_ready());
     let t0 = e.machine().ns;
+    // The first step is on the lines at once and in the count at the
+    // board's next clock.
+    while e.machine().ns < t0 + 2 * KB_CLK_NS {
+        e.step().expect("halted while the mouse moved");
+    }
+    assert_ne!(e.machine().ioboard.mouse_x(), before, "the first step was sampled");
     while e.machine().ns < t0 + 5 * FRAME_NS {
         e.step().expect("halted while the mouse moved");
     }

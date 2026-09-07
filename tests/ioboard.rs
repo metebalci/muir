@@ -8,8 +8,9 @@
 //! release is not vendored.
 
 use muir::busint::{self, Responder, decode};
-use muir::ioboard::{self, CYCLE_NS, IoBoard, SIXTY_CYCLE_NS, csr};
+use muir::ioboard::{self, CYCLE_NS, IoBoard, KB_CLK_NS, SIXTY_CYCLE_NS, csr};
 use muir::machine::{MAIN_WORDS, Machine, bus_error};
+use muir::terminal::mouse::MOUSE_STEP_NS;
 
 mod support;
 use support::release;
@@ -229,29 +230,47 @@ fn the_chaosnet_interface_answers_with_nothing_on_its_cable() {
     assert_eq!(c & csr::RECEIVE_DONE, 0, "and nothing came");
 }
 
-/// **The mouse registers carry the counts, the buttons and the phases as
-/// IOBMS2's read buffer lays them out.** Twelve bits of count an axis,
-/// wrapping; the three switches over the Y count as tail, middle, head in
-/// bits 12 to 14, which is the software's left 1, middle 2, right 4; the
-/// four quadrature lines over the X count; and any change is `MOUSE
-/// READY`, which reading the Y register clears.
+/// **The mouse registers carry the counts, the buttons and the lines as
+/// IOBMS2's read buffer lays them out, and all of it is sampled on `KB
+/// CLK^`.** Twelve bits of count an axis, wrapping; the three switches over
+/// the Y count as tail, middle, head in bits 12 to 14, which is the
+/// software's left 1, middle 2, right 4; the four quadrature lines as the
+/// 74LS374 at IOBMSE 0A24 last latched them over the X count; and any
+/// change between one clock and the next is `MOUSE READY`, which reading
+/// the Y register clears. Nothing reaches a register until the clock
+/// samples the lines: a move is on the lines at once and in the count
+/// eight microseconds later at the most.
 #[test]
-fn the_mouse_registers_carry_counts_buttons_and_phases() {
+fn the_mouse_registers_carry_counts_buttons_and_lines_as_sampled() {
     use ioboard::mouse;
     let mut b = IoBoard::default();
     assert!(!b.mouse_ready());
     assert_eq!(b.read(ioboard::MOUSE_Y, 0), 0);
-    assert_eq!(b.read(ioboard::MOUSE_X, 0), 0);
+    assert_eq!(
+        b.read(ioboard::MOUSE_X, 0),
+        0,
+        "at power-on the four lines read low: the encoders' highs through the 74LS14s"
+    );
 
     b.mouse_move(5, -3);
-    assert!(b.mouse_ready(), "a move is a status change");
-    assert_eq!(b.read(ioboard::MOUSE_X, 0) & mouse::COUNT, 5, "five to the right");
+    assert!(!b.mouse_ready(), "on the lines, and not yet sampled");
+    assert_eq!(b.read(ioboard::MOUSE_X, 0) & mouse::COUNT, 0, "the count waits for the clock");
+    b.advance(KB_CLK_NS);
+    assert!(b.mouse_ready(), "the first clock sees the first step: a status change");
+    assert_eq!(b.read(ioboard::MOUSE_X, KB_CLK_NS) & mouse::COUNT, 1, "one step to the right");
     assert!(b.mouse_ready(), "reading X does not clear it");
-    let y = b.read(ioboard::MOUSE_Y, 0);
-    assert_eq!(y & mouse::COUNT, 0o7775, "three up: the count wraps in twelve bits");
-    assert_eq!(y >> mouse::SHIFT, 0, "no buttons");
+    let y = b.read(ioboard::MOUSE_Y, KB_CLK_NS);
+    assert_eq!(y & mouse::COUNT, 0o7777, "one up: the count wraps in twelve bits");
     assert!(!b.mouse_ready(), "reading Y clears it");
     assert_eq!(b.csr() & csr::MOUSE_READY, 0);
+
+    // The mouse holds each phase for MOUSE_STEP_NS, so the rest of the
+    // motion takes its time.
+    b.advance(6 * MOUSE_STEP_NS);
+    assert_eq!(b.read(ioboard::MOUSE_X, 6 * MOUSE_STEP_NS) & mouse::COUNT, 5, "five to the right");
+    let y = b.read(ioboard::MOUSE_Y, 6 * MOUSE_STEP_NS);
+    assert_eq!(y & mouse::COUNT, 0o7775, "three up");
+    assert_eq!(y >> mouse::SHIFT, 0, "no buttons");
 
     // What TRACK-MOUSE does with it: the difference modulo 4096, signed
     // from bit 11.
@@ -259,11 +278,17 @@ fn the_mouse_registers_carry_counts_buttons_and_phases() {
     assert_eq!(delta(0o7775, 0), -3);
     assert_eq!(delta(5, 0), 5);
     b.mouse_move(-4096, 0);
-    assert_eq!(b.read(ioboard::MOUSE_X, 0) & mouse::COUNT, 5, "a whole turn is no move at all");
+    let t = 6 * MOUSE_STEP_NS + 4100 * MOUSE_STEP_NS;
+    b.advance(t);
+    assert_eq!(b.read(ioboard::MOUSE_X, t) & mouse::COUNT, 5, "a whole turn is no move at all");
 
+    b.read(ioboard::MOUSE_Y, t);
     b.mouse_buttons(0o5);
+    assert!(!b.mouse_ready(), "a switch is on its line until the clock");
+    let t = t + KB_CLK_NS;
+    b.advance(t);
     assert!(b.mouse_ready(), "a button is a status change");
-    let y = b.read(ioboard::MOUSE_Y, 0);
+    let y = b.read(ioboard::MOUSE_Y, t);
     assert_eq!(
         y & (mouse::TAIL | mouse::MIDDLE | mouse::HEAD),
         mouse::TAIL | mouse::HEAD,
@@ -271,23 +296,60 @@ fn the_mouse_registers_carry_counts_buttons_and_phases() {
     );
     assert_eq!(y >> 15, 0, "bit 15 is ground");
     b.mouse_buttons(0o5);
+    b.advance(t + 4 * KB_CLK_NS);
     assert!(!b.mouse_ready(), "the same buttons again change nothing");
+}
 
-    // The phases: each axis a Gray code of its count in bits 12-15, HORA,
-    // HORB, VERA, VERB.
+/// **The count is made from the lines, as IOBMS2 makes it.** Each axis's
+/// pair walks the Gray sequence and the board reads it back inverted, the
+/// 74LS14s being in the way; the count goes up when `OLD A xor NEW B` and
+/// down otherwise, and a step is one line moving between two clocks. A
+/// step between two clocks is in the count at the second and not before.
+#[test]
+fn the_count_follows_the_lines_a_step_a_clock() {
+    use ioboard::mouse;
     let mut b = IoBoard::default();
-    let phases: Vec<u16> = (0..5)
-        .map(|_| {
-            let p = b.read(ioboard::MOUSE_X, 0) >> mouse::SHIFT & 0o3;
-            b.mouse_move(1, 0);
-            p
-        })
-        .collect();
+    let mut t = 0;
+    let mut seen = Vec::new();
+    // HORA in bit 12, HORB in bit 13: read as HORB, HORA.
+    let lines = |b: &mut IoBoard, t| b.read(ioboard::MOUSE_X, t) >> mouse::SHIFT & 0o3;
+    let count = |b: &mut IoBoard, t| b.read(ioboard::MOUSE_X, t) & mouse::COUNT;
+    seen.push((lines(&mut b, t), count(&mut b, t)));
+    for _ in 0..4 {
+        b.mouse_move(1, 0);
+        t += MOUSE_STEP_NS;
+        b.advance(t);
+        seen.push((lines(&mut b, t), count(&mut b, t)));
+    }
     assert_eq!(
-        phases,
-        [0b00, 0b10, 0b11, 0b01, 0b00],
-        "HORA, HORB as a Gray sequence: one line moves a step"
+        seen,
+        [(0b00, 0), (0b10, 1), (0b11, 2), (0b01, 3), (0b00, 4)],
+        "to the right: HORA, HORB step the Gray sequence 11, 10, 00, 01 on the cable from \
+         rest, inverted here, and each step is a count"
     );
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        b.mouse_move(-1, 0);
+        t += MOUSE_STEP_NS;
+        b.advance(t);
+        seen.push((lines(&mut b, t), count(&mut b, t)));
+    }
+    assert_eq!(
+        seen,
+        [(0b01, 3), (0b11, 2), (0b10, 1), (0b00, 0)],
+        "and to the left the sequence runs back, a count off a step"
+    );
+
+    // Settled at `t`: the next clock is KB_CLK_NS on. A step on the lines
+    // before it is not in the count until it.
+    b.read(ioboard::MOUSE_Y, t);
+    b.mouse_move(0, 1);
+    b.advance(t + KB_CLK_NS / 2);
+    assert!(!b.mouse_ready(), "between clocks");
+    assert_eq!(b.read(ioboard::MOUSE_Y, t + KB_CLK_NS / 2) & mouse::COUNT, 0);
+    b.advance(t + KB_CLK_NS);
+    assert!(b.mouse_ready(), "at the clock");
+    assert_eq!(b.read(ioboard::MOUSE_Y, t + KB_CLK_NS) & mouse::COUNT, 1, "one down");
 }
 
 /// `-UB INIT` on the backplane is `RESET` on the board, and `-RESET` clears
@@ -306,6 +368,7 @@ fn a_unibus_init_clears_the_enables_and_the_chaosnet_interface_and_keeps_the_res
     b.write(chaos::CSR, chaos::csr::LOOP_BACK | chaos::csr::RECEIVE_INT_ENABLE, 0);
     b.press(0o123);
     b.mouse_move(5, -3);
+    b.advance(6 * MOUSE_STEP_NS);
     assert!(b.interrupt_request(0).is_some(), "keyboard ready and enabled");
 
     b.unibus_init();
@@ -343,6 +406,7 @@ fn each_ready_bit_asks_for_an_interrupt_when_its_enable_is_set() {
     // The mouse, on the keyboard's own vector.
     b.write(ioboard::CSR, 0, 0);
     b.mouse_move(1, 1);
+    b.advance(KB_CLK_NS);
     assert_eq!(b.interrupt_request(0), None, "ready, and no enable");
     b.write(ioboard::CSR, csr::MOUSE_INT_ENABLE, 0);
     assert_eq!(b.interrupt_request(0), Some(ioboard::KBD_VECTOR), "260 is KBD/MOUSE.IREQ's");
@@ -367,6 +431,7 @@ fn the_clock_is_named_before_the_keyboard() {
     let mut b = IoBoard::default();
     b.press(0o123);
     b.mouse_move(1, 1);
+    b.advance(KB_CLK_NS);
     b.write(ioboard::CSR, csr::KBD_INT_ENABLE | csr::MOUSE_INT_ENABLE, 0);
     assert_eq!(b.interrupt_request(0), Some(ioboard::KBD_VECTOR));
 
