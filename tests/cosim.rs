@@ -520,3 +520,91 @@ fn a_byte_with_function_zero_deposits_without_rotating() {
     assert_eq!(r.machine().amem[0o201], 0x1111_111f, "rtl");
     assert_eq!(e.machine().amem[0o201], 0x1111_111f, "micro");
 }
+
+/// **The map write lands on the cycle after the store, in both engines.**
+///
+/// `mit/cadr/ir.bits`, on destination `23`, which MIT writes `VMA, MAP(MD)VMA`:
+/// "The write actually occurs on the cycle following the store into
+/// destination WRITE-MAP, and the VMA must not be disturbed during this cycle
+/// for proper operation."
+///
+/// `rtl` has always had the delay --- `WMAPD` is registered at VCTL2 1C15 and
+/// the write is one of `Rtl::write_phase`'s, a microcycle behind the level
+/// that asked for it. `micro` wrote at the store, so the entry appeared to
+/// the microcycle in between, which on the board still reads the old map.
+///
+/// Two instructions in the boot PROM, so this needs no pack: one to put the
+/// virtual address in `MD`, one to store the map word through `VMA`. The
+/// store is the microcycle `VMA` becomes the stored word; the write is the
+/// microcycle the level-2 entry appears. They must be one apart.
+#[test]
+fn the_map_write_lands_the_cycle_after_the_store() {
+    // ALU class, `SETA`, A source, and the two functional destinations.
+    // `ir.bits`: the ALU function table is "shift left 3", so `SETA` is 5 at
+    // `IR<8:3>`; `IR<13:12>` = 1 takes the ALU output; the functional
+    // destination is `IR<23:19>` with `IR<25>` clear, and `IR<18:14>` is the
+    // M address a functional write also lands in.
+    let alu = 1u64 << 12;
+    let seta = 5u64 << 3;
+    let a_src = |a: u64| a << 32;
+    let functional = |d: u64| (d << 19) | (0o37 << 14);
+
+    // Virtual address `0o2000000`: `MD<23:13>` is `0o100`, the level-1 index,
+    // and `MD<12:8>` is 0, so with `1` in the level-1 entry the level-2 index
+    // is `1 << 5`. The word stored has `VMA<25>` set, which is the level-2
+    // write enable, and `VMA<26>` clear, so the level-1 entry is left alone.
+    const VIRTUAL: u32 = 0o2000000;
+    const MAP_WORD: u32 = (1 << 25) | 0o12345;
+    const L1: usize = 0o100;
+    const L2: usize = 1 << 5;
+
+    let machine = || {
+        let mut m = Machine::new();
+        m.l1_map[L1] = 1;
+        m.amem[0o100] = MAP_WORD;
+        m.amem[0o101] = VIRTUAL;
+        m.load_prom(&[
+            // ((MD) SETA A-MEM 101)
+            Insn::new(alu | seta | a_src(0o101) | functional(0o30)),
+            // ((VMA-WRITE-MAP) SETA A-MEM 100), MIT's `VMA, MAP(MD)VMA`
+            Insn::new(alu | seta | a_src(0o100) | functional(0o23)),
+            Insn::new(0),
+            Insn::new(0),
+            Insn::new(0),
+            Insn::new(0),
+        ]);
+        m
+    };
+
+    /// The executed microcycle the store lands in, and the one the map entry
+    /// appears in.
+    fn watch(e: &mut dyn Engine) -> (usize, usize) {
+        let (mut stored, mut written) = (None, None);
+        let mut n = 0;
+        while written.is_none() {
+            assert!(n < 64, "the map entry never appeared");
+            e.step().unwrap();
+            n += 1;
+            if stored.is_none() && e.machine().vma == MAP_WORD {
+                stored = Some(n);
+            }
+            if e.machine().l2_map[L2] == (MAP_WORD & 0o77777777) {
+                written = Some(n);
+            }
+        }
+        (stored.expect("VMA never took the map word"), written.unwrap())
+    }
+
+    let mut a = Micro::new(machine());
+    a.boot();
+    let mut b = Rtl::new(machine());
+    b.boot();
+    let (a_stored, a_written) = watch(&mut a);
+    let (b_stored, b_written) = watch(&mut b);
+
+    assert_eq!(a_written, a_stored + 1, "micro: one microcycle after the store");
+    assert_eq!(b_written, b_stored + 1, "rtl: one microcycle after the store");
+    assert_eq!(a.machine().l2_map, b.machine().l2_map, "and the same entry");
+    assert_eq!(a.machine().l1_map, b.machine().l1_map, "with the level-1 map untouched");
+    assert_eq!(a.machine().l1_map[L1], 1, "VMA<26> was clear");
+}

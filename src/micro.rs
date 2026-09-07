@@ -95,6 +95,13 @@ pub struct Micro {
 
     executed: Option<u16>,
 
+    /// `WMAP`, the level a `MAP(MD)VMA` store puts up, with `VMA` and `MD`
+    /// as it leaves them: what the register below takes at the edge.
+    map_write: Option<(u32, u32)>,
+    /// `WMAPD`, the 74S374 at VCTL2 1C15 --- the same level a microcycle
+    /// later, which is what gates the two write pulses.
+    /// [`Micro::land_map_write`] is that write phase.
+    map_write_d: Option<(u32, u32)>,
     /// The map word of the last memory cycle, as the 74S373 at VMEMDR 1D14
     /// holds it: what `MAP(MD)`'s permission bits are read from.
     lvmo: u32,
@@ -157,6 +164,8 @@ impl Micro {
             out: 0,
             iwr: 0,
             executed: None,
+            map_write: None,
+            map_write_d: None,
             lvmo: LVMO_AT_POWER_ON,
             wrcyc: false,
             speed: Speed::ExtraSlow,
@@ -424,6 +433,47 @@ impl Micro {
     ///  7 -                  17 IMOD<47:26>         33 MD, MAP(MD)VMA
     /// ```
     ///
+    /// **The map write is a microcycle late.**  `ir.bits`, on destination
+    /// `23`: "The write actually occurs on the cycle following the store
+    /// into destination WRITE-MAP, and the VMA must not be disturbed during
+    /// this cycle for proper operation."  So the store arms it here with
+    /// `VMA` and `MD` as it leaves them --- which is what the board's own
+    /// registers hold for the whole of the next microcycle, `-WP1` firing
+    /// before the edge that would change them --- and
+    /// [`Micro::land_map_write`] performs it at the end of that microcycle.
+    /// A memory reference in between reads the old map, as it does on the
+    /// board and in `rtl`.
+    ///
+    /// What is still not modelled is the address the write goes to when the
+    /// intervening microcycle has a memory cycle running: `MEMSTART` swings
+    /// the map's address multiplexer from `MD` to `VMA`, which is what MIT's
+    /// warning is about, and this engine has no `MEMSTART`.  `rtl` does it in
+    /// `Rtl::map_address`. **unverified** here: a microcode sequence that
+    /// starts a memory cycle in the intervening microcycle, run on `chip`,
+    /// would settle what this engine should do.
+    fn arm_map_write(&mut self) {
+        self.map_write = Some((self.m.vma, self.m.md));
+    }
+
+    /// `MAPWR0D` and `MAPWR1D` fire from `WMAPD`, in the microcycle after
+    /// the store: before this microcycle's instruction, so that a memory
+    /// reference in it goes through the new entry, as `rtl` has it --- there
+    /// the write is `Rtl::write_phase`'s and the lookup of a cycle prepared
+    /// in the same microcycle is a read phase later still.  After the store's
+    /// own microcycle, so that nothing between the two sees the entry.
+    fn land_map_write(&mut self) {
+        if let Some((vma, md)) = self.map_write_d.take() {
+            self.m.write_map(vma, md);
+        }
+    }
+
+    /// The edge at the end of a microcycle, taking `WMAP` into `WMAPD`.
+    /// Two stores running back to back each get their own write, one
+    /// microcycle behind them, as the register gives them.
+    fn clock_map_write(&mut self) {
+        self.map_write_d = self.map_write.take();
+    }
+
     /// The `(!)` on 31 is MIT's, not ours.  3 to 7 and 24 to 27 are
     /// unassigned and halt here.
     fn write_functional(&mut self, dest: u16, data: u32) -> Result<(), Halt> {
@@ -486,8 +536,7 @@ impl Micro {
             }
             0o23 => {
                 self.m.vma = data;
-                let (vma, md) = (self.m.vma, self.m.md);
-                self.m.write_map(vma, md);
+                self.arm_map_write();
             }
             // MD, and the three that start a cycle with it
             0o30 => self.m.md = data,
@@ -503,8 +552,7 @@ impl Micro {
             }
             0o33 => {
                 self.m.md = data;
-                let (vma, md) = (self.m.vma, self.m.md);
-                self.m.write_map(vma, md);
+                self.arm_map_write();
             }
             _ => return Err(Halt::UnknownDest { pc: self.p0_pc, dest }),
         }
@@ -924,6 +972,8 @@ impl Engine for Micro {
             out,
             iwr,
             executed,
+            map_write,
+            map_write_d,
             lvmo,
             wrcyc,
             speed,
@@ -959,6 +1009,12 @@ impl Engine for Micro {
         w.u32(*out);
         w.u64(*iwr);
         w.opt(*executed, crate::checkpoint::Writer::u16);
+        let map = |w: &mut crate::checkpoint::Writer, (vma, md): (u32, u32)| {
+            w.u32(vma);
+            w.u32(md);
+        };
+        w.opt(*map_write, map);
+        w.opt(*map_write_d, map);
         w.u32(*lvmo);
         w.bool(*wrcyc);
         w.speed(*speed);
@@ -996,6 +1052,8 @@ impl Engine for Micro {
         self.out = r.u32()?;
         self.iwr = r.u64()?;
         self.executed = r.opt(crate::checkpoint::Reader::u16)?;
+        self.map_write = r.opt(|r| Ok((r.u32()?, r.u32()?)))?;
+        self.map_write_d = r.opt(|r| Ok((r.u32()?, r.u32()?)))?;
         self.lvmo = r.u32()?;
         self.wrcyc = r.bool()?;
         self.speed = r.speed()?;
@@ -1044,6 +1102,7 @@ impl Engine for Micro {
         self.m.ns += self.speed.cycle_ns(ilong) as u64;
         self.mclk_edge();
         self.advance_pipeline();
+        self.land_map_write();
 
         if self.new_md_delay > 0 {
             self.new_md_delay -= 1;
@@ -1058,6 +1117,7 @@ impl Engine for Micro {
             self.inhibit = false;
             // Nopped, the instruction's misc field decodes to nothing.
             self.halted = false;
+            self.clock_map_write();
             self.m.cycles += 1;
             return Ok(());
         }
@@ -1104,6 +1164,7 @@ impl Engine for Micro {
             self.npc = (t & 0o37777) as u16;
         }
 
+        self.clock_map_write();
         self.m.cycles += 1;
         Ok(())
     }

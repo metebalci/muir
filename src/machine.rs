@@ -317,8 +317,10 @@ impl Machine {
     /// are `mit/cadr/ir.bits` in MIT's own words.
     ///
     /// The hardware performs the write on the cycle *after* the store, and
-    /// `ir.bits` warns that VMA must not be disturbed meanwhile.  Nothing here
-    /// models that delay; the engines call this at the store.
+    /// `ir.bits` warns that VMA must not be disturbed meanwhile.  That delay
+    /// is the caller's: `micro` holds the write in `WMAPD` and calls this at
+    /// the start of the next microcycle, `rtl` writes the two levels itself
+    /// in its write phase, and `chip` has the registers.
     pub fn write_map(&mut self, vma: u32, md: u32) {
         let l1_index = (md >> 13) as usize & 0o3777;
         if vma & (1 << 26) != 0 {
