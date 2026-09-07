@@ -1,0 +1,117 @@
+# muir's built-in keyboard mapping: what a viewer's X11 keysym means on
+# the Lisp Machine keyboard.  This file is compiled into muir and is the
+# whole of the default; a file of the same form replaces any line of it.
+#
+#   muir --keyboard <file>
+#   .muirkeys in the directory muir was run from, or in the home one
+#
+# `keys` at muir's prompt prints the mapping a run is using.
+#
+# Two kinds of line:
+#
+#   key    <keysym> <key>            one host key
+#   prefix <keysym> <keysym> <key>   press the first, then the second
+#
+# A keysym is an X11 name from keysymdef.h, a single printable character,
+# or a number in decimal or 0x hexadecimal.  A key is one of MIT's own
+# names for a key on the CADR keyboard --- a named key such as `Alt Mode`,
+# a shifting key such as `Greek`, either of a pair as `Left Control` or
+# `Right Control` --- or the character a character key gives.
+#
+# Nothing binds the letters, digits and punctuation: a printable keysym
+# no line names is looked for on MIT's own key table by the character it
+# is, on the unshifted plane and the shifted one both.
+
+# The keys a host keyboard has a key for.
+key Return              Return
+key KP_Enter            Return
+key Tab                 Tab
+key BackSpace           Rubout
+key Delete              Rubout
+key Linefeed            Line
+key Escape              Alt Mode
+key Help                Help
+key Break               Break
+key Cancel              Abort
+key End                 End
+key Pause               Hold Output
+
+# The CADR has no function keys.  These are twelve of the keys on its top
+# row that a host keyboard has no name for, and the order is muir's own:
+# nothing in MIT's sources says it.
+key F1                  Terminal
+key F2                  System
+key F3                  Network
+key F4                  Status
+key F5                  Resume
+key F6                  Abort
+key F7                  Call
+key F8                  Help
+key F9                  Clear Input
+key F10                 Clear Screen
+key F11                 Break
+key F12                 Quote
+
+# The shifting keys a viewer sends as modifiers.  A host keyboard's Alt is
+# where a Lisp Machine's Meta is, and every viewer sends that key as Alt.
+key Shift_L             Left Shift
+key Shift_R             Right Shift
+key Control_L           Left Control
+key Control_R           Right Control
+key Meta_L              Left Meta
+key Alt_L               Left Meta
+key Meta_R              Right Meta
+key Alt_R               Right Meta
+key Super_L             Left Super
+key Super_R             Right Super
+key Hyper_L             Left Hyper
+key Hyper_R             Right Hyper
+key Caps_Lock           Caps Lock
+
+# Greek and Top are how the Lisp Machine character set is entered --- the
+# Greek letters, the arrows and the mathematical symbols --- and no host
+# keyboard has a key with either name.  AltGr is the nearest thing a host
+# has to Greek, being the key that gives the other character set, and the
+# Menu key, which nothing else wants, is Top.
+key ISO_Level3_Shift    Left Greek
+key Menu                Left Top
+
+# Everything else, behind a prefix.  There are more keys on this keyboard
+# than a host has spare, so Scroll Lock sends nothing of its own and the
+# key after it says which key is meant.  A shifting key reached this way
+# is held for the one key that follows it, which is what holding Greek and
+# typing a letter does on the real keyboard; any other key is tapped.
+#
+# A Mac keyboard has no Scroll Lock, and a desktop that takes Scroll Lock
+# for itself leaves none of this reachable.  That is what this file is
+# for: one line changes the prefix.
+prefix Scroll_Lock g    Greek
+prefix Scroll_Lock t    Top
+prefix Scroll_Lock a    Alt Lock
+prefix Scroll_Lock m    Mode Lock
+prefix Scroll_Lock r    Repeat
+prefix Scroll_Lock c    Caps Lock
+prefix Scroll_Lock h    Hyper
+prefix Scroll_Lock e    Meta
+prefix Scroll_Lock l    Control
+
+# Super with them, because booting to a usable listener starts with
+# Super-B and a desktop environment usually takes the Windows or Command
+# key before a viewer ever sees it.
+prefix Scroll_Lock s    Super
+
+# The named keys no host key is spare for.  The letters are muir's own
+# and arbitrary; the four hands and thumbs are on the four arrows, which
+# is roughly where they sit on the real keyboard.
+prefix Scroll_Lock d    Delete
+prefix Scroll_Lock x    Macro
+prefix Scroll_Lock o    Overstrike
+prefix Scroll_Lock p    Stop Output
+prefix Scroll_Lock 1    Roman I
+prefix Scroll_Lock 2    Roman II
+prefix Scroll_Lock 3    Roman III
+prefix Scroll_Lock 4    Roman IV
+prefix Scroll_Lock Left  Hand Left
+prefix Scroll_Lock Right Hand Right
+prefix Scroll_Lock Up    Up Thumb
+prefix Scroll_Lock Down  Down Thumb

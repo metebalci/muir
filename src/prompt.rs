@@ -59,6 +59,10 @@ pub enum Command {
     /// What this run is: the engine, the memory, the boards, the pack,
     /// the terminal, as said at the start.
     Info,
+    /// The keyboard mapping in force: what a viewer's keysyms mean on the
+    /// Lisp Machine keyboard, for a user who cannot type a key and wants
+    /// to know what would.
+    Keys,
     /// End the run, as a stop does.
     Quit,
     Help,
@@ -114,6 +118,8 @@ endcapture, ec          write the recording that is going and stop
 checkpoint [file]       the machine's whole state to the file, or to
                         muir-yyyymmdd-hhmmss.chk in the current directory
 info, i                 what this run is, as said at the start
+keys                    the keyboard mapping in force: what a viewer's
+                        keysyms mean on the Lisp Machine keyboard
 quit, q                 end the run, as a stop does
 help, h, ?              this
 
@@ -138,6 +144,7 @@ pub fn parse(line: &str) -> Result<Option<Command>, String> {
         "pc" => bare(Command::Pc),
         "reg" => bare(Command::Registers),
         "info" | "i" => bare(Command::Info),
+        "keys" => bare(Command::Keys),
         "quit" | "q" => bare(Command::Quit),
         "help" | "h" | "?" => bare(Command::Help),
         "step" if arg.is_empty() => Ok(Some(Command::Step(1))),
