@@ -78,6 +78,20 @@ microcycle boundary. Run the fast one, check it against the slow one.
 | `rtl` | The timing model: every datapath signal on the machine's two-phase clock, and everything that is a matter of *when* --- bus waits and hangs, arbitration, timeouts, the debug cable. | ~2x real |
 | `chip` | The parts themselves, resolved net by net from whatever drives each, with every board on both buses a netlist too. The reference: where it and `rtl` part, the drawings decide which is wrong. | ~1/4,000 |
 
+Those figures are microcycles against the machine's own 145 ns microcycle,
+and **the disk is outside them**. With the disk controller as a behavioural
+model --- always on `micro` and `rtl`, and on `chip` unless it is given
+`--disk-controller netlist` --- a transfer completes inside the store to
+`START` and a seek takes no time. The hardware spent milliseconds on a seek
+and spent them running the microcode's polling loop, so a 55 ms seek is
+about 380,000 microcycles a CADR executes and muir does not. A program that
+seeks finishes further ahead of the hardware than the table says, by an
+amount that depends on the program.
+
+On `--disk-controller netlist` it inverts: the drive takes its own time and
+that polling loop runs through every gate on the board, so a seeking program
+comes out slower than 1/4,000 rather than faster.
+
 Any board can run as `rtl`'s behavioural model instead, one at a time, which
 is faster: `--main-memory`, `--io-board`, `--tv` and `--disk-controller` take
 `netlist` or `model`; the disk controller is the one that defaults to
