@@ -60,8 +60,19 @@ impl Viewer {
         incremental: bool,
         bytes_per_pixel: usize,
     ) -> Vec<(u16, u16, u16, u16, Vec<u8>)> {
+        let whole = (0, 0, simpletv::WIDTH as u16, simpletv::HEIGHT as u16);
+        self.update_rect(incremental, whole, bytes_per_pixel)
+    }
+
+    /// The same for one rectangle of it.
+    fn update_rect(
+        &mut self,
+        incremental: bool,
+        (rx, ry, rw, rh): (u16, u16, u16, u16),
+        bytes_per_pixel: usize,
+    ) -> Vec<(u16, u16, u16, u16, Vec<u8>)> {
         let mut request = vec![3u8, incremental as u8];
-        for v in [0u16, 0, simpletv::WIDTH as u16, simpletv::HEIGHT as u16] {
+        for v in [rx, ry, rw, rh] {
             request.extend_from_slice(&v.to_be_bytes());
         }
         let head = self.exchange(&request, 4);
@@ -82,6 +93,72 @@ impl Viewer {
         }
         out
     }
+
+    /// `SetPixelFormat`, and the colour map that follows a mapped one.
+    fn set_format(&mut self, f: rfb::PixelFormat) {
+        let mut m = vec![0u8, 0, 0, 0];
+        m.extend_from_slice(&f.encode());
+        if f.true_colour {
+            self.exchange(&m, 0);
+        } else {
+            let map = self.exchange(&m, 6 + 12);
+            assert_eq!(map[0], 1, "SetColourMapEntries");
+        }
+    }
+}
+
+/// The formats a viewer may ask for: eight, sixteen and thirty-two bits a
+/// pixel, each way round, and the mapped one that the eight-bit case is.
+fn formats() -> Vec<rfb::PixelFormat> {
+    let mut out = Vec::new();
+    for big_endian in [false, true] {
+        out.push(rfb::PixelFormat { big_endian, ..rfb::PixelFormat::RGB888 });
+        out.push(rfb::PixelFormat {
+            bits_per_pixel: 16,
+            depth: 16,
+            big_endian,
+            red_max: 31,
+            green_max: 63,
+            blue_max: 31,
+            red_shift: 11,
+            green_shift: 5,
+            blue_shift: 0,
+            ..rfb::PixelFormat::RGB888
+        });
+        out.push(rfb::PixelFormat {
+            bits_per_pixel: 8,
+            depth: 8,
+            big_endian,
+            true_colour: false,
+            ..rfb::PixelFormat::RGB888
+        });
+    }
+    out
+}
+
+/// A screen whose bits fall in no pattern, so that a wrong bit anywhere in
+/// a byte or a word shows up rather than cancelling out.
+fn scramble(tv: &mut SimpleTv) {
+    for k in 0..(simpletv::HEIGHT * simpletv::WORDS_PER_LINE) as u32 {
+        tv.write_buffer(k, k.wrapping_mul(0x9e37_79b9) ^ k.rotate_left(13));
+    }
+}
+
+/// What [`rfb::PixelFormat::put`] would write for the rectangle `(x, y, w,
+/// h)` of `frame`, one pixel at a time.
+fn as_put_would(
+    frame: Frame,
+    f: rfb::PixelFormat,
+    (x, y, w, h): (usize, usize, usize, usize),
+) -> Vec<u8> {
+    let (white, black) = (f.white(), f.black());
+    let mut out = Vec::new();
+    for row in y..y + h {
+        for col in x..x + w {
+            f.put(&mut out, if frame.shows_white(col, row) { white } else { black });
+        }
+    }
+    out
 }
 
 /// Writes `out` to `stream`, then polls `terminal` with `frame` and reads
@@ -660,4 +737,58 @@ fn a_bell_with_no_viewers_is_not_held() {
     // `ServerInit` and nothing before it: no bell arrived first.
     let head = exchange_with(&mut terminal, &mut stream, frame, &[1], 24);
     assert_eq!(u16::from_be_bytes([head[0], head[1]]), simpletv::WIDTH as u16, "ServerInit");
+}
+
+/// **Every pixel format a viewer may ask for is sent as
+/// [`rfb::PixelFormat::put`] would write it, byte for byte.** A rectangle
+/// goes out eight pixels at a time, out of a table built for the format;
+/// `put` is the one-pixel-at-a-time statement of RFC 6143 section 7.4,
+/// and this is what holds the one to the other. The screen is scrambled
+/// first, so a table entry that is right for a run of equal bits and
+/// wrong for a mixed one cannot pass.
+#[test]
+fn every_pixel_format_is_sent_as_put_would_write_it() {
+    for f in formats() {
+        for bow in [false, true] {
+            let (mut v, _) = Viewer::connect();
+            scramble(&mut v.tv);
+            v.tv.write_control(0, if bow { simpletv::mode::BOW } else { 0 }, 0);
+            v.set_format(f);
+            let n = f.bytes_per_pixel().unwrap();
+            let rects = v.update(false, n);
+            assert_eq!(rects.len(), 1, "one rectangle for the whole screen");
+            let want = as_put_would(Frame::of(&v.tv), f, (0, 0, simpletv::WIDTH, simpletv::HEIGHT));
+            assert_eq!(rects[0].4.len(), want.len(), "{f:?} bow {bow}: as many bytes");
+            assert!(rects[0].4 == want, "{f:?} bow {bow}: the pixels put would write");
+        }
+    }
+}
+
+/// **A rectangle that begins and ends inside a byte of the frame buffer is
+/// sent as `put` would write it too.** The table carries eight pixels at a
+/// time, so the pixels at either end of such a rectangle go one at a time;
+/// this is the check that the two paths meet, and that a viewer entitled
+/// to ask for an odd rectangle gets the same pixels as one asking for the
+/// screen.
+#[test]
+fn a_rectangle_that_ends_inside_a_byte_is_sent_as_put_would_write_it() {
+    // Between them: a ragged head and a ragged tail; a rectangle short
+    // enough to hold no whole byte at all, from a byte's edge and from
+    // inside one; one aligned at both ends, which is all table and no
+    // ends; the last byte of a row; and a ragged head with an aligned
+    // tail, which is what a viewer asking for all but the left edge
+    // would send.
+    for (x, w) in [(3usize, 13usize), (3, 5), (0, 7), (8, 16), (760, 8), (5, 763)] {
+        let (mut v, _) = Viewer::connect();
+        scramble(&mut v.tv);
+        let (y, h) = (2usize, 4usize);
+        let rects = v.update_rect(false, (x as u16, y as u16, w as u16, h as u16), 4);
+        assert_eq!(rects.len(), 1, "one rectangle at {x}+{w}");
+        assert_eq!(
+            (rects[0].0, rects[0].1, rects[0].2, rects[0].3),
+            (x as u16, y as u16, w as u16, h as u16)
+        );
+        let want = as_put_would(Frame::of(&v.tv), rfb::PixelFormat::RGB888, (x, y, w, h));
+        assert!(rects[0].4 == want, "the pixels put would write at {x}+{w}");
+    }
 }

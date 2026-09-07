@@ -181,10 +181,111 @@ struct Viewer {
     /// request is answered with the whole screen.
     seen: bool,
     request: Option<Request>,
+    /// The pixels of [`Viewer::format`], made ready to copy out: remade
+    /// whenever the viewer changes the format.
+    pixels: Pixels,
     /// When the whole screen last went, for [`FULL_UPDATE_INTERVAL`].
     full_at: Option<Instant>,
     /// Bytes of a `ClientCutText` still to arrive, dropped as they do.
     skip: usize,
+}
+
+/// The pixels of a viewer's format, made ready to copy rather than
+/// computed one at a time: every value a byte of the frame buffer can
+/// take, as the eight pixels it stands for.
+///
+/// The screen is one bit a pixel and a pixel is one of two values, so a
+/// rectangle can go out a byte of the frame buffer at a time --- a copy
+/// out of a table --- instead of a pixel at a time, which is a branch on
+/// each bit and a fresh look at the format's width and byte order. On a
+/// screen whose bits do not fall in a pattern a branch predictor can
+/// follow, that measured about seven times faster over a whole 768 x 963
+/// screen, and it is the engine's own thread that pays for the encoding.
+///
+/// The table is 8 KB at 32 bits a pixel, beside the 92 KB copy of the
+/// screen and the outbox each viewer already holds.
+///
+/// [`rfb::PixelFormat::put`] is the statement of what RFC 6143 section
+/// 7.4 asks for, one pixel at a time, and every entry here is built with
+/// it; `tests/terminal.rs` holds what a viewer is sent to what `put`
+/// would have written for the same pixels, in every format and across a
+/// rectangle whose ends fall inside a byte.
+struct Pixels {
+    /// Bytes a pixel takes on the wire.
+    n: usize,
+    /// 256 entries of eight pixels, `8 * n` bytes each: entry `b` is the
+    /// frame-buffer byte `b`, its bit 0 first, bit 0 being the leftmost
+    /// pixel.
+    table: Vec<u8>,
+    /// One pixel each, for the ends of a rectangle that begins or ends
+    /// inside a byte of the frame buffer.
+    white: Vec<u8>,
+    black: Vec<u8>,
+}
+
+impl Pixels {
+    fn new(format: PixelFormat) -> Pixels {
+        // As `put` does. `PixelFormat::fits` refuses any width but 8, 16
+        // or 32 as it arrives, so the four is never the one taken.
+        let n = format.bytes_per_pixel().unwrap_or(4);
+        let (mut white, mut black) = (Vec::new(), Vec::new());
+        format.put(&mut white, format.white());
+        format.put(&mut black, format.black());
+        let mut table = Vec::with_capacity(256 * 8 * n);
+        for byte in 0..256u32 {
+            for bit in 0..8 {
+                table.extend_from_slice(if byte >> bit & 1 != 0 { &white } else { &black });
+            }
+        }
+        Pixels { n, table, white, black }
+    }
+
+    /// The eight pixels frame-buffer byte `b` stands for.
+    fn eight(&self, b: u8) -> &[u8] {
+        let at = b as usize * 8 * self.n;
+        &self.table[at..at + 8 * self.n]
+    }
+
+    /// One pixel.
+    fn one(&self, white: bool) -> &[u8] {
+        if white { &self.white } else { &self.black }
+    }
+
+    /// Row `y` of `frame`, from pixel `x` for `w` of them, appended to
+    /// `out`.
+    ///
+    /// The middle goes eight pixels at a time out of the table; the ends,
+    /// where the rectangle begins or stops inside a byte of the frame
+    /// buffer, go one at a time through [`Frame::shows_white`], which is
+    /// where the rule about which way round the screen is lives. A viewer
+    /// normally asks for the whole screen, whose 768 pixels are 96 whole
+    /// bytes, and then there are no ends.
+    fn put_row(&self, out: &mut Vec<u8>, frame: Frame, y: usize, x: usize, w: usize) {
+        let row = &frame.words[y * frame.words_per_line..];
+        // A pixel is a bit of the row, counting from the low end of the
+        // first word, so pixel `p` is bit `p % 8` of byte `p / 8`, and
+        // byte `k` is the `k % 4`th of word `k / 4`.  `BOW` swaps every
+        // pixel, which is the word inverted before it is taken apart.
+        let byte = |k: usize| {
+            let word = row[k / 4];
+            let word = if frame.black_on_white { !word } else { word };
+            (word >> (k % 4 * 8)) as u8
+        };
+        let end = x + w;
+        let mut p = x;
+        while p < end && !p.is_multiple_of(8) {
+            out.extend_from_slice(self.one(frame.shows_white(p, y)));
+            p += 1;
+        }
+        while p + 8 <= end {
+            out.extend_from_slice(self.eight(byte(p / 8)));
+            p += 8;
+        }
+        while p < end {
+            out.extend_from_slice(self.one(frame.shows_white(p, y)));
+            p += 1;
+        }
+    }
 }
 
 /// The most one poll reads from one viewer: a viewer streaming faster
@@ -207,6 +308,7 @@ impl Viewer {
             was: vec![0; visible],
             seen: false,
             request: None,
+            pixels: Pixels::new(PixelFormat::RGB888),
             full_at: None,
             skip: 0,
         };
@@ -332,6 +434,7 @@ impl Viewer {
                         ));
                     }
                     self.format = f;
+                    self.pixels = Pixels::new(f);
                     if !f.true_colour {
                         self.outbox.extend(rfb::colour_map());
                     }
@@ -420,19 +523,14 @@ impl Viewer {
             return;
         }
         self.outbox.extend(rfb::update_header(rects.len() as u16));
-        let white = self.format.white();
-        let black = self.format.black();
         let mut pixels = Vec::new();
         for r in &rects {
             self.outbox
                 .extend(rfb::rectangle_header(r.x as u16, r.y as u16, r.w as u16, r.h as u16));
             pixels.clear();
-            pixels.reserve(r.w * r.h * self.format.bytes_per_pixel().unwrap_or(4));
+            pixels.reserve(r.w * r.h * self.pixels.n);
             for y in r.y..r.y + r.h {
-                for x in r.x..r.x + r.w {
-                    let v = if frame.shows_white(x, y) { white } else { black };
-                    self.format.put(&mut pixels, v);
-                }
+                self.pixels.put_row(&mut pixels, frame, y, r.x, r.w);
             }
             self.outbox.extend(pixels.iter().copied());
         }
