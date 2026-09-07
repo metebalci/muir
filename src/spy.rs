@@ -390,6 +390,32 @@ impl Flag1 {
         };
         byte(hi, 15) | byte(lo, 7)
     }
+
+    /// The register read back: [`Flag1::word`]'s inverse, applying the same
+    /// polarities.  What a console has to do to make anything of `FLAG-1`,
+    /// and what the run loop does to see that the machine has stopped
+    /// itself.
+    pub fn of(w: u16) -> Self {
+        let up = |bit: u16| w & (1 << bit) != 0;
+        Flag1 {
+            wait: !up(15),
+            v1pe: !up(14),
+            v0pe: !up(13),
+            promdisable: up(12),
+            stathalt: !up(11),
+            err: up(10),
+            ssdone: up(9),
+            srun: up(8),
+            higherr: up(7),
+            mempe: up(6),
+            ipe: up(5),
+            dpe: up(4),
+            spe: up(3),
+            pdlpe: up(2),
+            mpe: up(1),
+            ape: up(0),
+        }
+    }
 }
 
 /// `SPY-FLAG-2`, register 9: the two 74LS244s at SPY2 3F15 and 3E16.

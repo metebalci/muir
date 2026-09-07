@@ -162,6 +162,13 @@ work.
 One engine at a time, `--rtl` by default. A run goes on until a stop, a
 halt or ^C; `--stop-after` ends it after that many microcycles.
 
+A machine that stops *itself* is held at the prompt and says so. `(si:%halt)`
+in System 100 runs `HALT-CONS`, which under `ERRSTOP` drops `MACHRUN` with
+`RUN` still set: the screen stops and no microcycle runs from there. Nothing
+about stepping says so, so muir reads it off `FLAG-1` where a console would,
+and `boot` presses the button that starts it again. On `chip`, which has no
+prompt, it ends the run instead.
+
 Every engine boots MIT's own PROM, System 100's `sys/ubin/promh.mcr`, which
 is built in, so nothing under `vendor/` is needed to start a machine.
 `--prom <file>` runs another one instead, out of an MCR microcode file as

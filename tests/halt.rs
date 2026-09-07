@@ -86,3 +86,32 @@ fn halt_cons_runs_on_without_errstop() {
     assert!(e.pc() > 20, "micro ran on, PC {:o}", e.pc());
     assert_eq!(e.spy_read(spy::FLAG_1) & ERR, 0, "and ERR is down again");
 }
+
+/// **A machine stopped by `HALT-CONS` under `ERRSTOP` stays stopped**, and
+/// says so in `FLAG-1` where a console reads it: `SRUN` still set, so this
+/// is not the halt a cleared `RUN` is, with `ERR` up and no `WAIT`.
+///
+/// This is what `(si:%halt)` does in System 100, and it is why the run loop
+/// has to watch `FLAG-1` rather than step on: [`Engine::step`] goes on
+/// returning `Ok` for as long as it is called, advancing the master clock
+/// and running no microcycle, so nothing about the call says the machine
+/// has stopped.
+fn stays_halted<E: Engine>(what: &str, e: &mut E) {
+    e.boot();
+    run(e, true);
+    let pc = e.pc();
+    let f = spy::Flag1::of(e.spy_read(spy::FLAG_1));
+    assert!(f.srun, "{what}: RUN is still set, so a cleared RUN is not what stopped it");
+    assert!(f.err, "{what}: ERR is up");
+    assert!(!f.wait, "{what}: and it is not a wait on the bus, which it would come out of");
+    for _ in 0..10_000 {
+        e.step().expect("no halt this engine raises");
+    }
+    assert_eq!(e.pc(), pc, "{what}: stepped 10,000 times more and never moved");
+}
+
+#[test]
+fn an_errstop_halt_stays_halted_and_shows_in_flag_1() {
+    stays_halted("rtl", &mut Rtl::new(program(filler())));
+    stays_halted("micro", &mut Micro::new(program(filler())));
+}
