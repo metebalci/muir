@@ -1,17 +1,20 @@
 # Build, lint and test on every push and pull request, twice over: on a
-# fresh clone with nothing fetched, and with the System 100 release.
+# fresh clone with nothing fetched, and with the release.
 #
 # `check` fetches nothing and configures nothing: a fresh clone passes the
 # whole suite on its own, because everything the tests read is committed.
-# The tests that want the System 100 release find it absent and skip
-# cleanly, which is the behaviour this job also checks.
+# The tests that want a release find it absent and skip cleanly, which is
+# the behaviour this job also checks.
 #
-# `system-100` fetches the release with tools/fetch-system-100.sh --- the
-# pack the engines boot and the sources the Chaosnet server serves --- and
-# runs the same suite with it there, so the tests that boot the band run,
-# CC's own quick diagnostic of the machine among them. The two downloads,
-# some 34 MB, are cached on the script's hash; the pack is unpacked from
-# them on every run.
+# `system-100` fetches System 100, the target --- the pack the engines boot
+# and the sources the Chaosnet server serves --- and runs the same suite
+# with it there, so the tests that boot the band run, CC's own quick
+# diagnostic of the machine among them. The two downloads, some 34 MB, are
+# cached on the script's hash; the pack is unpacked from them on every run.
+#
+# System 304 is not fetched here. It boots too and has a test of its own,
+# which skips in both jobs the way everything needing `vendor/` does, and is
+# run on a desk with `tools/fetch-system-304.sh` in place.
 #
 # The compiler version comes from rust-toolchain.toml, so it is pinned here
 # the same way it is pinned on a desk. `--locked` refuses to update
@@ -113,5 +116,7 @@ jobs:
 
       # Everything, with the pack there: the engines boot the band, the
       # Chaosnet server serves the sources, and CC checks the machine.
+      # The System 304 test skips, as it does on a fresh clone; that
+      # release is not fetched here.
       - name: Tests, with the release
         run: cargo test --locked

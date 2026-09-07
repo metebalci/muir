@@ -26,7 +26,7 @@ use muir::trident;
 use muir::wirelist;
 
 mod support;
-use support::{mit, mit_text, vendor};
+use support::{mit, mit_text};
 
 const CADRDC: &str = include_str!("../data/CADRDC.netlist");
 
@@ -1492,7 +1492,7 @@ fn a_write_with_a_drive_puts_the_page_on_the_pack() {
 /// the label, and its first word is `LABL` as the boot PROM checks it.
 #[test]
 fn the_system_100_pack_reads_through_the_board() {
-    let Some(image) = vendor(&["run", "disk-sys-100-0.img"]) else { return };
+    let Some(image) = support::pack_100() else { return };
     let n = cadrdc();
     let store = control_store();
     let mut b = controller(&n);

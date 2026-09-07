@@ -9,10 +9,12 @@
 use muir::sym::{Space, Symbols, parse};
 
 mod support;
-use support::{mit_text, release};
+use support::mit_text;
 
 fn symbols(file: &str) -> Option<Symbols> {
-    let s = release(&format!("ubin/{file}"))?;
+    // `SYS: UBIN;` out of the target's sources: the same file in both
+    // releases, and this is the one CI fetches.
+    let s = std::fs::read_to_string(support::release_100_file(&["ubin", file])?).unwrap();
     Some(parse(&s).unwrap())
 }
 
@@ -132,7 +134,8 @@ fn the_releases_prom_table_is_the_committed_one() {
 /// Aliases: more names than addresses, and every name at an address is kept.
 #[test]
 fn one_address_can_have_several_names() {
-    let Some(text) = release("ubin/ucadr.sym") else { return };
+    let Some(p) = support::release_100_file(&["ubin", "ucadr.sym"]) else { return };
+    let text = std::fs::read_to_string(p).unwrap();
     let s = parse(&text).unwrap();
     let lines = text.lines().filter(|l| l.contains(" I-MEM ")).count();
     assert_eq!(lines, 2_264, "symbol lines in MIT's file");

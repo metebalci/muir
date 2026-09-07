@@ -15,7 +15,6 @@ use muir::disk_unit::{BLOCK_WORDS, Geometry, Unit};
 use muir::machine::Machine;
 
 mod support;
-use support::vendor;
 
 /// Status bits, by MIT's numbering.  `DCSTS` drives each of these onto the
 /// Xbus line of the same number.
@@ -46,7 +45,7 @@ mod reg {
 }
 
 fn image() -> Option<PathBuf> {
-    vendor(&["run", "disk-sys-100-0.img"])
+    support::pack_100()
 }
 
 /// A controller with unit 0 loaded from the System 100 pack, and 256 pages of

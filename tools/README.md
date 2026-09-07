@@ -13,7 +13,8 @@ Ubuntu, `gcc` on Fedora --- and only when a netlist has to be made again.
 
 | Script | Makes |
 |---|---|
-| `fetch-system-100.sh` | `vendor/`: the System 100 release, and a directory for muir to serve it from. Nothing in `vendor/` is committed |
+| `fetch-system-100.sh` | `vendor/`: the System 100 release --- the target --- and a directory for muir to serve it from. Nothing in `vendor/` is committed |
+| `fetch-system-304.sh` | `vendor/`: the System 304 release, which also boots here; its microcode is the second copy the committed one is held to |
 | `cadr-netlist.sh`, `busint-netlist.sh`, `cadrm-netlist.sh`, `cadrio-netlist.sh`, `cadrdc-netlist.sh`, `simpletv-netlist.sh`, `lispmtv-netlist.sh` | `data/<BOARD>.netlist`, one board each: MIT's drawings read with `soap4`, then reconciled with MIT's wire list by `examples/reconcile.rs` |
 | `newdsk-proms.sh` | `data/newdsk-d0?.prom`, the disk controller's control store, assembled from `mit/cadrdc/newdsk.31` by `examples/dcmicro.rs` |
 | `trident-tables.sh` | `data/trident-connectors.txt` and `data/trident-bus.txt`, by `examples/trident-tables.rs` |

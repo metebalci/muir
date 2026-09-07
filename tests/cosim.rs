@@ -30,15 +30,15 @@ use muir::rtl::Rtl;
 mod support;
 use support::machine_with_pack;
 
-/// The System 304 pack, which these comparisons need for a reason worth
+/// The System 100 pack, which these comparisons need for a reason worth
 /// stating: they run past `PROM-DISABLE`, so the disk must have loaded
 /// microcode 323 by then. Without a pack both engines would spin in
 /// `DISK-RECALIBRATE` in step with each other and agree about nothing.
 fn pack() -> Option<PathBuf> {
-    support::pack_304()
+    support::pack_100()
 }
 
-/// A machine with the System 304 pack, `pack`, on unit 0.
+/// A machine with the System 100 pack, `pack`, on unit 0.
 ///
 /// Both engines must have the same pack on the same unit, or they diverge on
 /// the first thing the boot PROM reads off it rather than on anything either
@@ -299,7 +299,7 @@ fn the_lc_shift_selects_the_byte_the_diagnostics_expect() {
 // --- micro against rtl, one construct at a time ------------------------------
 
 use muir::isa::asm::{
-    ALU, ALWAYS, BYTE, DISPATCH, JUMP, MD, N, P, POPJ, R, SETM, SETO, SETZ, SRC_MD, START_READ,
+    ALU, ALWAYS, BYTE, DISPATCH, JUMP, MD, P, POPJ, R, SETM, SETO, SETZ, SRC_MD, START_READ,
     a_dest, a_src, d_addr, filler, m_src, src, target, width,
 };
 

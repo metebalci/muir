@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Checks the MCR reader against the System 100 microcode.
+//! Checks the MCR reader against the releases' microcode.
 //!
 //! These files are AGPL and large, so they live in `vendor/` and are not part
 //! of the repository.  Run `tools/fetch-system-100.sh` to get them; without
@@ -11,23 +11,44 @@ use muir::isa::Op;
 use muir::mcr;
 
 mod support;
-use support::vendor;
-
+/// A file of `SYS: UBIN;` in the release this project targets.
 fn ubin(name: &str) -> Option<Vec<u8>> {
-    let p = vendor(&["system-100-0", "sys", "ubin", name])?;
+    Some(std::fs::read(support::release_100_file(&["ubin", name])?).unwrap())
+}
+
+/// The same file in the System 100 release, for the cross-check below.
+fn ubin_100(name: &str) -> Option<Vec<u8>> {
+    let p = support::vendor(&["system-100-0", "sys", "ubin", name])?;
     Some(std::fs::read(p).unwrap())
 }
 
-/// **The committed microcode is the release's own file.** `src/mcr.rs` says
-/// `mit/sys/ubin/ucadr.mcr` is byte for byte System 100's
-/// `sys/ubin/ucadr.mcr`, and it is what `diskpack` puts on a pack when it is
-/// given no file.  Two builds of a microcode version can both parse and both
-/// run, so only the release's own bytes settle which one this is.
+/// **The committed microcode is the release's own file, and the same file
+/// in both releases.** `src/mcr.rs` says `mit/sys/ubin/ucadr.mcr` is byte
+/// for byte the release's `sys/ubin/ucadr.mcr`, and it is what `diskpack`
+/// puts on a pack when it is given no file. Two builds of a microcode
+/// version can both parse and both run, so only the release's own bytes
+/// settle which one this is.
+///
+/// The two copies reach this test by different routes --- System 100's
+/// out of the tarball published with that release, System 304's out of a
+/// tarball built from the project's Fossil repository --- which is what
+/// makes their agreement worth asserting: microcode 323 is one file across
+/// the two, so every fact this project holds about the microcode is true
+/// of both, and a release that quietly rebuilt it would fail here.
 #[test]
-fn the_committed_microcode_is_the_one_system_100_ships() {
-    let Some(theirs) = ubin("ucadr.mcr") else { return };
-    assert_eq!(theirs.len(), mcr::UCADR_323.len(), "the two files differ in length");
-    assert!(theirs.as_slice() == mcr::UCADR_323, "mit/sys/ubin/ucadr.mcr is not the release's");
+fn the_committed_microcode_is_the_one_both_releases_ship() {
+    let mut checked = 0;
+    if let Some(theirs) = ubin_100("ucadr.mcr") {
+        assert_eq!(theirs.len(), mcr::UCADR_323.len(), "System 100's file differs in length");
+        assert!(theirs.as_slice() == mcr::UCADR_323, "mit/sys/ubin/ucadr.mcr is not System 100's");
+        checked += 1;
+    }
+    if let Some(theirs) = ubin("ucadr.mcr") {
+        assert_eq!(theirs.len(), mcr::UCADR_323.len(), "System 304's file differs in length");
+        assert!(theirs.as_slice() == mcr::UCADR_323, "mit/sys/ubin/ucadr.mcr is not System 304's");
+        checked += 1;
+    }
+    eprintln!("held against {checked} of the two releases");
 }
 
 /// **The built-in microcode is microcode 323, and parses.** Committed, so
@@ -41,10 +62,10 @@ fn the_built_in_microcode_is_323() {
     assert_eq!(m.amem.len(), 0o2000, "A memory words");
 }
 
-/// The boot PROM as System 100 ships it, with the section sizes its own
+/// The boot PROM as the release ships it, with the section sizes its own
 /// headers give.
 #[test]
-fn system_100_prom_parses() {
+fn the_release_prom_parses() {
     let Some(bytes) = ubin("promh.mcr") else {
         return;
     };
@@ -73,7 +94,7 @@ fn system_100_prom_parses() {
 
 /// The whole of microcode 323 --- about 12k words --- must parse and decode.
 #[test]
-fn system_100_microcode_parses() {
+fn the_release_microcode_parses() {
     let Some(bytes) = ubin("ucadr.mcr") else {
         return;
     };

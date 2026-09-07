@@ -31,9 +31,7 @@ fn lit(e: &Rtl) -> usize {
 /// Then the listener echoes it, and the screen has more on it than it had.
 #[test]
 fn a_key_typed_at_the_listener_is_read_and_echoed() {
-    let (Some(pack), Some(root)) =
-        (vendor(&["run", "disk-sys-100-0.img"]), vendor(&["run", "file-root"]))
-    else {
+    let (Some(pack), Some(root)) = (support::pack_100(), vendor(&["run", "file-root"])) else {
         return;
     };
     let mut e = Rtl::new(machine_with_pack(&pack));
@@ -63,7 +61,8 @@ fn a_key_typed_at_the_listener_is_read_and_echoed() {
     eprintln!("after typing, {after} pixels lit");
     // The form is echoed on the line under the prompt's two, rows 128 to
     // 142, and its value printed on the next; the cursor, which blinks
-    // two hundred pixels either way, is below both.
+    // two hundred pixels either way, is below both. The rows follow the
+    // herald's height, and System 304's is a line taller.
     let echo = lit_rows(&e, 128..142);
     let value = lit_rows(&e, 142..156);
     eprintln!("the echo line has {echo} pixels lit, the value's line {value}");

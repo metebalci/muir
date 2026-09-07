@@ -1049,8 +1049,9 @@ fn lisp_machine_text_becomes_unix_text() {
 /// **The FILE service never writes outside the tree it serves.** The root is
 /// the server's `/`, and `--chaos-file-root`'s help promises that everything
 /// the service writes, renames and deletes stays under it. The tree is the
-/// root and what the root's own links lead to --- `tools/fetch-system-100.sh`
-/// puts the release under `/tree` by such a link --- so a pathname is taken
+/// root and what the root's own links lead to --- each release's fetch
+/// script puts its sources there by such a link, under the name that band
+/// asks for --- so a pathname is taken
 /// component by component under the root with `..` and `.` refused; the root
 /// itself is no file to open for writing, delete, rename or create; a link
 /// deeper in that points out of the tree leads nowhere, for reading as for
@@ -1826,4 +1827,62 @@ fn the_lockout_ends_between_the_mid_cell_transition_and_the_next_cell() {
     let mid = wire::CELL_NS + wire::CELL_NS / 2;
     assert!(changes.iter().any(|&(t, _)| t == mid), "a mid-cell edge in the second cell");
     assert_eq!(wire::decode(&changes), vec![bits.to_vec()]);
+}
+
+/// **The System 304 band calls its file and time host at 4403, and this
+/// machine answers there as 4401.** [`support::CHAOS_304`] is the pair
+/// every machine test runs with, and it is the band's own: asked at its
+/// listener, `(send (si:parse-host "OZ") :chaos-address)` answers 2307
+/// decimal, which is 4403, and `si:local-host` is `AMS-LISPM-1`, which its
+/// host table puts at 4401.
+///
+/// What that pair buys is on the cable here: the boot puts an `RFC "TIME"`
+/// on it, addressed from 4401 to 4403, and the server answers. At any
+/// other pair nothing is sent at all --- 4403 is on another subnet from
+/// 3050, and the band, hearing no route to it, never transmits --- and the
+/// machine comes up asking for the date instead. So this is also the test
+/// that the defaults, which are System 100's, are not this band's.
+#[test]
+fn the_304_band_reaches_the_server_at_its_own_numbers() {
+    let (Some(pack), Some(root)) = (support::pack_304(), support::vendor(&["run", "file-root"]))
+    else {
+        return;
+    };
+    use muir::engine::Engine as _;
+    let mut e = muir::rtl::Rtl::new(support::machine_with_pack(&pack));
+    e.boot();
+    let m = e.machine_mut();
+    m.chaos.address = support::CHAOS_304.0;
+    m.chaos.server_address = support::CHAOS_304.1;
+    m.chaos.file_root = Some(root);
+    m.chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
+    m.plug_chaos(0);
+    m.ioboard.chaos.as_mut().unwrap().ether_mut().unwrap().keep_log(true);
+    let ran = support::wait_for_the_prompt(&mut e);
+
+    let ether = e.machine().ioboard.chaos.as_ref().unwrap().ether().unwrap();
+    let packets: Vec<Packet> = ether
+        .log
+        .iter()
+        .filter_map(|ev| match ev {
+            muir::chaos::ether::Event::Sent(_, _, b) => Some(&b[..]),
+            muir::chaos::ether::Event::Heard(_, f) => Some(&f.buffer[..]),
+            muir::chaos::ether::Event::Collision(_) => None,
+        })
+        .filter_map(|b| Packet::from_buffer(b).ok().map(|(p, _)| p))
+        .collect();
+    eprintln!("at the prompt after {ran}: {} packets on the cable", packets.len());
+    let time_rfc = packets
+        .iter()
+        .find(|p| p.opcode == op::RFC && p.data.starts_with(b"TIME"))
+        .expect("the band asked for the time");
+    assert_eq!(
+        (time_rfc.source, time_rfc.dest),
+        support::CHAOS_304,
+        "from this machine to its file and time host"
+    );
+    assert!(
+        packets.iter().any(|p| p.opcode == op::ANS && p.source == support::CHAOS_304.1),
+        "and the server answered it"
+    );
 }

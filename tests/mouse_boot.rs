@@ -38,8 +38,8 @@ fn fixnum(word: u32) -> i32 {
 #[test]
 fn the_pointer_moves_the_machines_mouse() {
     let (Some(pack), Some(symbols), Some(root)) = (
-        vendor(&["run", "disk-sys-100-0.img"]),
-        vendor(&["system-100-0", "sys", "ubin", "ucadr.sym"]),
+        support::pack_100(),
+        support::release_100_file(&["ubin", "ucadr.sym"]),
         vendor(&["run", "file-root"]),
     ) else {
         return;
