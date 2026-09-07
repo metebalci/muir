@@ -16,7 +16,6 @@ use muir::micro::Micro;
 use muir::rtl::Rtl;
 
 mod support;
-use support::vendor;
 
 /// **Packing keeps every byte and costs a run of zeros almost nothing.**
 #[test]
@@ -277,7 +276,7 @@ fn resumes<E: Engine>(name: &str, mut straight: E, mut resumed: E, at: u64, more
 /// read; then a hundred thousand microcycles more, in step.
 #[test]
 fn micro_picks_up_where_the_checkpoint_left_off() {
-    let Some(pack) = vendor(&["run", "disk-sys-100-0.img"]) else { return };
+    let Some(pack) = support::pack_100() else { return };
     let mut straight = Micro::new(machine(&pack));
     straight.boot();
     let mut resumed = Micro::new(machine(&pack));
@@ -289,7 +288,7 @@ fn micro_picks_up_where_the_checkpoint_left_off() {
 /// Chaosnet interface plugged in, so its state goes and comes too.
 #[test]
 fn rtl_picks_up_where_the_checkpoint_left_off() {
-    let Some(pack) = vendor(&["run", "disk-sys-100-0.img"]) else { return };
+    let Some(pack) = support::pack_100() else { return };
     let build = || {
         let mut m = machine(&pack);
         m.plug_chaos(0);

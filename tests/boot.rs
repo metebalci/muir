@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Runs the System 100 boot PROM on the `micro` engine.
+//! Runs MIT's boot PROM on the `micro` engine.
 //!
-//! The PROM is committed, in `mit/sys/ubin/`; the one test here that
-//! boots on to the pack needs the vendored System 100 release, and says
-//! so when it is skipped.
+//! The PROM is committed, in `mit/sys/ubin/`, and is one file across the
+//! releases; the one test here that boots on to the pack needs the
+//! vendored System 100 release, and says so when it is skipped.
 
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -18,7 +18,7 @@ use muir::micro::Micro;
 use muir::rtl::Rtl;
 
 mod support;
-use support::{machine_with_pack, vendor};
+use support::machine_with_pack;
 
 /// Every PC the machine visits over one turn of the wait it is in.  Two
 /// thousand microcycles is many times round a loop of a dozen.
@@ -196,10 +196,9 @@ fn rtl_engine_reaches_the_disk() {
 /// decoder and 12,449 `WRITE-I-MEM`s.
 #[test]
 fn the_boot_loads_microcode_323_off_the_pack() {
-    let (Some(pack), Some(band)) = (
-        vendor(&["run", "disk-sys-100-0.img"]),
-        vendor(&["system-100-0", "sys", "ubin", "ucadr.mcr"]),
-    ) else {
+    let (Some(pack), Some(band)) =
+        (support::pack_100(), support::release_100_file(&["ubin", "ucadr.mcr"]))
+    else {
         return;
     };
     let mut e = Micro::new(machine_with_pack(&pack));

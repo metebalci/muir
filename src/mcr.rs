@@ -27,8 +27,9 @@
 
 use crate::isa::Insn;
 
-/// System 100's own microcode as a file: `sys/ubin/ucadr.mcr` from the
-/// release, which is microcode 323, the version this project targets.
+/// The release's own microcode as a file: `sys/ubin/ucadr.mcr`, which is
+/// microcode 323, the version this project targets --- and one file across
+/// System 100 and System 304, which `tests/mcr.rs` holds it to.
 ///
 /// Byte for byte what the release ships, committed in `mit/` beside the boot
 /// PROM's own file so that what a pack made here loads is the target's own
@@ -38,8 +39,8 @@ use crate::isa::Insn;
 /// only the release's bytes settle which one this is.
 ///
 /// It is 12,449 control store words --- `0o30241`, the count `tests/boot.rs`
-/// finds in the `MCR1` partition of the System 100 pack after the boot PROM
-/// has loaded it.
+/// finds in the `MCR1` partition of the pack after the boot PROM has loaded
+/// it.
 pub const UCADR_323: &[u8] = include_bytes!("../mit/sys/ubin/ucadr.mcr");
 
 #[derive(Clone, Debug, Default)]

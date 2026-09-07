@@ -297,8 +297,10 @@ impl Control {
     /// reach a file outside the tree it serves: `--chaos-file-root`'s help
     /// promises that what it writes, renames and deletes stays there. The
     /// tree is the root and what the root's own links lead to ---
-    /// `tools/fetch-system-100.sh` puts the release's `sys` under `/tree`
-    /// by such a link, read and written as the band would --- and nothing
+    /// each release's fetch script puts its sources under the root by such
+    /// a link, `sys` for System 304 and `tree` for System 100, under the
+    /// name that release's band asks for, read and written as the band
+    /// would --- and nothing
     /// else. So the pathname is taken component by component under the
     /// root, with `..` and `.` refused rather than followed; then the
     /// deepest part of the result that exists is resolved on the host,

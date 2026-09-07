@@ -599,7 +599,7 @@ fn prom_labels() -> std::collections::BTreeMap<u64, String> {
 /// image with its own written blocks, so one call serves both.
 fn machine_with_pack() -> Option<muir::machine::Machine> {
     use muir::disk_unit::{Geometry, Unit};
-    let p = support::vendor(&["run", "disk-sys-100-0.img"])?;
+    let p = support::pack_100()?;
     let mut m = muir::machine::Machine::new();
     m.disk.attach(0, Unit::open(&p, Geometry::T300).expect("the System 100 pack"));
     Some(m)

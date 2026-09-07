@@ -19,7 +19,7 @@ mod support;
 use support::vendor;
 
 fn pack() -> Option<Label> {
-    let p = vendor(&["run", "disk-sys-100-0.img"])?;
+    let p = support::pack_100()?;
     Some(Label::open(&p).unwrap())
 }
 
@@ -290,7 +290,7 @@ fn nearly_every_word_of_the_band_has_a_data_type_that_exists() {
 #[test]
 fn the_pack_carries_the_bands_the_release_ships() {
     let (Some(pack), Some(archive)) =
-        (vendor(&["run", "disk-sys-100-0.img"]), vendor(&["system-100-0", "LOD1-cold-3-23-23.gz"]))
+        (support::pack_100(), vendor(&["system-100-0", "LOD1-cold-3-23-23.gz"]))
     else {
         return;
     };

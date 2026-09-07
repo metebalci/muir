@@ -4,8 +4,9 @@
 //! The boot PROM, and the shape it is burned in.
 //!
 //! The engines boot MIT's own microcode file, `mit/sys/ubin/promh.mcr`,
-//! out of `SYS: UBIN;` --- System 100's own `sys/ubin/promh.mcr`, taken
-//! from the release unchanged, as `mit/README.md` records.  [`boot_prom`]
+//! out of `SYS: UBIN;` --- the release's own `sys/ubin/promh.mcr`, taken
+//! from it unchanged, as `mit/README.md` records, and the same file in
+//! System 100 and System 304.  [`boot_prom`]
 //! is that file's words in the 1K the board decodes as PROM
 //! ([`PROM_WORDS`]).  [`parse_mcr`] reads a PROM of one's own out of the
 //! same kind of file, which is what `muir --prom` hands it.
@@ -28,9 +29,8 @@
 //! what was burned.
 //!
 //! Not every recovered copy of "version 9" is the same program, so which
-//! copy is loaded matters: the engines run System 100's own, and
-//! `tests/prom.rs` holds `mit/sys/ubin/promh.mcr` to the release's file byte
-//! for byte.
+//! copy is loaded matters: the engines run the release's own, and
+//! `tests/prom.rs` holds `mit/sys/ubin/promh.mcr` to it byte for byte.
 
 use crate::isa::Insn;
 
@@ -44,8 +44,9 @@ pub const CHIP_WORDS: usize = 512;
 
 /// MIT's own microcode file for the boot PROM, version 9, out of `SYS: UBIN;`.
 ///
-/// Byte for byte what System 100 ships as `sys/ubin/promh.mcr`, so what the
-/// engines boot is the release's own file and not a copy of it.
+/// Byte for byte what the releases ship as `sys/ubin/promh.mcr` --- System
+/// 100 and System 304 carry the same file --- so what the engines boot is
+/// the release's own and not a copy of it.
 const PROMH_9MCR: &[u8] = include_bytes!("../mit/sys/ubin/promh.mcr");
 
 /// The boot PROM's microinstructions, from MIT's own file, [`PROM_WORDS`]

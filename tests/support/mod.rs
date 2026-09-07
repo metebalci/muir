@@ -33,9 +33,33 @@ pub fn mit_text(parts: &[&str]) -> String {
     String::from_utf8_lossy(&std::fs::read(mit(parts)).unwrap()).into_owned()
 }
 
-/// A file under `vendor/`, where `tools/fetch-system-100.sh` puts the
-/// release, or `None` with a line saying so: a test that needs the release
-/// skips without it, and says that it did.
+/// The **System 304** pack, put there by `tools/fetch-system-304.sh`. That
+/// release boots here and has a test of its own; it is not what the machine
+/// tests run, because CC does not load on it --- see `tests/cc_harness`.
+pub fn pack_304() -> Option<PathBuf> {
+    vendor(&["run", "disk-sys-304-0.img"])
+}
+
+/// The pack the machine tests boot: **System 100**, what this project
+/// targets, put there by `tools/fetch-system-100.sh`. It is also the
+/// fixture the label and band tests are written against --- their
+/// partition table, pack name and band comments are its.
+pub fn pack_100() -> Option<PathBuf> {
+    vendor(&["run", "disk-sys-100-0.img"])
+}
+
+/// The Chaosnet numbers the System 304 band holds: this machine
+/// `AMS-LISPM-1` at 4401, and `OZ`, its file and time host, at 4403. Read
+/// out of the band itself --- `(send (si:parse-host "OZ") :chaos-address)`
+/// answers 2307 decimal, and `si:local-host` is `AMS-LISPM-1` when the
+/// switches say 4401 --- and enforced by
+/// `tests/chaos.rs::the_304_band_reaches_the_server_at_its_own_numbers`.
+/// A server answering anywhere else is a server this band never calls.
+pub const CHAOS_304: (u16, u16) = (0o4401, 0o4403);
+
+/// A file under `vendor/`, where the fetch scripts put the releases, or
+/// `None` with a line saying so: a test that needs a release skips
+/// without it, and says that it did.
 pub fn vendor(parts: &[&str]) -> Option<PathBuf> {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vendor");
     p.extend(parts);
@@ -49,9 +73,33 @@ pub fn vendor(parts: &[&str]) -> Option<PathBuf> {
 
 /// A source file of the System 100 release, `vendor/system-100-0/sys/<file>`,
 /// as text, or `None` with the skip line.
+///
+/// **The two releases' sources are not interchangeable**, which is why this
+/// names one: `window/shwarm.lisp`, for one, carries the display geometry
+/// as `DEFCONST`s here and does not there. A test reads whichever release
+/// its fact is from, and one that wants the target's takes
+/// [`release_304`].
 pub fn release(file: &str) -> Option<String> {
     let p = vendor(&["system-100-0", "sys", file])?;
     Some(String::from_utf8_lossy(&std::fs::read(p).unwrap()).into_owned())
+}
+
+/// A file of the System 100 release, `vendor/system-100-0/sys/<parts>`, as
+/// a path: for `SYS: UBIN;`, where the readers want bytes rather than text.
+pub fn release_100_file(parts: &[&str]) -> Option<PathBuf> {
+    let mut p = vec!["system-100-0", "sys"];
+    p.extend_from_slice(parts);
+    vendor(&p)
+}
+
+/// A file of the System 304 sources, `vendor/system-304-0/sys-304-0/<file>`,
+/// or `None` with the skip line. The upstream release is the pack alone,
+/// so these are the project's own Fossil repository at branch
+/// `system-304`; `tools/fetch-system-304.sh` says how they are built.
+pub fn release_304(parts: &[&str]) -> Option<PathBuf> {
+    let mut p = vec!["system-304-0", "sys-304-0"];
+    p.extend_from_slice(parts);
+    vendor(&p)
 }
 
 /// A supply, a pull-up, an unconnected pin or a spare: a net no signal is
@@ -201,12 +249,28 @@ pub fn quiet() -> Vec<(&'static str, Level)> {
 /// line is printed in hold more than 400 lit pixels, and a moment more for
 /// the prompt to settle. Returns the microcycles it took.
 pub fn boot_to_the_prompt(e: &mut Rtl, file_root: PathBuf) -> u64 {
+    // The band this boots is System 100's, whose own Chaosnet numbers are
+    // what `chaos::Config` defaults to. A band reached at the wrong pair
+    // gets neither the time nor its files and stops to ask for the date;
+    // System 304's wants [`CHAOS_304`], which its own test gives it.
     e.machine_mut().chaos.file_root = Some(file_root);
     e.machine_mut().chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
     e.machine_mut().plug_chaos(0);
+    wait_for_the_prompt(e)
+}
+
+/// The wait itself, for a machine whose Chaosnet is already plugged: a
+/// test that wants the ether's log on has to turn it on after the plug,
+/// so it does that and comes here.
+pub fn wait_for_the_prompt(e: &mut Rtl) -> u64 {
+    // The `;Reading at top level` line, which is the prompt appearing.
+    // Where it lands depends on how tall the herald above it is --- six
+    // lines on System 304's band, one fewer on System 100's --- so the
+    // rows watched are the band the line falls in for either, and the
+    // herald itself is above all of them.
     let reading = |e: &Rtl| {
         let tv = &e.machine().simpletv;
-        (84..100usize)
+        (84..130usize)
             .flat_map(|y| (0..muir::simpletv::WIDTH).map(move |x| (x, y)))
             .filter(|&(x, y)| tv.pixel(x, y))
             .count()

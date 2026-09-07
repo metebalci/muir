@@ -50,13 +50,28 @@ pub mod wire;
 /// of that machine, only of its services; and TIME need not come from it
 /// at all, the band asking the whole network by broadcast.
 ///
-/// The defaults are the band's own, from `vendor/system-100-0/sys/site/
+/// **Which numbers a run wants is the band's, and the band is asked.** A
+/// band holds a host table, and it calls its file and time host at the
+/// address that table gives; a server answering anywhere else is a server
+/// it never calls, and the machine then boots but stops to ask for the
+/// date and reaches no files.
+///
+/// The defaults here are System 100's, from `vendor/system-100-0/sys/site/
 /// hosts.text`: this machine is `MIT-LISPM-1` at 3050, and its associated
 /// machine is `MIT-OZ` at 3060, the `SYS` host of `site.lisp`. The
 /// release's builders trimmed that table to exactly those two and gave OZ
 /// that address (its `README`; discrepancy 60), and the release's own
-/// configuration runs the band as them, so they are what this band
-/// expects rather than MIT's historical numbers. On `muir`:
+/// configuration runs the band as them, so they are what that band
+/// expects rather than MIT's historical numbers.
+///
+/// System 304's band answers differently, and was asked at its listener:
+/// `si:local-host` is `AMS-LISPM-1` at 4401, and `OZ` --- `AMS-BRIDGE-1`
+/// under its other name --- is at 4403, which is where it looks for both
+/// its files and its time. A run with that pack is given
+/// `--chaos-address 4401,4403`.
+///
+/// The defaults do not follow the target release. They are one working
+/// pair, and the pack a run boots says which pair it wants. On `muir`:
 /// `--chaos-address <this>[,<server>]`, `--chaos-file-root`;
 /// `--chaos-trace` prints every packet.
 #[derive(Clone, Debug)]

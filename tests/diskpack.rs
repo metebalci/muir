@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use muir::band::{BLOCK_WORDS, Label, T300};
 use muir::diskpack::{Command, Pack, Size, parse, parse_size};
 use muir::engine::Engine;
-use support::{scratch, vendor};
+use support::scratch;
 
 /// Bytes in a block, for the sizes the tests work in.
 const BLOCK_BYTES: u64 = BLOCK_WORDS as u64 * 4;
@@ -489,7 +489,7 @@ fn a_microcode_partition_takes_a_microcode_file() {
 /// every field, the partition table, the padding between them.
 #[test]
 fn the_system_100_label_written_back_is_the_same_bytes() {
-    let Some(pack) = vendor(&["run", "disk-sys-100-0.img"]) else { return };
+    let Some(pack) = support::pack_100() else { return };
     let dir = scratch("diskpack-same-bytes");
     let path = dir.join("copy.img");
 
@@ -517,7 +517,7 @@ fn the_system_100_label_written_back_is_the_same_bytes() {
 /// rest of the partition with it.
 #[test]
 fn the_microcode_written_is_the_microcode_on_the_pack() {
-    let Some(pack) = vendor(&["run", "disk-sys-100-0.img"]) else { return };
+    let Some(pack) = support::pack_100() else { return };
     let dir = scratch("diskpack-microcode");
     let (mut ours, path) = pack_at(&dir, "fresh.img");
     ours.run(Command::Initialize).unwrap();
@@ -554,7 +554,7 @@ fn the_microcode_written_is_the_microcode_on_the_pack() {
 /// of one's own is made by, and the check is that the blocks are the blocks.
 #[test]
 fn a_band_dumped_and_loaded_arrives() {
-    let Some(pack) = vendor(&["run", "disk-sys-100-0.img"]) else { return };
+    let Some(pack) = support::pack_100() else { return };
     let dir = scratch("diskpack-band");
     let dump = dir.join("lod1.dump");
 
@@ -582,7 +582,7 @@ fn a_band_dumped_and_loaded_arrives() {
 /// reads them and nothing is swapped.
 #[test]
 fn a_band_copied_from_another_pack_arrives() {
-    let Some(theirs) = vendor(&["run", "disk-sys-100-0.img"]) else { return };
+    let Some(theirs) = support::pack_100() else { return };
     let dir = scratch("diskpack-load-from");
     let (mut ours, path) = pack_at(&dir, "fresh.img");
     ours.run(Command::Initialize).unwrap();
@@ -636,7 +636,7 @@ fn a_band_copied_from_another_pack_arrives() {
 /// check, by hand.
 #[test]
 fn a_pack_made_here_boots() {
-    let Some(theirs) = vendor(&["run", "disk-sys-100-0.img"]) else { return };
+    let Some(theirs) = support::pack_100() else { return };
     let dir = scratch("diskpack-boots");
     let (mut made, path) = pack_at(&dir, "made.img");
     for c in [

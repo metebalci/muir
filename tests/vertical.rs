@@ -22,10 +22,15 @@ use support::{boot_to_the_prompt, machine_with_pack, type_at, vendor};
 /// At the listener's prompt the mode register is 0 and the sync RAM is
 /// empty: `LISP-REINITIALIZE` in this release runs its `SETUP-CPT` block
 /// under `(UNLESS (NOT CALLED-BY-USER) ...)`, which the cold boot's
-/// `(LISP-REINITIALIZE NIL)` does not satisfy, where the trunk source has
-/// `(UNLESS CALLED-BY-USER ...)`. So the PROM's sync program keeps running
-/// and `MODE INTR ENB` stays clear, and with the disk idle the microcode's
-/// `60CYC` never runs.
+/// `(LISP-REINITIALIZE NIL)` does not satisfy. So the PROM's sync program
+/// keeps running and `MODE INTR ENB` stays clear, and with the disk idle
+/// the microcode's `60CYC` never runs.
+///
+/// System 304 does it in the cold boot instead --- `sys/ltop.lisp` there
+/// has the block as a function, `TV::INITIALIZE-RUN-LIGHT-LOCATIONS`,
+/// registered `:BEFORE-COLD` --- so that band reaches the listener with
+/// mode `14` and the sync RAM already in. Booting it is how this was
+/// found; the state it arrives in is the state typing gets to here.
 ///
 /// `(SI:SETUP-CPT)` typed at the listener loads the program into the sync
 /// RAM through registers 1 to 3, turns the RAM in with register 3's bit
@@ -37,8 +42,8 @@ use support::{boot_to_the_prompt, machine_with_pack, type_at, vendor};
 #[test]
 fn setup_cpt_enables_the_vertical_interrupt_and_the_microcode_counts_frames() {
     let (Some(pack), Some(symbols), Some(root)) = (
-        vendor(&["run", "disk-sys-100-0.img"]),
-        vendor(&["system-100-0", "sys", "ubin", "ucadr.sym"]),
+        support::pack_100(),
+        support::release_100_file(&["ubin", "ucadr.sym"]),
         vendor(&["run", "file-root"]),
     ) else {
         return;

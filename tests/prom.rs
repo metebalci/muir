@@ -4,7 +4,7 @@
 //! Checks the microinstruction decoder against the boot PROM.
 //!
 //! The engines boot MIT's own microcode file, `mit/sys/ubin/promh.mcr`,
-//! which is byte for byte what System 100 ships as `sys/ubin/promh.mcr`;
+//! which is byte for byte what the releases ship as `sys/ubin/promh.mcr`;
 //! `the_committed_prom_is_the_one_system_100_ships` holds it to that when
 //! the release is vendored, and says it was skipped when not.  What is
 //! checked here is that it is the *right* PROM --- two builds of "version
@@ -16,7 +16,7 @@ use muir::isa::Op;
 use muir::prom::{self, PROM_WORDS};
 
 mod support;
-use support::{mcr, vendor};
+use support::mcr;
 
 #[test]
 fn the_prom_is_512_words() {
@@ -25,13 +25,13 @@ fn the_prom_is_512_words() {
 }
 
 /// **The committed boot PROM is the release's own file.** `src/prom.rs`
-/// says `mit/sys/ubin/promh.mcr` is byte for byte System 100's
+/// says `mit/sys/ubin/promh.mcr` is byte for byte the release's
 /// `sys/ubin/promh.mcr`; two builds of version 9 exist, so a copy that
 /// drifted would still parse and still boot, and only the release's own
 /// bytes settle which one the engines run.
 #[test]
 fn the_committed_prom_is_the_one_system_100_ships() {
-    let Some(theirs) = vendor(&["system-100-0", "sys", "ubin", "promh.mcr"]) else { return };
+    let Some(theirs) = support::release_100_file(&["ubin", "promh.mcr"]) else { return };
     let theirs = std::fs::read(&theirs).unwrap();
     let ours = include_bytes!("../mit/sys/ubin/promh.mcr");
     assert_eq!(theirs.len(), ours.len(), "the two files differ in length");
