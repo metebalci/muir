@@ -416,7 +416,8 @@ impl Netlist {
     ];
 
     /// The wires MIT added by hand after a board came back from wrapping,
-    /// which no wire list has: the disk controller's one-board jumpers.
+    /// which no wire list has: the disk controller's one-board jumpers, its
+    /// address jumpers and its timeout enable.
     ///
     /// `cadrdc/dc.eco` §ii, "Hand wiring after board comes back from
     /// wire-wrapping (add in red): Jumpers for 1-board version (do NOT
@@ -441,6 +442,50 @@ impl Netlist {
     /// signal directly from the drive, it is not separately latched in the
     /// controller".
     ///
+    /// `disk.hand`'s next paragraph is the seven **address jumpers**, `J5-1
+    /// : J5-2` through `J5-13 : J5-14`, and the one after that the
+    /// **timeout enable**, `J5-16 : J5-41`, "the adjacent ground pin";
+    /// `dc.eco` lists both again. `dc.wlr` says what the pins carry. `J5`'s
+    /// odd pins 1 to 15 are all on `HI1`, the net the 330 ohm SIP at DCTRSG
+    /// 0A06 pulls up, and its even pins 2 to 14 are `AD14`, `AD13`, `AD6`,
+    /// `AD5`, `AD4`, `AD3` and `AD2`, the A inputs of the 25LS2521 address
+    /// comparator at DCREG 0E14 whose B inputs are the bus address,
+    /// `XBAI2`..`XBAI14`; its eighth pair is `GND` against `XBAI17`. So
+    /// each jumper says one bit of the controller's own address is a 1, and
+    /// the seven together are why the board answers at
+    /// [`crate::disk_controller::REGS`], `17377774` --- what
+    /// `sys/doc/disk.text` means by "The address can be changed by changing
+    /// jumpers". Without them those seven are open 74LS inputs and read
+    /// high anyway, so this is the address made definite rather than a
+    /// change of behaviour.
+    ///
+    /// The timeout enable is a change of behaviour. `J5-16` is `-TIMEOUT
+    /// ENB`, which is pin 6, the enable, of the 74LS124 at DCTMOT 0B04
+    /// section 1 and nothing else on the board. Open, it reads high, and by
+    /// the part's own sheet the output is then held high: `TIMEOUT.CLK`
+    /// never falls, the 74393 at 0C03 never counts, and no operation can
+    /// ever time out. The jumper grounds it, and the board has the watchdog
+    /// `sys/doc/disk.text` describes,
+    /// [`crate::disk_controller::TIMEOUT_NS`] long. The other section's
+    /// enable, pin 11, is on ground in the wire list, so the 2 us clock
+    /// needs no jumper.
+    ///
+    /// The fourth paragraph, the Xbus Power OK jumper `B5-3 : B5-4`, is
+    /// not here. Those are socket numbers, the numbering `dc.eco`'s own
+    /// wires are written in: `dc.wlr` has `B05@03-01(03)` --- logical pin 1
+    /// in socket 3 --- on `XBUS.POWER.OK`, which reaches the board from the
+    /// backplane at `CK1` and touches nothing else on it, and
+    /// `B05@03-02(04)` on `HI7`, so the jumper puts that 75452's two inputs
+    /// on the pull-up together and `TRIDENT.0.SEQUENCE/` stops waiting on
+    /// the backplane. Whether a board wrapped to the 10 December 1980 list
+    /// wants it is **unverified**: `dc.eco` conditions it on ECO 8 --- "the
+    /// wires under this are removed by ECO #8, so put that in first, then
+    /// come back and install this" --- and says in the same paragraph that
+    /// ECO 8 "does not apply to boards made to the older wirelist, where
+    /// part of ECO#8 is included in ECO#6", which the drawings already
+    /// carry. It makes no difference to this netlist either way: with one
+    /// pin on the board the net reads high with the jumper or without.
+    ///
     /// Applied by [`parse`] and not by [`parse_wired`]: the wire list is the
     /// board as wrapped, before the red wires, and `tests/cadrdc_netlist.rs`
     /// holds the wired netlist to the list and the parsed one to the
@@ -455,6 +500,14 @@ impl Netlist {
             ("GND", "UNIT2"),                           // ES2 : ET1
             ("GND", "UNIT1"),                           // ER2 : ES2
             ("GND", "UNIT0"),                           // EP2 : ER2
+            ("GND", "-TIMEOUT ENB"),                    // J5-16 : J5-41
+            ("HI1", "AD14"),                            // J5-1 : J5-2
+            ("HI1", "AD13"),                            // J5-3 : J5-4
+            ("HI1", "AD6"),                             // J5-5 : J5-6
+            ("HI1", "AD5"),                             // J5-7 : J5-8
+            ("HI1", "AD4"),                             // J5-9 : J5-10
+            ("HI1", "AD3"),                             // J5-11 : J5-12
+            ("HI1", "AD2"),                             // J5-13 : J5-14
         ],
     )];
 
