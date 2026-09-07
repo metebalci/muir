@@ -19,12 +19,11 @@
 //!    register's bits and MIT's command table, `DCDA` the disk address
 //!    counters, and `DCCCW` the channel command word.  **primary**
 //!
-//! Where the two disagree the drawings are the board.  Three places this model
+//! Where the two disagree the drawings are the board.  Two places this model
 //! is knowingly not the machine: the transfer completes inside the store to
 //! START rather than taking milliseconds, so the controller is never seen
-//! busy; the block counter in `STATUS<31:24>` is not modelled; and Read
-//! All and Write All, which move a track's raw bits, end with the timeout
-//! error rather than done, the model having no track format (see
+//! busy; and Read All and Write All, which move a track's raw bits, end
+//! with the timeout error rather than done, the model having no track format (see
 //! `Controller::start`; the three undocumented codes that enter those
 //! sectors with the channel turned round go the same way, while 14, 15 and
 //! the reserved `xxx7` do what the board does).  A written block goes where
@@ -177,15 +176,15 @@ impl Controller {
     /// The status word.  Every bit here is `DCSTS`'s own name for the signal
     /// on that Xbus line, and MIT's text says the same.
     ///
-    /// What is not modelled: `<31:24>` the block counter, `<23>` internal
-    /// parity, `<19:12>` the memory-parity, header, ECC, overrun, aborted
-    /// and start-block errors, `<8>` off-cylinder, `<5>` no unit selected
-    /// and `<4>` multiple units selected.  None of them can happen here,
+    /// What is not modelled: `<23>` internal parity, `<19:12>` the
+    /// memory-parity, header, ECC, overrun, aborted and start-block errors,
+    /// `<8>` off-cylinder, `<5>` no unit selected and `<4>` multiple units
+    /// selected.  None of them can happen here,
     /// and the boot PROM's `AWAIT-DRIVE-READY` requires bits 4, 5, 6, 8, 9
     /// and 10 to be clear before it will go on.  `<11>`, the timeout error,
     /// is what a command the model does not do ends with.
     pub fn status(&self) -> u32 {
-        let mut v = 0;
+        let mut v = self.block_counter() << 24;
         if self.read_compare_difference {
             v |= 1 << 22;
         }
@@ -240,6 +239,47 @@ impl Controller {
             v |= 1;
         }
         v
+    }
+
+    /// `STATUS<31:24>`: "The block-counter of the selected unit.  This
+    /// tells you its current rotational position.  Reading of this register
+    /// is not synchronized to its incrementation, so you must read it twice
+    /// and check that it came out the same both times."
+    ///
+    /// On the board it is the two 74LS569s at DCTRID 0B07 and 0B08, clocked
+    /// by `BLOCK.CLK^` at the trailing edge of each pulse on the drive's
+    /// composite sector/index line and cleared, synchronously, by `-UNIT 0
+    /// CLR BC` off the one-shot at 0B09, which only the index pulse
+    /// outlasts.  So the count steps to `k` as sector `k`'s pulse ends,
+    /// [`crate::disk_unit::SECTOR_PULSE_NS`] in, and holds the last sector's
+    /// number through the index pulse until that ends,
+    /// [`crate::disk_unit::INDEX_PULSE_NS`] in.  `tests/cadrdc_netlist.rs` reads
+    /// the board at both edges and `tests/disk.rs` holds this to the same
+    /// readings.  The spindle is the one [`crate::disk_unit::turn`] gives the drive
+    /// on the cable, with an index pulse at time zero of the machine's
+    /// clock: this controller has one drive, the multiplexor not being
+    /// modelled, so one spindle is the machine.  With no drive there are no
+    /// pulses; the board's counter holds whatever it last had, and here
+    /// that is zero.
+    ///
+    /// What reads it is CC's `DCHECK-BLOCK-COUNTER` in `sys/cc/dcheck.lisp`:
+    /// half a second of reads, expecting every value from 0 to 17 and no
+    /// other --- "Vandals: Yes, a value of 17. can appear here".  A 17 needs
+    /// an eighteenth pulse in the revolution, a seventeenth sector pulse in
+    /// the track's leftover after the index, which is what
+    /// `sys/doc/disk.text` describes: "17. sector pulses per track, or one
+    /// every 1164. bytes, with a little left over at the end of the track".
+    /// The drive on the cable, [`crate::disk_unit::Trident`], spaces seventeen
+    /// pulses evenly with the index as the first, so neither it nor this
+    /// counter ever shows 17.  **unverified**: whether the drive's index
+    /// pulse is separate from its seventeen sector pulses; Century Data's
+    /// description of the composite line would settle it, and the fix
+    /// would be the drive's, not this counter's.
+    fn block_counter(&self) -> u32 {
+        let Some(u) = &self.units[self.selected()] else { return 0 };
+        let n = u.geometry.blocks_per_track;
+        let (k, into) = crate::disk_unit::turn(n, 0, self.now);
+        if into < crate::disk_unit::pulse_ns(k) { (k + n - 1) % n } else { k }
     }
 
     /// `-XBUS.INTR`, which the bus interface carries to the cpu as `INT`.

@@ -780,6 +780,39 @@ fn blank() -> (Controller, Vec<u32>) {
     (d, vec![0; 1 << 16])
 }
 
+/// **The block counter turns with the spindle.** `STATUS<31:24>`: "The
+/// block-counter of the selected unit.  This tells you its current
+/// rotational position."  A T-300 turns at 3,600 rpm with seventeen sector
+/// pulses a revolution, so the count steps once every 980 us and wraps at
+/// 17.  On the board the step lands as each pulse ends and the clear as
+/// the index pulse ends, so the count is one behind for a pulse's width:
+/// `the_block_counter_follows_the_drives_sector_pulses` in
+/// `tests/cadrdc_netlist.rs` reads the netlist controller at these same
+/// offsets.  With no drive there are no pulses and the byte is zero.
+#[test]
+fn the_block_counter_turns_with_the_spindle() {
+    let (mut d, _main) = blank();
+    let sector = |k: u64| k * REVOLUTION_NS / 17;
+    // 100 us into each sector of a turn and a quarter: the pulse over.
+    for k in 0..21u64 {
+        d.advance(sector(k) + 100_000);
+        assert_eq!(d.status() >> 24, (k % 17) as u32, "sector {k}");
+    }
+    // 300 ns into sector 3, its pulse still on: the count is still 2.
+    d.advance(sector(3) + 300);
+    assert_eq!(d.status() >> 24, 2, "during a sector pulse");
+    // 2.5 us into the second turn's index pulse, longer than a sector
+    // pulse and not yet over: 16, the last sector's, until it ends.
+    d.advance(sector(17) + 2_500);
+    assert_eq!(d.status() >> 24, 16, "during the index pulse");
+    d.advance(sector(17) + 6_000);
+    assert_eq!(d.status() >> 24, 0, "after the index pulse");
+    // No drive on the selected unit: nothing to count.
+    let mut d = Controller::default();
+    d.advance(sector(5) + 100_000);
+    assert_eq!(d.status() >> 24, 0, "no drive");
+}
+
 /// **Reset takes effect in the store to the command register.** MIT:
 /// "0016 Reset. This stops the current transfer and resets the controller.
 /// This command takes effect as soon as it is stored in the command
