@@ -1490,9 +1490,22 @@ fn pci_tx_empt_pin(s: &State) -> bool {
 
 /// The status register, Table 8, with `-DCD` and `-DSR` as the pins hold
 /// them, asserted or not --- but in local loop back `-DTR` stands in for
-/// `-DCD`, as the sheet connects them; whether `SR6` shows the pin or the
-/// connection then is **unverified**, the sheet saying only that the
-/// inputs are ignored.
+/// `-DCD`, as the sheet connects them.
+///
+/// **The sheet looks self-contradictory here and is not.** Its local loop
+/// back list says both that "DTR is connected to DCD and RTS is connected
+/// to CTS" and that "The CTS, DCD, DSR and RxD inputs are ignored". Read as
+/// the *pins* being ignored and the internal connections standing in their
+/// place, the two agree, and that is the only reading under which the mode
+/// works: the sheet also says the chip is "conditioned to receive data when
+/// the -DCD input is low", so if local loop back left `-DCD` inactive the
+/// receiver would never run and a chip could not test itself. `SR6` shows
+/// the connection, which is what is done here and in `src/serial.rs`.
+///
+/// The stakes are near zero in any case --- nothing in the release drives
+/// the port, and the only thing that enters this mode is muir's own test
+/// --- but a reasoned reading beats a marker for a question no document
+/// will answer more clearly than this one already does.
 fn pci_status(s: &State, dcd: bool, dsr: bool) -> u8 {
     use crate::serial::status as sr;
     let dcd = if pci_local_loop(s) { pci_cr(s) & serial_cr::DTR != 0 } else { dcd };

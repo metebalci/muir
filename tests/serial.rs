@@ -96,6 +96,38 @@ fn reset_reads_zero_below_a_floating_upper_byte() {
     assert_eq!(b.read(STATUS | 0o10, 0), csr::FLOATING, "the same register at 76417x");
 }
 
+/// **Reset leaves the receive holding register unreadable, which is what
+/// makes its contents not matter.**
+///
+/// What the holding registers hold through a reset is not in Signetics'
+/// documentation, and `src/serial.rs` records the four routes that were
+/// checked and found silent. It is an undefined state rather than an
+/// unverified fact: the model has to choose, it chooses zero, and this is
+/// the test that makes the choice unobservable rather than merely believed.
+///
+/// `RxRDY` is clear from reset --- the sheet's Table 2 clears the status
+/// register, and with the command register clear the receiver is disabled,
+/// which "causes -RxRDY to go high (inactive)". So a program following the
+/// protocol never reads the register before the chip has filled it, and one
+/// that reads it anyway is reading a register the chip has not loaded. What
+/// it gets back is muir's choice and not the hardware's answer.
+#[test]
+fn nothing_can_read_a_character_the_chip_has_not_received() {
+    let mut b = IoBoard::default();
+    let status = b.read(STATUS, 0) & !csr::FLOATING;
+    assert_eq!(
+        status & muir::serial::status::RX_READY as u16,
+        0,
+        "RxRDY is clear from reset, so there is no character to read: {status:#o}"
+    );
+    // And it stays clear with nothing on the cable: a far end that has sent
+    // nothing cannot make one appear.
+    for _ in 0..4 {
+        let status = b.read(STATUS, 0) & !csr::FLOATING;
+        assert_eq!(status & muir::serial::status::RX_READY as u16, 0, "still nothing received");
+    }
+}
+
 /// **`serial.lisp` finds the chip.** `SERIAL-CHECK-EXISTENCE` writes 0 to
 /// the command register and reads it back, then `100`: "If IOB not wired
 /// for it, will read back all zero. If PCI not plugged in, will read back
