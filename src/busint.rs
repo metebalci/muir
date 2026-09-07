@@ -1754,6 +1754,24 @@ impl Busint {
     /// strobe's trailing edge loading its latch, the request lifted after
     /// the acknowledgement, `DBUB MASTER` clearing after that.
     pub fn debug_advance(&mut self, now: u64) {
+        // Nothing on the cable, nothing to do.  Every arm below asks for a
+        // `Debug` other than `Idle` --- the block that follows acts on
+        // `Selected` and `Granted`, the loop on `Strobe`, `Master` and
+        // `Releasing` --- so from `Idle` this function reaches none of
+        // them and returns having changed nothing.  Worth saying out loud
+        // because the engines call it twice a microcycle and a machine
+        // with no debugger on it is in `Idle` for every one of them: 400
+        // million calls over 200,000,000 microcycles of the System 100
+        // band, and `Debug::Idle` on all 400 million.
+        //
+        // The state and not `unibus_master`.  That flag is `LMUB MASTER`,
+        // which is cleared only where the debug master's `SACK` takes the
+        // Unibus away, so with no cable the processor becomes master once
+        // and stays it: true on 99.7% of those calls, and a condition that
+        // asks for it to be false is a condition that never fires.
+        if matches!(self.debug, Debug::Idle) {
+            return;
+        }
         // The processor's cycle ending while the debug master waits with its
         // `SACK` up: `LM NEED UB`, the 74S74 at REQUB 0B10, is cleared the
         // instant `-MEMRQ` rises --- `LMNEEDUB (EARLY)` on its clear ---
@@ -1784,8 +1802,13 @@ impl Busint {
         // stood still since it acknowledged --- on a stream, one whose
         // thread is late --- is asked again at an instant past the lift and
         // the release both, and must find the cable idle by then.
+        // Each arm leaves `self.debug` a different variant from the one it
+        // matched, so an arm taken is a step made and the arm that matches
+        // nothing is the end of the run.  Saying that with `break` rather
+        // than comparing the state against a copy of itself keeps a
+        // 48-byte enum and its derived `PartialEq` off a path the engines
+        // take twice a microcycle.
         loop {
-            let was = self.debug;
             match self.debug {
                 Debug::Strobe { until } if now >= until => {
                     self.debug_latch();
@@ -1796,10 +1819,7 @@ impl Busint {
                     self.debug = Debug::Releasing { until: self.debug_freed_at };
                 }
                 Debug::Releasing { until } if now >= until => self.debug = Debug::Idle,
-                _ => {}
-            }
-            if self.debug == was {
-                break;
+                _ => break,
             }
         }
     }
@@ -2481,5 +2501,97 @@ impl Busint {
         self.debug_out_timeout_at = r.u64()?;
         self.memory_next = r.u64()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Everything the board's model holds, as the checkpoint writes it:
+    /// [`Busint::save`] destructures the whole struct and writes every
+    /// field, so two equal snapshots are two equal models.
+    fn snapshot(b: &Busint) -> Vec<u8> {
+        let mut w = crate::checkpoint::Writer::new();
+        b.save(&mut w);
+        w.finish()
+    }
+
+    /// A board in the shape a machine with no debugger on it is in: the
+    /// cable idle, and the processor holding the Unibus with a cycle just
+    /// finished, which is where it sits for almost every microcycle of a
+    /// band run.
+    fn no_debugger() -> Busint {
+        let mut b = Busint::new(1);
+        b.unibus_master = true;
+        b.memrq_up_at = Some(1_000);
+        assert_eq!(b.debug, Debug::Idle);
+        b
+    }
+
+    /// A state to put the board in, with a name for the failure message.
+    type Step = (&'static str, fn(&mut Busint));
+
+    fn request() -> DebugRequest {
+        DebugRequest { strobe: DEBUG_ADDRESS, write: true, dbd: 0o377, hold_ns: 100 }
+    }
+
+    /// **`debug_advance` changes nothing while the cable is idle**, at any
+    /// instant and however often it is called.  This is what the early
+    /// return at the top of it claims, and the engines lean on it twice a
+    /// microcycle: over 200,000,000 microcycles of the System 100 band the
+    /// function is entered 400 million times and the state is `Idle` on
+    /// every one.
+    #[test]
+    fn debug_advance_changes_nothing_while_the_cable_is_idle() {
+        let mut b = no_debugger();
+        let before = snapshot(&b);
+        for now in [0, 999, 1_000, 1_001, 10_000, 1_000_000, u64::MAX / 2] {
+            b.debug_advance(now);
+            assert_eq!(snapshot(&b), before, "at {now} ns");
+        }
+        // And with the cable's `SACK` where a debugger would have put it,
+        // which is the only thing that makes the first block's conditions
+        // true, it is still `Idle` that decides.
+        b.debug_sack_at = 0;
+        let before = snapshot(&b);
+        b.debug_advance(2_000);
+        assert_eq!(snapshot(&b), before, "the SACK is not what holds it");
+    }
+
+    /// **Every state that is not `Idle` is a state `debug_advance` steps.**
+    /// So the early return may test for `Idle` and nothing wider: widen it
+    /// to any of these and the step it owes is skipped.
+    ///
+    /// `tests/chip.rs` catches four of the five against the netlist board.
+    /// `Granted` it does not --- the debug master is `Selected` when the
+    /// processor's cycle ends in every sequence that test runs --- so this
+    /// is the only thing holding that arm.
+    #[test]
+    fn debug_advance_steps_every_state_that_is_not_idle() {
+        let steps: [Step; 5] = [
+            ("Strobe", |b| b.debug = Debug::Strobe { until: 1_500 }),
+            ("Master", |b| {
+                b.debug =
+                    Debug::Master { since: 0, msyn: 0, ack: 0, answered: 0, until: 1_500, xbus: 0 }
+            }),
+            ("Releasing", |b| b.debug = Debug::Releasing { until: 1_500 }),
+            ("Selected", |b| {
+                b.debug_sack_at = 0;
+                b.debug = Debug::Selected;
+            }),
+            ("Granted", |b| {
+                b.debug_sack_at = 0;
+                b.debug = Debug::Granted { sack_at: 0 };
+            }),
+        ];
+        for (what, set) in steps {
+            let mut b = no_debugger();
+            b.debug_request = Some(request());
+            set(&mut b);
+            let before = snapshot(&b);
+            b.debug_advance(2_000);
+            assert_ne!(snapshot(&b), before, "{what} is a step and must be taken");
+        }
     }
 }
