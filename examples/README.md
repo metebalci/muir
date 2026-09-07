@@ -45,6 +45,13 @@ held to the count the program left in `VMA` --- the microcycles it ran divided
 by what one time round the loop costs --- because a machine that has stalled
 toggles fewer nets and looks *faster*.
 
+Neither program touches the disk, and the rate it prints against the
+machine's own 145 ns microcycle does not account for one. Unless `chip` is
+given `--disk-controller netlist`, a seek takes no time in muir where the
+hardware spent milliseconds running the microcode's polling loop, so a
+program that seeks does better against a CADR than this rate implies. See
+the note on `report` in `benchmark.rs`.
+
 ## What needs fetching
 
 `dcmicro`, `reconcile`, `trident-tables` and `benchmark` read only what is
