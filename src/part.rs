@@ -868,17 +868,29 @@ fn table(base: &str) -> Option<Pinout> {
         // switches.
         "P SIP1000-10" => p(0, &[2, 3, 4, 5, 6, 7, 8, 9, 10], PullUp, Family),
         // The Trident signal cable's terminator, `TRITERM` being MIT's own
-        // body name for it on DCTRSG, and the one part here with no
-        // datasheet at all: its resistance is **unverified**, and MIT's own
-        // files do not carry it either. `cadrdc/dc.prt` gives A03 and A05 a
-        // DIP type of `DUMMY` with no part number and no `VALUE:`, where a
-        // few rows further down the same list reads `2DUMMY 1 VALUE:.1 UF`
-        // for the capacitor at A10@02; `cadrdc/dc.wlr` marks all sixteen
-        // pins `RES` and every one of them 0.00 in both loading columns; and
-        // the six `TRITERM` bodies on the DM board in `cadrio/dm.stf` are
-        // the same valueless `DUMMY`. What would settle it is a value off a
-        // surviving board, or the Trident drive's own cable-termination
-        // figure. Nothing here turns on the number: only the geometry does.
+        // body name for it on DCTRSG.
+        //
+        // **Its components are MIT's, from `cadrpt/parts.64`**, Penny's
+        // whole-machine parts list of 16 April 1980, which draws every
+        // "dummy" body pin by pin. It assigns the board `DC dummies: 2 type
+        // B, 1 type C, 1 type D, 3 type J`, and the netlist has exactly two
+        // `TRITERM` (0A03, 0A05), two `16DUMMY` (0A09, 0C04) and three
+        // `RES4`, so the two type Bs are these. Type B is four 100 ohm on
+        // pins 1-16, 3-14, 5-12 and 7-10 and four 680 pF on 2-15, 4-13,
+        // 6-11 and 8-9. The other two are identified independently and
+        // agree with their own drawings: type C is 0A09, whose `20K`,
+        // `330 pF` and four `91` are `dctrid.drw`'s, and type D is 0C04,
+        // whose eight values are `dctmot.drw`'s.
+        //
+        // So it is not a terminator in the pull-up sense: it is a 100 ohm
+        // series resistor and a 680 pF shunt to the cable's ground return,
+        // a low-pass filter ahead of a Schmitt trigger, with the SIP doing
+        // the line termination. The earlier note here said the value was
+        // unverified and that MIT's files do not carry it; `dc.prt` and
+        // `dc.wlr` do not, and the parts list does.
+        //
+        // Nothing here turns on the number in any case: only the geometry
+        // does.
         // The geometry is not unverified, because the board's wiring
         // allows only one. Sixteen pins: the four bus-cable status lines
         // arrive on 1, 3, 5, 7 with the cable's ground returns on 2, 4, 6, 8,

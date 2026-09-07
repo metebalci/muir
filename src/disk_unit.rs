@@ -846,6 +846,21 @@ impl Trident {
     /// all, and for how long, is Century Data's to say, and their
     /// specification has not reached us.
     ///
+    /// **And MIT's own text points the other way on the attention.** This
+    /// raises `attention` for a same-cylinder seek, where `disk.text` on
+    /// `STATUS<2>` says it "indicates seek completion, recalibrate
+    /// completion, initial loading of the heads, seek incomplete error, or
+    /// an emergency head retract.  "Implicit" seeks do not cause
+    /// attention", and under command 0004 that "the controller always
+    /// initiates a seek **if necessary** at the start of a data transfer
+    /// command". What MIT counts as an implicit seek is defined nowhere in
+    /// that file, so this is not settled either way; it is the nearest
+    /// thing to a statement on it and it is against the choice made here.
+    /// The cost of being wrong is small: a spare attention, cleared by At
+    /// Ease, and a spurious interrupt only for a program that sets
+    /// Attention Interrupt Enable, which microcode 323 and the driver do
+    /// not.
+    ///
     /// MIT's controller microcode does not decide it either way. Every
     /// read, write, read-all and write-all begins with a cylinder tag ---
     /// `cadrdc/newdsk.31` at 000, 100, 200 and 300, "Cylinder to DBUS,
