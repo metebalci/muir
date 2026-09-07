@@ -146,7 +146,7 @@ use muir::netlist;
 use muir::part::Level;
 use muir::prompt::{Command, Memory};
 use muir::rtl::Rtl;
-use muir::terminal::keyboard::Keyboard;
+use muir::terminal::keyboard::{Keyboard, Mapping};
 use muir::terminal::mouse::Mouse;
 use muir::terminal::{Frame, Terminal};
 
@@ -474,8 +474,9 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <this>[
             [--debuggee-terminal [<endpoint>]]
             [--disk-controller netlist|model]
             [--disk-pack <image>[,<unit>][,ro]] [--io-board netlist|model]
-            [--main-memory netlist|model] [--main-memory-boards <n>]
-            [--no-auto-boot] [--prom <file>] [--resume <file>]
+            [--keyboard <file>] [--main-memory netlist|model]
+            [--main-memory-boards <n>] [--no-auto-boot] [--prom <file>]
+            [--resume <file>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
             [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
@@ -604,6 +605,19 @@ A simulator of the MIT CADR Lisp Machine.
                                drive with no pack in it and a boot that
                                waits on it for ever]
   --io-board netlist|model     chip: the I/O board. [default: netlist]
+  --keyboard <file>            what a viewer's keysyms mean on the Lisp
+                               Machine keyboard: `key <keysym> <key>` a
+                               line, and `prefix <keysym> <keysym> <key>`
+                               for a key reached by pressing one and then
+                               another. It goes over muir's built-in
+                               mapping rather than replacing it, so a file
+                               naming one key leaves the rest as they were,
+                               and the prompt's `keys` prints what is in
+                               force. MUIR_KEYS names a file in place of
+                               the two looked for. [default: .muirkeys in
+                               the directory muir was run from, else in the
+                               home directory; without one the built-in
+                               mapping stands]
   --main-memory netlist|model  chip: main memory as MIT's board or as
                                rtl's model of it. [default: netlist]
   --main-memory-boards <n>     how many 64K-word boards, 1 to 60: main
@@ -781,6 +795,77 @@ fn pack_choice(pack: Option<&Pack>) -> Option<(PathBuf, usize, bool)> {
 
 /// What a file of flags is called where muir looks for one.
 const RC: &str = ".muirrc";
+
+/// The keyboard mapping this run's terminal uses, settled once from the
+/// flags and read by every place that makes a [`Keyboard`].
+///
+/// One run has one mapping --- it is what a viewer's keysyms mean, and a
+/// run serves one viewer's keyboard --- so it is here rather than
+/// threaded through the five timing loops and the prompt, none of which
+/// would do anything with it but pass it on.
+static KEYS_IN_FORCE: std::sync::OnceLock<Mapping> = std::sync::OnceLock::new();
+
+/// The keyboard mapping in force, as the prompt's `keys` prints it: what
+/// each of a viewer's keysyms means, and where the mapping came from.
+fn keys_in_force() -> String {
+    let m = KEYS_IN_FORCE.get().cloned().unwrap_or_default();
+    let from = match m.source() {
+        Some(p) => format!("{}, over the built-in mapping", shown(p)),
+        None => "the built-in mapping".to_string(),
+    };
+    format!("keyboard mapping: {from}\n{}", m.show())
+}
+
+/// A keyboard on the mapping this run settled on.
+fn a_keyboard() -> Keyboard {
+    Keyboard::with_mapping(KEYS_IN_FORCE.get().cloned().unwrap_or_default())
+}
+
+/// The keyboard mapping a run reads, beside its flags: `.muirkeys` in the
+/// directory muir was run from, else `.muirkeys` in the home directory.
+const KEYS: &str = ".muirkeys";
+
+/// The keyboard mapping file this run reads, and whether it was asked for
+/// by name.
+///
+/// `--keyboard` if it is given, else `MUIR_KEYS`, else [`KEYS`] in the
+/// directory muir was run from, else [`KEYS`] in the home directory ---
+/// the same order and the same rule as [`config_path`], the first of them
+/// there and not all of them. A file asked for by name must be there; the
+/// ones looked for need not be, and most runs have none, which leaves the
+/// built-in mapping standing.
+fn keyboard_path(named: Option<&Path>) -> Option<(PathBuf, bool)> {
+    if let Some(p) = named {
+        return Some((p.to_path_buf(), true));
+    }
+    if let Some(from_env) = std::env::var_os("MUIR_KEYS") {
+        return Some((PathBuf::from(from_env), false));
+    }
+    let here = PathBuf::from(KEYS);
+    if here.exists() {
+        return Some((here, false));
+    }
+    let home = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(KEYS))?;
+    home.exists().then_some((home, false))
+}
+
+/// The mapping this run's terminal uses: the built-in one, with whatever
+/// [`keyboard_path`] found over it.  A file that cannot be read or that
+/// says something muir does not understand stops the run rather than
+/// leaving the user with a keyboard that is quietly not the one they
+/// wrote.
+fn keyboard_mapping(named: Option<&Path>) -> (Mapping, String) {
+    let Some((path, _)) = keyboard_path(named) else {
+        return (Mapping::default(), format!("built in; no {KEYS} found (--keyboard <file>)"));
+    };
+    match Mapping::from_file(&path) {
+        Ok(m) => {
+            let line = format!("{}, over the built-in one", shown(&path));
+            (m, line)
+        }
+        Err(e) => usage(&format!("--keyboard {e}")),
+    }
+}
 
 /// The file of flags this run reads, and whether it was asked for by name.
 ///
@@ -991,8 +1076,8 @@ fn time_lashup(
     // debuggee's at the right, timed by the debugger's clock, which the
     // lashup holds the debuggee's to within a generator cycle.
     let mut capture = capture.map(|(path, time)| (path, Recorder::pair(time)));
-    let (mut keyboard, mut mouse) = (Keyboard::new(), Mouse::new());
-    let (mut b_keyboard, mut b_mouse) = (Keyboard::new(), Mouse::new());
+    let (mut keyboard, mut mouse) = (a_keyboard(), Mouse::new());
+    let (mut b_keyboard, mut b_mouse) = (a_keyboard(), Mouse::new());
     let mut last_poll = Instant::now();
     let mut ran = 0;
     let (mut a_cycles, mut b_cycles) = (0u64, 0u64);
@@ -1074,7 +1159,7 @@ fn time_remote(name: &str, mut remote: Remote<Rtl>, stop: Stop, terminal: Option
     let t = Instant::now();
     let mut halt = None;
     let mut terminal = terminal;
-    let mut keyboard = Keyboard::new();
+    let mut keyboard = a_keyboard();
     let mut mouse = Mouse::new();
     let mut last_poll = Instant::now();
     let mut ran = 0;
@@ -1161,7 +1246,7 @@ fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>,
     let mut ran = 0;
     let mut halt = None;
     let mut terminal = terminal;
-    let mut keyboard = Keyboard::new();
+    let mut keyboard = a_keyboard();
     let mut mouse = Mouse::new();
     let mut last_poll = Instant::now();
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
@@ -1318,6 +1403,7 @@ fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>,
                         }
                     }
                     Ok(Some(Command::Info)) => print!("{setup}"),
+                    Ok(Some(Command::Keys)) => print!("{}", keys_in_force()),
                     Ok(Some(Command::Screenshot(path))) => {
                         let path = path.unwrap_or_else(|| timestamped("png"));
                         write_screenshot(&path, &e.machine().simpletv);
@@ -1993,7 +2079,7 @@ fn time_chip(
         None
     };
     let mut terminal = terminal;
-    let (mut keyboard, mut mouse) = (Keyboard::new(), Mouse::new());
+    let (mut keyboard, mut mouse) = (a_keyboard(), Mouse::new());
     let mut last_poll = Instant::now();
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
     let mut last_check = Instant::now();
@@ -2112,6 +2198,7 @@ fn time_chip(
                     },
                     Ok(Some(Command::Pc)) => say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu)),
                     Ok(Some(Command::Info)) => print!("{setup}"),
+                    Ok(Some(Command::Keys)) => print!("{}", keys_in_force()),
                     Ok(Some(Command::Screenshot(path))) => {
                         let path = path.unwrap_or_else(|| timestamped("png"));
                         write_screenshot(&path, &far.buses.machine.simpletv);
@@ -2201,7 +2288,7 @@ fn time_chip_debuggee(
     let t = Instant::now();
     let prom_enabled = |c: &Chip| c.net(promdisable) != Level::High;
     let mut terminal = terminal;
-    let (mut keyboard, mut mouse) = (Keyboard::new(), Mouse::new());
+    let (mut keyboard, mut mouse) = (a_keyboard(), Mouse::new());
     let mut last_poll = Instant::now();
     let mut checked = 0;
     catch_interrupts();
@@ -2252,6 +2339,7 @@ fn main() {
     let mut auto_boot = true;
     let mut checkpoint: Option<PathBuf> = None;
     let mut prom_file: Option<PathBuf> = None;
+    let mut keyboard_file: Option<PathBuf> = None;
     let mut resume: Option<PathBuf> = None;
     let mut stop_at: Option<u16> = None;
     let mut stop_at_prom: Option<u16> = None;
@@ -2455,6 +2543,10 @@ fn main() {
             (None, "-c" | "--config") => {
                 args.next();
             }
+            (None, "--keyboard") => match args.next() {
+                Some(path) => keyboard_file = Some(PathBuf::from(path)),
+                None => usage("--keyboard wants a file of key bindings"),
+            },
             (None, "--no-auto-boot") => auto_boot = false,
             (None, "--prom") => match args.next() {
                 Some(path) => prom_file = Some(PathBuf::from(path)),
@@ -2646,6 +2738,10 @@ fn main() {
 
     // The boot PROM, before the setup: the setup says which one it is.
     let prom = boot_prom(prom_file.as_deref());
+    // What a viewer's keysyms mean on the Lisp Machine keyboard, which is
+    // the one part of it that is muir's own and so the user's to change.
+    let (keyboard_map, keyboard_said) = keyboard_mapping(keyboard_file.as_deref());
+    let _ = KEYS_IN_FORCE.set(keyboard_map);
 
     // What this run is: said once here, and again by the prompt's `info`.
     let setup = {
@@ -2727,6 +2823,7 @@ fn main() {
         )
         .unwrap();
         writeln!(s, "terminal: {}", terminal_line(&terminal, &no_terminal, listen.addr)).unwrap();
+        writeln!(s, "keyboard: {keyboard_said}").unwrap();
         if debuggee {
             let pack = match debuggee_pack.as_ref() {
                 Some(p) => format!("pack {}", shown(&p.path)),

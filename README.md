@@ -220,6 +220,15 @@ meaning: RFB's `None` security is the only type offered, so a viewer needs
 no password. A port that is named there is bound as it stands, and the run
 stops rather than serving a viewer somewhere it was not told to look.
 
+The Lisp Machine keyboard is not a keyboard anyone has: 31 named keys and 11
+shifting keys, against a viewer sending X11 keysyms from a PC or a Mac. What
+a keysym means here is therefore a choice and not a fact, so it is a file ---
+`--keyboard`, or `.muirkeys` beside `.muirrc` --- over a built-in mapping
+that needs no configuration. `key <keysym> <key>` is one host key; `prefix
+<keysym> <keysym> <key>` is one pressed after another, which is how Greek,
+Top and the rest are reached on a keyboard with no spare keys for them. The
+prompt's `keys` prints the mapping in force.
+
 `--debug-in-process` is the two-machine lashup, both machines in one process.
 A second machine runs beside the one you started, both debug cables between
 them, each machine's DBGOUT on the other's DBGIN, as MIT ran two CADRs. The

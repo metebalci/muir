@@ -26,14 +26,23 @@
 //! machine knows the status of all keys." A VNC viewer sends the opposite
 //! --- X11 keysyms with the shift already applied, `A` and not `shift, a`
 //! --- so [`Keyboard::key`] has to find the position and plane that make
-//! that character and hold or release the shift keys to match. That is
-//! the one piece of invention here, and it is confined to one function.
+//! that character and hold or release the shift keys to match.
+//!
+//! **What a keysym means is the one piece of invention here, and it is
+//! the user's to change.** No keyboard anyone has resembles this one: it
+//! has 31 named keys and 11 shifting keys, and a host keyboard has no key
+//! called Greek, Top or Hand Left. So which host key stands for which is
+//! a choice rather than a fact, and it is [`Mapping`] --- data, read from
+//! `default.keys` beside this file, and from the user's own on top of it.
+//! Everything under it is MIT's.
 //!
 //! What reaches the I/O board is the same 24-bit word by either route:
 //! [`Keyboard::deliver`] presses it into the behavioural board, and
 //! `crate::terminal::cable` clocks it down the wire into the netlist one.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::ioboard::IoBoard;
 
@@ -86,6 +95,23 @@ pub enum Shift {
     AltLock = 8,
     ModeLock = 9,
     Repeat = 10,
+}
+
+/// MIT's own name for a shifting key, as the keyboard mapping writes it.
+pub fn shift_name(s: Shift) -> &'static str {
+    match s {
+        Shift::Shift => "Shift",
+        Shift::Greek => "Greek",
+        Shift::Top => "Top",
+        Shift::CapsLock => "Caps Lock",
+        Shift::Control => "Control",
+        Shift::Meta => "Meta",
+        Shift::Super => "Super",
+        Shift::Hyper => "Hyper",
+        Shift::AltLock => "Alt Lock",
+        Shift::ModeLock => "Mode Lock",
+        Shift::Repeat => "Repeat",
+    }
 }
 
 /// What a position on the keyboard is, in MIT's table.
@@ -274,69 +300,393 @@ pub const FUNCTION_KEYS: [&str; 12] = [
     "Quote",
 ];
 
-/// The position a keysym is on, and whether it wants the shift plane.
-/// `None` for a keysym this keyboard has nothing for.
-///
-/// A printable ASCII keysym is its own code, and is looked for on plane 0
-/// and plane 1 of every character key; a key may give it on either, `(`
-/// being unshifted at 132 and shifted at 71, and both are returned so
-/// that [`Keyboard::key`] can pick the one that fits the shift the viewer
-/// is holding.
+/// The built-in mapping, read once: what [`positions`] and [`modifier`]
+/// answer for, and what a run starts from before any file is read.
+static BUILT_IN: LazyLock<Mapping> = LazyLock::new(Mapping::built_in);
+
+/// The position a keysym is on in the **built-in** mapping, and whether
+/// it wants the shift plane.  [`Mapping::positions`] is the same question
+/// asked of the mapping a run is actually using.
 pub fn positions(keysym: u32) -> Vec<(u8, bool)> {
-    use keysym::*;
-    if (0x20..=0x7e).contains(&keysym) {
-        let c = keysym as u8;
-        let mut out = Vec::new();
-        for (p, k) in TABLE.iter().enumerate() {
-            if let Key::Char(plain, shifted) = k {
-                if *plain == c {
-                    out.push((p as u8, false));
+    BUILT_IN.positions(keysym)
+}
+
+/// The shifting key a modifier keysym is in the built-in mapping, and
+/// which of its two positions: left or right.
+pub fn modifier(keysym: u32) -> Option<(Shift, usize)> {
+    BUILT_IN.modifier(keysym)
+}
+
+// --- The keyboard mapping ---------------------------------------------------
+
+/// muir's built-in keyboard mapping, in the form a user writes.
+///
+/// This is the whole of the mapping: [`Mapping::default`] is this text
+/// read by the same parser a file goes through, so anything the default
+/// says a file may say, and a file may replace any line of it.
+pub const DEFAULT_MAPPING: &str = include_str!("default.keys");
+
+/// What a viewer's keysyms mean on the Lisp Machine keyboard.
+///
+/// The key positions and the word on the cable are MIT's; this is not.
+/// A viewer sends X11 keysyms from whatever keyboard the person has, and
+/// the CADR has 31 named keys and 11 shifting keys that no such keyboard
+/// has a key for, so which host key stands for which is a choice, and it
+/// is the user's to make rather than muir's to settle.
+///
+/// Two kinds of binding:
+///
+/// - a **key**, one host keysym standing for one key;
+/// - a **prefix**, a host keysym that sends nothing on its own and gives
+///   the keysym after it a meaning of its own. There are more keys on
+///   this keyboard than a host has spare, and a prefix is how the rest
+///   are reached.
+///
+/// A printable ASCII keysym that no binding names is looked for on MIT's
+/// table by the character it is, which is where the letters and digits
+/// come from; nothing needs to bind those.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mapping {
+    /// A keysym on its own: the position it presses, and whether the
+    /// character it wants is on the shifted plane.
+    key: BTreeMap<u32, (u8, bool)>,
+    /// A prefix keysym and the keysym after it.
+    after: BTreeMap<(u32, u32), (u8, bool)>,
+    /// Which file this was read from, for the run to say.
+    source: Option<PathBuf>,
+}
+
+/// The built-in mapping: what a run uses when no file says otherwise.
+impl Default for Mapping {
+    fn default() -> Mapping {
+        BUILT_IN.clone()
+    }
+}
+
+impl Mapping {
+    /// Nothing bound at all, which only [`Mapping::parse`] starts from.
+    fn empty() -> Mapping {
+        Mapping { key: BTreeMap::new(), after: BTreeMap::new(), source: None }
+    }
+
+    /// The built-in mapping alone.
+    pub fn built_in() -> Mapping {
+        Mapping::parse(DEFAULT_MAPPING).expect("muir's built-in keyboard mapping parses")
+    }
+
+    /// A mapping from `text` and nothing else --- what the built-in one
+    /// is read by, and what a test uses to hold one binding on its own.
+    pub fn parse(text: &str) -> Result<Mapping, String> {
+        let mut m = Mapping::empty();
+        m.read_into(text)?;
+        Ok(m)
+    }
+
+    /// The built-in mapping with `text` over it: a line of the file
+    /// replaces the binding for that keysym, and every keysym the file
+    /// says nothing about keeps the one it had.
+    pub fn read(text: &str) -> Result<Mapping, String> {
+        let mut m = Mapping::built_in();
+        m.read_into(text)?;
+        Ok(m)
+    }
+
+    /// The mapping this run uses: the built-in one, with the file over it
+    /// if there is one.  The file's path is kept so the run can say which
+    /// it read.
+    pub fn from_file(path: &Path) -> Result<Mapping, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut m = Mapping::read(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        m.source = Some(path.to_path_buf());
+        Ok(m)
+    }
+
+    /// The file this mapping was read from, if it was read from one.
+    pub fn source(&self) -> Option<&Path> {
+        self.source.as_deref()
+    }
+
+    fn read_into(&mut self, text: &str) -> Result<(), String> {
+        for (n, line) in text.lines().enumerate() {
+            let at = |e: String| format!("line {}: {e}", n + 1);
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (word, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+            let rest = rest.trim();
+            match word {
+                "key" => {
+                    let (sym, key) = two(rest).map_err(&at)?;
+                    let sym = keysym_of(sym).map_err(&at)?;
+                    let bound = key_of(key).map_err(&at)?;
+                    self.key.insert(sym, bound);
                 }
-                if *shifted == c && shifted != plain {
-                    out.push((p as u8, true));
+                "prefix" => {
+                    let (first, rest) = two(rest).map_err(&at)?;
+                    let (second, key) = two(rest).map_err(&at)?;
+                    let first = keysym_of(first).map_err(&at)?;
+                    let second = keysym_of(second).map_err(&at)?;
+                    let bound = key_of(key).map_err(&at)?;
+                    self.after.insert((first, second), bound);
+                }
+                other => {
+                    return Err(at(format!("{other} is not `key` or `prefix`")));
                 }
             }
         }
-        return out;
+        // A keysym is a key or a prefix, never both: the first press
+        // would have to be two things at once.
+        for (sym, _) in self.after.keys() {
+            if self.key.contains_key(sym) {
+                return Err(format!(
+                    "{} is bound as a key and used as a prefix",
+                    keysym_name(*sym)
+                ));
+            }
+        }
+        Ok(())
     }
-    let name = match keysym {
-        RETURN | KP_ENTER => "Return",
-        TAB => "Tab",
-        BACKSPACE | DELETE => "Rubout",
-        LINEFEED => "Line",
-        ESCAPE => "Alt Mode",
-        HELP => "Help",
-        BREAK => "Break",
-        CANCEL => "Abort",
-        END => "End",
-        PAUSE => "Hold Output",
-        F1..=F12 => FUNCTION_KEYS[(keysym - F1) as usize],
-        _ => return Vec::new(),
-    };
-    named(name).map(|p| vec![(p, false)]).unwrap_or_default()
+
+    /// The position a keysym is on, and whether it wants the shift plane,
+    /// as [`Keyboard::key`] asks.
+    ///
+    /// A binding first; failing that, a printable ASCII keysym is looked
+    /// for on plane 0 and plane 1 of every character key of MIT's table,
+    /// where a key may give it on either --- `(` being unshifted at 132
+    /// and shifted at 71 --- and both are returned so that the one
+    /// fitting the shift the viewer holds can be picked.
+    pub fn positions(&self, keysym: u32) -> Vec<(u8, bool)> {
+        if let Some(&bound) = self.key.get(&keysym) {
+            return vec![bound];
+        }
+        character_positions(keysym)
+    }
+
+    /// The shifting key a keysym is, and which of its positions: 0 for
+    /// the left of a pair, 1 for the right.
+    pub fn modifier(&self, keysym: u32) -> Option<(Shift, usize)> {
+        let &(position, _) = self.key.get(&keysym)?;
+        let Key::Shift(s) = TABLE[position as usize] else { return None };
+        let side = shifting(s).iter().position(|&p| p == position).unwrap_or(0);
+        Some((s, side))
+    }
+
+    /// Whether a keysym sends nothing on its own and gives the keysym
+    /// after it a meaning.
+    pub fn is_prefix(&self, keysym: u32) -> bool {
+        self.after.keys().any(|&(first, _)| first == keysym)
+    }
+
+    /// What `keysym` means after `prefix`.
+    fn after_prefix(&self, prefix: u32, keysym: u32) -> Option<(u8, bool)> {
+        self.after.get(&(prefix, keysym)).copied()
+    }
+
+    /// Every position any binding reaches: what can be typed at all.
+    pub fn reachable(&self) -> BTreeSet<u8> {
+        self.key.values().chain(self.after.values()).map(|&(p, _)| p).collect()
+    }
+
+    /// The mapping in force, a line a binding, for a user who cannot type
+    /// a key and wants to know what would.
+    pub fn show(&self) -> String {
+        let mut s = String::new();
+        for (sym, &(p, shifted)) in &self.key {
+            s.push_str(&format!("  {:<18} {}\n", keysym_name(*sym), key_name(p, shifted)));
+        }
+        for (&(first, second), &(p, shifted)) in &self.after {
+            s.push_str(&format!(
+                "  {:<18} {}\n",
+                format!("{} {}", keysym_name(first), keysym_name(second)),
+                key_name(p, shifted)
+            ));
+        }
+        s
+    }
 }
 
-/// The shifting key a modifier keysym is, and which of its two positions:
-/// left or right.
-pub fn modifier(keysym: u32) -> Option<(Shift, usize)> {
-    use keysym::*;
-    Some(match keysym {
-        SHIFT_L => (Shift::Shift, 0),
-        SHIFT_R => (Shift::Shift, 1),
-        CONTROL_L => (Shift::Control, 0),
-        CONTROL_R => (Shift::Control, 1),
-        // A PC keyboard's Alt is where a Lisp Machine's Meta is, and every
-        // viewer sends it as Alt.
-        META_L | ALT_L => (Shift::Meta, 0),
-        META_R | ALT_R => (Shift::Meta, 1),
-        SUPER_L => (Shift::Super, 0),
-        SUPER_R => (Shift::Super, 1),
-        HYPER_L => (Shift::Hyper, 0),
-        HYPER_R => (Shift::Hyper, 1),
-        CAPS_LOCK => (Shift::CapsLock, 0),
-        _ => return None,
-    })
+/// A printable ASCII keysym on MIT's table, by the character it is.
+fn character_positions(keysym: u32) -> Vec<(u8, bool)> {
+    if !(0x20..=0x7e).contains(&keysym) {
+        return Vec::new();
+    }
+    let c = keysym as u8;
+    let mut out = Vec::new();
+    for (p, k) in TABLE.iter().enumerate() {
+        if let Key::Char(plain, shifted) = k {
+            if *plain == c {
+                out.push((p as u8, false));
+            }
+            if *shifted == c && shifted != plain {
+                out.push((p as u8, true));
+            }
+        }
+    }
+    out
 }
+
+/// A line's first word and the rest of it, both wanted.
+fn two(rest: &str) -> Result<(&str, &str), String> {
+    match rest.split_once(char::is_whitespace) {
+        Some((a, b)) if !b.trim().is_empty() => Ok((a, b.trim())),
+        _ => Err(format!("wants a keysym and what it means, not {rest:?}")),
+    }
+}
+
+/// A keysym as the mapping writes it: an X11 name, a single printable
+/// character, or a number in decimal or `0x` hexadecimal.
+fn keysym_of(word: &str) -> Result<u32, String> {
+    if let Some(&(_, sym)) = KEYSYM_NAMES.iter().find(|(n, _)| n.eq_ignore_ascii_case(word)) {
+        return Ok(sym);
+    }
+    let mut chars = word.chars();
+    if let (Some(c), None) = (chars.next(), chars.next())
+        && (' '..='~').contains(&c)
+    {
+        return Ok(c as u32);
+    }
+    if let Some(hex) = word.strip_prefix("0x") {
+        return u32::from_str_radix(hex, 16).map_err(|_| format!("{word} is no keysym"));
+    }
+    word.parse::<u32>().map_err(|_| format!("{word} is no keysym"))
+}
+
+/// A key as the mapping writes it: one of MIT's names for a named key, a
+/// shifting key by name with `Left` or `Right` before it where there are
+/// two, or the character a character key gives.
+fn key_of(word: &str) -> Result<(u8, bool), String> {
+    if let Some(p) =
+        TABLE.iter().position(|k| matches!(k, Key::Named(n) if n.eq_ignore_ascii_case(word)))
+    {
+        return Ok((p as u8, false));
+    }
+    let (side, name) = match word.split_once(char::is_whitespace) {
+        Some((first, rest)) if first.eq_ignore_ascii_case("left") => (0, rest.trim()),
+        Some((first, rest)) if first.eq_ignore_ascii_case("right") => (1, rest.trim()),
+        _ => (0, word),
+    };
+    if let Some(s) = SHIFTS.iter().find(|s| shift_name(**s).eq_ignore_ascii_case(name)) {
+        let at = shifting(*s);
+        let p = at.get(side).or(at.first()).copied();
+        return p.map(|p| (p, false)).ok_or_else(|| format!("{name} is on no position"));
+    }
+    let mut chars = word.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        let found = character_positions(c as u32);
+        if let Some(&bound) = found.first() {
+            return Ok(bound);
+        }
+    }
+    Err(format!("{word} is no key of this keyboard"))
+}
+
+/// What to call a position, the way the mapping writes it.
+fn key_name(position: u8, shifted: bool) -> String {
+    match TABLE[position as usize] {
+        Key::Named(n) => n.to_string(),
+        Key::Shift(s) => {
+            let at = shifting(s);
+            let side = at.iter().position(|&p| p == position).unwrap_or(0);
+            if at.len() > 1 {
+                format!("{} {}", if side == 0 { "Left" } else { "Right" }, shift_name(s))
+            } else {
+                shift_name(s).to_string()
+            }
+        }
+        Key::Char(plain, up) => (if shifted { up } else { plain } as char).to_string(),
+        Key::None => format!("position {position:o}"),
+    }
+}
+
+/// What to call a keysym: its X11 name, the character it is, or its
+/// number.
+fn keysym_name(keysym: u32) -> String {
+    if let Some(&(name, _)) = KEYSYM_NAMES.iter().find(|(_, s)| *s == keysym) {
+        return name.to_string();
+    }
+    match char::from_u32(keysym) {
+        Some(c) if (' '..='~').contains(&c) => c.to_string(),
+        _ => format!("{keysym:#x}"),
+    }
+}
+
+/// The eleven shifting keys, for reading a name back.
+const SHIFTS: [Shift; 11] = [
+    Shift::Shift,
+    Shift::Greek,
+    Shift::Top,
+    Shift::CapsLock,
+    Shift::Control,
+    Shift::Meta,
+    Shift::Super,
+    Shift::Hyper,
+    Shift::AltLock,
+    Shift::ModeLock,
+    Shift::Repeat,
+];
+
+/// The X11 keysym names the mapping understands, from `X11/keysymdef.h`:
+/// the keys a host keyboard has that this one might want, and the
+/// function keys and arrows a mapping is likely to reach for.  A keysym
+/// with no name here is still written as a number.
+const KEYSYM_NAMES: &[(&str, u32)] = &[
+    ("BackSpace", 0xff08),
+    ("Tab", 0xff09),
+    ("Linefeed", 0xff0a),
+    ("Return", 0xff0d),
+    ("Pause", 0xff13),
+    ("Scroll_Lock", 0xff14),
+    ("Escape", 0xff1b),
+    ("Home", 0xff50),
+    ("Left", 0xff51),
+    ("Up", 0xff52),
+    ("Right", 0xff53),
+    ("Down", 0xff54),
+    ("Prior", 0xff55),
+    ("Next", 0xff56),
+    ("End", 0xff57),
+    ("Begin", 0xff58),
+    ("Print", 0xff61),
+    ("Insert", 0xff63),
+    ("Menu", 0xff67),
+    ("Cancel", 0xff69),
+    ("Help", 0xff6a),
+    ("Break", 0xff6b),
+    ("Mode_switch", 0xff7e),
+    ("Num_Lock", 0xff7f),
+    ("KP_Enter", 0xff8d),
+    ("F1", 0xffbe),
+    ("F2", 0xffbf),
+    ("F3", 0xffc0),
+    ("F4", 0xffc1),
+    ("F5", 0xffc2),
+    ("F6", 0xffc3),
+    ("F7", 0xffc4),
+    ("F8", 0xffc5),
+    ("F9", 0xffc6),
+    ("F10", 0xffc7),
+    ("F11", 0xffc8),
+    ("F12", 0xffc9),
+    ("F13", 0xffca),
+    ("F14", 0xffcb),
+    ("F15", 0xffcc),
+    ("Shift_L", 0xffe1),
+    ("Shift_R", 0xffe2),
+    ("Control_L", 0xffe3),
+    ("Control_R", 0xffe4),
+    ("Caps_Lock", 0xffe5),
+    ("Meta_L", 0xffe7),
+    ("Meta_R", 0xffe8),
+    ("Alt_L", 0xffe9),
+    ("Alt_R", 0xffea),
+    ("Super_L", 0xffeb),
+    ("Super_R", 0xffec),
+    ("Hyper_L", 0xffed),
+    ("Hyper_R", 0xffee),
+    ("ISO_Level3_Shift", 0xfe03),
+    ("Delete", 0xffff),
+];
 
 /// How many words wait to go down the cable while the software is not
 /// reading the keyboard.  The keyboard's own firmware has a shift register
@@ -369,11 +719,33 @@ pub struct Keyboard {
     /// Positions the viewer has down, so that a key up is sent for each
     /// and a shift the viewer holds is not sent twice.
     down: Vec<u8>,
+    /// What a viewer's keysyms mean here.
+    map: Mapping,
+    /// A prefix keysym pressed and not yet answered: the next keysym is
+    /// looked up behind it rather than on its own.
+    prefix: Option<u32>,
+    /// Shifting keys held for the one key that follows them, which is
+    /// what a prefix naming a shifting key does.
+    latched: Vec<u8>,
+    /// Keysyms whose next release is to be dropped: a key the terminal
+    /// has already sent whole, tapped rather than held.
+    tapped: Vec<u32>,
 }
 
 impl Keyboard {
+    /// A keyboard on the built-in mapping.
     pub fn new() -> Keyboard {
-        Keyboard::default()
+        Keyboard::with_mapping(BUILT_IN.clone())
+    }
+
+    /// A keyboard on `map`.
+    pub fn with_mapping(map: Mapping) -> Keyboard {
+        Keyboard { map, ..Keyboard::default() }
+    }
+
+    /// The mapping this keyboard is using.
+    pub fn mapping(&self) -> &Mapping {
+        &self.map
     }
 
     /// Whether a shifting key is down, at either of its positions.
@@ -401,18 +773,107 @@ impl Keyboard {
         }
     }
 
+    /// The key at `position` pressed and released at once, with the
+    /// Shift key worked around it when the plane it wants is not the one
+    /// the viewer is holding.
+    ///
+    /// The machine sees shift, key, and shift back, which is what a
+    /// typist would have done. Refused whole beyond the backlog, as a
+    /// plain press is, so that it leaves nothing down.
+    fn tap(&mut self, position: u8, wants_shift: bool) {
+        if self.queue.len() >= BACKLOG {
+            return;
+        }
+        let shift = shifting(Shift::Shift)[0];
+        let holding = self.holding(Shift::Shift);
+        if wants_shift && !holding {
+            self.queue.push_back(up_down(shift, false));
+            self.queue.push_back(up_down(position, false));
+            self.queue.push_back(up_down(position, true));
+            self.queue.push_back(up_down(shift, true));
+        } else if !wants_shift && holding {
+            // Every shift the viewer holds comes up around the key.
+            let held: Vec<u8> =
+                shifting(Shift::Shift).into_iter().filter(|q| self.down.contains(q)).collect();
+            for &q in &held {
+                self.queue.push_back(up_down(q, true));
+            }
+            self.queue.push_back(up_down(position, false));
+            self.queue.push_back(up_down(position, true));
+            for &q in &held {
+                self.queue.push_back(up_down(q, false));
+            }
+        } else {
+            self.queue.push_back(up_down(position, false));
+            self.queue.push_back(up_down(position, true));
+        }
+    }
+
+    /// A key the mapping named behind a prefix, or under a latched
+    /// shifting key: a shifting key is held for the one key that follows
+    /// it, anything else is tapped.
+    fn behind_prefix(&mut self, position: u8, wants_shift: bool) {
+        if let Key::Shift(_) = TABLE[position as usize] {
+            self.press(position);
+            self.latched.push(position);
+        } else {
+            self.tap(position, wants_shift);
+        }
+    }
+
     /// A key from the viewer, by X11 keysym, going down or coming up.
     ///
     /// A modifier is pressed or released at its own position and nothing
-    /// more. A character is found on the keyboard by [`positions`] and
-    /// sent as the position whose plane matches the shift the viewer is
-    /// holding; when no position does --- `!` with no shift held, or `(`
-    /// with it held and only the unshifted key free --- the shift is
-    /// pressed or released around the key, so that the machine, which
-    /// decodes from the stream of positions, sees the character the
-    /// viewer typed. That is the one place this code invents anything.
+    /// more. A character is found on the keyboard by
+    /// [`Mapping::positions`] and sent as the position whose plane
+    /// matches the shift the viewer is holding; when no position does ---
+    /// `!` with no shift held, or `(` with it held and only the unshifted
+    /// key free --- the shift is pressed or released around the key, so
+    /// that the machine, which decodes from the stream of positions, sees
+    /// the character the viewer typed.
+    ///
+    /// A prefix sends nothing of its own and the keysym after it is
+    /// looked up behind it. A prefix naming a shifting key holds it for
+    /// the one key that follows; anything reached behind a prefix or held
+    /// under one is tapped rather than held, and its own release is
+    /// dropped, the terminal having sent the key whole already.
+    ///
+    /// This whole function is the one place muir's keyboard invents
+    /// anything; everything under it is MIT's.
     pub fn key(&mut self, keysym: u32, down: bool) {
-        if let Some((s, side)) = modifier(keysym) {
+        // A key the terminal has already sent whole: its release is not
+        // owed to the machine.
+        if !down && let Some(i) = self.tapped.iter().position(|&s| s == keysym) {
+            self.tapped.remove(i);
+            return;
+        }
+        // A prefix standing: this keysym is looked up behind it.
+        if let Some(first) = self.prefix {
+            if self.map.is_prefix(keysym) {
+                // The prefix's own release, or the prefix again, which
+                // is the way out of a sequence begun by mistake.
+                if down {
+                    self.prefix = None;
+                }
+                return;
+            }
+            if !down {
+                return;
+            }
+            self.prefix = None;
+            self.tapped.push(keysym);
+            if let Some((p, wants)) = self.map.after_prefix(first, keysym) {
+                self.behind_prefix(p, wants);
+            }
+            return;
+        }
+        if self.map.is_prefix(keysym) {
+            if down {
+                self.prefix = Some(keysym);
+            }
+            return;
+        }
+        if let Some((s, side)) = self.map.modifier(keysym) {
             let at = shifting(s);
             let position = at.get(side).or(at.first()).copied();
             if let Some(p) = position {
@@ -420,11 +881,27 @@ impl Keyboard {
             }
             return;
         }
-        let found = positions(keysym);
+        let found = self.map.positions(keysym);
         if found.is_empty() {
             return;
         }
         let shifted = self.holding(Shift::Shift);
+        // Under a latched shifting key the key is tapped inside it and
+        // the latch let go after, so that the shifting key held is held
+        // for this key and no other.
+        if !self.latched.is_empty() {
+            if !down {
+                return;
+            }
+            let (p, wants) =
+                found.iter().find(|&&(_, w)| w == shifted).copied().unwrap_or(found[0]);
+            self.tapped.push(keysym);
+            self.tap(p, wants);
+            for q in std::mem::take(&mut self.latched) {
+                self.release(q);
+            }
+            return;
+        }
         // The position whose plane the viewer's own shift already gives.
         if let Some(&(p, _)) = found.iter().find(|&&(_, wants)| wants == shifted) {
             if down {
@@ -434,40 +911,13 @@ impl Keyboard {
             }
             return;
         }
-        // Otherwise the shift has to be worked around the key: held for it
-        // when the character is on the shifted plane and the viewer is
-        // not holding shift, let go for it when the other way round. The
-        // machine sees shift, key, and shift back, which is what a typist
-        // would have done.
+        // Otherwise the shift is worked around the key.
         let (p, wants) = found[0];
-        let shift = shifting(Shift::Shift)[0];
         if !down {
             self.release(p);
             return;
         }
-        // A press with the shift worked around it is refused whole beyond
-        // the backlog, as a plain press is; it leaves nothing down.
-        if self.queue.len() >= BACKLOG {
-            return;
-        }
-        if wants {
-            self.queue.push_back(up_down(shift, false));
-            self.queue.push_back(up_down(p, false));
-            self.queue.push_back(up_down(p, true));
-            self.queue.push_back(up_down(shift, true));
-        } else {
-            // Every shift the viewer holds comes up around the key.
-            let held: Vec<u8> =
-                shifting(Shift::Shift).into_iter().filter(|q| self.down.contains(q)).collect();
-            for &q in &held {
-                self.queue.push_back(up_down(q, true));
-            }
-            self.queue.push_back(up_down(p, false));
-            self.queue.push_back(up_down(p, true));
-            for &q in &held {
-                self.queue.push_back(up_down(q, false));
-            }
-        }
+        self.tap(p, wants);
     }
 
     /// Words waiting to go down the cable.
