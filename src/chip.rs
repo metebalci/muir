@@ -2605,16 +2605,33 @@ fn one_shot_width(page: &str, reference: &str, section: u8) -> u64 {
         // resistance on the page is within reach of the sheet's 5 kilohm
         // minimum Rx.
         //
-        // **Which resistor pairs with which capacitor, and which pair drives
-        // which section, is unverified**: the drawing files its bodies
-        // grouped by type rather than by circuit, so their order does not
-        // pair them, and MIT's parts list gives A03@02 no values at all.
-        // Either pairing puts both widths between about 30 and 170 ns, and
-        // 100 sits inside that; reading the two off the LMLNDR sheet is what
-        // would settle it. Nothing muir runs turns on it: both drawings want
-        // an edge and not a width --- LMRCTL A04 under "THIS PRE-DECREMENTS
-        // THE SILO POINTER WHICH THEN POINTS TO THE FIRST BIT", LMTBFC A04
-        // under "THIS MAKES IT WIN WITH PDP11S".
+        // **Which resistor pairs with which capacitor is settled**, and the
+        // sentence that used to stand here was wrong twice. The drawing's
+        // *list order* is grouped by type and does not pair them, but its
+        // *drawn geometry* does: the eight bodies sit on the eight rows of
+        // the DUMMY socket, each value on the row of the socket pair it
+        // belongs to. And MIT's parts list does give the values ---
+        // `cadrpt/parts.64`, Penny's list of 16 April 1980, draws every
+        // dummy pin by pin and assigns them per board, `IOB dummies: 1 type
+        // E, 1 type F, 1 type G, 1 type H`. Type E is the sixteen-pin one:
+        //
+        //     1:|180 ohm|16:      5:| 82 pF |12:
+        //     2:|180 ohm|15:      6:|4.7Kohm|11:
+        //     3:| 22 pF |14:      7:|470 ohm|10:
+        //     4:|6.8Kohm|13:      8:|470 ohm|9:
+        //
+        // With the socket wiring above --- a capacitor from `R.C` (14) to
+        // `R.RC` (3) and a resistor from `R.RC` (4) to VCC for LMRCTL's
+        // section, the same shape on 12/5 and 6/11 for LMTBFC's --- LMRCTL
+        // takes 22 pF and 6.8 kilohms and LMTBFC 82 pF and 4.7 kilohms.
+        // Through the Am26S02 formula that is about 46 ns and 118 ns.
+        //
+        // **They are left at 100 all the same**, because nothing muir runs
+        // turns on it: both drawings want an edge and not a width ---
+        // LMRCTL A04 under "THIS PRE-DECREMENTS THE SILO POINTER WHICH THEN
+        // POINTS TO THE FIRST BIT", LMTBFC A04 under "THIS MAKES IT WIN
+        // WITH PDP11S" --- and 100 sits inside the band either pairing
+        // gives. Changing them would be motion without a check behind it.
         ("LMRCTL", "0A04", 1) | ("LMTBFC", "0A04", 1) | ("LMTBFC", "0A04", 2) => 100,
         _ => panic!("no timing components known for one-shot {section} at {page} {reference}"),
     }
