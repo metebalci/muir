@@ -381,6 +381,15 @@ fn every_read_register_is_the_nets_its_buffers_carry() {
     };
     assert_eq!(all.word(), 0x17ff);
 
+    // And `of` reads that word back, polarities and all, so a console --- or
+    // muir's own run loop --- gets out what the board put in.
+    assert_eq!(spy::Flag1::of(none), spy::Flag1::default(), "the quiet machine round-trips");
+    assert_eq!(spy::Flag1::of(all.word()), all, "everything up round-trips");
+    for bit in 0..16 {
+        let w = 1u16 << bit;
+        assert_eq!(spy::Flag1::of(w).word(), w, "bit {bit} alone round-trips");
+    }
+
     // FLAG-2: four unconnected inputs read high, `-VMAOK` reads low when
     // the access was permitted, and the rest are what they say.
     let flag2 = spy_sources(&n, "-SPY.FLAG2");

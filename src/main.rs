@@ -90,6 +90,15 @@
 //! machine, since the button is all that does; a hold nothing can run on
 //! --- stdin having ended --- ends the run rather than standing there.
 //!
+//! A machine that stops itself is held at the prompt and says so, rather
+//! than being run on through: `HALT-CONS` under `ERRSTOP` --- what System
+//! 100's `(si:%halt)` runs --- and the statistics counter under `STATHENB`
+//! both drop `MACHRUN` with `RUN` still set, and no microcycle runs from
+//! there. Nothing about stepping says so, the screen simply stops, so the
+//! run loop reads it off `FLAG-1` where a console would. `boot` presses
+//! the button that starts it again. On `chip`, which has no prompt, it
+//! ends the run instead.
+//!
 //! A run goes on until a stop, a halt or ^C. `--stop-after` ends it after
 //! that many microcycles, `--stop-at` when the PC reaches an address with
 //! the boot PROM disabled, `--stop-at-prom` with it enabled --- the PROM and
@@ -1183,6 +1192,20 @@ fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>,
                 mouse.deliver(board);
             }
         }
+        // The machine stopping itself --- `(si:%halt)`, or the statistics
+        // counter --- looks like nothing at all from `step`, which goes on
+        // returning `Ok` and running no microcycle. So it is read off
+        // `FLAG-1` here and held on, once, rather than spun on: the screen
+        // has stopped, and without this the run says nothing about why.
+        if check
+            && !held
+            && let Some(why) = machrun_low(&e)
+        {
+            held = true;
+            stepping = None;
+            say_machrun_low(why);
+            say_pc(&e, ran);
+        }
         // ^C: with a prompt to go on from, the first holds the machine
         // there and one more while held quits; with none, one quits. A
         // quit is the run's own end, so what it was to write gets written.
@@ -1230,6 +1253,8 @@ fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>,
                     Ok(Some(Command::Continue)) => {
                         if halted(&e) {
                             say_halted();
+                        } else if let Some(why) = machrun_low(&e) {
+                            say_machrun_low(why);
                         } else {
                             held = false;
                         }
@@ -1237,6 +1262,8 @@ fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>,
                     Ok(Some(Command::Step(n))) => {
                         if halted(&e) {
                             say_halted();
+                        } else if let Some(why) = machrun_low(&e) {
+                            say_machrun_low(why);
                         } else {
                             held = false;
                             stepping = Some(n);
@@ -1400,6 +1427,43 @@ fn halted<E: Engine>(e: &E) -> bool {
 /// button starts one, on the board and here.
 fn say_halted() {
     println!("the machine is halted, its RUN clear: boot presses the button that starts it");
+}
+
+/// **The machine has stopped itself with `RUN` still set**, and why, or
+/// `None` if it is running.  `MACHRUN` is low because `ERR` is up under
+/// `ERRSTOP` --- which is what `HALT-CONS` does, and so what System 100's
+/// `(si:%halt)` does --- or because the statistics counter ran out under
+/// `STATHENB`.  A `WAIT` is neither: the machine comes out of a bus wait
+/// by itself.
+///
+/// This is read from `FLAG-1`, where a console reads it, because nothing
+/// in [`Engine::step`] says it has happened: a stopped machine's `step`
+/// goes on returning `Ok`, advancing the master clock and running no
+/// microcycle, so a run loop that watched only the return would spin here
+/// for as long as it was left to.  `tests/halt.rs` holds both engines to
+/// that.
+fn machrun_low<E: Engine>(e: &E) -> Option<&'static str> {
+    let f = muir::spy::Flag1::of(e.spy_read(muir::spy::FLAG_1));
+    if !f.srun {
+        // A cleared RUN is the other halt, and `halted` is its name.
+        return None;
+    }
+    if f.err && e.machine().mode.errstop {
+        return Some("ERR is up under ERRSTOP, which is what HALT-CONS does: (si:%halt)");
+    }
+    if f.stathalt {
+        return Some("the statistics counter ran out under STATHENB");
+    }
+    None
+}
+
+/// What a machine that stopped itself says, once, as it drops to the
+/// prompt.  `boot` is the way on: the button presets `RUN` and resets the
+/// console's registers, `ERRSTOP` among them, which is what a CADR's
+/// operator does here too.
+fn say_machrun_low(why: &str) {
+    println!("the machine stopped itself: {why}");
+    println!("it will not run on by itself; boot presses the button that starts it again");
 }
 
 /// The prompt's answer to `reg`: the machine's registers, in hex and as
@@ -1682,6 +1746,16 @@ struct ChipMachine {
     bus: netlist::Netlist,
     pc_nets: Vec<netlist::NetId>,
     promdisable: netlist::NetId,
+    /// `SRUN`, `-ERRHALT` and `-STATHALT`: three of the six inputs of the
+    /// 9S42 at OLORD1 1A15 that makes `MACHRUN`, which the drawing has as
+    /// `MACHRUN = (SSTEP AND -SSDONE) OR (SRUN AND -ERRHALT AND -WAIT AND
+    /// -STATHALT)`.  What [`machrun_low`] reads off `FLAG-1` on the other
+    /// two engines is read off these nets here, and `-WAIT` is left out of
+    /// it for the same reason: a machine waiting on the bus comes out of
+    /// it by itself.
+    srun: netlist::NetId,
+    errhalt: netlist::NetId,
+    stathalt: netlist::NetId,
 }
 
 fn chip_machine(
@@ -1720,12 +1794,15 @@ fn chip_machine(
     // The mode register's bit, as `Machine::mode` has it on the other
     // engines.
     let promdisable = n.by_name_id("PROMDISABLE").unwrap();
+    let srun = n.by_name_id("SRUN").unwrap();
+    let errhalt = n.by_name_id("-ERRHALT").unwrap();
+    let stathalt = n.by_name_id("-STATHALT").unwrap();
     let mut skipped = 0;
     while c.read(&pc_nets) == 0 && skipped < 40 {
         c.microcycle(&mut clk);
         skipped += 1;
     }
-    ChipMachine { cpu: c, clk, far, bus: bus_n, pc_nets, promdisable }
+    ChipMachine { cpu: c, clk, far, bus: bus_n, pc_nets, promdisable, srun, errhalt, stathalt }
 }
 
 /// One turn of the terminal for a netlist machine: the screen out and the
@@ -1798,14 +1875,39 @@ fn time_chip(
     terminal: Option<&mut Terminal>,
     capture: Option<(PathBuf, bool)>,
 ) {
-    let ChipMachine { mut cpu, mut clk, mut far, pc_nets, promdisable, .. } =
-        chip_machine(image, pack, boards, memory_boards, chaos);
+    let ChipMachine {
+        mut cpu,
+        mut clk,
+        mut far,
+        pc_nets,
+        promdisable,
+        srun,
+        errhalt,
+        stathalt,
+        ..
+    } = chip_machine(image, pack, boards, memory_boards, chaos);
     // One microcycle is however many clock transitions it takes for the phase
     // to wrap, not a fixed number of them.
     let t = Instant::now();
     let mut ran = 0;
     let mut last = clk.phase_ns();
     let prom_enabled = |c: &Chip| c.net(promdisable) != Level::High;
+    // As [`machrun_low`] is on the other two engines, off the nets rather
+    // than off `FLAG-1`. There is no prompt here to drop to, so a machine
+    // that stops itself ends the run and says so, the way a stop does.
+    let stopped_itself = |c: &Chip| {
+        if c.net(srun) != Level::High {
+            return None;
+        }
+        if c.net(errhalt) == Level::Low {
+            return Some("ERR is up under ERRSTOP, which is what HALT-CONS does: (si:%halt)");
+        }
+        if c.net(stathalt) == Level::Low {
+            return Some("the statistics counter ran out under STATHENB");
+        }
+        None
+    };
+    let mut why_stopped = None;
     let mut terminal = terminal;
     let (mut keyboard, mut mouse) = (Keyboard::new(), Mouse::new());
     let mut last_poll = Instant::now();
@@ -1829,11 +1931,18 @@ fn time_chip(
                 if poll {
                     last_poll = Instant::now();
                 }
+                if let Some(why) = stopped_itself(&cpu) {
+                    why_stopped = Some(why);
+                    break;
+                }
             }
         }
         last = p;
     }
     report("chip", ran, t.elapsed().as_secs_f64());
+    if let Some(why) = why_stopped {
+        say_machrun_low(why);
+    }
     stop.conclude(ran, cpu.read(&pc_nets) as u16, prom_enabled(&cpu), None);
     if let Some((path, rec)) = capture.as_mut() {
         rec.sample(&far.buses.machine.simpletv, clk.time_ns(), wall_clock());
@@ -2591,7 +2700,10 @@ fn main() {
                 // The port first, so that the debugger's connect finds it
                 // while the netlists are built.
                 let listener = listen_for_debugger(addr);
-                let ChipMachine { cpu, clk, far, bus, pc_nets, promdisable } =
+                // The debuggee's stops are the debugger's to notice over
+                // the cable, which is what CC is for, so the self-halt
+                // check `time_chip` makes is not made here.
+                let ChipMachine { cpu, clk, far, bus, pc_nets, promdisable, .. } =
                     chip_machine(&image, pack, on_the_buses, boards, chaos);
                 let (reader, stream) = accept_debugger(&listener, addr);
                 let end = DebugIn::new(&bus, cpu, clk, far);
@@ -2616,6 +2728,60 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A machine that stopped itself is seen in `FLAG-1`, never in
+    /// `step`.** `HALT-CONS` under `ERRSTOP` --- misc function 1, which is
+    /// what System 100's `(si:%halt)` runs --- leaves `RUN` set and `ERR`
+    /// up, and every `step` after it returns `Ok` having run no
+    /// microcycle. So the run loop cannot learn this from stepping, and
+    /// [`machrun_low`] is what it reads instead.
+    ///
+    /// `tests/halt.rs` holds both engines to the halt itself; this holds
+    /// the run loop's reading of it.
+    #[test]
+    fn a_machine_that_stopped_itself_reads_low_on_machrun() {
+        // `HALT-CONS`, `1_10.` in `sys/sys/cadsym.lisp`: `IR<11:10>` = 1.
+        const HALT_CONS: u64 = 1 << 10;
+        let halting = || {
+            let mut m = Machine::new();
+            let mut prom = vec![muir::isa::asm::filler(); 512];
+            prom[5] = Insn::new(muir::isa::asm::filler().raw() | HALT_CONS);
+            m.load_prom(&prom);
+            m
+        };
+
+        // Running, with nothing to report.
+        let mut e = Rtl::new(halting());
+        e.boot();
+        assert_eq!(machrun_low(&e), None, "just booted and running");
+
+        // `ERRSTOP` is set after the boot, which resets the console's
+        // registers. Forty microcycles is well past the halt at 5.
+        e.machine_mut().mode.errstop = true;
+        for _ in 0..40 {
+            e.step().expect("no halt this engine raises");
+        }
+        let why = machrun_low(&e).expect("stopped by HALT-CONS under ERRSTOP");
+        assert!(why.contains("ERRSTOP"), "and says why: {why}");
+
+        // Without `ERRSTOP` the same program runs straight through it, so
+        // there is nothing for the run loop to hold on.
+        let mut e = Rtl::new(halting());
+        e.boot();
+        for _ in 0..40 {
+            e.step().expect("no halt this engine raises");
+        }
+        assert_eq!(machrun_low(&e), None, "HALT-CONS without ERRSTOP runs on");
+
+        // And the same on `micro`, which the run loop treats alike.
+        let mut e = Micro::new(halting());
+        e.boot();
+        e.machine_mut().mode.errstop = true;
+        for _ in 0..40 {
+            e.step().expect("no halt this engine raises");
+        }
+        assert!(machrun_low(&e).is_some(), "micro stops the same way");
+    }
 
     /// **The wall clock reads the C library's `struct tm` where the hours,
     /// minutes and seconds are.** It is a time of day, and it stands from
