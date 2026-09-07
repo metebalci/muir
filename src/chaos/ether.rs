@@ -23,9 +23,9 @@
 //! cable is busy, and two driving high at once is §2.3's interference: a
 //! transmitter whose clock edge finds it aborts and holds the cable high
 //! for [`ABORT_HOLD_NS`], the abort signal, and what was left on the
-//! cable fails its check and is heard by nobody.
+//! cable reaches every receiver as wreckage, failing its check.
 
-use super::packet::{Framed, frame, unframe};
+use super::packet::{Framed, Received, frame, unframe_any};
 use super::wire::{self, Decoder};
 use std::collections::VecDeque;
 
@@ -116,7 +116,8 @@ struct Board {
     pending: Option<(u64, Vec<u16>)>,
     /// When the frame being sent ends, once it has started.
     sending_until: Option<u64>,
-    heard: VecDeque<(u64, Framed)>,
+    /// What the board heard, as a receiver takes it.
+    heard: VecDeque<(u64, Received)>,
     /// Every frame that started on the cable, the board's own included:
     /// its first edge, its source and its nominal end, for the board's
     /// turn timer, which watches the cable as the receiver does.
@@ -281,10 +282,10 @@ impl Ether {
         self.board.as_ref().and_then(|b| b.sending_until)
     }
 
-    /// A frame the behavioural board heard, oldest first: everything on
-    /// the cable but its own, for the interface to filter as the receiver
-    /// does.
-    pub fn board_heard(&mut self) -> Option<(u64, Framed)> {
+    /// A frame the behavioural board heard, oldest first, as a receiver
+    /// takes it: everything on the cable but its own, wreckage included,
+    /// for the interface to filter as the receiver does.
+    pub fn board_heard(&mut self) -> Option<(u64, Received)> {
         self.board.as_mut().and_then(|b| b.heard.pop_front())
     }
 
@@ -487,27 +488,27 @@ impl Ether {
         if !self.busy(now) {
             self.collided = false;
         }
+        // A run of bits over: a packet, or a collision's wreckage, which
+        // every receiver takes as it takes a packet and judges by its check
+        // word and bit count. The turn timers load from the source word as
+        // it came, whatever the check says, as the board's does.
         if let Some(bits) = self.decoder.at(now) {
-            match unframe(&bits) {
-                Ok(f) => {
-                    self.last_source = Some(f.source);
-                    for n in &mut self.nodes {
-                        if n.address() != f.source {
-                            n.receive(now, &f);
-                        }
-                    }
-                    if let Some(b) = self.board.as_mut()
-                        && b.address != f.source
-                    {
-                        b.heard.push_back((now, f.clone()));
-                    }
-                    self.record(Event::Heard(now, f));
-                }
-                Err(_) => {
-                    // Noise, or a collision's wreckage: the hardware would
-                    // fail the check and drop it too.
+            let r = unframe_any(&bits);
+            let from = r.framed.source;
+            if r.bits >= 32 {
+                self.last_source = Some(from);
+            }
+            for n in &mut self.nodes {
+                if n.address() != from {
+                    n.receive(now, &r.framed);
                 }
             }
+            if let Some(b) = self.board.as_mut()
+                && b.address != from
+            {
+                b.heard.push_back((now, r.clone()));
+            }
+            self.record(Event::Heard(now, r.framed));
         }
         // The board's frame goes at its turn timer's instant, cable busy
         // or not: the timer took the cable idle at its terminal count,

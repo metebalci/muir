@@ -177,6 +177,8 @@ pub struct Framed {
 
 /// The words back out of the cable's bits. The trailing zero, if the
 /// decoder delivered it, is dropped; the interface "strips it off".
+/// A run of bits that is not a whole packet is an error here;
+/// [`unframe_any`] takes it as the receiver does.
 pub fn unframe(bits: &[bool]) -> Result<Framed, String> {
     let mut bits = bits.to_vec();
     if bits.len() % 16 == 1 && !bits[bits.len() - 1] {
@@ -185,13 +187,53 @@ pub fn unframe(bits: &[bool]) -> Result<Framed, String> {
     if !bits.len().is_multiple_of(16) || bits.len() < 3 * 16 {
         return Err(format!("{} bits is not a packet", bits.len()));
     }
+    Ok(unframe_any(&bits).framed)
+}
+
+/// A run of bits off the cable, as a receiver takes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Received {
+    /// The words as the software reads them back.
+    pub framed: Framed,
+    /// How many bits came, the trailing zero stripped: the bit count.
+    pub bits: usize,
+}
+
+/// The words back out of any run of bits the decoder ended, a collision's
+/// wreckage included, and how many bits there were: the receiver takes
+/// whatever comes once the destination has matched, and the software
+/// judges it by the check word and the bit count --- AIM-628 §5.1's
+/// meters count "incoming packets with CRC errors" and those "rejected
+/// for a length that is not a multiple of 16 bits". The trailing zero is
+/// stripped. The buffer is a bit at a time, the 2147 at LMRBUF 0C04 on
+/// `RBCT<11:0>`, and the software reads it sixteen bits at a time down
+/// from the word boundary above the last bit stored, so a partial word is
+/// the last bits received, read with what the RAM held above them: the
+/// netlist board reads wreckage back that way in `tests/chaos_netlist.rs`
+/// and `tests/chaos_rtl.rs`, and read zeros there. **Unverified** whether
+/// the RAM holds zeros above the last bit after an earlier packet; a
+/// longer one received first would settle it. Fewer than three whole
+/// words, or a count that is not a whole number of words, cannot check
+/// good.
+pub fn unframe_any(bits: &[bool]) -> Received {
+    let mut bits = bits.to_vec();
+    if bits.last() == Some(&false) {
+        bits.pop();
+    }
+    let count = bits.len();
+    let n = count.div_ceil(16);
+    bits.resize(n * 16, false);
     bits.reverse();
     let words: Vec<u16> =
         bits.chunks(16).map(|c| c.iter().fold(0u16, |w, &b| w << 1 | b as u16)).collect();
-    let n = words.len();
-    let (buffer, rest) = words.split_at(n - 2);
-    let (source, check) = (rest[0], rest[1]);
-    let mut over = buffer.to_vec();
+    let whole = count.is_multiple_of(16) && n >= 3;
+    let (buffer, source, check) = match n {
+        0 => (Vec::new(), 0, 0),
+        1 => (Vec::new(), 0, words[0]),
+        _ => (words[..n - 2].to_vec(), words[n - 2], words[n - 1]),
+    };
+    let mut over = buffer.clone();
     over.push(source);
-    Ok(Framed { buffer: buffer.to_vec(), source, check, check_ok: check_word(&over) == check })
+    let check_ok = whole && check_word(&over) == check;
+    Received { framed: Framed { buffer, source, check, check_ok }, bits: count }
 }

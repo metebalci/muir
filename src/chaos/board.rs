@@ -23,7 +23,7 @@
 
 use super::ether::{Ether, turn_byte};
 use super::interface::{self, csr};
-use super::packet::{Framed, check_word, frame};
+use super::packet::{Framed, Received, check_word, frame};
 use super::wire;
 use std::collections::VecDeque;
 
@@ -177,13 +177,21 @@ pub struct Interface {
     /// check --- and how far it has been read.
     rcv: Vec<u16>,
     rcv_at: usize,
+    /// The bits the receiver took for what is in the buffer, the trailing
+    /// zero stripped: a whole number of words for a packet, and whatever
+    /// came for wreckage, whose last partial word is read back padded.
+    rcv_bits: usize,
     /// When Transmit Done comes for the frame being sent.
     tdone_at: Option<u64>,
-    /// Frames off the cable, or looped back, each due at its `RDONE`.
-    incoming: VecDeque<(u64, Framed)>,
+    /// Frames off the cable, or looped back, each due at its `RDONE`, as
+    /// the receiver takes them.
+    incoming: VecDeque<(u64, Received)>,
     turn: Turn,
     /// When the cable was last looked at.
     polled: u64,
+    /// The time as last advanced to, for what the registers show of the
+    /// cable at the instant they are read.
+    now: u64,
     /// The cable, with the Chaosnet server on it; none, and a frame sent goes
     /// nowhere and nothing ever comes.
     ether: Option<Box<Ether>>,
@@ -207,10 +215,12 @@ impl Clone for Interface {
             xmit: self.xmit.clone(),
             rcv: self.rcv.clone(),
             rcv_at: self.rcv_at,
+            rcv_bits: self.rcv_bits,
             tdone_at: self.tdone_at,
             incoming: self.incoming.clone(),
             turn: self.turn.clone(),
             polled: self.polled,
+            now: self.now,
             ether: None,
             trace: self.trace,
         }
@@ -242,10 +252,12 @@ impl Interface {
             xmit: Vec::new(),
             rcv: Vec::new(),
             rcv_at: 0,
+            rcv_bits: 0,
             tdone_at: None,
             incoming: VecDeque::new(),
             turn: Turn::new(powered_at),
             polled: powered_at,
+            now: powered_at,
             ether,
             trace,
         }
@@ -278,21 +290,30 @@ impl Interface {
             | if self.transmit_abort { csr::TRANSMIT_ABORT } else { 0 }
             | if self.transmit_done { csr::TRANSMIT_DONE } else { 0 }
             | ((self.lost as u16) << 9) & csr::LOST_COUNT
-            | if self.crc_error { csr::CRC_ERROR } else { 0 }
+            | if self.crc_error || self.turn.busy_at(self.now) { csr::CRC_ERROR } else { 0 }
             | if self.receive_done { csr::RECEIVE_DONE } else { 0 }
     }
 
     /// "The number of bits in the incoming packet buffer, minus one.
     /// After the whole packet has been read out, it will contain 7777."
     /// Before any packet, and after a Reset or a Clear Receiver, the
-    /// netlist board reads 0 (`tests/cadrio_netlist.rs`).
+    /// netlist board reads 0 (`tests/cadrio_netlist.rs`). The count comes
+    /// down by what each read takes: sixteen bits a word, and only the
+    /// bits there are for the partial word wreckage puts at the top ---
+    /// the netlist board reads 15 with one whole word left of 222 bits
+    /// (`tests/chaos_rtl.rs`).
     pub fn bit_count(&self) -> u16 {
         if !self.receive_done {
-            0
-        } else if self.rcv_at < self.rcv.len() {
-            (self.rcv.len() * 16 - 1) as u16
-        } else {
-            0o7777
+            return 0;
+        }
+        let top = self.rcv_bits - (self.rcv.len().saturating_sub(1)) * 16;
+        let read = match self.rcv_at {
+            0 => 0,
+            k => top + (k - 1) * 16,
+        };
+        match self.rcv_bits.saturating_sub(read) {
+            0 => 0o7777,
+            left => (left as u16 - 1) & 0o7777,
         }
     }
 
@@ -307,6 +328,7 @@ impl Interface {
     /// cable's, the turn timer's terminal counts, frames landing, Transmit
     /// Done; then a look at the cable when one is owed.
     pub fn advance(&mut self, now: u64) {
+        self.now = self.now.max(now);
         loop {
             let tc = self.turn.next_tc();
             let cable = self.ether.as_ref().and_then(|e| e.next_due());
@@ -324,8 +346,8 @@ impl Interface {
                 self.take_from_cable();
             }
             if landing == Some(t) {
-                let (_, f) = self.incoming.pop_front().unwrap();
-                self.arrive(t, &f);
+                let (_, r) = self.incoming.pop_front().unwrap();
+                self.arrive(t, &r);
             }
             if self.tdone_at == Some(t) {
                 self.tdone_at = None;
@@ -389,20 +411,21 @@ impl Interface {
                 }
             }
         }
-        while let Some((at, f)) = e.board_heard() {
+        while let Some((at, r)) = e.board_heard() {
             if loop_back {
                 continue;
             }
+            let from = r.framed.source;
             // `RDONE` with `-CBLBSY` lifting, after the frame's end.
             let end = self
                 .turn
                 .frames
                 .iter()
-                .filter(|&&(s, source, _)| source == f.source && s <= at)
+                .filter(|&&(s, source, _)| source == from && s <= at)
                 .map(|&(_, _, e)| e)
                 .max();
             let land = end.map_or(at, |e| e + CBLBSY_OFF_NS);
-            self.incoming.push_back((land, f));
+            self.incoming.push_back((land, r));
             self.incoming.make_contiguous().sort_by_key(|&(t, _)| t);
         }
     }
@@ -427,8 +450,10 @@ impl Interface {
                 let mut over = buffer.clone();
                 over.push(self.address);
                 let check = check_word(&over);
-                let f = Framed { buffer, source: self.address, check, check_ok: true };
-                self.incoming.push_back((end + CBLBSY_OFF_NS, f));
+                let bits = (buffer.len() + 2) * 16;
+                let framed = Framed { buffer, source: self.address, check, check_ok: true };
+                let r = Received { framed, bits };
+                self.incoming.push_back((end + CBLBSY_OFF_NS, r));
                 self.incoming.make_contiguous().sort_by_key(|&(t, _)| t);
             }
         } else if let Some(e) = self.ether.as_mut() {
@@ -436,15 +461,18 @@ impl Interface {
         }
     }
 
-    /// A frame off the cable: taken if it is for this interface --- its
-    /// address, a broadcast, or anything under Spy --- and the buffer is
-    /// free; counted as lost if the buffer was full.
-    fn arrive(&mut self, now: u64, f: &Framed) {
-        let dest = f.buffer.last().copied().unwrap_or(0);
+    /// A frame off the cable, wreckage included: taken if it is for this
+    /// interface --- its address, a broadcast, or anything under Spy ---
+    /// and the buffer is free; counted as lost if the buffer was full.
+    /// The destination is matched as it came on the wire; wreckage too
+    /// short to carry one matched nothing.
+    fn arrive(&mut self, now: u64, r: &Received) {
+        let Some(&dest) = r.framed.buffer.last() else { return };
         let mine = dest == self.address || dest == 0 || self.csr & csr::SPY != 0;
         if !mine {
             return;
         }
+        let (f, bits) = (&r.framed, r.bits);
         if self.receive_done {
             self.lost = (self.lost + 1).min(15);
             if self.trace {
@@ -472,6 +500,7 @@ impl Interface {
         self.rcv.push(f.source);
         self.rcv.push(f.check);
         self.rcv_at = 0;
+        self.rcv_bits = bits;
         self.crc_error = !f.check_ok;
         self.receive_done = true;
     }
@@ -585,10 +614,12 @@ impl Interface {
             xmit,
             rcv,
             rcv_at,
+            rcv_bits,
             tdone_at,
             incoming,
             turn,
             polled,
+            now: _,
             ether: _,
             trace: _,
         } = self;
@@ -602,14 +633,16 @@ impl Interface {
         w.u16s(xmit);
         w.u16s(rcv);
         w.u64(*rcv_at as u64);
+        w.u64(*rcv_bits as u64);
         w.opt(*tdone_at, crate::checkpoint::Writer::u64);
         w.u64(incoming.len() as u64);
-        for (at, f) in incoming {
+        for (at, r) in incoming {
             w.u64(*at);
-            w.u16s(&f.buffer);
-            w.u16(f.source);
-            w.u16(f.check);
-            w.bool(f.check_ok);
+            w.u16s(&r.framed.buffer);
+            w.u16(r.framed.source);
+            w.u16(r.framed.check);
+            w.bool(r.framed.check_ok);
+            w.u64(r.bits as u64);
         }
         turn.save(w);
         w.u64(*polled);
@@ -634,6 +667,7 @@ impl Interface {
         self.xmit = r.u16s()?;
         self.rcv = r.u16s()?;
         self.rcv_at = r.u64()? as usize;
+        self.rcv_bits = r.u64()? as usize;
         self.tdone_at = r.opt(crate::checkpoint::Reader::u64)?;
         let n = r.u64()?;
         let mut incoming = VecDeque::new();
@@ -643,7 +677,9 @@ impl Interface {
             let source = r.u16()?;
             let check = r.u16()?;
             let check_ok = r.bool()?;
-            incoming.push_back((at, Framed { buffer, source, check, check_ok }));
+            let bits = r.u64()? as usize;
+            let framed = Framed { buffer, source, check, check_ok };
+            incoming.push_back((at, Received { framed, bits }));
         }
         self.incoming = incoming;
         self.turn.load(r)?;

@@ -95,17 +95,18 @@ fn the_file_names_its_engine_and_refuses_other_files() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// **The format is version 7, and a file of another version is refused by
+/// **The format is version 8, and a file of another version is refused by
 /// number.** The version is bumped whenever a type changes what it writes,
 /// so a file from another build is read wrong or not at all; this pins
 /// which it is, and that the refusal names both versions. Version 3 added
 /// the serial port's registers to the I/O board's, version 4 the instant
 /// the interval timer was loaded, version 5 `micro`'s pending map write,
-/// version 6 the speaker's flip-flop, and version 7 the mouse interface's
-/// latches and clock with the encoders on its lines.
+/// version 6 the speaker's flip-flop, version 7 the mouse interface's
+/// latches and clock with the encoders on its lines, and version 8 the
+/// bit count of what the Chaosnet interface received or has landing.
 #[test]
-fn the_format_is_version_7_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 7, "a new version needs its own tests");
+fn the_format_is_version_8_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 8, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -113,14 +114,14 @@ fn the_format_is_version_7_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 7u32.to_le_bytes());
-    for other in [1u32, 2, 3, 4, 5, 6, u32::MAX] {
+    assert_eq!(&good[at..at + 4], 8u32.to_le_bytes());
+    for other in [1u32, 2, 3, 4, 5, 6, 7, u32::MAX] {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 7"), "{err}");
+        assert!(err.contains("reads 8"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }
