@@ -1,0 +1,48 @@
+# The ten lines of the disk bus and what the controller puts on each of
+# them, read off cadrdc/dcdbus.drw as data/CADRDC.netlist has it.
+#
+# Three 74LS244s at DCDBUS 0C07, 0C08 and 0C09 drive DBUS0-7, one per tag,
+# and a 74S157 at 0C06 drives DBUS8 and DBUS9. The 157's select is CYLINDER
+# TAG, so its B inputs are the cylinder's and its A inputs the control
+# tag's; its enable is HEAD TAG, so while the head tag is up those two
+# lines are undriven, which is the `-` in the third column. The head tag
+# carries six head bits and two offset bits, the cylinder tag ten cylinder
+# bits, and the control tag the gates and the two data strobes.
+#
+# CONTROL TAG is not a microcode field. DCDBUS 0C16 makes it the NOR of the
+# other two, so the control tag is what the bus carries whenever neither
+# other tag is asserted, which is what newdsk.31 means by "Neither CYLINDER
+# TAG nor HEAD TAG implies CONTROL TAG". TAG ENABLE, which is a field, is
+# what sends a tag down the cable; without it a tag only steers this
+# multiplexer, and the microcode uses that to settle the bus before the tag
+# goes out. The 75452 drivers invert, so DBUSn high leaves TRIDENT.BUSn/
+# low, which is asserted.
+#
+# The last column is Century Data's own name for the same cable line, read
+# off Al Kossow's tridentCables.pdf. The two documents number the bus in
+# opposite directions: MIT's DBUSn is Century Data's bus 9-n. Under that
+# reversal the seven lines this controller uses land on their counterparts
+# name for name --- recalibrate on rezero, pre gate on head select (which
+# is what newdsk.31 calls it too, "Enable disk head-select"), fault clear
+# on device check reset, and read, write and the two data strobes on
+# themselves --- and the three MIT ties to ground land on the three this
+# controller has no use for: it writes no address marks, never resets the
+# head address and never advances the head. Seven for seven is what says
+# this is a reversal and not a disagreement. Which of the two numbers the
+# lines forwards is not settled by anything we have, and need not be, as
+# long as one mapping is used throughout.
+#
+# tests/cadrdc_netlist.rs regenerates the first four columns from the
+# netlist and compares. The header above is written by hand and kept.
+#
+# line | cylinder tag | head tag | control tag | Century Data
+DBUS0 | CYL0 | HEAD0             | GND               | bus 9  head advance
+DBUS1 | CYL1 | HEAD1             | RECALIBRATE       | bus 8  rezero
+DBUS2 | CYL2 | HEAD2             | PRE GATE          | bus 7  head select
+DBUS3 | CYL3 | HEAD3             | FAULT CLEAR       | bus 6  device chk reset
+DBUS4 | CYL4 | HEAD4             | GND               | bus 5  reset head adr
+DBUS5 | CYL5 | HEAD5             | GND               | bus 4  address mark
+DBUS6 | CYL6 | SERVO OFFSET PLUS | READ GATE         | bus 3  read
+DBUS7 | CYL7 | SERVO OFFSET      | WRITE GATE        | bus 2  write
+DBUS8 | CYL8 | -                 | DATA STROBE EARLY | bus 1  strobe early
+DBUS9 | CYL9 | -                 | DATA STROBE LATE  | bus 0  strobe late

@@ -1,0 +1,106 @@
+# The disk controller's two Trident connectors, pin by pin, read off MIT's
+# wire list cadrdc/dc.wlr (10 December 1980).
+#
+# J01 is the bus cable, which every drive on the string sees; J03 is the
+# radial cable, which belongs to one drive. Those are Century Data's own
+# names for the two, from Al Kossow's tridentCables.pdf; MIT titles the
+# drawings behind them TRIDENT SIGNAL CABLE (dctrsg) and SINGLE TRIDENT
+# (dctrid). Neither party calls them the A and B cables, so neither do we.
+#
+# Each line: the connector and pin, the wire MIT names it, then every pin
+# the board puts on that wire --- page, reference, pin, body. The body says
+# which way the line runs:
+#
+#   75452     open-collector peripheral driver: the controller drives it
+#   TRITERM   the cable terminator the controller receives one through
+#   SIP100-8  100 ohms to +5, one resistor per bus cable line
+#   75107     the radial cable's differential receiver: read data and clock
+#   75110     the radial cable's differential driver: write data
+#   16DUMMY   the resistor pack terminating the radial cable's two pairs
+#
+# `-` is a pin with nothing listed after it. For GND and +5.0V that is only
+# because they reach half the board and their hundreds of pins would say
+# nothing about the cable. For the other seven it is the fact: MIT's own
+# list flags each of them ONE PIN RUN. Six are lines the drive drives that
+# this controller has no use for --- it takes sector and index off the
+# radial cable's composite instead of off the bus cable --- and the seventh
+# is a spare.
+#
+# J01 has 40 wired pins and Century Data's bus cable has 40 conductors,
+# signal for signal, ground for ground, down to the single spare position;
+# J03 has 20 of the radial cable's 40. The numbering is not shared: J01 and
+# J03 are the board's own headers, so the correspondence is by name.
+#
+# Two sources describe the same cables and they are not equal. MIT's wire
+# list is the board as it was wrapped, and is what the rows below are read
+# from. Century Data's tridentCables.pdf is the cable's own maker
+# describing the other end, and it is the weaker of the two: it misnumbers
+# three pins and it numbers the bus in the opposite direction from MIT.
+# Where they disagree the wire list is followed, and `data/trident-bus.txt`
+# carries Century Data's name for each line beside MIT's so the two can be
+# read together.
+#
+# tests/cadrdc_netlist.rs regenerates the rows from the wire list and
+# compares. The header above is written by hand and kept.
+#
+# conn pin | wire | board pins, as page reference pin body
+J01  1 | TRIDENT.CYL.TAG/ | DCTRSG B03@03 3 75452, DCTRSG A01@03 5 SIP100-8
+J01  2 | TRIDENT.CONTROL.TAG/ | DCTRSG B05 3 75452, DCTRSG A01@03 6 SIP100-8
+J01  3 | TRIDENT.TER.IN/ | -
+J01  4 | GND | -
+J01  5 | GND | -
+J01  6 | GND | -
+J01  7 | GND | -
+J01  8 | GND | -
+J01  9 | GND | -
+J01 10 | GND | -
+J01 11 | GND | -
+J01 12 | GND | -
+J01 13 | GND | -
+J01 14 | GND | -
+J01 15 | GND | -
+J01 16 | GND | -
+J01 17 | +5.0V | -
+J01 18 | +5.0V | -
+J01 19 | TRIDENT.ADDR.MK.DET/ | -
+J01 20 | TRIDENT.SECTOR/ | -
+J01 26 | TRIDENT.HEAD.TAG/ | DCTRSG B03@03 5 75452, DCTRSG A01@03 4 SIP100-8
+J01 27 | TRIDENT.BUS0/ | DCTRSG B01 5 75452, DCTRSG A01@20 2 SIP100-8
+J01 28 | TRIDENT.BUS1/ | DCTRSG B01 3 75452, DCTRSG A01@20 3 SIP100-8
+J01 29 | TRIDENT.BUS2/ | DCTRSG B01@03 5 75452, DCTRSG A01@20 4 SIP100-8
+J01 30 | TRIDENT.BUS3/ | DCTRSG B01@03 3 75452, DCTRSG A01@20 5 SIP100-8
+J01 31 | TRIDENT.BUS4/ | DCTRSG A06@20 5 SIP100-8, DCTRSG A02 3 75452
+J01 32 | TRIDENT.BUS5/ | DCTRSG A06@20 6 SIP100-8, DCTRSG A02 5 75452
+J01 33 | TRIDENT.BUS6/ | DCTRSG A06@20 7 SIP100-8, DCTRSG A02@03 3 75452
+J01 34 | TRIDENT.BUS7/ | DCTRSG A02@03 5 75452, DCTRSG B02@03 3 SIP100-8
+J01 35 | TRIDENT.BUS8/ | DCTRSG B02@03 4 SIP100-8, DCTRSG B03 3 75452
+J01 36 | TRIDENT.BUS9/ | DCTRSG A01@03 7 SIP100-8, DCTRSG B03 5 75452
+J01 37 | TRIDENT.SPARE/ | -
+J01 38 | TRIDENT.SEEK.INC/ | DCTRSG A05 1 TRITERM, DCTRSG A06@20 2 SIP100-8
+J01 39 | TRIDENT.ON.LINE/ | DCTRSG A03 7 TRITERM, DCTRSG B02@03 2 SIP100-8
+J01 40 | TRIDENT.DEVICE.CHECK/ | DCTRSG A03 5 TRITERM, DCTRSG B02@03 5 SIP100-8
+J01 41 | TRIDENT.READ.ONLY/ | DCTRSG A03 3 TRITERM, DCTRSG A01@03 2 SIP100-8
+J01 42 | TRIDENT.READY/ | DCTRSG A03 1 TRITERM, DCTRSG A01@03 3 SIP100-8
+J01 43 | TRIDENT.INDEX/ | -
+J01 44 | TRIDENT.OFFSET/ | -
+J01 45 | TRIDENT.END.OF.CYL/ | -
+J03  1 | GND | -
+J03  2 | GND | -
+J03  3 | GND | -
+J03  4 | GND | -
+J03  5 | GND | -
+J03  6 | GND | -
+J03  7 | GND | -
+J03  8 | GND | -
+J03  9 | GND | -
+J03 10 | +5.0V | -
+J03 21 | TRIDENT.0.CLOCK.M | DCTRID A09 11 16DUMMY, DCTRID A10 12 75107
+J03 22 | TRIDENT.0.CLOCK.P | DCTRID A09 12 16DUMMY, DCTRID A10 11 75107
+J03 23 | TRIDENT.0.DATA.M | DCTRID A08 9 75110, DCTRID A09 9 16DUMMY, DCTRID A10 2 75107
+J03 24 | TRIDENT.0.DATA.P | DCTRID A10 1 75107, DCTRID A09 10 16DUMMY, DCTRID A08 8 75110
+J03 25 | TRIDENT.0.SELECT/ | DCTRID B05@03 5 75452, DCTRSG A01@20 7 SIP100-8
+J03 26 | TRIDENT.0.SEQUENCE/ | DCTRID B05@03 3 75452
+J03 27 | TRIDENT.0.SELECTED/ | DCTRSG A06@20 4 SIP100-8, DCTRSG A05 5 TRITERM
+J03 28 | TRIDENT.0.ATTENTION/ | DCTRSG A05 3 TRITERM, DCTRSG A01@20 6 SIP100-8
+J03 29 | TRIDENT.0.COMPSECIDX/ | DCTRSG A06@20 3 SIP100-8, DCTRSG A05 7 TRITERM
+J03 30 | +5.0V | -
