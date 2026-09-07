@@ -24,6 +24,16 @@
 //! The traces are of what the machine and the far end can see: the port's
 //! status register, what reached the cable and when, the interface's CSR,
 //! its bit count and its interrupt request, and the ether's log.
+//!
+//! **What a comparison like this cannot do is worth knowing.** Running the
+//! same model at two grains catches an error in the *rate* --- a batch
+//! that takes the wrong number of steps --- and never one in a
+//! *precondition*, because both runs share it and both get it equally
+//! wrong. `Turn::idle_run`'s refusals are the case in point: with its
+//! `frames.is_empty()` guard removed, every test in this file still
+//! passes, and so does the netlist cross-check. That is why the direct
+//! stepped-against-batched unit tests live beside `Turn` itself in
+//! `src/chaos/board.rs`.
 
 use muir::chaos::board::Interface;
 use muir::chaos::ether::{Capture, Ether, Event};
