@@ -58,26 +58,26 @@ pub const TIMEOUT_DIVIDER: u64 = 128;
 /// `sys/doc/disk.text`'s "a disk operation took longer than 2.5 seconds"
 /// and the netlist board ran at 1.536 s, and nothing said which muir meant.
 ///
-/// **Which of MIT's two figures is right is unsettled**, and the drawing is
-/// followed because this project ranks a drawing above documentation:
+/// **Settled by the part's own data sheet, and MIT's prose was right.**
+/// The SN74LS124 sheet --- TI's *TTL Data Book*, 2nd edition of 1976, pages
+/// 7-123 to 7-128, a part deleted in 1981 and replaced by the 'LS629, which
+/// is why no standalone sheet for it survives --- gives the LS part
+/// `fo = 1e-4 / Cext`, its own constant and not the S part's `5e-4`.
 ///
-/// - The drawing is self-consistent.  `mit/cadrdc/dctmot.drw` carries
-///   `;Period = 12 ms` on the body *and* labels the net
-///   `|TIMEOUT    ;1.5 SEC`; 12 ms x 128 is 1.536 s, so MIT did this
-///   arithmetic on their own sheet.
-/// - But it disagrees with its own other section.  The timing capacitor is
-///   **2 uF, not 1**: `dc.wlr` puts C04 pins 1 *and* 2 on `VCO.C1` and 15
-///   *and* 16 on `VCO.C2`, joined BARE, and MIT's parts list gives 1 uF on
-///   both those body positions.  Section 2 has one 220 pF body and is drawn
-///   `PERIOD = 1.8 - 2.0 usec.`.  Scaling within the one package,
-///   1.9 us x (2 uF / 220 pF) is 17.3 ms, which would make the timeout
-///   2.1-2.3 s and put `disk.text`'s 2.5 s nearer the mark than the
-///   drawing's own note.  The two properties are inconsistent by 1.44.
+/// The board carries **2 uF** on this section: `dc.wlr` puts C04 pins 1
+/// *and* 2 on `VCO.C1` and 15 *and* 16 on `VCO.C2`, joined BARE, and MIT's
+/// parts list gives 1 uF on both those positions.  That is 50 Hz, a 20 ms
+/// period, and 20 ms x 128 is 2.56 s --- `disk.text`'s "longer than 2.5
+/// seconds".
 ///
-/// So the `12 ms` may be a design estimate off a log-log curve rather than
-/// the board.  Settling it needs a 74LS124 datasheet --- no LS sheet has
-/// reached this project, and the S part's curve is not the LS part's, which
-/// MIT says outright in `cadr1/busint.eco` ECO 5 --- or a scope.
+/// The drawing's `;Period = 12 ms` corresponds to 1.2 uF, one capacitor and
+/// a little stray, and its `|TIMEOUT ;1.5 SEC` note is that figure counted
+/// down.  Both were written before the second body went on.
+///
+/// An earlier reading here took the drawing over the text, on the rule that
+/// a drawing outranks documentation.  The rule holds.  What it does not
+/// cover is the part's own data sheet, which outranks both and agrees with
+/// the text.
 ///
 /// The timeout is also optional hardware: `cadrdc/disk.hand` and `dc.eco`
 /// make it the hand jumper `J5-16 : J5-41`, and without it `-TIMEOUT ENB`

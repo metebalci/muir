@@ -604,9 +604,37 @@ fn vco_period(page: &str, reference: &str, section: u8) -> (u64, u64) {
     }
 }
 
-/// The disk controller's timeout clock, `dctmot` 0B04 section 1: 12 ms,
-/// by the drawing's own property on that body.
-pub const DISK_TIMEOUT_VCO_PERIOD: (u64, u64) = (12_000_000, 1);
+/// The disk controller's timeout clock, `dctmot` 0B04 section 1: 20 ms.
+///
+/// **Not the drawing's `;Period = 12 ms`, and the difference is a second
+/// capacitor.** The SN74LS124's own data sheet --- TI's *TTL Data Book for
+/// Design Engineers*, 2nd edition of 1976, pages 7-123 to 7-128, a part TI
+/// deleted in 1981 and replaced with the 'LS629, which is why no separate
+/// sheet for it survives --- gives the LS its own constant, distinct from
+/// the S part's:
+///
+/// ```text
+///     fo = 1 x 10^-4 / Cext   for 'LS124      fo = 5 x 10^-4 / Cext   for 'S124
+/// ```
+///
+/// The board as wrapped has **2 uF** on this section, not 1: `dc.wlr` puts
+/// C04 pins 1 *and* 2 on `VCO.C1` and 15 *and* 16 on `VCO.C2`, joined BARE,
+/// and MIT's parts list gives 1 uF on both those body positions. Two
+/// capacitors in parallel. 1e-4 / 2e-6 is 50 Hz, a 20 ms period.
+///
+/// The drawing's 12 ms corresponds to 1.2 uF, which is one capacitor and a
+/// little stray: the property was written for the section before the second
+/// body went on, and its `|TIMEOUT ;1.5 SEC` note is that figure counted
+/// down. With the board as built, 20 ms through the 74393's divide by 128
+/// is **2.56 s**, and `sys/doc/disk.text` says the timeout error means "a
+/// disk operation took longer than 2.5 seconds". MIT's prose was right and
+/// the drawing's two notes are stale.
+///
+/// This reverses an earlier reading which took the drawing over the text on
+/// the rule that a drawing outranks documentation. The rule holds; what
+/// changed is that the part's own data sheet outranks both, and it agrees
+/// with the text.
+pub const DISK_TIMEOUT_VCO_PERIOD: (u64, u64) = (20_000_000, 1);
 
 fn dip_oscillator_period(page: &str, reference: &str) -> (u64, u64) {
     match (page, reference) {
