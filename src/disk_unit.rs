@@ -354,6 +354,16 @@ pub mod format {
     pub const POSTAMBLE: usize = 44;
     /// The sector, 1,164 bytes.
     pub const SECTOR: usize = 1164;
+    /// The track: "A track contains (approximately) 20160. bytes (on a
+    /// T-80 or a T-300)."  Seventeen sectors of [`SECTOR`] are 19,788 of
+    /// them, and the rest is the [`LEFTOVER`] below.
+    pub const TRACK: usize = 20160;
+    /// "Jumpers in the disk are set to give 17. sector pulses per track,
+    /// or one every 1164. bytes, with a little left over at the end of
+    /// the track."  372 bytes, holding no block: it is the shortest gap
+    /// of the turn and the one the index closes.  Written with ones, as
+    /// every gap the format leaves is.
+    pub const LEFTOVER: usize = TRACK - 17 * SECTOR;
     /// Where the header's sync byte sits, from the sector pulse.
     pub const HEADER_SYNC_AT: usize = PREAMBLE + VFO_LOCK;
     /// Where the data's sync byte sits.

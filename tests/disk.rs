@@ -1072,33 +1072,6 @@ fn a_reserved_code_hangs_the_controller_until_the_timeout() {
     );
 }
 
-/// **The track commands end with a timeout error, and the simulator goes
-/// on.** Read All and Write All move a track's raw bits, headers and all,
-/// and 01, 03 and 12 enter the Write, Write All and Read All sectors with
-/// the memory channel turned round; this model has no track format for
-/// any of them, where the netlist controller and its drive have. Each is
-/// answered with the timeout error at once, the words untouched, and the
-/// next transfer clears it as it clears the other errors.
-#[test]
-fn the_track_commands_end_with_a_timeout_error() {
-    for cmd in [0o02u32, 0o13, 0o01, 0o03, 0o12] {
-        let (mut d, mut main) = blank();
-        main[CLP as usize] = 2 << 8;
-        main[2 << 8] = 0o525252;
-        d.write(reg::COMMAND, cmd, &mut main);
-        d.write(reg::CLP, CLP, &mut main);
-        d.write(reg::DISK_ADDRESS, 0, &mut main);
-        d.write(reg::START, 0, &mut main);
-        let s = d.status();
-        assert_ne!(s & status::TIMEOUT, 0, "command {cmd:o}: the timeout error");
-        assert_ne!(s & status::NOT_ACTIVE, 0, "command {cmd:o}: ready again");
-        assert_eq!(main[2 << 8], 0o525252, "command {cmd:o}: no words moved");
-        d.write(reg::COMMAND, 0, &mut main);
-        d.write(reg::START, 0, &mut main);
-        assert_eq!(d.status() & status::TIMEOUT, 0, "command {cmd:o}: the next transfer clears it");
-    }
-}
-
 /// **The record of tags is bounded.** It is there for a test to read back;
 /// a long run's seeks would otherwise grow it for the life of the run.
 #[test]
@@ -1206,4 +1179,123 @@ fn a_ccw_page_is_twenty_two_bits_wide() {
     assert_eq!(d.status() & status::NXM, 0, "the two bits are not part of the address");
     assert_eq!(&main[512..768], &main[256..512], "the block landed in page 2");
     assert_eq!(d.read(reg::MEMORY_ADDRESS), 2 * 256 + 255);
+}
+
+// --- Read All and Write All -------------------------------------------------
+
+/// A command run on the controller with a command list of `pages` CCWs
+/// starting at `page`, the disk address `da`, and the timer advanced past
+/// [`TIMEOUT_NS`] so that a command which hangs has shown it.
+fn run(d: &mut Controller, main: &mut [u32], cmd: u32, da: u32, page: u32, pages: u32) {
+    for k in 0..pages {
+        main[CLP as usize + k as usize] = (page + k) << 8 | u32::from(k + 1 < pages);
+    }
+    d.write(reg::COMMAND, cmd, main);
+    d.write(reg::CLP, CLP, main);
+    d.write(reg::DISK_ADDRESS, da, main);
+    d.write(reg::START, 0, main);
+    d.advance(TIMEOUT_NS * 2);
+}
+
+/// **Read All hands over the track's own bytes, and does not time out.**
+///
+/// "0002 Read All.  Reads all bits of the disk starting at the specified
+/// rotational position."  So what lands in memory is the format ---
+/// preamble, sync, header, checkword, relock, sync, pad, data, checkword,
+/// postamble --- and `disk_unit::parse_sector` reads it back off its bits
+/// as the controller's own receiver would.  Before this the model had no
+/// track format and answered the command with a timeout error, which is
+/// `STATUS<11>`, a hardware fault that had not happened: issue #8.
+#[test]
+fn read_all_hands_over_the_tracks_own_bytes() {
+    use muir::disk_unit::{format, parse_sector};
+    let Some((mut d, mut main)) = loaded() else { return };
+    // The first block of the pack, whose data an ordinary Read gives too.
+    let mut ordinary = vec![0u32; 1 << 16];
+    let Some((mut e, _)) = loaded() else { return };
+    read_block(&mut e, &mut ordinary, 0, 1);
+    let block0: Vec<u32> = ordinary[0o400..0o400 + BLOCK_WORDS].to_vec();
+
+    // Read All from the same rotational position, a track's worth of pages.
+    let pages = format::SECTOR.div_ceil(BLOCK_WORDS * 4) as u32 + 1;
+    run(&mut d, &mut main, 0o02, 0, 16, pages);
+    assert_eq!(d.status() & status::TIMEOUT, 0, "no timeout: {:o}", d.status());
+    assert_eq!(d.status() & status::NOT_ACTIVE, status::NOT_ACTIVE, "and the transfer is over");
+
+    // The bytes of the first sector, low-order byte first, parsed back.
+    let words = &main[0o10000..0o10000 + pages as usize * BLOCK_WORDS];
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let bits: Vec<bool> =
+        bytes.iter().flat_map(|&b| (0..8).map(move |k| b >> k & 1 != 0)).collect();
+    let s = parse_sector(&bits).expect("a sector in what Read All handed over");
+    assert!(s.header_checks, "the header checkword");
+    assert!(s.data_checks, "the data checkword");
+    assert_eq!(s.header & 0x0fff_ffff, 0, "cylinder 0, head 0, block 0");
+    assert_eq!(s.data.to_vec(), block0, "the block an ordinary Read gives");
+}
+
+/// **What Write All lays down, an ordinary Read reads back.**  That is
+/// what the command is for: "The format is determined by the program that
+/// uses the Write All operation to format the disk."  A track image built
+/// in memory, written with 0013, and then the ordinary Read of a block in
+/// it gives the data the image carried.
+#[test]
+fn write_all_formats_a_track_an_ordinary_read_can_read() {
+    use muir::disk_unit::{format, sector_image};
+    let mut d = Controller::default();
+    d.attach(0, Unit::blank(Geometry::T300));
+    let mut main = vec![0u32; 1 << 16];
+
+    // Two sectors of a track, each with its own data, laid out as bytes and
+    // packed into memory low-order byte first.
+    let g = Geometry::T300;
+    let data = |n: u32| std::array::from_fn::<u32, BLOCK_WORDS, _>(|i| n * 0x10000 + i as u32);
+    let mut bytes = Vec::new();
+    for block in 0..2u32 {
+        bytes.extend(sector_image(&g, 0, 0, block, &data(block + 1)));
+    }
+    assert_eq!(bytes.len(), 2 * format::SECTOR);
+    let words: Vec<u32> = bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
+    let pages = words.len().div_ceil(BLOCK_WORDS);
+    main[0o10000..0o10000 + words.len()].copy_from_slice(&words);
+
+    run(&mut d, &mut main, 0o13, 0, 16, pages as u32);
+    assert_eq!(d.status() & status::TIMEOUT, 0, "no timeout: {:o}", d.status());
+
+    // And the ordinary Read of each block gives what the image carried.
+    for block in 0..2u32 {
+        let mut back = vec![0u32; 1 << 16];
+        read_block(&mut d, &mut back, block, 1);
+        assert_eq!(
+            back[0o400..0o400 + BLOCK_WORDS],
+            data(block + 1),
+            "block {block} read back after Write All"
+        );
+    }
+}
+
+/// **None of the seven answers with a timeout any more, and `xxx7` still
+/// does.**
+///
+/// A timeout is `STATUS<11>`, "a disk operation took longer than 2.5
+/// seconds", a hardware fault the software cannot tell from a failing
+/// drive.  `cadrdc/newdsk.31` has the command PROM "divided into 8 sectors
+/// of 64 words each", so the sector is `<2:0>` alone and `<3>` only steers
+/// the memory channel: every one of these lands in a sector the listing
+/// fills, and the board runs it.  Sector 7 is the exception the listing
+/// leaves empty, 700 to 777, where `sys/doc/disk.text` says the sequencer
+/// "will currently hang the controller, causing a timeout error".
+#[test]
+fn only_the_unwritten_sector_times_out() {
+    for cmd in [0o00, 0o01, 0o02, 0o03, 0o10, 0o11, 0o12, 0o13, 0o04, 0o14, 0o05, 0o15, 0o06, 0o16]
+    {
+        let Some((mut d, mut main)) = loaded() else { return };
+        run(&mut d, &mut main, cmd, 0, 8, 1);
+        assert_eq!(d.status() & status::TIMEOUT, 0, "{cmd:o} timed out: {:o}", d.status());
+    }
+    for cmd in [0o07, 0o17] {
+        let Some((mut d, mut main)) = loaded() else { return };
+        run(&mut d, &mut main, cmd, 0, 8, 1);
+        assert_ne!(d.status() & status::TIMEOUT, 0, "{cmd:o} is unwritten PROM and hangs");
+    }
 }
