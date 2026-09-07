@@ -1598,6 +1598,29 @@ impl Rtl {
     fn master_clock_cycle(&mut self, r: &Read) -> u64 {
         let before = self.ns;
         self.land_write(self.ns + SPEEDCLK_NS);
+        // The debug master's write of the mode register is carried to
+        // `SPEEDCLK` too, not only to the edge.  The processor's own write
+        // is, on the line above, for the reason [`Rtl::land_write`] gives:
+        // the speed synchroniser samples the register sixty nanoseconds
+        // into every generator cycle.  A write over the debug cable lands
+        // in [`Rtl::debug_cycle`] instead, and landing it only at the edge
+        // made this engine take a speed change **one generator cycle later
+        // than the board does**.  Measured against the netlist: the mode
+        // register loads at 5093 ns, `SPEED1A` follows at the 5100
+        // `SPEEDCLK` and `SSPEED1` at the 5320 one, so the board's cycle
+        // beginning 5260 already runs at the new length --- while `rtl`,
+        // having landed the write only at 5260, was still an extra-slow
+        // cycle behind and ran 220 where the board ran 145.  The two then
+        // stood 75 ns apart, which is 220 less 145, for the rest of the
+        // run.  `chip_and_rtl_take_a_speed_change_on_the_same_cycle` holds
+        // it.
+        //
+        // Only when there is a debug write still to land: this runs every
+        // microcycle, and a machine with nothing on the cable answers
+        // `None` here without touching the state machine.
+        if !self.debug_written && self.busint.debug_answered_at().is_some() {
+            self.debug_cycle(self.ns + SPEEDCLK_NS);
+        }
         self.speedclk();
         self.ns += self.speed.cycle_ns(r.ilong) as u64;
         self.bus_cycle(self.ns);
@@ -2278,6 +2301,11 @@ impl Rtl {
             }
             self.write_phase(&r);
             self.land_write(self.ns + SPEEDCLK_NS);
+            // The debug master's mode-register write reaches `SPEEDCLK`
+            // here as the processor's does; see [`Rtl::master_clock_cycle`].
+            if !self.debug_written && self.busint.debug_answered_at().is_some() {
+                self.debug_cycle(self.ns + SPEEDCLK_NS);
+            }
             self.speedclk();
             // "Note that the bus interface interface must work whether the
             // cpu is stopped or not.  Once a cycle is started it goes to

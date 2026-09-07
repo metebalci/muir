@@ -3288,6 +3288,72 @@ fn chip_and_rtl_arbitrate_a_debug_cycle_against_a_running_processor_alike() {
     eprintln!("{done} reads of the error status parked alike on both, at {} ns", r.ns());
 }
 
+/// **A speed change is taken on the same generator cycle by the board and
+/// by `rtl`.**  The mode register's two speed bits pick which tap of the
+/// delay line ends the read phase, and the 74S174 at OLORD1 1A01 is a
+/// two-stage synchroniser on `SPEEDCLK` between the register and the
+/// multiplexer.  Nothing else in this file changes speed --- every board
+/// test runs at the extra slow the machine comes up at --- so the cycle a
+/// change lands on went unchecked until this.
+///
+/// It was wrong.  `rtl` landed a debug master's write of the mode register
+/// only at the master clock edge, so the `SPEEDCLK` sixty nanoseconds into
+/// the cycle the write arrived in did not see it and the whole
+/// synchroniser ran a cycle behind the board's.  The board's cycle at 5260
+/// ns ran the new 145 and `rtl`'s ran the old 220, and the two stood 75 ns
+/// apart --- 220 less 145 --- from there on, never meeting again.
+///
+/// Here the debugger writes each of the four speeds in turn with the
+/// machine running, and after each the eight cycles that follow must take
+/// exactly eight of that speed's periods on the board and leave `rtl` on
+/// the same nanosecond.
+#[test]
+fn chip_and_rtl_take_a_speed_change_on_the_same_cycle() {
+    use muir::clock::{Clock, Speed};
+    use muir::spy;
+
+    let n = netlist::parse(NETLIST).unwrap();
+    let bus_n = netlist::parse(BUSINT).unwrap();
+    let mut m = muir::machine::Machine::new();
+    // Fillers throughout: no memory cycle, so no wait can stretch a
+    // generator cycle and the periods below are the speed's alone.
+    m.amem[3] = 0o123456;
+    m.load_prom(&vec![muir::isa::asm::filler(); 512]);
+    let (mut c, mut clk, mut far, mut r) = same_program(&n, &m);
+    let clk0 = cpu_clock(&n);
+    let cable = DebuggerOnCable::new(&bus_n);
+    for _ in 0..8 {
+        generator_cycle(&mut c, &mut far, &mut clk, clk0);
+    }
+    meet(&n, &mut c, &mut far, &mut clk, &mut r, clk0);
+
+    let lock = Lockstep::new(&n, &cable, clk0, Debuggee::Running, 0);
+    let speeds = [(2u16, Speed::Normal), (1, Speed::Slow), (3, Speed::Fast), (0, Speed::ExtraSlow)];
+    for (bits, speed) in speeds {
+        lock.spy_write(&mut c, &mut far, &mut clk, &mut r, spy::MODE, bits);
+        meet(&n, &mut c, &mut far, &mut clk, &mut r, clk0);
+        // Past the two stages of the synchroniser, whichever cycle of the
+        // write the register happened to load in.
+        for _ in 0..3 {
+            generator_cycle(&mut c, &mut far, &mut clk, clk0);
+        }
+        meet(&n, &mut c, &mut far, &mut clk, &mut r, clk0);
+        let from = clk.time_ns();
+        for _ in 0..8 {
+            generator_cycle(&mut c, &mut far, &mut clk, clk0);
+        }
+        let took = clk.time_ns() - from;
+        assert_eq!(
+            took,
+            8 * speed.cycle_ns(false) as u64,
+            "eight cycles at {speed:?} on the board"
+        );
+        meet(&n, &mut c, &mut far, &mut clk, &mut r, clk0);
+        assert_eq!(r.ns(), clk.time_ns(), "and rtl on the same nanosecond at {speed:?}");
+        eprintln!("{speed:?}: {} ns a cycle on both, at {} ns", speed.cycle_ns(false), r.ns());
+    }
+}
+
 // --- The debug cable on DBGOUT -----------------------------------------------
 
 /// The far end of the debugger's cable as a harness plays it: the DBGOUT
