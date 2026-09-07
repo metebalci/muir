@@ -52,12 +52,17 @@ pub const XBUS_ACK_NS: u64 = 60;
 /// How long the bus interface waits before giving up on an address.
 ///
 /// **There are two timers and they are not the same.** MIT's
+/// From the first edge of the timeout counter's clock after the grant to
+/// the edge that registers `NXM TIMEOUT`: five intervals of the 74LS124 at
+/// REQTIM 0A01, [`NXM_VCO_NS`] each. Where the first edge falls against
+/// the grant is the clock's business, and [`nxm_timeout_at`] has it.
+///
 /// `sys/doc/disk.text` says a device that "failed to respond within 15
 /// microseconds" is a nonexistent-memory error --- but that is the *disk
 /// controller* timing out its own Xbus cycles. The one that times out the
 /// processor's is a PROM on the bus interface, and it is dumped:
-/// `cadr1/reqtim.prom`, "REQTIM NXM TIMEOUT PROM (74S288)", a 32x8 clocked
-/// "roughly 2 uSec" whose own comments give
+/// `cadr1/reqtim.prom`, "REQTIM NXM TIMEOUT PROM (74S288)", a 32x8 table
+/// walked one state per clock, whose own comments give
 ///
 /// ```text
 ///                 Normal      When referencing other processor
@@ -65,28 +70,54 @@ pub const XBUS_ACK_NS: u64 = 60;
 /// HUNG timeout    20 uSec     32 uSec
 /// ```
 ///
-/// So this is 10 microseconds, on the authority of the part that does it,
-/// counted from the grant: `INT BUSY` rises with `LMX GRANT` or `LMUB
-/// GRANT` and starts the 74LS124 that clocks the counter, so the 80 ns of
-/// setup before `-XBUS RQ` are inside it, not before it. The netlist bus
-/// interface acknowledges a cycle nothing answers 10,000 ns after the
-/// grant to the nanosecond, and `tests/cables.rs` found the 80 when a
-/// microcycle's edge fell between. A model reading the PROM instead of
-/// this constant would get the warning and the hung timeouts with it. The second
-/// column is the debug cable's, [`DEBUG_TIMEOUT_NS`] --- and the PROM's
-/// table says 26, not the 30 its header says.
-pub const TIMEOUT_NS: u64 = 10_000;
+/// **What the PROM fixes is the count, and its microseconds are another
+/// board's.** The register it drives --- the 74LS273 at REQTIM 0B01, held
+/// clear by `INT BUSY` until the grant and clocked by the oscillator's
+/// output --- walks one state per rising edge; state 5 is where the table
+/// raises `PROM NXM TIMEOUT`, and the flag is registered on the edge after,
+/// the sixth. The header's "This Assumes Roughly 2 uSec clock intervals"
+/// is the clock of the board after `cadr1/busint.eco` item 5 of February
+/// 1981 put an S part at 1000 pF there; the board the netlist is built
+/// from has the LS part at 100 pF, which its own sheet puts near a
+/// microsecond ([`crate::chip::VCO_PERIOD`] has the evidence, and the
+/// band). The oscillator has run since power-on and its output is gated,
+/// not started, by the grant, so the sixth edge is between five and a half
+/// intervals and six and a half after it: the PROM's 10 microseconds is
+/// 5.5 to 6.5 here, and `rtl` gives a cycle up at the instant the board
+/// does, to the nanosecond (`tests/chip.rs`). The 80 ns of setup before
+/// `-XBUS RQ` are inside the wait, not before it: `INT BUSY` rises with
+/// `LMX GRANT` or `LMUB GRANT`. The second column is the debug cable's,
+/// [`DEBUG_TIMEOUT_NS`] --- and the PROM's table says 26, not the 30 its
+/// header says.
+pub const TIMEOUT_NS: u64 = 5 * NXM_VCO_NS;
 
 /// The interval of the 74LS124 at REQTIM 0A01 that clocks the timeout
-/// counter: "roughly 2 uSec" by the PROM's own comments, and 2,000 ns on
-/// the netlist board, where two figures of MIT's own table pin it --- see
-/// `chip`'s `Oscillator`.  It shows when the counter is let go: a
-/// cycle held open by the debug modifier's timeout inhibit and released at
-/// instants a microsecond apart was given up on at instants 2,000 ns apart
-/// --- [`TIMEOUT_NS`] after the first of the oscillator's edges past the
-/// release, the edges reckoned from the grant, where `INT BUSY` started
-/// it (`chip_and_rtl_hold_an_unanswered_cycle_under_the_timeout_inhibit_alike`).
-pub const NXM_VCO_NS: u64 = 2_000;
+/// counter: [`crate::chip::VCO_PERIOD`], 1,000 ns, in whole nanoseconds.
+///
+/// The oscillator runs from power-on and the grant only opens its output,
+/// which `rtl` reckons as `chip` runs it, through [`crate::chip::gated_rise`]
+/// from `t = 0`. The board showed the counter is let go the same way when
+/// the debugger's timeout inhibit is lifted: a cycle held open by the
+/// inhibit and released at instants a microsecond apart was given up on at
+/// instants an interval apart --- [`TIMEOUT_NS`] after the first of the
+/// output's rising edges past the release, the edges those of the clock
+/// from power-on (`chip_and_rtl_hold_an_unanswered_cycle_under_the_timeout_inhibit_alike`).
+pub const NXM_VCO_NS: u64 = crate::chip::VCO_PERIOD.0 / crate::chip::VCO_PERIOD.1;
+
+/// When a cycle granted at `granted_at` is given up on if nothing answers
+/// it: `INT BUSY` lets the counter go at the grant, and `NXM TIMEOUT` is
+/// registered on the sixth rising edge of the oscillator's output after
+/// that, [`TIMEOUT_NS`] after the first.
+pub fn nxm_timeout_at(granted_at: u64) -> u64 {
+    crate::chip::gated_rise(crate::chip::VCO_PERIOD, granted_at, 1) + TIMEOUT_NS
+}
+
+/// When the debugger's own interface gives up a debug cycle granted at
+/// `granted_at` that the other machine has not answered: the fourteenth
+/// edge, [`DEBUG_TIMEOUT_NS`] after the first.
+pub fn debug_timeout_at(granted_at: u64) -> u64 {
+    crate::chip::gated_rise(crate::chip::VCO_PERIOD, granted_at, 1) + DEBUG_TIMEOUT_NS
+}
 
 /// An ideal device: it answers as early as the bus allows.
 ///
@@ -259,13 +290,15 @@ pub const DEBUG_OUT_REQUEST_NS: u64 = 100;
 /// giving up on a debug cycle: the REQTIM PROM's second table, selected by
 /// `DEBUG REQUEST ACTIVE` --- `SELECT DEBUG` registered in the 74LS273 at
 /// REQTIM 0B01 --- which raises `NXM TIMEOUT` at count 13, "35 36 ;26 usec
-/// NXM timeout", thirteen of the 74LS124's intervals from `INT BUSY` at
-/// the grant, as the first table's count 5 is [`TIMEOUT_NS`].  **The
-/// PROM's own header says 30 microseconds** ("When referencing other
-/// processor: NXM timeout 30 uSec, HUNG timeout 32 uSec"); its table says
-/// 26 and 30.  The table is what is burned (discrepancy 67).
-/// Not yet measured on the netlist board.
-pub const DEBUG_TIMEOUT_NS: u64 = 26_000;
+/// NXM timeout", thirteen of the 74LS124's intervals after the first edge
+/// of its output past the grant, as the first table's count 5 is
+/// [`TIMEOUT_NS`]; [`debug_timeout_at`] has the instant.  **The PROM's own
+/// header says 30 microseconds** ("When referencing other processor: NXM
+/// timeout 30 uSec, HUNG timeout 32 uSec"); its table says 26 and 30.  The
+/// table is what is burned (discrepancy 67), and the microseconds are the
+/// later board's: on this one the wait from the grant is between 13.5 and
+/// 14.5.  Measured on the netlist board in `tests/chip.rs`.
+pub const DEBUG_TIMEOUT_NS: u64 = 13 * NXM_VCO_NS;
 
 /// The memory board's timing, as `rtl` runs it: a behavioural twin of the
 /// control logic of `data/CADRM.netlist`, measured on the netlist board in
@@ -1171,8 +1204,8 @@ pub struct Busint {
     debug_out: Option<DebugOut>,
     /// A request is on the cable and the far machine has not answered.
     debug_out_pending: bool,
-    /// When the debugger's interface gives up on it: `INT BUSY` at the
-    /// grant plus [`DEBUG_TIMEOUT_NS`].
+    /// When the debugger's interface gives up on it: [`debug_timeout_at`]
+    /// the grant, where `INT BUSY` let the counter go.
     debug_out_timeout_at: u64,
     /// The earliest instant at which a master clock edge changes any twin,
     /// [`MemoryBoard::next_change`] over all of them: an edge before it
@@ -1469,7 +1502,7 @@ impl Busint {
                                         strobe,
                                     });
                                     self.debug_out_pending = true;
-                                    self.debug_out_timeout_at = now + DEBUG_TIMEOUT_NS;
+                                    self.debug_out_timeout_at = debug_timeout_at(now);
                                     (u64::MAX, u64::MAX, false)
                                 } else {
                                     (msyn, msyn, false)
@@ -1491,8 +1524,8 @@ impl Busint {
         self.debug_edge(now);
     }
 
-    /// When a cycle nothing answers is given up on: [`TIMEOUT_NS`] from
-    /// the grant, or never while the debugger holds
+    /// When a cycle nothing answers is given up on: [`nxm_timeout_at`] the
+    /// grant, or never while the debugger holds
     /// [`debug_modifier::TIMEOUT_INHIBIT`] --- the counter at REQTIM 0B01
     /// is held clear.
     fn timeout(&mut self, now: u64) -> u64 {
@@ -1500,7 +1533,7 @@ impl Busint {
         if self.debug_modifier & debug_modifier::TIMEOUT_INHIBIT != 0 {
             u64::MAX
         } else {
-            now + TIMEOUT_NS
+            nxm_timeout_at(now)
         }
     }
 
@@ -1782,11 +1815,11 @@ impl Busint {
                 let was = self.debug_modifier;
                 self.debug_modifier = req.dbd & 7;
                 // The timeout counter, held clear while the inhibit was up,
-                // counts from its release --- from the first edge of its
-                // oscillator past the release, the oscillator having run
-                // from the grant: a cycle of the processor's that nothing
-                // answers is given up on [`TIMEOUT_NS`] after that edge.
-                // Measured on the netlist board; see [`NXM_VCO_NS`].
+                // counts from its release --- from the first rising edge
+                // of the oscillator's output past the release, the output
+                // open since the grant: a cycle of the processor's that
+                // nothing answers is given up on [`TIMEOUT_NS`] after that
+                // edge. Measured on the netlist board; see [`NXM_VCO_NS`].
                 let inhibit = debug_modifier::TIMEOUT_INHIBIT;
                 if was & inhibit != 0
                     && self.debug_modifier & inhibit == 0
@@ -1795,8 +1828,11 @@ impl Busint {
                 {
                     let _ = (loadmd, answered);
                     let lift = self.debug_requested_at.saturating_add(req.hold_ns);
-                    let since = lift.saturating_sub(self.granted_at);
-                    let edge = self.granted_at + (since / NXM_VCO_NS + 1) * NXM_VCO_NS;
+                    let edge = crate::chip::gated_rise_after(
+                        crate::chip::VCO_PERIOD,
+                        self.granted_at,
+                        lift.max(self.granted_at),
+                    );
                     // The same shape as a Unibus cycle timing out unheld.
                     let nxm = edge + TIMEOUT_NS;
                     self.state = State::Granted {
@@ -1875,8 +1911,8 @@ impl Busint {
     /// `NAND(-UBX GRANT, -LMX GRANT, -LMUB GRANT)` at RQSYNC 0C13 and
     /// knows nothing of this master, so a cycle nothing answers waits for
     /// the debugger to give up, which its own interface does at
-    /// [`DEBUG_TIMEOUT_NS`], 26 microseconds.  `SACK` drops with the master
-    /// set.
+    /// [`debug_timeout_at`] its grant, 13.5 to 14.5 microseconds on.
+    /// `SACK` drops with the master set.
     fn debug_set_master(&mut self, now: u64) {
         let req = self.debug_request.expect("a debug master with no request");
         let msyn = now + DEBUG_MSYN_NS;

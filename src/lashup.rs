@@ -14,8 +14,8 @@
 //! `DEBUG ACK` can rise ([`Rtl::debug_in_promise`]), and a machine is
 //! stepped only when the step cannot carry it past the other's promise.
 //! Simulated time and not wall time, because the debugger's interface
-//! times a debug cycle out at [`crate::busint::DEBUG_TIMEOUT_NS`] of
-//! *machine* time.
+//! times a debug cycle out [`crate::busint::DEBUG_TIMEOUT_NS`] after the
+//! first edge of its timeout clock, in *machine* time.
 //!
 //! A step of [`Rtl`] may run past the bound it is given by less than one
 //! generator cycle at the slowest speed ([`Rtl::step_until`]), so that is

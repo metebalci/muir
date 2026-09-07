@@ -442,13 +442,16 @@ fn a_debug_cycle_the_debuggee_never_answers_times_out_on_the_debugger() {
     lashup.run_until(granted + 3_000).unwrap();
     assert!(lashup.debugger.busint().debug_out_pending(), "the request is out, unanswered");
     assert!(lashup.debuggee.busint().debug_master(), "DBUB MASTER holds the debuggee's Unibus");
-    // A timeout of 26 microseconds from the grant has not come at 24; it has
-    // at 28, where the header's 30 would not have.
-    lashup.run_until(granted + 24_000).unwrap();
-    assert!(lashup.debugger.busint().debug_out_pending(), "still waiting 24 microseconds on");
+    // The debugger's timeout counter registers its NXM on the fourteenth
+    // edge of a clock that has run since power-on, between 13.5 and 14.5
+    // microseconds after the grant (`busint::debug_timeout_at`): not yet at
+    // 13, and by 15, where the PROM's 26 --- the header's 30 --- would not
+    // have come, those being a later board's microseconds.
+    lashup.run_until(granted + 13_000).unwrap();
+    assert!(lashup.debugger.busint().debug_out_pending(), "still waiting 13 microseconds on");
     assert_eq!(lashup.debugger.machine().amem[0o101], 0, "no word yet");
-    lashup.run_until(granted + 28_000).unwrap();
-    assert!(!lashup.debugger.busint().debug_out_pending(), "given up on by 28 microseconds");
+    lashup.run_until(granted + 15_000).unwrap();
+    assert!(!lashup.debugger.busint().debug_out_pending(), "given up on by 15 microseconds");
     let a = lashup.debugger.machine();
     assert_eq!(a.bus_error, bus_error::UNIBUS_NXM, "the debugger's own NXM timeout");
     assert_eq!(a.amem[0o101], 0xffff, "the word of a cycle nothing answered: the open bus");
