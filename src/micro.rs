@@ -192,8 +192,17 @@ impl Micro {
     /// make.  See `Rtl::mclk_edge`, which this follows.
     fn mclk_edge(&mut self) {
         // The I/O board's own clock runs on between the processor's
-        // references to it: the mouse's lines are sampled up to now.
-        self.m.ioboard.sample_mouse(self.m.ns);
+        // references to it: the mouse's lines under `KB CLK^`, the serial
+        // port's characters, and the Chaosnet's frames off the cable.  A
+        // register access advances the device it names by itself, but the
+        // Chaosnet's `RECEIVE DONE` and `Transmit Done` are set nowhere
+        // else, and `IoBoard::interrupt_request` only reads them --- so an
+        // engine that does not do this is an engine whose Chaosnet can
+        // never interrupt.  `tests/ioboard_clock.rs` holds every engine to
+        // it.  What this engine's clock is worth is said above: the
+        // machine's periods and `MEMORY_ACCESS_NS`, not the measured
+        // waits, so the board's clock runs a little fast against `rtl`'s.
+        self.m.ioboard.advance(self.m.ns);
         let boot = std::mem::take(&mut self.m.prog_boot);
         let reset = std::mem::take(&mut self.m.prog_reset) || boot;
         if reset {

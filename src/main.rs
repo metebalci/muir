@@ -69,9 +69,10 @@
 //! screen for as long as a viewer is looking at it once the run has
 //! stopped. In the lashup the other machine is served a terminal too, the
 //! display above this machine's, and `--debuggee-terminal` puts that
-//! elsewhere. On an engine with no Chaosnet the boot stops in the debugger
-//! at the initialization that wants a host: `Super-B` there, then the date
-//! and time it asks for and `y`, finish it.
+//! elsewhere. A machine that reaches no server --- `--chaos-address` at a
+//! pair its band does not call, say --- stops in the debugger at the
+//! initialization that wants a host: `Super-B` there, then the date and
+//! time it asks for and `y`, finish it. Every engine has a Chaosnet.
 //!
 //! Separately, and on every engine: the band's cold boot leaves the
 //! display's vertical interrupt off, so the mouse is not tracked until
@@ -488,31 +489,30 @@ A simulator of the MIT CADR Lisp Machine.
   --micro | --rtl | --chip     the engine: microinstruction, register
                                transfer, or chip level. [default: --rtl]
   --chaos-address <this>[,<server>]
-                               rtl, chip: this machine's Chaosnet address,
-                               always, and after a comma the Chaosnet
-                               server's --- the address muir's server on
-                               the other end of the cable answers at, for
-                               STATUS, TIME and UPTIME, and FILE when given
-                               a root. Each address is the sixteen bits in
-                               octal, 3050, or subnet:host with each in
-                               octal, 6:50 --- the same number, subnet in
-                               the high byte. Which pair a run wants is the
-                               band's own: System 100's host table has this
-                               machine at 3050 and its file and time host
-                               at 3060, System 304's at 4401 and 4403, and
-                               a server answering anywhere else is a server
-                               the band never calls. [default: 3050,3060,
-                               which is System 100's pair; the System 304
-                               pack wants 4401,4403]
+                               this machine's Chaosnet address, always, and
+                               after a comma the Chaosnet server's --- the
+                               address muir's server on the other end of
+                               the cable answers at, for STATUS, TIME and
+                               UPTIME, and FILE when given a root. Each
+                               address is the sixteen bits in octal, 3050,
+                               or subnet:host with each in octal, 6:50 ---
+                               the same number, subnet in the high byte.
+                               Which pair a run wants is the band's own:
+                               System 100's host table has this machine at
+                               3050 and its file and time host at 3060,
+                               System 304's at 4401 and 4403, and a server
+                               answering anywhere else is a server the band
+                               never calls. [default: 3050,3060, which is
+                               System 100's pair; the System 304 pack wants
+                               4401,4403]
   --chaos-file-root <dir>
-                               rtl, chip: the directory the Chaosnet server
-                               serves as its /; the band asks it for
-                               /tree/sys/... on System 100 and /sys/... on
-                               System 304. It may not be /: the service
-                               writes, renames and deletes under it.
-                               [default: vendor/run/file-root when present;
-                               with no root the server answers no FILE at
-                               all]
+                               the directory the Chaosnet server serves as
+                               its /; the band asks it for /tree/sys/... on
+                               System 100 and /sys/... on System 304. It
+                               may not be /: the service writes, renames
+                               and deletes under it. [default:
+                               vendor/run/file-root when present; with no
+                               root the server answers no FILE at all]
   --checkpoint <file>          micro, rtl: write the machine's whole state
                                to <file> when the run stops, for --resume
                                to start from: the engine, the processor's
@@ -693,10 +693,10 @@ A simulator of the MIT CADR Lisp Machine.
                                simulated time at the left and the wall
                                clock, the local time of day, at the right,
                                each hh:mm:ss; this drops that line.
-  --chaos-trace                rtl, chip: every Chaosnet packet and frame on
-                               the cable, to stderr. What to reach for when a
-                               lashup goes quiet: it shows whether the machine
-                               is still talking.
+  --chaos-trace                every Chaosnet packet and frame on the
+                               cable, to stderr. What to reach for when a
+                               lashup goes quiet: it shows whether the
+                               machine is still talking.
   -h, --help                   this.
   -V, --version                what this build calls itself: the version,
                                and whether it was built with optimisations
@@ -2626,8 +2626,8 @@ fn main() {
             Err(e) => (None, Some(e)),
         },
     };
-    // The Chaosnet server's file root, on the engines with a Chaosnet.
-    if which != Which::Micro && machine_chaos_wants_default(&chaos) {
+    // The Chaosnet server's file root.
+    if machine_chaos_wants_default(&chaos) {
         chaos.file_root = default_file_root();
     }
     // The other machine's Chaosnet: its own ether with its own server on
@@ -2666,9 +2666,6 @@ fn main() {
             ("--main-memory", "chip", which == Which::Chip),
             ("--tv", "chip", which == Which::Chip),
             ("--tv-board", "chip", which == Which::Chip),
-            ("--chaos-address", "rtl and chip", which != Which::Micro),
-            ("--chaos-file-root", "rtl and chip", which != Which::Micro),
-            ("--chaos-trace", "rtl and chip", which != Which::Micro),
         ] {
             if !has && given.iter().any(|w| w == flag) {
                 writeln!(s, "warning: {flag} is {engines}, and this run is {engine}: ignored")
@@ -2717,20 +2714,18 @@ fn main() {
                 writeln!(s, "pack: none; the boot waits on a drive that never answers").unwrap()
             }
         }
-        if which != Which::Micro {
-            let root = match &chaos.file_root {
-                Some(r) => format!("file root {}", shown(r)),
-                None => format!(
-                    "no file root, so STATUS, TIME and UPTIME but no FILE (--chaos-file-root, or make {VENDORED_FILE_ROOT})"
-                ),
-            };
-            writeln!(
-                s,
-                "chaosnet: {:o}, the server at {:o}, {root}",
-                chaos.address, chaos.server_address
-            )
-            .unwrap();
-        }
+        let root = match &chaos.file_root {
+            Some(r) => format!("file root {}", shown(r)),
+            None => format!(
+                "no file root, so STATUS, TIME and UPTIME but no FILE (--chaos-file-root, or make {VENDORED_FILE_ROOT})"
+            ),
+        };
+        writeln!(
+            s,
+            "chaosnet: {:o}, the server at {:o}, {root}",
+            chaos.address, chaos.server_address
+        )
+        .unwrap();
         writeln!(s, "terminal: {}", terminal_line(&terminal, &no_terminal, listen.addr)).unwrap();
         if debuggee {
             let pack = match debuggee_pack.as_ref() {
@@ -2810,7 +2805,16 @@ fn main() {
 
     match which {
         Which::Micro => {
-            let mut e = Micro::new(machine(&prom, pack, boards));
+            // The Chaosnet, as under rtl and chip: the interface is the
+            // I/O board's and the board is the machine's, so it is the
+            // same three lines whatever engine runs it.  What it wants
+            // from an engine is a clock, and this one has the machine's
+            // periods; `tests/micro_chaos.rs` holds the two engines to
+            // the same conversation with the server.
+            let mut m = machine(&prom, pack, boards);
+            m.chaos = chaos.clone();
+            m.plug_chaos(0);
+            let mut e = Micro::new(m);
             if auto_boot {
                 e.boot();
             }
