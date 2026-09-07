@@ -36,7 +36,7 @@ use muir::rtl::Rtl;
 use muir::simpletv::WIDTH;
 use muir::terminal::keyboard::{Keyboard, keysym};
 
-pub use crate::support::vendor;
+pub use crate::support::{pack_100, vendor};
 
 /// The two machines, A's keyboard, the FILE service's root and the
 /// recording of the two screens.
@@ -371,10 +371,21 @@ pub fn boot_and_login() -> Option<Cc> {
 }
 
 /// The same, `debuggee_pack` saying whether B has A's pack under it too.
+///
+/// **This runs System 100's pack, not the target's.** CC does not load on
+/// System 304: `cc/lcadrd.lisp`, `cc/diags.lisp` and `cc/ldbg.lisp` call
+/// `MAKE-ARRAY` in the old positional form --- `(MAKE-ARRAY NIL 'ART-Q
+/// '(8))` --- seven times between them, and System 304 took that form out
+/// (`patch/system-300-2.lisp`, whose `MAKE-ARRAY` answers "~S is not a
+/// known MAKE-ARRAY keyword"). CC was never updated for it. The three files
+/// are byte for byte the same in both releases, so this is the system
+/// moving out from under CC rather than CC differing. On System 100's band
+/// the old form still works and CC loads, which is one reason that release
+/// is kept.
 pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
     let (Some(prom), Some(pack), Some(root)) = (
         vendor(&["system-100-0", "sys", "ubin", "promh.mcr"]),
-        vendor(&["run", "disk-sys-100-0.img"]),
+        pack_100(),
         vendor(&["run", "file-root"]),
     ) else {
         return None;
@@ -393,6 +404,8 @@ pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
     let mut a = Machine::new();
     a.load_prom(&prom);
     a.disk.attach(0, Unit::open(&pack, Geometry::T300).expect("the System 100 pack"));
+    // System 100's band, so the Chaosnet numbers are its own, which are
+    // what `chaos::Config` defaults to: 3050 here and `MIT-OZ` at 3060.
     a.chaos.file_root = Some(root.clone());
     a.chaos.trace = std::env::var_os("MUIR_CHAOS_TRACE").is_some();
     a.chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
@@ -430,8 +443,8 @@ pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
         _root_held: root_held,
     };
 
-    // A to its prompt: the listener's `;Reading at top level` line, rows
-    // 84 to 100, then a moment.
+    // A to its prompt: the listener's `;Reading at top level` line, which
+    // this band's herald puts in rows 84 to 100, then a moment.
     while lit_rows(&cc.l, 84..100) < 400 {
         cc.run(500_000);
         assert!(cc.l.steps.0 < 100_000_000, "A never reached its listener");
