@@ -117,10 +117,24 @@ file is load-bearing or reference.
 Two things in the "no" column are worth knowing about rather than forgetting.
 The `.bin` archives are 6 MB of the 19, a second copy of drawings we already
 hold as `.drw`; nothing is lost by ignoring them, and nothing would be lost by
-deleting them either. And `.ray` looks like an independent description of the
-same wiring a `.wlr` gives --- `busint.ray` lists wire runs by pin --- so if
-it is, it would be a second route for the netlist checks. That is
-**unverified**: nobody has read the format.
+deleting them either. And `.ray` **is** an independent description of the same
+wiring a `.wlr` gives, read on 7 September 2026: fixed 80-byte records, one
+wire each, with the from and to locations and pins in columns 15 to 30, the
+signal name to column 67, the wrap level on the from post, and a `MITnnnnn`
+sequence number. The pin field is the wire-wrap **post** number rather than
+the DIP pin, offset by `(20 - pin count) / 2` because the DIP sits centred
+in a 20-post socket.
+
+It is better than a second copy: **a `.ray` is usually a different dated
+revision of the board from the `.wlr` beside it.** `cadr1/busint.ray` is the
+wire list of 4 March 1979, earlier than its December 1980 `.wlr` and matching
+the `[WIRE LIST OF 3/4/79]` heading in `busint.eco`; `cadrm/mem.ray` is the
+summer 1980 list, later than its March 1980 `.wlr`, and is the list
+discrepancy 31 had been asking for. `cadrdc/dc.ray` is close to the same
+revision as its own. So the two together date a board's changes rather than
+merely confirming one of them, and `busint.eco` is the diff between the two
+dates. `cadrio/iob.ray` and `cadrio/dc.ray` are damaged, lines concatenated
+and truncated; prefer `cadrdc/dc.ray`.
 
 The unread `.drw` are the other boards sharing an ITS directory with one we
 model: `cadr1`'s CDC adaptor, `cadrdc`'s DISK MULTIPLEXOR and MARKSMAN,

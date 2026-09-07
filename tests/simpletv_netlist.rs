@@ -385,11 +385,22 @@ fn the_sync_program_repeats_the_line() {
 
 /// Lines of the frame the sync program leaves unblanked, at
 /// [`ACTIVE_DOTS`] each, and the lines it blanks end to end. **Measured on
-/// the board**, and 912 is not the 896 that comes from a
-/// hand walk of `cpt.prom` --- the walk reads the program's repeat counts
-/// as 255 + 255 + 255 + 131. The two agree on everything else the walk
-/// gives: 966 lines a frame, 16.000 us a line, 768 dots. Which of 896 and
-/// 912 is the program's is **unverified**.
+/// the board.**
+///
+/// **912 and 896 are both right and count different things**, which is
+/// what a hand walk of `cpt.prom` settled: the program's nine loops give
+/// 966 lines a frame and 16.000 us a line, of which 54 are blanked end to
+/// end, 912 are unblanked, and only the four loops with `255 + 255 + 255 +
+/// 131` iterations issue video cycles. So 912 is the unblanked raster and
+/// **896 is the picture**, with 8 unblanked lines above it and 8 below
+/// that fetch nothing: a border. Confirmed on the board by writing single
+/// buffer lines around the boundary --- buffer line 895 appears and 896
+/// never does.
+///
+/// MIT says 896 twice in its own window system. `sys/window/shwarm.lisp`
+/// has `(DEFVAR MAIN-SCREEN-HEIGHT ... (:CADR 963.) ;was 896. for CPT`,
+/// and its `SET-TV-SPEED` computes display lines as the frame's total less
+/// 70 overhead lines, which for this program's 966 is 896.
 const ACTIVE_LINES: usize = 912;
 /// The rest of the frame: 966 - 912.
 const BLANKED_LINES: usize = 54;
