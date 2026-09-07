@@ -84,6 +84,12 @@ pub const TDONE_BEFORE_END_NS: u64 = 250;
 /// packets of one to thirty words alike.
 pub const TSR_READY_NS: u64 = 6_350;
 
+/// From `ABORT` at LMMODU 0A09 setting --- the transmitter's next clock
+/// edge after its transceiver's interference, `TABORTED` with it --- to
+/// `TBUSY` down and Transmit Done.  Measured on the netlist board,
+/// `tests/chaos_netlist.rs`: 125.
+pub const TDONE_AFTER_ABORT_NS: u64 = 125;
+
 /// The turn timer.  A terminal count at a time: the counter is loaded
 /// with [`turn_byte`] of every frame's source 33 cells into the frame,
 /// held while the cable is busy, counted down on every second terminal
@@ -359,6 +365,28 @@ impl Interface {
             }
             if !loop_back || source == self.address {
                 self.turn.frames.push((start, source, end));
+            }
+        }
+        // A transmitter aborted at `t`: its frame ends with its abort
+        // signal, and `-CBLBSY` lifts from there rather than from the
+        // nominal end.  The board's own, if it is: `ABORT` ends `TBUSY`,
+        // `TABORTED` reads back as Transmit Abort, and Transmit Done comes
+        // [`TDONE_AFTER_ABORT_NS`] on.
+        while let Some((t, source, end)) = e.board_collision() {
+            if let Some(f) =
+                self.turn.frames.iter_mut().rev().find(|f| f.1 == source && f.0 <= t && f.2 > t)
+            {
+                f.2 = end;
+            }
+            if source == self.address {
+                self.transmit_abort = true;
+                self.tdone_at = Some(t + TDONE_AFTER_ABORT_NS);
+                if self.trace {
+                    eprintln!(
+                        "chaos {t:>6}: interface {:o}'s frame aborted on interference",
+                        self.address
+                    );
+                }
             }
         }
         while let Some((at, f)) = e.board_heard() {

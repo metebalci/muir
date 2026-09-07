@@ -682,6 +682,13 @@ impl Node for Server {
         }
         self.out.pop_front()
     }
+
+    /// A frame aborted on interference goes again at the next turn, ahead
+    /// of anything queued since, as an interface's driver retries on
+    /// Transmit Abort.
+    fn aborted(&mut self, _now: u64, buffer: Vec<u16>) {
+        self.out.push_front(buffer);
+    }
 }
 
 fn fmt_end((a, i): (u16, u16)) -> String {
