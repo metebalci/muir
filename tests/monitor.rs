@@ -23,8 +23,7 @@ fn simpletv() -> Netlist {
 
 /// Runs the board with a monitor on it until `frames` are painted, or the
 /// deadline passes, and gives back the monitor.
-fn paint(n: &Netlist, frames: u64, ns: u64) -> Monitor {
-    let mut b = XbusMaster::new(n, 0);
+fn paint(b: &mut XbusMaster, n: &Netlist, frames: u64, ns: u64) -> Monitor {
     let mut m = Monitor::of(n).expect("a display board has a video cable");
     m.attach(&mut b.chip, b.now);
     let deadline = b.now + ns;
@@ -113,10 +112,26 @@ fn the_monitor_terminates_the_cable() {
     );
 }
 
-/// **The board hands the monitor a whole picture off the cable alone.**
-/// 966 lines between flybacks, of which 912 carry dots and 54 are dark ---
-/// the raster `tests/simpletv_netlist.rs` measures from the inside,
-/// arrived at here without reading one net that does not leave the board.
+/// **The board hands the monitor a picture, and the picture is the frame
+/// buffer.** 966 lines between flybacks, arrived at without reading one net
+/// that does not leave the board.
+///
+/// **This test used to assert 912 lit lines with nothing written**, and it
+/// passed for the wrong reason: `-MECL VIDEO` had no driver, its terminator
+/// held it low, and the video output was the blanking signal alone, so every
+/// unblanked dot was lit whatever the buffer held. With
+/// [`muir::netlist::Netlist::STRAP_PAGES`]'s `ECLVID` join in place the video
+/// follows the buffer, an empty buffer is a dark screen, and the old
+/// assertion measured the raster rather than the picture.
+///
+/// So write first and then look. Two lines of the buffer are filled and the
+/// two raster lines they land on must carry a full line of dots while every
+/// other line stays dark. That is the property the old test was reaching for
+/// and could not have caught being broken.
+///
+/// The offset is the border: of the 912 unblanked lines only 896 fetch, 8
+/// above and 8 below fetching nothing, so buffer line 0 is raster line 9.
+/// `tests/simpletv_netlist.rs` measures both counts from the inside.
 ///
 /// Ignored for the same reason the frame test there is: a frame of board
 /// time is about half a minute.
@@ -124,16 +139,63 @@ fn the_monitor_terminates_the_cable() {
 ///     cargo test --test monitor -- --ignored --nocapture
 #[test]
 #[ignore = "a frame of board time is about half a minute: cargo test --test monitor -- --ignored --nocapture"]
-fn the_monitor_is_handed_the_boards_raster() {
+fn the_monitor_is_handed_the_boards_picture() {
+    use muir::simpletv::BUFFER;
+    /// 768 dots at 32 bits a word.
+    const WORDS_A_LINE: u32 = 24;
+    /// Buffer line 0 is raster line 9: eight border lines and the dark one.
+    const FIRST: usize = 9;
+
     let n = simpletv();
-    let m = paint(&n, 2, 16_000 * 2_100);
+    let mut b = XbusMaster::new(&n, 0);
+    // A request has to be run out and released before the next one: issued
+    // back to back only the last of them reaches the DRAMs.
+    // Long enough that a cycle delayed by a DRAM refresh still completes:
+    // at 1,100 ns one word in twenty-four was abandoned mid-line, which
+    // showed up as a 32-dot gap in an otherwise whole line.
+    let write = |b: &mut XbusMaster, address: u32| {
+        b.request(address, Some(0xffff_ffff));
+        let until = b.now + 20_000;
+        b.run(until);
+        b.release();
+        let until = b.now + 600;
+        b.run(until);
+    };
+    // The first request a freshly built master makes is lost however long
+    // the board is left to settle first, so the first word is written twice
+    // and the duplicate is harmless. Without it the first line written comes
+    // out 32 dots short and the second is whole, which is what showed it.
+    let first = BUFFER + 100 * WORDS_A_LINE;
+    write(&mut b, first);
+    for line in [100u32, 200] {
+        for w in 0..WORDS_A_LINE {
+            write(&mut b, BUFFER + line * WORDS_A_LINE + w);
+        }
+    }
+    let m = paint(&mut b, &n, 2, 16_000 * 2_100);
+
     let (dots, lines) = m.lit();
     eprintln!("{} frames, {} lines, {dots} dots lit on {lines} lines", m.frames, m.lines());
-    eprintln!("line 1 carries {} dots, from {:?}", m.dots_on(1).len(), m.dots_on(1).first());
+    for row in [FIRST + 100, FIRST + 200] {
+        let d = m.dots_on(row);
+        eprintln!(
+            "  raster line {row} carries {} dots, first {:?} last {:?}",
+            d.len(),
+            d.first(),
+            d.last()
+        );
+    }
     assert_eq!(m.frames, 2, "two flybacks");
     assert_eq!(m.lines(), 966, "lines between one vertical flyback and the next");
-    assert_eq!(lines, 912, "lines carrying any dot at all");
-    assert_eq!(dots % lines, 0, "every lit line carries the same count: {dots} on {lines}");
+    assert_eq!(lines, 2, "only the two lines written are lit: {dots} dots on {lines} lines");
+    // 768, `MAIN-SCREEN-WIDTH`, not [`DOTS_A_LINE`]: the sweep is 1024 dots
+    // and the picture is the unblanked 768 of them, starting at 40.
+    for row in [FIRST + 100, FIRST + 200] {
+        let d = m.dots_on(row);
+        assert_eq!(d.len(), 768, "raster line {row} carries the whole buffer line");
+        assert_eq!((d[0], d[767]), (40, 807), "and carries it where the sweep is unblanked");
+        assert!(DOTS_A_LINE > d[767], "a line's dots fit in the sweep");
+    }
     assert!(m.dots_on(0).is_empty(), "the first line of the frame is dark");
-    assert!(DOTS_A_LINE >= m.dots_on(1).len(), "a line's dots fit in the sweep");
+    assert!(m.dots_on(FIRST + 150).is_empty(), "a line nothing was written to is dark");
 }
