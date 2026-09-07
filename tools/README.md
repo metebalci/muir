@@ -21,15 +21,28 @@ is not this project's own work throughout:
 - `soap4.c` was written by Mete Balci in 2026 for `ams/cadr4`, following Brad
   Parker's `soap.c` of October 2004, whose header it keeps. It came here from
   `ams/cadr4`, which is under the GNU Affero General Public License, version
-  3 or later. The terms Brad Parker released the original under are not
-  stated in the copy that reached this repository.
-- `unpack4.c` is `ams/cadr4`'s version of John Wilson's `unpack.c` of 1993,
-  which reads ITS files stored in Alan Bawden's evacuated format; its header
-  keeps John Wilson's. The same holds: it came under the AGPL through
-  `ams/cadr4`, and the terms of the 1993 original are not stated in the copy
-  that reached this repository.
+  3 or later.
+- `unpack4.c` is `ams/cadr4`'s version of John Wilson's `unpack.c`, written
+  in 1993 and separated from his `DUMP.C` in 1998, which reads ITS files
+  stored in Alan Bawden's evacuated format; its header keeps John Wilson's.
+  It came here the same way, under the AGPL through `ams/cadr4`.
 
-The copyright lines at the top of the two files name the original authors
-beside this project's, and the changes made here are listed in `soap4.c`'s
-own header. Everything else in this directory is this project's, under the
-repository's licence.
+**Neither original carries a licence**, and that was checked at the source
+rather than assumed from the copies here. Both are published in
+`lisper/cpus-cadr`, Brad Parker's own repository: `suds/soap.c` and
+`suds/unpack.c` there give authorship and a description in their headers and
+state no terms, and the repository holds no licence file. So for whatever
+survives of the two originals in these files there is no grant to point at
+--- not a permissive one, and not a refusal either. The terms were never
+written down.
+
+`ams/cadr4` released its versions under the AGPL and this repository carries
+them on. That covers the work done in each --- the rewrite for cadr4, and
+the changes listed in `soap4.c`'s own header --- and it cannot make a grant
+for what came before it, which is why the copyright lines at the top of both
+files name the original authors beside this project's. Anyone redistributing
+these two files should know the position is unsettled rather than settled in
+their favour. It is the one open licensing question in this repository.
+
+Everything else in this directory is this project's, under the repository's
+licence.
