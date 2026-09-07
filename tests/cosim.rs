@@ -608,3 +608,46 @@ fn the_map_write_lands_the_cycle_after_the_store() {
     assert_eq!(a.machine().l1_map, b.machine().l1_map, "with the level-1 map untouched");
     assert_eq!(a.machine().l1_map[L1], 1, "VMA<26> was clear");
 }
+
+/// **A map write whose store pops into a fetch still lands the store's
+/// word.** The write takes its address and data from `VMA` and `MD` a
+/// microcycle after the store, and `ir.bits` warns that "the VMA must not
+/// be disturbed during this cycle".  Here the store is a `POPJ` to a stack
+/// word with bit 14 up, `NEED-FETCH` pending, so an instruction fetch
+/// follows and page VCTL1's `VMAS` multiplexer loads `VMA` with `LC<25:2>`
+/// --- on the board a microcycle after the `POPJ`, `NEXT INSTRD`, which is
+/// after the write; `micro` fetches in the `POPJ`'s own step, and its
+/// latch of `VMA` at the store is what keeps the write the store's.  Both
+/// engines write the entry and both end with the fetch address in `VMA`.
+#[test]
+fn a_map_write_whose_store_pops_into_a_fetch_still_lands() {
+    const WRITE_MAP: u64 = (0o23 << 19) | (0o37 << 14);
+    const VIRTUAL: u32 = 0o2000000;
+    const MAP_WORD: u32 = (1 << 25) | 0o12345;
+    const FETCH_WORD: u32 = 0o1000;
+    const L2: usize = 1 << 5;
+    let prom = [
+        Insn::new(ALU | SETM | m_src(1) | MD),
+        Insn::new(ALU | SETM | m_src(2) | LC),
+        Insn::new(ALU | SETM | m_src(3) | WRITE_MAP | POPJ),
+        filler(),
+        filler(),
+        filler(),
+    ];
+    let set = |m: &mut Machine| {
+        m.mmem[1] = VIRTUAL;
+        // LC counts bytes.
+        m.mmem[2] = FETCH_WORD << 2;
+        m.mmem[3] = MAP_WORD;
+        m.l1_map[VIRTUAL as usize >> 13] = 1;
+        // The return address for the POPJ, with bit 14: fetch on the way out.
+        m.spcptr = 1;
+        m.spc[1] = 3 | (1 << 14);
+    };
+    let (e, r) = both(&prom, &set, 12);
+    assert_eq!(r.machine().vma, FETCH_WORD, "rtl: VMA is the fetch address by the end");
+    assert_eq!(r.machine().l2_map[L2], MAP_WORD & 0o77777777, "rtl: the map word landed");
+    assert_eq!(e.machine().vma, r.machine().vma, "micro: VMA");
+    assert_eq!(e.machine().l2_map, r.machine().l2_map, "micro: the level-2 map");
+    assert_eq!(e.machine().l1_map, r.machine().l1_map, "micro: the level-1 map");
+}

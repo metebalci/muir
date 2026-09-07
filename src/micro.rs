@@ -444,13 +444,19 @@ impl Micro {
     /// A memory reference in between reads the old map, as it does on the
     /// board and in `rtl`.
     ///
-    /// What is still not modelled is the address the write goes to when the
-    /// intervening microcycle has a memory cycle running: `MEMSTART` swings
-    /// the map's address multiplexer from `MD` to `VMA`, which is what MIT's
-    /// warning is about, and this engine has no `MEMSTART`.  `rtl` does it in
-    /// `Rtl::map_address`. **unverified** here: a microcode sequence that
-    /// starts a memory cycle in the intervening microcycle, run on `chip`,
-    /// would settle what this engine should do.
+    /// `MEMSTART` swings the map's address multiplexer from `MD` to `VMA`
+    /// through the microcycle after a memory operation, which is what MIT's
+    /// warning is about, and it is not modelled here because it has no
+    /// case to decide.  The one memory operation a `MAP(MD)VMA` store's
+    /// microcycle can carry is an instruction fetch, and page VCTL1's
+    /// `VMAS` multiplexer then loads `VMA` with the fetch address in that
+    /// same microcycle --- `LC<25:2>`, twenty-four bits, with neither write
+    /// enable, `VMA<26>` or `VMA<25>`, in it --- so the pulses find nothing
+    /// to write at whichever address they are given.  The latch is what
+    /// keeps the case straight here: a `POPJ`'s fetch comes the microcycle
+    /// after the `POPJ` on the board, `NEXT INSTRD` in `rtl`, where this
+    /// engine takes it in the `POPJ`'s own step, and the write's word is
+    /// the store's either way.  Held to `rtl` in `tests/cosim.rs`.
     fn arm_map_write(&mut self) {
         self.map_write = Some((self.m.vma, self.m.md));
     }
