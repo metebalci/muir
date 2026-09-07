@@ -623,9 +623,10 @@ fn cpu_clock(n: &netlist::Netlist) -> netlist::NetId {
 
 /// How long a cpu microcycle may take before a comparison gives up on it,
 /// in nanoseconds of the machine's time. The longest stall in the boot is
-/// the bus timeout: about six microseconds for a device that is not there,
-/// eleven for a hung one, fourteen when referencing another processor
-/// (`busint::TIMEOUT_NS`); this is four times the longest. A `HANG` stops the
+/// the bus timeout: about five microseconds for a device that is not there,
+/// ten for a hung one, twelve when referencing another processor
+/// (`busint::TIMEOUT_NS`); this is nearly five times the longest. A `HANG`
+/// stops the
 /// generator while `FarEnd::tick_with` carries the bus and the delay lines
 /// on to whatever ends it, and panics on a hang nothing can end; so this is
 /// for a cycle that never comes for some other reason.

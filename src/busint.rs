@@ -83,7 +83,7 @@ pub const XBUS_ACK_NS: u64 = 60;
 /// band). The oscillator has run since power-on and its output is gated,
 /// not started, by the grant, so the sixth edge is between five and a half
 /// intervals and six and a half after it: the PROM's 10 microseconds is
-/// 5.5 to 6.5 here, and `rtl` gives a cycle up at the instant the board
+/// 4.7 to 5.5 here, and `rtl` gives a cycle up at the instant the board
 /// does, to the nanosecond (`tests/chip.rs`). The 80 ns of setup before
 /// `-XBUS RQ` are inside the wait, not before it: `INT BUSY` rises with
 /// `LMX GRANT` or `LMUB GRANT`. The second column is the debug cable's,
@@ -92,7 +92,7 @@ pub const XBUS_ACK_NS: u64 = 60;
 pub const TIMEOUT_NS: u64 = 5 * NXM_VCO_NS;
 
 /// The interval of the 74LS124 at REQTIM 0A01 that clocks the timeout
-/// counter: [`crate::chip::VCO_PERIOD`], 1,000 ns, in whole nanoseconds.
+/// counter: [`crate::chip::VCO_PERIOD`], 850 ns, in whole nanoseconds.
 ///
 /// The oscillator runs from power-on and the grant only opens its output,
 /// which `rtl` reckons as `chip` runs it, through [`crate::chip::gated_rise`]
@@ -296,8 +296,8 @@ pub const DEBUG_OUT_REQUEST_NS: u64 = 100;
 /// header says 30 microseconds** ("When referencing other processor: NXM
 /// timeout 30 uSec, HUNG timeout 32 uSec"); its table says 26 and 30.  The
 /// table is what is burned (discrepancy 67), and the microseconds are the
-/// later board's: on this one the wait from the grant is between 13.5 and
-/// 14.5.  Measured on the netlist board in `tests/chip.rs`.
+/// later board's: on this one the wait from the grant is between 11.5 and
+/// 12.3.  Measured on the netlist board in `tests/chip.rs`.
 pub const DEBUG_TIMEOUT_NS: u64 = 13 * NXM_VCO_NS;
 
 /// The memory board's timing, as `rtl` runs it: a behavioural twin of the
@@ -1911,7 +1911,7 @@ impl Busint {
     /// `NAND(-UBX GRANT, -LMX GRANT, -LMUB GRANT)` at RQSYNC 0C13 and
     /// knows nothing of this master, so a cycle nothing answers waits for
     /// the debugger to give up, which its own interface does at
-    /// [`debug_timeout_at`] its grant, 13.5 to 14.5 microseconds on.
+    /// [`debug_timeout_at`] its grant, 11.5 to 12.3 microseconds on.
     /// `SACK` drops with the master set.
     fn debug_set_master(&mut self, now: u64) {
         let req = self.debug_request.expect("a debug master with no request");

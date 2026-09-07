@@ -379,7 +379,7 @@ fn the_boot_takes_the_same_microcycles_and_more_nanoseconds() {
     // 537,848 microcycles at the 220 ns the machine comes up in is
     // 118,326,560 ns. The rest is the bus: the parity-fix loop's two
     // overrunning cycles, which nothing answers, each given up on between
-    // 5.5 and 6.5 microseconds after its grant as the timeout counter's
+    // 4.7 and 5.5 microseconds after its grant as the timeout counter's
     // clock happens to lie (`nxm_timeout_at`; `reqtim.prom`'s 10
     // microseconds is a later board's), the Unibus arbitration before the
     // mode register's write, and the loop's 256 turns each held for the
@@ -387,8 +387,8 @@ fn the_boot_takes_the_same_microcycles_and_more_nanoseconds() {
     // spends almost all of its time clearing memories it can reach without
     // the bus. `chip_agrees_with_rtl` holds the netlist to `rtl` cycle for
     // cycle over the window it is given.
-    assert_eq!(e.ns(), 118_605_740, "nanoseconds to the first disk read");
-    assert_eq!(e.ns() - 537_848 * 220, 279_180, "spent stalled on the bus");
+    assert_eq!(e.ns(), 118_604_200, "nanoseconds to the first disk read");
+    assert_eq!(e.ns() - 537_848 * 220, 277_640, "spent stalled on the bus");
 }
 
 /// One turn of `PAGE-0-PARITY-FIX`, which is the boot's only pair of

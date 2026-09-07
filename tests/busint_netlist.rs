@@ -544,7 +544,10 @@ fn a_request_nobody_answers_times_out() {
     let mut timeline: Vec<(u64, String)> = Vec::new();
     let mut acked = None;
     while b.now < t0 + 10_000 {
-        let next = b.now + 50;
+        // Stop at every edge and tap on the way, so that the instants read
+        // are the board's and not a grid's: the oscillator's half period
+        // is not a whole number of anything.
+        let next = b.c.next_tap().map_or(b.now + 50, |t| t.min(b.now + 50));
         b.run(next);
         for (k, w) in watch.iter().enumerate() {
             let l = b.level(w);
@@ -618,7 +621,8 @@ fn the_timeout_clock_runs_free_and_idles_high() {
         let (mut busy, mut out, mut nxm) =
             (b.level("INT BUSY"), b.c.net(vco), b.level("NXM TIMEOUT"));
         while b.now < start + 10_000 {
-            b.run(b.now + 10);
+            let next = b.c.next_tap().map_or(b.now + 10, |t| t.min(b.now + 10));
+            b.run(next);
             let now_busy = b.level("INT BUSY");
             if now_busy.read() == Some(true) && busy.read() != Some(true) {
                 enabled_at.get_or_insert(b.now);
