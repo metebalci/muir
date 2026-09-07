@@ -280,17 +280,22 @@ impl Controller {
     /// the track's leftover after the index, which is what
     /// `sys/doc/disk.text` describes: "17. sector pulses per track, or one
     /// every 1164. bytes, with a little left over at the end of the track".
-    /// The drive on the cable, [`crate::disk_unit::Trident`], spaces seventeen
-    /// pulses evenly with the index as the first, so neither it nor this
-    /// counter ever shows 17.  **unverified**: whether the drive's index
-    /// pulse is separate from its seventeen sector pulses; Century Data's
-    /// description of the composite line would settle it, and the fix
-    /// would be the drive's, not this counter's.
+    /// [`crate::disk_unit::turn`] spaces the pulses that way, a sector apart
+    /// from the index with the leftover last, so the count runs 0 to 17 and
+    /// the 17 is the leftover, which holds no block.  Through a pulse the
+    /// count is still the region before it, and the region before the index
+    /// is that same 17.
     fn block_counter(&self) -> u32 {
         let Some(u) = &self.units[self.selected()] else { return 0 };
         let n = u.geometry.blocks_per_track;
         let (k, into) = crate::disk_unit::turn(n, 0, self.now);
-        if into < crate::disk_unit::pulse_ns(k) { (k + n - 1) % n } else { k }
+        if into >= crate::disk_unit::pulse_ns(k) {
+            k
+        } else if k == 0 {
+            n
+        } else {
+            k - 1
+        }
     }
 
     /// `-LOSSAGE`, the level behind `STATUS<13>`: "Transfer Aborted.  This

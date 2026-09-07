@@ -590,15 +590,13 @@ pub const REVOLUTION_NS: u64 = 16_666_667;
 /// bits, 20,032 bytes a track against Century Data's 20,160, which is 0.6
 /// per cent low; the unrounded pair gives 20,150, which is 0.05 per cent
 /// low. Nothing muir runs measures a track's length, so the even clock is
-/// kept. At this
-/// rate a sector's 1,164 bytes take 968 us of the 980 us between sector
-/// pulses, and MIT's own two figures for a track agree with that:
-/// `sys/doc/disk.text` says "Jumpers in the disk are set to give 17.
-/// sector pulses per track, or one every 1164. bytes, with a little left
-/// over at the end of the track", and 17 x 1,164 is 19,788 of the
-/// approximately 20,160 a track holds. `cadrdc/dctrid.drw` carries the
-/// jumper as a note on the sheet: "Set sector length jumpers in drive to
-/// 1410 (octal) which is 1164. bytes."
+/// kept, and where it shows is the track's leftover. [`SECTOR_NS`] is
+/// exact --- 1,164 bytes at this rate, 968 us --- so the seventeen sector
+/// pulses take 16.46 ms of the revolution and the 203 us left over are 244
+/// bytes where MIT's two figures, 20,160 a track and 19,788 in seventeen
+/// sectors, leave 372. The leftover is short by the rounding; that there
+/// is one, and that the seventeenth pulse falls before the index rather
+/// than on it, is what [`turn`] takes from those figures.
 pub const BIT_NS: u64 = 104;
 
 /// The composite sector/index pulse widths, **Century Data's own**.
@@ -620,34 +618,69 @@ pub const BIT_NS: u64 = 104;
 pub const SECTOR_PULSE_NS: u64 = 1_240;
 pub const INDEX_PULSE_NS: u64 = 4_000;
 
-/// When sector `k` of a revolution of `sectors` begins, from the index: the
-/// one definition of the boundary, so that the sector under the head and
-/// the time to the next one always agree.
-fn began_of(sectors: u64, k: u64) -> u64 {
-    k * REVOLUTION_NS / sectors
+/// One sector on the cable: `format::SECTOR` bytes at [`BIT_NS`].
+///
+/// **The spacing is the drive's sector length jumper, not a share of the
+/// revolution.** `cadrdc/dctrid.drw` carries the jumper as a note on the
+/// sheet, "Set sector length jumpers in drive to 1410 (octal) which is
+/// 1164. bytes", and `sys/doc/disk.text` says what that gives: "Jumpers in
+/// the disk are set to give 17. sector pulses per track, or one every 1164.
+/// bytes, with a little left over at the end of the track". So the pulses
+/// are a sector apart from the index and the track's tail is short, which
+/// is where [`turn`]'s last region comes from.
+pub const SECTOR_NS: u64 = format::SECTOR as u64 * 8 * BIT_NS;
+
+/// When the pulse that begins region `k` falls, from the index: the one
+/// definition of the boundary, so that the region under the head and the
+/// time to the next one always agree.
+fn began_of(k: u64) -> u64 {
+    k * SECTOR_NS
 }
 
-/// Where a spindle of `sectors` a revolution stands at `now`, its index
-/// pulse beginning at `phase` modulo a revolution: the sector under the
-/// head and how far into it, in nanoseconds. The drive on the cable turns
-/// by this, [`Trident::turn`], and so does the block counter of the
+/// Where a spindle of `sectors` sectors a revolution stands at `now`, its
+/// index pulse beginning at `phase` modulo a revolution: the region under
+/// the head and how far into it, in nanoseconds. The drive on the cable
+/// turns by this, [`Trident::turn`], and so does the block counter of the
 /// behavioural controller, `disk_controller::Controller`, which has no
 /// drive on a cable to count pulses from.
+///
+/// **A revolution is `sectors` + 1 regions, because it is `sectors` + 1
+/// pulses.** The index begins region 0 and each sector pulse begins the
+/// next, so the seventeen sector pulses of [`SECTOR_NS`] end the seventeen
+/// blocks and the last of them opens a region the index closes. That
+/// region carries no data --- [`Unit::block_at`] has nothing at block
+/// `sectors`, so the head reads ones there as it does off the pack --- and
+/// it is short: [`BIT_NS`] makes it 203 us where MIT's figures make it 372
+/// bytes.
+///
+/// MIT's own two texts settle it, and both say the index stands alone.
+/// `sys/doc/disk.text` puts the tail of the track after the last sector
+/// pulse rather than a pulse at the index: "17. sector pulses per track, or
+/// one every 1164. bytes, with a little left over at the end of the track",
+/// and 17 x 1,164 is 19,788 of the 20,160 a track holds. And
+/// `sys/cc/dcheck.lisp` reads the block counter for half a second in
+/// `DCHECK-BLOCK-COUNTER` and expects every value from 0 to 17 and no other
+/// --- "Vandals: Yes, a value of 17. can appear here". A 17 needs the
+/// counter clocked seventeen times between one index and the next, which an
+/// index carrying a sector pulse of its own could not give: seventeen
+/// pulses in all would stop the count at 16, which is what this drive did
+/// while it spaced seventeen pulses evenly.
 pub fn turn(sectors: u32, phase: u64, now: u64) -> (u32, u64) {
-    let n = sectors as u64;
     let t = (now + REVOLUTION_NS - phase % REVOLUTION_NS) % REVOLUTION_NS;
-    let mut k = t * n / REVOLUTION_NS;
-    while k + 1 < n && began_of(n, k + 1) <= t {
-        k += 1;
-    }
-    while k > 0 && began_of(n, k) > t {
-        k -= 1;
-    }
-    (k as u32, t - began_of(n, k))
+    let k = (t / SECTOR_NS).min(sectors as u64);
+    (k as u32, t - began_of(k))
 }
 
-/// The width of the pulse at the start of a sector: the index's at sector
-/// 0, a sector pulse's at every other.
+/// How long the region after the pulse that begins region `k` lasts: a
+/// sector, or, for the last, what is left of the revolution.
+fn region_ns(sectors: u64, k: u64) -> u64 {
+    if k >= sectors { REVOLUTION_NS - began_of(sectors) } else { SECTOR_NS }
+}
+
+/// The width of the pulse that begins a region: the index's at region 0, a
+/// sector pulse's at every other. The index stands alone --- there is no
+/// sector pulse under it --- which is what leaves the block counter a
+/// seventeenth sector pulse to reach 17 on.
 pub fn pulse_ns(sector: u32) -> u64 {
     if sector == 0 { INDEX_PULSE_NS } else { SECTOR_PULSE_NS }
 }
@@ -812,19 +845,14 @@ impl Trident {
     /// Turns the spindle so that `sector` begins `in_ns` from `now`: a
     /// test that wants a block need not wait a revolution for it.
     pub fn spin_to(&mut self, now: u64, sector: u32, in_ns: u64) {
-        let began = self.began_of(sector as u64);
+        let began = began_of(sector as u64);
         self.phase = (now + in_ns + REVOLUTION_NS - began % REVOLUTION_NS) % REVOLUTION_NS;
         debug_assert_eq!(self.turn(now + in_ns), (sector, 0));
     }
 
-    /// Sectors a revolution.
+    /// Sectors a revolution. The regions are one more, [`turn`].
     fn sectors(&self) -> u64 {
         self.unit.geometry.blocks_per_track as u64
-    }
-
-    /// When sector `k` of a revolution begins, from the index.
-    fn began_of(&self, k: u64) -> u64 {
-        began_of(self.sectors(), k)
     }
 
     /// Where the spindle is at `now`: the sector under the head and how
@@ -1082,7 +1110,7 @@ impl Trident {
         let (sector, into) = self.turn(now);
         let began = now as i64 - into as i64;
         let pulse_end = began + pulse_ns(sector) as i64;
-        let length = (self.began_of(sector as u64 + 1) - self.began_of(sector as u64)) as i64;
+        let length = region_ns(self.sectors(), sector as u64) as i64;
         let pulse = if (now as i64) < pulse_end { pulse_end } else { began + length } as u64;
         let seek = self.seek.map_or(u64::MAX, |(_, at)| at.max(now + 1));
         clock.min(pulse).min(seek)
