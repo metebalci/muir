@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>muir manual &mdash; running the CADR simulator</title>
-<meta name="description" content="The muir manual: what the simulator does, how to run it, every command-line flag, the prompt and its commands, the terminal, the Chaosnet server, the two-machine lashup, and how the three engines work.">
+<meta name="description" content="The muir manual: what the simulator does, how to run it, every command-line flag, the prompt and its commands, the terminal, the Chaosnet server, the two-machine lashup, how the three engines work, and the wire protocol that runs two of them against each other over TCP.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -453,7 +453,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
   <div class="band">
     <h2>How the engines work</h2>
     <div class="prose">
-      <p>The three engines differ in what they actually compute on the way to the next microcycle &mdash; no timing model, the timing model, the full netlist. This is what that means in each case, and it is the part of the project most easily mistaken for something it is not.</p>
+      <p>The three engines differ in what they actually compute on the way to the next microcycle &mdash; no timing model, the timing model, the full netlist. This is what that means in each case, and it is the part of the project most easily mistaken for something it is not. Last is the wire protocol that runs two of them against each other over a network, which is a scheduling problem before it is a networking one.</p>
     </div>
 
     <h3>What register-transfer level means here</h3>
@@ -476,6 +476,39 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
       <p>A VHDL simulator is general. It elaborates any design into processes and signals, drives them from an event queue, advances time to the next event, and resolves each signal through a resolution function. <code>chip</code> simulates one netlist and exploits it. Taken pin by pin — which output each input actually reaches — the CADR is acyclic, so its gates are sorted into levels once and then evaluated in that order, with no event queue at all. Taken package-wide the same dependencies appear to close loops the hardware does not have; the only real cycles are in the clock generator, which is modelled directly instead. Each pass recomputes only the gates something moved under.</p>
       <p>Both run zero-delay: neither charges a gate for its propagation time, and in muir the nanoseconds come from the clock and bus models instead. So the two should agree, and that has been measured rather than assumed. Running cadr4&rsquo;s VHDL of the same three boards under nvc against <code>chip</code>, on the same PROM, every named net at every instruction: over the boot&rsquo;s first millisecond 2,014 nets agree at every sample, 830 differ only while the VHDL is still uninitialised, and 15 are the clock taps the behavioural clock leaves undriven. None agrees for a while and then parts. Over the whole boot PROM the two are on the same PC at every microcycle, and <code>chip</code> gets there about four times faster in wall time and ten times per core.</p>
     </div>
+
+    <h3>The debug cable over TCP</h3>
+    <div class="prose">
+      <p>Two machines on a debug cable in one process are one clock, and the cable is a function call. <code>--debug-cable-listen</code> and <code>--debug-cable-connect</code> put the two machines in separate programs on a TCP connection, and then they are two clocks that have to be made into one. The protocol below is how.</p>
+      <p><strong>The only time on the wire is machine time.</strong> Every instant sent is the sending machine&rsquo;s own nanosecond count, and no message carries a wall clock, a heartbeat or a timeout of its own. It could not: the debugger&rsquo;s interface gives a debug cycle up 11,050&nbsp;ns after the grant &mdash; thirteen intervals of the 74LS124 at REQTIM 0A01, the REQTIM PROM&rsquo;s second table &mdash; and that instant has to fall in the same place whether the other machine answered in a microsecond of wall time or a minute of it. A slow peer must make the debugger wait, not time out.</p>
+      <p>So neither end is ever allowed to run into time the other has not accounted for. <b>Each side tells the other the earliest instant it could do anything, and runs only as far as the other&rsquo;s last such promise.</b> The debugger promises the earliest a request or a release can appear on the cable &mdash; with a cycle out, that is the timeout&rsquo;s release; idle, 440&nbsp;ns. The debuggee promises the earliest <code>DEBUG ACK</code> can rise for the request it is holding, and promises nothing at all when the cable is quiet, having nothing to say until it is asked. A side steps only while the step cannot carry it past the other&rsquo;s promise, and blocks on a message when it cannot step. Since the debugger&rsquo;s promise is always a finite instant and the debuggee&rsquo;s is only finite while a request is out, a quiet cable always leaves exactly one side free to move, and the two cannot sit waiting on each other.</p>
+      <p>The messages are fixed 24-byte frames, a one-byte tag then little-endian fields. Fixed, because a frame that is always one length needs neither a length prefix nor a parser: <b>either end may be a program that is not muir</b>, and that is the point of writing the protocol down rather than leaving it as whatever two copies of the same binary happen to agree on.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Tag</th><th>Message</th><th>Sent by</th><th>What it says</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="num">1</td><td class="name">Request</td><td>debugger</td><td><code>-DEBUG IN REQ</code> down at an instant, with the strobe, the direction, <code>DBD&lt;15:0&gt;</code>, and how long after the acknowledgement the debugger will lift it</td></tr>
+          <tr><td class="num">2</td><td class="name">Release</td><td>debugger</td><td>the request lifted unacknowledged: the debugger&rsquo;s own timeout, which crosses the wire as an ordinary event and not as a failure</td></tr>
+          <tr><td class="num">3</td><td class="name">Ack</td><td>debuggee</td><td><code>DEBUG ACK</code> up at an instant, with the word the board drove on <code>DBD</code> if it drove one</td></tr>
+          <tr><td class="num">4</td><td class="name">Promise</td><td>either</td><td>nothing from this side before this instant &mdash; and how many of the other side&rsquo;s events it had taken when it said so</td></tr>
+          <tr><td class="num">5</td><td class="name">Done</td><td>either</td><td>this side has run as far as it will</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>The cable carries the request, the release and the acknowledgement, and not the lift of the request. That is why a request says how long it will be held: the debuggee&rsquo;s end raises <code>DEBUG ACK</code>, then lifts <code>-DEBUG IN REQ</code> itself at the instant the debugger&rsquo;s Unibus cycle would have.</p>
+      <p>A promise can go stale, and that is what the count in it is for. Each side runs ahead on two assumptions that save a round trip &mdash; having sent a request, the debugger takes the answer to be due no sooner than the request&rsquo;s own instant, a register strobe being acknowledged as it arrives; having sent an acknowledgement, the debuggee stops trusting the debugger&rsquo;s last promise, since it collapses from the timeout&rsquo;s release to the next cycle&rsquo;s earliest request the moment the answer lands. A promise the other side made before it had the event that changed it is therefore wrong, and arrives after it. Each side counts the events it has sent that move the other&rsquo;s promise &mdash; the debugger&rsquo;s requests, the debuggee&rsquo;s acknowledgements &mdash; and every promise carries the count it was made against; one whose count is behind is dropped, and the fresh one is a frame away.</p>
+      <p>Opening is a bare TCP connection with no handshake, no version and no magic number: the listener is the debuggee, the connecting side is the debugger, and the first frame either sends is a promise. Each end reads on a thread of its own into a queue of 256 frames, about 6&nbsp;KB of cable; full, it stops reading and the peer&rsquo;s writes wait on the socket, so a peer running faster is held to the slower machine&rsquo;s pace rather than buffered without end. Closing is symmetric: each side sends an unbounded promise and then <code>Done</code>, and waits for the other&rsquo;s, so that neither is left blocked on a promise that will never be revised.</p>
+      <p>A frame the cable cannot take ends the run with an error naming what was sent, rather than killing the process or trusting it: a message from the wrong side, a second request while one is already on the cable, or an instant behind the receiver&rsquo;s own by more than one generator cycle. An instant <em>ahead</em> is not an error &mdash; it is held and put on the connector when the receiving machine reaches it, which is what lets an <code>rtl</code> debugger drive a netlist debuggee that runs thousands of times slower.</p>
+      <p><code>micro</code> can be neither end, having no timing model and so no instants to promise. <code>rtl</code> can be either. <code>chip</code> can be the debuggee, where the request goes on the interface board&rsquo;s real DBGIN connector at its instant and the acknowledgement comes back as of the instant the board raised it. The default endpoint is <code>127.0.0.1:7661</code>, the port chosen for DBGOUT&rsquo;s Unibus address <code>766100</code>.</p>
+    </div>
+
+    <div class="note">There is no authentication and no encryption on this connection, and a peer that speaks it can halt the machine at the other end, read its memory and reset it &mdash; that is what a debug cable is for. Hence the loopback default; an address other than the loopback is worth meaning. The protocol is held to the in-process cable rather than to itself: the same two machines are run both ways, and the debuggee has to halt at the same PC and the debugger read back the same words.</div>
   </div>
 </section>
 
