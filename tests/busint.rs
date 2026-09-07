@@ -11,8 +11,8 @@
 
 use muir::busint::{
     Busint, MEMORY_BUSY_STAGES, MEMORY_CYCLE_STAGES, MEMORY_POWER_ON_EDGE, MemoryBoard, REFRESH_NS,
-    REFRESH_TRIGGER_STAGES, Responder, SETUP_NS, STROBE_NS, TIMEOUT_NS, UNIBUS_ACK_NS,
-    UNIBUS_ADDRESS_NS, UNIBUS_STROBE_NS, XBUS_ACK_NS, decode, rising_edge, rising_edge_after,
+    REFRESH_TRIGGER_STAGES, Responder, SETUP_NS, STROBE_NS, UNIBUS_ACK_NS, UNIBUS_ADDRESS_NS,
+    UNIBUS_STROBE_NS, XBUS_ACK_NS, decode, nxm_timeout_at, rising_edge, rising_edge_after,
 };
 use muir::machine::MAIN_WORDS;
 
@@ -188,20 +188,24 @@ fn nothing_answering_times_out_and_still_acks() {
     let mut b = Busint::default();
     b.request(false);
     b.mclk_edge(0, r);
-    assert_eq!(b.poll(TIMEOUT_NS - 1, r), None, "too early to give up");
-    let ack = b.poll(TIMEOUT_NS, r).expect("the timeout ends the cycle");
+    // The counter is let go at the grant and counts a clock that has run
+    // since power-on: `nxm_timeout_at` says where its sixth edge falls.
+    let nxm = nxm_timeout_at(0);
+    assert_eq!(b.poll(nxm - 1, r), None, "too early to give up");
+    let ack = b.poll(nxm, r).expect("the timeout ends the cycle");
     assert!(ack.timed_out);
     assert_eq!(ack.responder, r);
     b.finish();
 
-    // On the Unibus the counter starts at the grant, after the arbitration,
-    // and the timeout is acknowledged as an `SSYN` would be.
+    // On the Unibus the counter is let go at the grant, after the
+    // arbitration, and the timeout is acknowledged as an `SSYN` would be.
     let r = Responder::NoUnibus;
     let mut b = Busint::default();
     b.request(false);
     let granted = clock_until_granted(&mut b, r, 0);
-    assert_eq!(b.poll(granted + TIMEOUT_NS + UNIBUS_ACK_NS - 1, r), None, "too early to give up");
-    let ack = b.poll(granted + TIMEOUT_NS + UNIBUS_ACK_NS, r).expect("the timeout ends the cycle");
+    let nxm = nxm_timeout_at(granted);
+    assert_eq!(b.poll(nxm + UNIBUS_ACK_NS - 1, r), None, "too early to give up");
+    let ack = b.poll(nxm + UNIBUS_ACK_NS, r).expect("the timeout ends the cycle");
     assert!(ack.timed_out);
     assert_eq!(ack.responder, r);
 }
@@ -374,15 +378,17 @@ fn the_boot_takes_the_same_microcycles_and_more_nanoseconds() {
     assert_eq!(cycles, 537_848, "microcycles to the first disk read");
     // 537,848 microcycles at the 220 ns the machine comes up in is
     // 118,326,560 ns. The rest is the bus: the parity-fix loop's two
-    // overrunning cycles, which nothing answers, at the 10 microseconds
-    // `reqtim.prom` gives, the Unibus arbitration before the mode
-    // register's write, and the loop's 256 turns each held for the memory
-    // board's cycle. It is 0.2% of the boot, because the boot PROM spends
-    // almost all of its time clearing memories it can reach without the
-    // bus. `chip_agrees_with_rtl` holds the netlist to `rtl` cycle for
+    // overrunning cycles, which nothing answers, each given up on between
+    // 5.5 and 6.5 microseconds after its grant as the timeout counter's
+    // clock happens to lie (`nxm_timeout_at`; `reqtim.prom`'s 10
+    // microseconds is a later board's), the Unibus arbitration before the
+    // mode register's write, and the loop's 256 turns each held for the
+    // memory board's cycle. It is 0.2% of the boot, because the boot PROM
+    // spends almost all of its time clearing memories it can reach without
+    // the bus. `chip_agrees_with_rtl` holds the netlist to `rtl` cycle for
     // cycle over the window it is given.
-    assert_eq!(e.ns(), 118_613_440, "nanoseconds to the first disk read");
-    assert_eq!(e.ns() - 537_848 * 220, 286_880, "spent stalled on the bus");
+    assert_eq!(e.ns(), 118_605_740, "nanoseconds to the first disk read");
+    assert_eq!(e.ns() - 537_848 * 220, 279_180, "spent stalled on the bus");
 }
 
 /// One turn of `PAGE-0-PARITY-FIX`, which is the boot's only pair of

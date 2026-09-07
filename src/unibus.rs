@@ -527,7 +527,8 @@ pub struct UnibusMaster<'a> {
 
 impl<'a> UnibusMaster<'a> {
     /// How long a slave may take before the harness gives up on a cycle;
-    /// the interface's own timeout is 10 µs.
+    /// the interface's own timeout is under 7 µs
+    /// ([`crate::busint::nxm_timeout_at`]).
     pub const TIMEOUT_NS: u64 = 20_000;
 
     /// Powers a board, holds every Unibus wire it has up and each net in

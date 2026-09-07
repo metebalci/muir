@@ -623,16 +623,16 @@ fn cpu_clock(n: &netlist::Netlist) -> netlist::NetId {
 
 /// How long a cpu microcycle may take before a comparison gives up on it,
 /// in nanoseconds of the machine's time. The longest stall in the boot is
-/// the bus timeout: ten microseconds for a device that is not there, twenty
-/// for a hung one, thirty when referencing another processor
-/// (`busint::TIMEOUT_NS`); this is twice the longest. A `HANG` stops the
+/// the bus timeout: about six microseconds for a device that is not there,
+/// eleven for a hung one, fourteen when referencing another processor
+/// (`busint::TIMEOUT_NS`); this is four times the longest. A `HANG` stops the
 /// generator while `FarEnd::tick_with` carries the bus and the delay lines
 /// on to whatever ends it, and panics on a hang nothing can end; so this is
 /// for a cycle that never comes for some other reason.
 ///
 /// It was a count of far-end transitions, 2048, until the display board
 /// went on the backplane: a 64 MHz board that never sleeps gave the far end
-/// that many transitions in well under the ten microseconds the boot's
+/// that many transitions in well under the microseconds the boot's
 /// memory-size probe legitimately waits at `10000000`, and the guard called
 /// a timeout a hang. Time is what the bound was always about.
 const HANG_BOUND_NS: u64 = 60_000;
@@ -3395,11 +3395,11 @@ type CableLog = Vec<(u64, u8, bool, u16, Option<u64>, Option<u64>)>;
 /// Every request's instant, acknowledgement and lift agree to the
 /// nanosecond.  The unanswered one is given up on by the board's timeout
 /// counter and flagged `UB NXM ERROR`, and the wait is read off the
-/// board's own wires: `NXM TIMEOUT` rises [`busint::DEBUG_TIMEOUT_NS`]
-/// after `INT BUSY` started the counter at the grant --- the REQTIM PROM's
-/// second table, 26 microseconds where the PROM's own header says 30 ---
-/// and the request lifts [`busint::UNIBUS_STROBE_NS`] after that, with
-/// `-UB MSYN` at `SSYN T100`.
+/// board's own wires: `NXM TIMEOUT` rises at [`busint::debug_timeout_at`]
+/// the grant, where `INT BUSY` let the counter go --- the REQTIM PROM's
+/// second table, its count 13 where the PROM's own header says 30
+/// microseconds --- and the request lifts [`busint::UNIBUS_STROBE_NS`]
+/// after that, with `-UB MSYN` at `SSYN T100`.
 #[test]
 fn chip_and_rtl_drive_the_debug_cable_alike() {
     use muir::busint::{self, CableEvent, DEBUG_CYCLE};
@@ -3553,29 +3553,34 @@ fn chip_and_rtl_drive_the_debug_cable_alike() {
         generator_cycle(&mut c, &mut far, &mut clk, clk0);
         r.step().unwrap();
     }
-    // The unanswered cycle on the board's own wires: the counter runs from
-    // `INT BUSY` at the grant, `NXM TIMEOUT` is up when the REQTIM PROM's
-    // second table says, and the request lifts with `-UB MSYN` at `SSYN
-    // T100`.
+    // The unanswered cycle on the board's own wires: the counter is let go
+    // by `INT BUSY` at the grant, `NXM TIMEOUT` is up when the REQTIM
+    // PROM's second table says, and the request lifts with `-UB MSYN` at
+    // `SSYN T100`.
     let unanswered = chip[REQUESTS - 1];
-    let granted = granted_at.expect("the unanswered cycle was never granted") - t0;
-    let timed_out = timed_out_at.expect("NXM TIMEOUT never rose on the board") - t0;
+    let granted = granted_at.expect("the unanswered cycle was never granted");
+    let timed_out = timed_out_at.expect("NXM TIMEOUT never rose on the board");
     let lifted = unanswered.5.unwrap();
     eprintln!(
-        "the unanswered cycle: granted at {granted} ns, requested at {} ns, NXM TIMEOUT at \
-         {timed_out} ns, lifted at {lifted} ns --- {} ns after the request",
+        "the unanswered cycle: granted at {} ns, requested at {} ns, NXM TIMEOUT at {} ns, \
+         lifted at {lifted} ns --- {} ns after the request",
+        granted - t0,
         unanswered.0,
+        timed_out - t0,
         lifted - unanswered.0
     );
+    // The clock's phase is that of absolute time, so the instants are
+    // compared before `t0` is taken off them.
     assert_eq!(
-        timed_out - granted,
-        busint::DEBUG_TIMEOUT_NS,
-        "the board gives a debug cycle up DEBUG_TIMEOUT_NS after INT BUSY started the counter at \
-         the grant: the REQTIM PROM's second table, count 13 of its 2 microsecond intervals"
+        timed_out,
+        busint::debug_timeout_at(granted),
+        "the board gives a debug cycle up DEBUG_TIMEOUT_NS after the first edge of the counter's \
+         clock past the grant, where INT BUSY let the counter go: the REQTIM PROM's second table, \
+         count 13 of the 74LS124's intervals"
     );
     assert_eq!(
         lifted,
-        timed_out + busint::UNIBUS_STROBE_NS,
+        timed_out - t0 + busint::UNIBUS_STROBE_NS,
         "the request lifts with -UB MSYN at SSYN T100, UNIBUS_STROBE_NS after NXM TIMEOUT"
     );
 
@@ -3634,8 +3639,8 @@ fn a_chip_debugger_halts_and_reads_an_rtl_debuggee() {
     // The board's side of the protocol `Lashup` runs between two `rtl`s.
     // With nothing on the cable the board promises its next event, before
     // which no wire of its can move; with a request out it promises the
-    // release at its timeout --- `DEBUG_TIMEOUT_NS` from a grant made
-    // before the request --- and nothing sooner, the lift after an
+    // release at its timeout --- `debug_timeout_at` a grant made before
+    // the request --- and nothing sooner, the lift after an
     // acknowledgement being the debuggee's to know from `hold_ns`.  The
     // debuggee promises its earliest acknowledgement, and once that is
     // carried, nothing.
@@ -4340,8 +4345,8 @@ fn chip_and_rtl_read_the_microsecond_clock_alike_from_the_first_cycle() {
 /// strobes run without edges --- and from there the two stand at the same
 /// PC at every instant they are brought to, the NXM flagged on both: the
 /// cycle is given up on [`busint::TIMEOUT_NS`] after the first edge of the
-/// timeout counter's 2 microsecond oscillator past the lift, which is why
-/// the lift is made at two phases of it.
+/// timeout counter's clock past the lift, which is why the lift is made at
+/// two phases of it.
 #[test]
 fn chip_and_rtl_hold_an_unanswered_cycle_under_the_timeout_inhibit_alike() {
     use microcode::*;
@@ -4575,10 +4580,11 @@ fn two_chip_machines_read_each_others_pc_over_two_cables() {
 
 /// **A Unibus cycle of the processor's that nothing answers is given up on
 /// and the processor runs on, alike on both engines.**  The debuggee reads
-/// `760100`, an address on no board; the NXM comes [`busint::TIMEOUT_NS`]
-/// after the grant on both --- on the board, `NXM TIMEOUT` that long after
-/// `INT BUSY` started the counter, and on `rtl` at the same instant, its
-/// cycle answered by its timeout --- and from there the two stand at the
+/// `760100`, an address on no board; the NXM comes at
+/// [`busint::nxm_timeout_at`] the grant on both --- on the board, `NXM
+/// TIMEOUT` on the sixth edge of the counter's clock after `INT BUSY` let
+/// it go, and on `rtl` at the same instant, its cycle answered by its
+/// timeout --- and from there the two stand at the
 /// same PC at every generator boundary for a hundred cycles more: the
 /// restart after a Unibus timeout, which the boot never makes (its probe
 /// that times out is an Xbus cycle), held to the board.
@@ -4680,10 +4686,11 @@ fn chip_and_rtl_run_on_alike_after_a_unibus_cycle_nothing_answers() {
          at {nxm_at:?} ns; rtl gave it up at {rtl_timed_out_at:?} ns"
     );
     assert_eq!(
-        timed_out - granted,
-        busint::TIMEOUT_NS,
-        "NXM TIMEOUT comes TIMEOUT_NS after INT BUSY started the counter at the grant: the REQTIM \
-         PROM's first table, count 5 of its 2 microsecond intervals"
+        timed_out,
+        busint::nxm_timeout_at(granted),
+        "NXM TIMEOUT comes TIMEOUT_NS after the first edge of the counter's clock past the grant, \
+         where INT BUSY let the counter go: the REQTIM PROM's first table, count 5 of the \
+         74LS124's intervals"
     );
     assert_eq!(
         rtl_timed_out_at,
