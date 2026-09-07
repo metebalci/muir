@@ -853,20 +853,28 @@ fn codes_14_and_15_are_the_seek_and_at_ease_of_their_sectors() {
 /// two parts and reaches the instant by itself; this holds the behavioural
 /// model to the same arithmetic, so the two cannot drift apart again.
 ///
-/// They did drift. This engine took `sys/doc/disk.text`'s 2.5 seconds and
-/// the netlist board ran at 1.536, and nothing in the code said which muir
-/// meant. Which of MIT's two figures is right is still open --- see
-/// [`TIMEOUT_NS`]'s own comment --- but they now disagree in one place
-/// instead of two.
+/// They did drift, and the figure they drifted to was wrong as well. This
+/// engine took `sys/doc/disk.text`'s 2.5 seconds and the netlist board ran
+/// at 1.536; they were made to agree at 1.536, on the drawing's own
+/// property, and the SN74LS124's data sheet has since shown the drawing to
+/// be the stale one --- see [`TIMEOUT_NS`]. The text was right all along.
 #[test]
 fn both_engines_take_the_timeout_from_the_same_two_facts() {
     let (period, over) = muir::chip::DISK_TIMEOUT_VCO_PERIOD;
     assert_eq!(over, 1, "the disk timeout clock's period is a whole number of ns");
-    assert_eq!(period, 12_000_000, "`dctmot.drw`'s own property on the body: 12 ms");
+    // The SN74LS124's own data sheet: fo = 1e-4 / Cext for the LS part, and
+    // the board has 2 uF on this section --- two 1 uF bodies joined BARE
+    // across VCO.C1 and VCO.C2 by `dc.wlr`, both given as 1 uF by MIT's
+    // parts list. 1e-4 / 2e-6 is 50 Hz.
+    assert_eq!(period, 20_000_000, "2 uF through the LS124's own formula: 20 ms");
     assert_eq!(muir::disk_controller::TIMEOUT_DIVIDER, 128, "the 74393 at 0C03 divides by 128");
     assert_eq!(TIMEOUT_NS, period * 128, "the model times out on the board's own count");
-    // MIT wrote the answer on the same sheet: `|TIMEOUT    ;1.5 SEC`.
-    assert_eq!(TIMEOUT_NS, 1_536_000_000, "1.536 s, which is the drawing's `;1.5 SEC`");
+    // Which is what MIT's own text says: "a disk operation took longer than
+    // 2.5 seconds". The drawing's `;Period = 12 ms` is 1.2 uF, one capacitor
+    // and some stray, and its `;1.5 SEC` note is that stale figure counted
+    // down; the second body went on the board after the property was
+    // written.
+    assert_eq!(TIMEOUT_NS, 2_560_000_000, "2.56 s, which is disk.text's 2.5 seconds");
 }
 
 /// **A reserved code hangs the controller until its timer stops it.**
