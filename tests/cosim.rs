@@ -299,7 +299,7 @@ fn the_lc_shift_selects_the_byte_the_diagnostics_expect() {
 // --- micro against rtl, one construct at a time ------------------------------
 
 use muir::isa::asm::{
-    ALU, ALWAYS, BYTE, DISPATCH, JUMP, MD, P, POPJ, R, SETM, SETO, SETZ, SRC_MD, START_READ,
+    ALU, ALWAYS, BYTE, DISPATCH, JUMP, MD, N, P, POPJ, R, SETM, SETO, SETZ, SRC_MD, START_READ,
     a_dest, a_src, d_addr, filler, m_src, src, target, width,
 };
 
@@ -615,10 +615,11 @@ fn the_map_write_lands_the_cycle_after_the_store() {
 /// be disturbed during this cycle".  Here the store is a `POPJ` to a stack
 /// word with bit 14 up, `NEED-FETCH` pending, so an instruction fetch
 /// follows and page VCTL1's `VMAS` multiplexer loads `VMA` with `LC<25:2>`
-/// --- on the board a microcycle after the `POPJ`, `NEXT INSTRD`, which is
-/// after the write; `micro` fetches in the `POPJ`'s own step, and its
-/// latch of `VMA` at the store is what keeps the write the store's.  Both
-/// engines write the entry and both end with the fetch address in `VMA`.
+/// --- a microcycle after the `POPJ`, `NEXT INSTRD`, on both engines
+/// since issue #21, which is the write's own microcycle.  The write still
+/// takes the store's word because it lands at the head of that microcycle,
+/// before the fetch moves `VMA`.  Both engines write the entry and both
+/// end with the fetch address in `VMA`.
 #[test]
 fn a_map_write_whose_store_pops_into_a_fetch_still_lands() {
     const WRITE_MAP: u64 = (0o23 << 19) | (0o37 << 14);
@@ -650,4 +651,164 @@ fn a_map_write_whose_store_pops_into_a_fetch_still_lands() {
     assert_eq!(e.machine().vma, r.machine().vma, "micro: VMA");
     assert_eq!(e.machine().l2_map, r.machine().l2_map, "micro: the level-2 map");
     assert_eq!(e.machine().l1_map, r.machine().l1_map, "micro: the level-1 map");
+}
+
+/// Both engines' `VMA` and `MD` after each of `steps` executed
+/// instructions.
+///
+/// Not `LC`: `rtl` keeps the location counter in a field of its own and
+/// never in [`Machine`], where `micro` keeps it, so there is nothing to
+/// compare. `engines_agree_on_memory` leaves it out for the same reason.
+///
+/// Executed instructions and not microcycles, for the reason
+/// `engines_agree_on_memory` gives: a cycle the pipeline inhibits runs on
+/// the board and retires nothing, and the two engines do not agree about
+/// how many of those there are at a boot. What they do agree about is the
+/// machine after each instruction retires, so that is where they are
+/// compared --- and it is still fine enough to see a fetch a microcycle
+/// early, which lands in the retiring instruction before the one that
+/// should carry it.
+fn traces(prom: &[Insn], set: &dyn Fn(&mut Machine), steps: usize) -> Vec<(String, String)> {
+    let make = || {
+        let mut m = Machine::new();
+        let mut words = vec![filler(); 512];
+        words[..prom.len()].copy_from_slice(prom);
+        m.load_prom(&words);
+        set(&mut m);
+        m
+    };
+    let show = |m: &Machine| format!("VMA {:o} MD {:o}", m.vma, m.md);
+    let mut e = Micro::new(make());
+    e.boot();
+    let mut r = Rtl::new(make());
+    r.boot();
+    let mut out = Vec::new();
+    for _ in 0..steps {
+        while {
+            e.step().unwrap();
+            e.executed().is_none()
+        } {}
+        while {
+            r.step().unwrap();
+            r.executed().is_none()
+        } {}
+        out.push((show(e.machine()), show(r.machine())));
+    }
+    out
+}
+
+/// **A `POPJ`'s instruction fetch comes the microcycle after the `POPJ`,
+/// on both engines.**
+///
+/// `rtl` registers the popped word's bit 14 as `NEXT INSTRD` at the
+/// `POPJ`'s clock edge and makes `IFETCH` from it in the microcycle after
+/// --- `lcinc = next_instrd || (irdisp && IR<24>)`, `ifetch = needfetch &&
+/// lcinc` --- so `VMA` takes `LC<25:2>` and the counter steps at the end
+/// of that following microcycle, not the `POPJ`'s.  `micro` did it in the
+/// `POPJ`'s own step, which put the fetch address in `VMA`, the stepped
+/// counter in `LC` and the fetched word in `MD` a microcycle early for the
+/// whole instruction stream.  Issue #21.
+///
+/// A `DISPATCH` with `IR<24>` fetches in its own microcycle on both, and
+/// `an_instruction_fetch_goes_through_the_map` covers that route; only the
+/// `POPJ` route is at issue here.
+#[test]
+fn a_popjs_fetch_comes_the_microcycle_after_the_popj() {
+    const FETCH_WORD: u32 = 0o1000;
+    let prom = [
+        // The counter, which sets NEED-FETCH; then a POPJ to a stack word
+        // with bit 14 up, so the return asks for the fetch.
+        Insn::new(ALU | SETM | m_src(2) | LC),
+        Insn::new(ALU | SETZ | POPJ | a_dest(0o100)),
+        filler(),
+        filler(),
+        filler(),
+        filler(),
+    ];
+    let set = |m: &mut Machine| {
+        // LC counts bytes, and page 1 is mapped so the fetch is answered.
+        m.mmem[2] = FETCH_WORD << 2;
+        m.l2_map[FETCH_WORD as usize >> 8] = (1 << 23) | (1 << 22) | 0o100;
+        m.spcptr = 1;
+        m.spc[1] = 4 | (1 << 14);
+    };
+    let t = traces(&prom, &set, 10);
+    for (i, (micro, rtl)) in t.iter().enumerate() {
+        assert_eq!(micro, rtl, "instruction {i}: micro {micro:?}, rtl {rtl:?}\nall: {t:#?}");
+    }
+    // And the fetch did happen, so the test is not passing on two engines
+    // that both did nothing.
+    assert!(
+        t.iter().any(|(_, rtl)| rtl.starts_with(&format!("VMA {FETCH_WORD:o} "))),
+        "the fetch address reached VMA: {t:#?}"
+    );
+}
+
+/// **The fetch lands in the microcycle after the `POPJ` even when that
+/// microcycle is inhibited.**
+///
+/// `IFETCH` is `NEEDFETCH AND LCINC` on page VCTL1 and `LCINC` is `NEXT
+/// INSTRD`, a register --- nothing about it is decoded from `IR`, so a
+/// microcycle the pipeline has nopped carries the fetch as any other
+/// does. This is the common case and not a corner: `(JUMP R N)` is how
+/// microcode 323 returns, and it both arms the fetch and inhibits the
+/// microcycle that must carry it. Deferring the fetch without this stops
+/// the band booting at all.
+#[test]
+fn a_fetch_armed_by_a_return_lands_in_the_inhibited_microcycle() {
+    const FETCH_WORD: u32 = 0o1000;
+    let prom = [
+        Insn::new(ALU | SETM | m_src(2) | LC),
+        // The return: pops, asks for the fetch, and inhibits the next.
+        Insn::new(JUMP | R | N | ALWAYS),
+        filler(),
+        filler(),
+        filler(),
+        filler(),
+    ];
+    let set = |m: &mut Machine| {
+        m.mmem[2] = FETCH_WORD << 2;
+        m.l2_map[FETCH_WORD as usize >> 8] = (1 << 23) | (1 << 22) | 0o100;
+        m.spcptr = 1;
+        m.spc[1] = 4 | (1 << 14);
+    };
+    let t = traces(&prom, &set, 8);
+    for (i, (micro, rtl)) in t.iter().enumerate() {
+        assert_eq!(micro, rtl, "instruction {i}: micro {micro:?}, rtl {rtl:?}\nall: {t:#?}");
+    }
+    assert!(
+        t.iter().any(|(_, rtl)| rtl.starts_with(&format!("VMA {FETCH_WORD:o} "))),
+        "the fetch address reached VMA: {t:#?}"
+    );
+}
+
+/// **And it lands with the instruction it belongs to even when that
+/// instruction costs extra microcycles.** A `WRITE-I-MEM` is two nopped
+/// microcycles and then its own, and a fetch armed by the `POPJ` before
+/// it must still arrive in the same executed instruction on both engines.
+#[test]
+fn a_fetch_armed_before_a_write_i_mem_lands_with_it() {
+    const FETCH_WORD: u32 = 0o1000;
+    let prom = [
+        Insn::new(ALU | SETM | m_src(2) | LC),
+        Insn::new(ALU | SETZ | POPJ | a_dest(0o100)),
+        // A JUMP with both R and P is WRITE-I-MEM, which costs two nopped
+        // microcycles before its own.
+        Insn::new(JUMP | R | P | target(6) | ALWAYS),
+        filler(),
+        filler(),
+        filler(),
+        filler(),
+        filler(),
+    ];
+    let set = |m: &mut Machine| {
+        m.mmem[2] = FETCH_WORD << 2;
+        m.l2_map[FETCH_WORD as usize >> 8] = (1 << 23) | (1 << 22) | 0o100;
+        m.spcptr = 1;
+        m.spc[1] = 2 | (1 << 14);
+    };
+    let t = traces(&prom, &set, 8);
+    for (i, (micro, rtl)) in t.iter().enumerate() {
+        assert_eq!(micro, rtl, "instruction {i}: micro {micro:?}, rtl {rtl:?}\nall: {t:#?}");
+    }
 }

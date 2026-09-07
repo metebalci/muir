@@ -75,6 +75,12 @@ pub struct Micro {
 
     inhibit: bool,
     popj: bool,
+    /// A pop this microcycle whose word asks for an instruction fetch:
+    /// `NEXT INSTR` on page CONTRL, which the edge registers.
+    next_instr: bool,
+    /// The same, registered: the fetch belongs to *this* microcycle.
+    /// `lcinc = next_instrd || (irdisp && IR<24>)` in `rtl`.
+    next_instrd: bool,
 
     oal: bool,
     oah: bool,
@@ -149,6 +155,8 @@ impl Micro {
             npc: 0,
             inhibit: false,
             popj: false,
+            next_instr: false,
+            next_instrd: false,
             oal: false,
             oah: false,
             oa_low: 0,
@@ -301,9 +309,49 @@ impl Micro {
     /// and `chip` compute the gates themselves, and `tests/cosim.rs` holds
     /// the three engines to one trace.
     ///
-    /// Returns `ppc` with bit 1 forced when no fetch happened, which is how
-    /// the caller skips the page-fault check.
-    fn advance_lc(&mut self, mut ppc: u32) -> Result<u32, Halt> {
+    /// The end of a microcycle: the fetch the microcycle before armed,
+    /// then the edge that registers this one's `NEXT INSTR` and `WMAP`.
+    ///
+    /// The fetch comes after everything the instruction did, because page
+    /// VCTL1's `VMAS` multiplexer gives `IFETCH` the last word on `VMA`:
+    /// `vmaenb = destvma | ifetch` and `vmas` is `LC<25:2>` whenever
+    /// `IFETCH`, whatever the instruction wanted to put there.
+    fn fetch_and_clock(&mut self) {
+        if self.next_instrd {
+            self.step_lc();
+        }
+        self.next_instrd = std::mem::take(&mut self.next_instr);
+        self.clock_map_write();
+    }
+
+    /// A pop whose word has bit 14 up: the counter steps and, if
+    /// `NEEDFETCH` is pending, the instruction fetch happens --- but a
+    /// microcycle later, so this arms `NEXT INSTR` rather than doing it.
+    /// `rtl`: `next_instr = spop && !srcspcpopreal && SPC<14>`, registered
+    /// at this edge, and `lcinc = next_instrd || (irdisp && IR<24>)` with
+    /// `ifetch = needfetch && lcinc` the microcycle after.
+    ///
+    /// What does happen here is `SPCMUNG`: with the bit up and no fetch
+    /// needed, the return address comes back with bit 1 forced, which
+    /// steps the return over the two instructions of the fetch. MIT's own
+    /// `uc-macrocode.lisp` says so of the main loop --- "QMLP MUST BE AT
+    /// LOC WITH BIT 1=0.  QMLP AND QMLP+1 ARE SKIPPED BY STREAM HARDWARE
+    /// AUTOMATICALLY IF NO FETCH REQUIRED" --- and `rtl` makes it in the
+    /// `POPJ`'s own read phase, off the counter before the edge steps it:
+    /// `spcmung = SPC<14> && !needfetch`, `spc1a = spcmung || SPC<1>`.
+    fn pop_asks_for_a_fetch(&mut self, word: u32) -> u32 {
+        self.next_instr = true;
+        if self.needfetch() { word } else { word | 2 }
+    }
+
+    /// `NEEDFETCH` as this engine carries it: `LC<31>`, set when the last
+    /// step landed on the last byte of a word and cleared by the fetch it
+    /// asks for.  `rtl` and `chip` compute the gates.
+    fn needfetch(&self) -> bool {
+        self.m.lc & (1 << 31) != 0
+    }
+
+    fn step_lc(&mut self) {
         // LC counts bytes and a word is four of them, so the word to fetch is
         // the counter *before* the step, shifted down by two. The counter is
         // `LC<25:0>` (page LC); the flags this engine keeps above it stay.
@@ -312,7 +360,7 @@ impl Micro {
         let lc = (self.m.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
         self.m.lc = (self.m.lc & !0o377777777) | lc;
 
-        if self.m.lc & (1 << 31) != 0 {
+        if self.needfetch() {
             self.m.lc &= !(1 << 31);
             // `IFETCH` is a term of `MEMOP` on page VCTL1 and `VMAS` is
             // `LC<25:2>` under it, so the fetch is a memory cycle like any
@@ -320,8 +368,6 @@ impl Micro {
             // only if the map permits.
             self.m.vma = fetch_from;
             self.start_read();
-        } else {
-            ppc |= 2;
         }
 
         // 1E07 and 3E17, on the counter as stepped.
@@ -330,7 +376,6 @@ impl Micro {
         if last_byte_in_word {
             self.m.lc |= 1 << 31;
         }
-        Ok(ppc)
     }
 
     /// Functional sources, `IR<30:26>` when `IR<31>` is set.
@@ -461,14 +506,19 @@ impl Micro {
     /// warning is about, and it is not modelled here because it has no
     /// case to decide.  The one memory operation a `MAP(MD)VMA` store's
     /// microcycle can carry is an instruction fetch, and page VCTL1's
-    /// `VMAS` multiplexer then loads `VMA` with the fetch address in that
-    /// same microcycle --- `LC<25:2>`, twenty-four bits, with neither write
-    /// enable, `VMA<26>` or `VMA<25>`, in it --- so the pulses find nothing
-    /// to write at whichever address they are given.  The latch is what
-    /// keeps the case straight here: a `POPJ`'s fetch comes the microcycle
-    /// after the `POPJ` on the board, `NEXT INSTRD` in `rtl`, where this
-    /// engine takes it in the `POPJ`'s own step, and the write's word is
-    /// the store's either way.  Held to `rtl` in `tests/cosim.rs`.
+    /// `VMAS` multiplexer then loads `VMA` with the fetch address ---
+    /// `LC<25:2>`, twenty-four bits, with neither write enable, `VMA<26>`
+    /// nor `VMA<25>` in it --- so the pulses find nothing to write at
+    /// whichever address they are given.
+    ///
+    /// The latch is not what keeps that case straight, though it once was:
+    /// a `POPJ`'s fetch comes the microcycle *after* the `POPJ` on every
+    /// engine now (issue #21), which is the write's own microcycle, and
+    /// [`Micro::land_map_write`] runs at the head of it, before anything
+    /// in it can move `VMA`.  What the latch is for is simply holding the
+    /// store's `VMA` and `MD` across the edge, which is what the board's
+    /// registers do: `-WP1` fires before the edge that would change them.
+    /// Held to `rtl` in `tests/cosim.rs`.
     fn arm_map_write(&mut self) {
         self.map_write = Some((self.m.vma, self.m.md));
     }
@@ -812,7 +862,7 @@ impl Micro {
         if r && cond {
             let mut t = self.m.pop_spc();
             if (t >> 14) & 1 != 0 {
-                t = self.advance_lc(t)?;
+                t = self.pop_asks_for_a_fetch(t);
             }
             target = (t & 0o37777) as u16;
         }
@@ -901,7 +951,7 @@ impl Micro {
             self.npc
         } & 0o37777;
         if advance {
-            self.advance_lc(0)?;
+            self.step_lc();
         }
         if n {
             self.inhibit = true;
@@ -917,7 +967,7 @@ impl Micro {
         if r {
             let mut t = self.m.pop_spc();
             if (t >> 14) & 1 != 0 {
-                t = self.advance_lc(t)?;
+                t = self.pop_asks_for_a_fetch(t);
             }
             target = t & 0o37777;
         }
@@ -975,6 +1025,8 @@ impl Engine for Micro {
             npc,
             inhibit,
             popj,
+            next_instr,
+            next_instrd,
             oal,
             oah,
             oa_low,
@@ -1012,6 +1064,8 @@ impl Engine for Micro {
         w.u16(*npc);
         w.bool(*inhibit);
         w.bool(*popj);
+        w.bool(*next_instr);
+        w.bool(*next_instrd);
         w.bool(*oal);
         w.bool(*oah);
         w.u64(*oa_low);
@@ -1055,6 +1109,8 @@ impl Engine for Micro {
         self.npc = r.u16()?;
         self.inhibit = r.bool()?;
         self.popj = r.bool()?;
+        self.next_instr = r.bool()?;
+        self.next_instrd = r.bool()?;
         self.oal = r.bool()?;
         self.oah = r.bool()?;
         self.oa_low = r.u64()?;
@@ -1135,7 +1191,13 @@ impl Engine for Micro {
             self.inhibit = false;
             // Nopped, the instruction's misc field decodes to nothing.
             self.halted = false;
-            self.clock_map_write();
+            // But an armed fetch still happens in it. `IFETCH` is
+            // `NEEDFETCH AND LCINC` on page VCTL1 and `LCINC` is `NEXT
+            // INSTRD` --- a register, not anything decoded from `IR` ---
+            // so a nopped microcycle carries the fetch as any other does.
+            // `POPJ-AFTER-NEXT` makes this the common case rather than a
+            // corner: the microcycle a `POPJ` arms is the inhibited one.
+            self.fetch_and_clock();
             self.m.cycles += 1;
             return Ok(());
         }
@@ -1177,12 +1239,11 @@ impl Engine for Micro {
         if self.popj {
             let mut t = self.m.pop_spc();
             if (t >> 14) & 1 != 0 {
-                t = self.advance_lc(t)?;
+                t = self.pop_asks_for_a_fetch(t);
             }
             self.npc = (t & 0o37777) as u16;
         }
-
-        self.clock_map_write();
+        self.fetch_and_clock();
         self.m.cycles += 1;
         Ok(())
     }

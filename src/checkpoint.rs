@@ -32,7 +32,7 @@ const MAGIC: &[u8; 16] = b"muir checkpoint\n";
 
 /// Bumped whenever any type changes what it writes; a file from another
 /// version is refused rather than read wrong.
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 /// The shortest run of zero bytes worth a count of its own.
 const MIN_ZERO_RUN: usize = 4;
