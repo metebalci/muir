@@ -18,19 +18,35 @@
 # goes out. The 75452 drivers invert, so DBUSn high leaves TRIDENT.BUSn/
 # low, which is asserted.
 #
-# The last column is Century Data's own name for the same cable line, read
-# off Al Kossow's tridentCables.pdf. The two documents number the bus in
-# opposite directions: MIT's DBUSn is Century Data's bus 9-n. Under that
-# reversal the seven lines this controller uses land on their counterparts
-# name for name --- recalibrate on rezero, pre gate on head select (which
-# is what newdsk.31 calls it too, "Enable disk head-select"), fault clear
-# on device check reset, and read, write and the two data strobes on
-# themselves --- and the three MIT ties to ground land on the three this
-# controller has no use for: it writes no address marks, never resets the
-# head address and never advances the head. Seven for seven is what says
-# this is a reversal and not a disagreement. Which of the two numbers the
-# lines forwards is not settled by anything we have, and need not be, as
-# long as one mapping is used throughout.
+# The last column is Century Data's own name for the same cable line. The
+# two documents number the bus in opposite directions: MIT's DBUSn is
+# Century Data's bus 9-n.
+#
+# That reversal is not a disagreement, and Century Data's own manual says
+# why. The TRIDENT T25/T50/T80 OEM Reference Manual, Table 4-1 "Bus
+# Definitions", reads bus 0 as CAR512 and bus 9 as CAR001, with the text
+# "Bus lines 0-9 are defined as cylinder address. Bus 9 is the LSB." So
+# Century Data numbers the conductors with the most significant bit first.
+# MIT numbers by bit weight: DBUS0 is the cylinder bit of weight 1, which
+# is read off DCDA 0B18/0B17 and DCDBUS 0C07/0C06 against disk.text's
+# "DA<27:16> Cylinder number". Both count forwards. They are counting
+# different things, and bus n is DBUS 9-n exactly.
+#
+# The names agree under that mapping, which is how the reversal was found
+# before the manual was: the seven lines this controller uses land on their
+# counterparts name for name --- recalibrate on rezero, pre gate on head
+# select (which is what newdsk.31 calls it too, "Enable disk head-select"),
+# fault clear on device check reset, and read, write and the two data
+# strobes on themselves --- and the three MIT ties to ground land on the
+# three this controller has no use for: it writes no address marks, never
+# resets the head address and never advances the head. Seven for seven said
+# it was a reversal; the manual says which way each document counts.
+#
+# Al Kossow's tridentCables.pdf carried these names first and is a hand
+# transcription of 1999, not a Century Data document. Where the two differ,
+# prefer the manual: bitsavers has seventeen of them under
+# pdf/centuryData/Trident/, including the performance specification MIT
+# calls "the Trident manual" throughout its own documentation.
 #
 # tests/cadrdc_netlist.rs regenerates the first four columns from the
 # netlist and compares. The header above is written by hand and kept.

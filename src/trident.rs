@@ -47,9 +47,12 @@ pub fn connectors(n: &Netlist, wlr: &str) -> String {
 /// What the controller puts on each of the ten disk bus lines, out of the
 /// tag multiplexers on DCDBUS.
 pub fn bus(n: &Netlist) -> String {
-    // Century Data's number and name for each line, by MIT's number, read
-    // off Al Kossow's `tridentCables.pdf`. The reversal is the header's
-    // subject; here it is only a table.
+    // Century Data's number and name for each line, by MIT's number. Their
+    // Table 4-1, "Bus Definitions", reads bus 0 as `CAR512` down to bus 9
+    // as `CAR001` and says "Bus 9 is the LSB", where MIT numbers by bit
+    // weight, so bus n is MIT's `DBUS 9-n`. Both count forwards and they
+    // count different things; `data/trident-bus.txt` has the whole of it.
+    // Here it is only a table.
     const CENTURY: [(u8, &str); 10] = [
         (9, "head advance"),
         (8, "rezero"),
