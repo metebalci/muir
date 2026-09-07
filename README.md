@@ -59,7 +59,7 @@ level order.
 | `CADR.netlist` | processor and control store, two boards in the one file | 985 |
 | `BUSINT.netlist` | bus interface | 176 |
 | `CADRM.netlist` | main memory, 64K words a board, 32 of them by default for 2M words | 168 |
-| `CADRIO.netlist` | I/O board: keyboard, mouse, clocks, and the Chaosnet half of the same board | 173 |
+| `CADRIO.netlist` | I/O board: keyboard, mouse, clocks, the serial port, and the Chaosnet half of the same board | 173 |
 | `CADRDC.netlist` | disk controller | 171 |
 | `SIMPLETV.netlist` | the black-and-white TV, MIT's word for the screen | 171 |
 | `LISPMTV.netlist` | colour TV, four- and eight-bit; replaced the SIMPLE TV in 1980 | 172 |
