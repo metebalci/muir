@@ -238,6 +238,16 @@ enum Transfer {
         /// and the message that went out in the asynchronous mark. While
         /// this is set the transfer is stopped.
         stalled: Option<(Vec<u8>, String)>,
+        /// Whether the synchronous mark that says the data is all there
+        /// has come up the data connection. A flag rather than a count
+        /// because a write's only inbound mark is that one: the others
+        /// the protocol has are the ones a `FILEPOS` or a
+        /// `SET-BYTE-SIZE` provokes, and both of those come *from* the
+        /// server.
+        marked: bool,
+        /// The transaction id of a `CLOSE` that came before the mark and
+        /// is waiting for it.
+        closing: Option<String>,
     },
 }
 
@@ -418,14 +428,31 @@ impl Control {
                 self.pending.push(Pending { tid, channel });
             }
             "UNDATA-CONNECTION" => {
+                // Both handles of the data connection go, and the
+                // transfers on both of them: "UNDATA-CONNECTION implies
+                // a CLOSE on each file handle of the DATA connection for
+                // which there is a file transfer in progress". The
+                // client names the input handle --- `qfile.lisp` sends
+                // `(DATA-INPUT-HANDLE DATA-CONN)` --- and a write is on
+                // the output one, so taking only the named handle's
+                // transfer would leave a write behind, and its temporary
+                // in the directory.
+                let mut going = vec![handle.clone()];
                 if let Some(ch) = self.handles.remove(&handle) {
                     ch.lock().unwrap().out.push_back(Out::Close("Undata".into()));
+                    going.extend(
+                        self.handles
+                            .iter()
+                            .filter(|(_, v)| Arc::ptr_eq(v, &ch))
+                            .map(|(k, _)| k.clone()),
+                    );
                     self.handles.retain(|_, v| !Arc::ptr_eq(v, &ch));
                 }
-                // A write in progress on the handle is abandoned with it:
-                // its temporary would otherwise stay in the directory.
-                if let Some(Transfer::Write { temp, .. }) = self.transfers.remove(&handle) {
-                    let _ = std::fs::remove_file(&temp);
+                for h in going {
+                    if let Some(Transfer::Write { temp, closing, .. }) = self.transfers.remove(&h) {
+                        let _ = std::fs::remove_file(&temp);
+                        self.stranded(&h, closing);
+                    }
                 }
                 self.reply(&tid, &handle, "UNDATA-CONNECTION", "");
             }
@@ -652,18 +679,42 @@ impl Control {
     /// that order --- "we must respond to the close before sending the
     /// SYNCMARK since otherwise we would likely block".
     ///
-    /// For a write it is the other way about: the user end has already
-    /// sent its own synchronous mark to say the data is all there, and
-    /// the close renames the temporary into place and answers with the
-    /// file's date, its length and its truename --- `FILE.c`'s `xclose`,
-    /// which writes that plain form when the protocol version is above
-    /// zero and one with a leading `-1` for an older client.
+    /// For a write it is the other way about: the mark is **awaited**,
+    /// and only then does the close rename the temporary into place and
+    /// answer with the file's date, its length and its truename ---
+    /// `FILE.c`'s `xclose`, which writes that plain form when the
+    /// protocol version is above zero and one with a leading `-1` for an
+    /// older client.
     fn close(&mut self, tid: &str, handle: &str) {
         // Any data that arrived on the data connection but has not yet
         // been moved into the write goes in before the temporary is
         // renamed: a CLOSE can follow the last data packet with no turn
         // of the server between them.
         self.drain_incoming(handle);
+        // A write's CLOSE comes up the control connection and its mark
+        // up the data connection, and the two can overtake each other:
+        // `sys/doc/chfile.text`'s worked example for writing a file
+        // sends "a SYNC mark on the DATA connection and a CLOSE on the
+        // CONTROL connection (in either order)", so a CLOSE that
+        // arrives first is a correct client's doing rather than a
+        // fault. The mark is what says the data is all there, and
+        // renaming without it would put a file into place short of
+        // whatever had not arrived --- empty, if none of it had. So the
+        // transfer stays open and the CLOSE is answered from the poll
+        // once the mark has come.
+        //
+        // The client sends the two that way round and does not wait
+        // between them: `qfile.lisp`'s `:COMMAND` writes the command
+        // packet on the control connection and then, for an output
+        // stream, `(SEND STREAM :WRITE-SYNCHRONOUS-MARK)` before it
+        // waits for the response. So holding the reply back cannot
+        // hold the mark back with it.
+        if let Some(Transfer::Write { marked: false, stalled: None, closing, .. }) =
+            self.transfers.get_mut(handle)
+        {
+            *closing = Some(tid.to_string());
+            return;
+        }
         let Some(transfer) = self.transfers.remove(handle) else {
             return self.error(
                 tid,
@@ -709,6 +760,26 @@ impl Control {
                 let results = if self.version > 0 { body } else { format!("-1 {body}") };
                 self.reply(tid, handle, "CLOSE", &results);
             }
+        }
+    }
+
+    /// Answers a `CLOSE` that was still waiting for its synchronous mark
+    /// when the write it was waiting on was taken away --- an
+    /// `UNDATA-CONNECTION` or a `DELETE` on the same handle. `CNO`,
+    /// "CLOSE on non-open channel", is `chfile.text`'s code for it: by
+    /// the time the CLOSE could be answered there was no longer a
+    /// channel to close.
+    ///
+    /// The band never gets here. Its `:REAL-CLOSE` waits for the CLOSE's
+    /// reply before it frees the data connection, its abort route sends
+    /// the DELETE first --- when the CLOSE that follows finds no
+    /// transfer at all --- and it only undoes a data connection that has
+    /// gone dormant. This is so that a client which does it the other
+    /// way round is told, rather than left waiting for a reply that
+    /// would never come.
+    fn stranded(&mut self, handle: &str, closing: Option<String>) {
+        if let Some(tid) = closing {
+            self.error(&tid, handle, "CNO", 'C', "The transfer was abandoned before its mark");
         }
     }
 
@@ -796,7 +867,15 @@ impl Control {
         self.reply(tid, handle, "OPEN", &results);
         self.transfers.insert(
             handle.to_string(),
-            Transfer::Write { temp, real: path, truename: tn, characters, stalled: None },
+            Transfer::Write {
+                temp,
+                real: path,
+                truename: tn,
+                characters,
+                stalled: None,
+                marked: false,
+                closing: None,
+            },
         );
     }
 
@@ -812,8 +891,14 @@ impl Control {
         let writing = self.transfers.contains_key(handle);
         for (op, bytes) in items {
             // A synchronous mark says the data is all there; it carries
-            // none of its own.
-            if op == SYNC_MARK_OP || op == ASYNC_MARK_OP {
+            // none of its own, and it is what a CLOSE waits for.
+            if op == SYNC_MARK_OP {
+                if let Some(Transfer::Write { marked, .. }) = self.transfers.get_mut(handle) {
+                    *marked = true;
+                }
+                continue;
+            }
+            if op == ASYNC_MARK_OP {
                 continue;
             }
             if writing {
@@ -906,9 +991,10 @@ impl Control {
     /// handle it removes the file.
     fn delete(&mut self, tid: &str, handle: &str, pathname: &str) {
         if !handle.is_empty()
-            && let Some(Transfer::Write { temp, .. }) = self.transfers.remove(handle)
+            && let Some(Transfer::Write { temp, closing, .. }) = self.transfers.remove(handle)
         {
             let _ = std::fs::remove_file(&temp);
+            self.stranded(handle, closing);
             return self.reply(tid, handle, "DELETE", "");
         }
         let path = match self.resolve_for_writing(pathname) {
@@ -1209,6 +1295,26 @@ impl Session for Control {
             .collect();
         for handle in writing {
             self.drain_incoming(&handle);
+        }
+        // A CLOSE that overtook its synchronous mark waits in the
+        // transfer; the mark has now come, so it can be answered. A
+        // write that has stalled since goes through here too, to the
+        // error the stalled arm gives it: a stall holds bytes that have
+        // not been written, so no mark can make that file whole.
+        let ready: Vec<(String, String)> = self
+            .transfers
+            .iter()
+            .filter_map(|(handle, transfer)| match transfer {
+                Transfer::Write { closing: Some(tid), marked, stalled, .. }
+                    if *marked || stalled.is_some() =>
+                {
+                    Some((tid.clone(), handle.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for (tid, handle) in ready {
+            self.close(&tid, &handle);
         }
         // Anything still waiting has no write to go to --- data before an
         // OPEN WRITE, or after a CLOSE --- and is discarded, so a channel
