@@ -63,9 +63,10 @@ the restored last MIT release, recovered from TID/671 in the MIT Tapes of Tech
 Square project. It will not run with earlier microcode.
 [System 304](https://tumbleweed.nu/system-304-0-release/), the current release
 of the line that continues it, boots here too, with its own pack and its own
-Chaosnet numbers. The target stays where it is because of the console program
-CC: CC calls `MAKE-ARRAY` in a form System 304 removed, so it does not load
-there, and the two-machine lashup is the acceptance test.
+Chaosnet numbers, and the console program CC runs on both: CC called
+`MAKE-ARRAY` in a form System 304 removed, which kept it from loading there
+until upstream rewrote the seven calls on 7 September 2026. The two-machine
+lashup, the acceptance test, is run on the target's band.
 
 ## Three engines
 
@@ -158,8 +159,9 @@ and [`system-100-0`](https://github.com/metebalci/muir/releases/tag/system-100-0
 so that the bytes the tests were written against stay the bytes: the packs
 byte for byte as [upstream](https://tumbleweed.nu/lm-3/) publishes them, and
 System 304's sources, which upstream ships no tarball of, built from the
-project's own Fossil repository at branch `system-304` --- each script says
-exactly what it fetched and from where. Everything in them is under the
+project's own Fossil repository at the check-in that carries CC's rewritten
+`MAKE-ARRAY` calls --- each script says exactly what it fetched and from
+where. Everything in them is under the
 AGPL, muir's own licence. Without them, everything needing a pack skips and
 says so. Windows is untested; the scripts are POSIX shell, so use WSL.
 

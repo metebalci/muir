@@ -49,9 +49,89 @@ pub struct Cc {
     /// while nothing writes its frame buffer, and that is what a frame of
     /// it says.
     pub rec: Recorder,
+    /// The release A booted, which says where its sources are and what its
+    /// Chaosnet numbers were.
+    pub release: Release,
+    /// Microcycles of A with neither cable moving after which a form asked
+    /// of it is given up on.  [`Cc::STALL`] to begin with, which is right
+    /// for a form that runs; a form that *compiles* is quiet for as long
+    /// as a file takes and raises it.
+    pub stall: u64,
     next_sample: u64,
     /// The Chaosnet server's root, held for as long as the machines are up.
     _root_held: MutexGuard<'static, ()>,
+}
+
+/// Which release machine A boots.
+///
+/// The two are different machines and want different Chaosnet numbers, and
+/// their sources are in different places: System 100's under
+/// `vendor/system-100-0/sys`, System 304's under
+/// `vendor/system-304-0/sys-304-0`, each linked into the FILE service's
+/// root under the name its own band asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Release {
+    /// **The target.** Its `SYS: CC;` is shipped compiled, so CC loads
+    /// from the release's own QFASLs.
+    System100,
+    /// The release that continues it.  It ships no QFASL for CC, so CC is
+    /// compiled from source before it can be loaded, which is twenty-odd
+    /// minutes of the machine's time.
+    System304,
+}
+
+impl Release {
+    /// The pack this release boots from, or `None` with the skip line if
+    /// its fetch script has not been run.
+    pub fn pack(self) -> Option<PathBuf> {
+        match self {
+            Release::System100 => pack_100(),
+            Release::System304 => crate::support::pack_304(),
+        }
+    }
+
+    /// The boot PROM's image in this release's `SYS: UBIN;`.  Both
+    /// releases carry the same `promh.mcr`, and each is read from its own
+    /// rather than from the other's.
+    pub fn prom(self) -> Option<PathBuf> {
+        match self {
+            Release::System100 => vendor(&["system-100-0", "sys", "ubin", "promh.mcr"]),
+            Release::System304 => vendor(&["system-304-0", "sys-304-0", "ubin", "promh.mcr"]),
+        }
+    }
+
+    /// The name the server answers `STATUS` with: `MIT-OZ`, which is
+    /// System 100's `sys/site/hosts.text` name for 3060, and `OZ` for
+    /// System 304, the name its band resolves to 4403 --- asked at its
+    /// listener, `(send (si:parse-host "OZ") :chaos-address)` answers
+    /// 2307 decimal.
+    ///
+    /// **Unverified** that `OZ` is that host's own name there rather than
+    /// a nickname of it: System 304's host table is in the pack and not
+    /// in the sources, so there is no file here to read it from, and the
+    /// name is seen only in a `STATUS` answer, which nothing in these
+    /// tests reads. `(si:get-host-from-address #o4403 :chaos)`
+    /// (`network/host.lisp`) asked at the band's listener would settle it.
+    pub fn server_name(self) -> String {
+        match self {
+            Release::System100 => muir::chaos::Config::default().server_name,
+            Release::System304 => "OZ".to_string(),
+        }
+    }
+
+    /// This machine's Chaosnet address and its file and time host's, as
+    /// this release's band holds them: `MIT-LISPM-1` at 3050 with `MIT-OZ`
+    /// at 3060, `AMS-LISPM-1` at 4401 with `OZ` at 4403.  A server
+    /// answering anywhere else is a server the band never calls.
+    pub fn chaos(self) -> (u16, u16) {
+        match self {
+            Release::System100 => (
+                muir::chaos::Config::default().address,
+                muir::chaos::Config::default().server_address,
+            ),
+            Release::System304 => crate::support::CHAOS_304,
+        }
+    }
 }
 
 /// The one Chaosnet server root the tests share, `vendor/run/file-root`:
@@ -288,7 +368,7 @@ impl Cc {
                     self.l.debugger.debug_cycles()
                 );
             }
-            if self.l.steps.0 - moved_at > Self::STALL || gone > limit {
+            if self.l.steps.0 - moved_at > self.stall || gone > limit {
                 self.screenshot(&format!("cc-{name}-timeout"));
                 // Where each machine stands, for whoever reads the failure.
                 for (who, m) in [("A", &self.l.debugger), ("B", &self.l.debuggee)] {
@@ -372,22 +452,24 @@ pub fn boot_and_login() -> Option<Cc> {
 
 /// The same, `debuggee_pack` saying whether B has A's pack under it too.
 ///
-/// **This runs System 100's pack, not the target's.** CC does not load on
-/// System 304: `cc/lcadrd.lisp`, `cc/diags.lisp` and `cc/ldbg.lisp` call
-/// `MAKE-ARRAY` in the old positional form --- `(MAKE-ARRAY NIL 'ART-Q
-/// '(8))` --- seven times between them, and System 304 took that form out
-/// (`patch/system-300-2.lisp`, whose `MAKE-ARRAY` answers "~S is not a
-/// known MAKE-ARRAY keyword"). CC was never updated for it. The three files
-/// are byte for byte the same in both releases, so this is the system
-/// moving out from under CC rather than CC differing. On System 100's band
-/// the old form still works and CC loads, which is one reason that release
-/// is kept.
+/// **This runs the target, System 100.**  [`boot_and_login_on`] boots
+/// either release; the tests that debug B through CC take this one,
+/// because the acceptance test is the target's.
 pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
-    let (Some(prom), Some(pack), Some(root)) = (
-        vendor(&["system-100-0", "sys", "ubin", "promh.mcr"]),
-        pack_100(),
-        vendor(&["run", "file-root"]),
-    ) else {
+    boot_and_login_on(Release::System100, debuggee_pack)
+}
+
+/// Boots A on `release` to its listener with B on the cable and logs in,
+/// B running the boot PROM with `debuggee_pack` saying whether A's pack is
+/// under it as well.
+///
+/// The release decides three things and nothing else: which pack A boots,
+/// which Chaosnet numbers its band calls with, and which tree the FILE
+/// service's link points at.  What is typed afterwards is the caller's.
+pub fn boot_and_login_on(release: Release, debuggee_pack: bool) -> Option<Cc> {
+    let (Some(prom), Some(pack), Some(root)) =
+        (release.prom(), release.pack(), vendor(&["run", "file-root"]))
+    else {
         return None;
     };
     // One run at a time under the shared root, from here to the end of
@@ -403,9 +485,12 @@ pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
     let prom = mcr::parse(&std::fs::read(prom).unwrap()).unwrap().imem;
     let mut a = Machine::new();
     a.load_prom(&prom);
-    a.disk.attach(0, Unit::open(&pack, Geometry::T300).expect("the System 100 pack"));
-    // System 100's band, so the Chaosnet numbers are its own, which are
-    // what `chaos::Config` defaults to: 3050 here and `MIT-OZ` at 3060.
+    a.disk.attach(0, Unit::open(&pack, Geometry::T300).expect("the release's pack"));
+    // The band's own numbers.  At any other pair the machine boots and
+    // reaches no server at all: 4403 is off 3050's subnet, so System 304's
+    // band, hearing no route to it, never transmits.
+    (a.chaos.address, a.chaos.server_address) = release.chaos();
+    a.chaos.server_name = release.server_name();
     a.chaos.file_root = Some(root.clone());
     a.chaos.trace = std::env::var_os("MUIR_CHAOS_TRACE").is_some();
     a.chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
@@ -416,7 +501,7 @@ pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
     let mut b = Machine::new();
     b.load_prom(&prom);
     if debuggee_pack {
-        b.disk.attach(0, Unit::open(&pack, Geometry::T300).expect("the System 100 pack"));
+        b.disk.attach(0, Unit::open(&pack, Geometry::T300).expect("the release's pack"));
     }
     // B's own Chaosnet, as `muir --debug-in-process` gives it: its own
     // ether with its own server on it, since one cable carries one
@@ -426,6 +511,8 @@ pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
     // and this run's directory is A's, temporary files and all.
     b.chaos.trace = std::env::var_os("MUIR_CHAOS_TRACE").is_some();
     b.chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
+    (b.chaos.address, b.chaos.server_address) = release.chaos();
+    b.chaos.server_name = release.server_name();
     b.plug_chaos(0);
     let (mut ea, mut eb) = (Rtl::new(a), Rtl::new(b));
     ea.boot();
@@ -439,13 +526,18 @@ pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
         k: Keyboard::new(),
         root,
         rec: Recorder::pair(true),
+        release,
+        stall: Cc::STALL,
         next_sample: 0,
         _root_held: root_held,
     };
 
-    // A to its prompt: the listener's `;Reading at top level` line, which
-    // this band's herald puts in rows 84 to 100, then a moment.
-    while lit_rows(&cc.l, 84..100) < 400 {
+    // A to its prompt: the listener's `;Reading at top level` line.  Where
+    // it lands depends on how tall the herald above it is --- six lines on
+    // System 304's band, one fewer on System 100's --- so the rows watched
+    // are the band the line falls in for either, as
+    // `support::wait_for_the_prompt` watches them.
+    while lit_rows(&cc.l, 84..130) < 400 {
         cc.run(500_000);
         assert!(cc.l.steps.0 < 100_000_000, "A never reached its listener");
     }
@@ -454,7 +546,9 @@ pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
     assert_eq!(cc.l.debugger.debug_cycles(), 0, "nothing on the cable yet");
 
     cc.type_line("(login 'lispm)");
-    cc.until_written(142..156, 0, 60_000_000);
+    // What the login prints, wherever this band's herald has pushed it to:
+    // the two land a line apart, so the rows watched cover both.
+    cc.until_written(142..170, 0, 60_000_000);
     // A diagnostic's typeout fills the window, and a full window stops at
     // **MORE** and waits for a key that no one will type.  MIT's own file
     // server turns the same switch off on login --- "Allow typeout to
