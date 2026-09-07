@@ -31,15 +31,11 @@
 //! nothing answering there the read is an NXM and the machine cold-boots by
 //! accident rather than by decision.
 //!
-//! Where this is knowingly not the machine: of
-//! the four interrupt enables only the keyboard's is acted on
-//! ([`IoBoard::interrupt_request`], which [`crate::machine::Machine`] takes
-//! as a Unibus interrupt) --- the mouse's is stored, microcode 323 polling
-//! the mouse from the display's vertical interrupt and never enabling it;
-//! the mouse's counters count what they are told rather than a quadrature
-//! pair ([`IoBoard::mouse_move`]); the beep is accepted and dropped; and
-//! the clocks are driven from simulated time rather than the computer's, which
-//! makes a run reproducible.
+//! Where this is knowingly not the machine: the mouse's counters count what
+//! they are told rather than a quadrature pair ([`IoBoard::mouse_move`]);
+//! the beep is accepted and dropped; and the clocks are driven from
+//! simulated time rather than the computer's, which makes a run
+//! reproducible.
 
 /// Keyboard, low sixteen bits of the scan code.  Reading either half clears
 /// [`csr::KBD_READY`].
@@ -154,6 +150,18 @@ pub const SERIAL_LAST: u32 = 0o764176;
 /// [`crate::chaos::board::VECTOR`] is the `270`.
 pub const SERIAL_VECTOR: u16 = 0o264;
 
+/// The interval timer's Unibus interrupt vector, `274`: microcode 323's own
+/// `(ASSIGN INTERVAL-TIMER-VECTOR 274)` in `uc-interrupt.lisp`, which is
+/// also what page IOBINT's two vector bits come to with `CLOCK.IREQ`
+/// latched --- see [`SERIAL_VECTOR`] for the two equations. `V2` and `V3`
+/// are both one under the clock, so it is named before all three others.
+pub const CLOCK_VECTOR: u16 = 0o274;
+
+/// One count of the interval timer, in nanoseconds: `16 USEC CLK` drives
+/// the counters' count-down input, and `iob.wlr` puts `F21-04 CNT DW` on
+/// that net with `F21-05 CNT UP` on `HI3`.
+pub const INTERVAL_TICK_NS: u64 = 16_000;
+
 /// Bits of the status register.
 ///
 /// `iobcsr.drw` names the signals, and `data/CADRIO.netlist` places them:
@@ -186,9 +194,23 @@ pub mod csr {
     /// of [`super::CLOCK`] and counting down on `16 USEC CLK` at pin 4 (the
     /// `DOWN` input, `sn74193.pdf`), their clears on ground.  So the bit
     /// comes up when the loaded interval runs out and goes down when a new
-    /// one is loaded.  Reading it as one always, as here, is what the
-    /// netlist board reads from reset, and stays right until the microcode
-    /// loads the timer.
+    /// one is loaded, which is [`super::IoBoard::clock_ready`].  Before any
+    /// load the latch reads set, which is what the netlist board reads from
+    /// reset.
+    ///
+    /// **Down from what was written, not up to zero.**  `iob.wlr`, the
+    /// board as wrapped, puts `16 USEC CLK` on `F21-04 CNT DW` and
+    /// `F21-05 CNT UP` on `HI3`, and takes `F21-13 BORROW` up the chain
+    /// while `F21-12 CARRY` goes nowhere; MIT's `doc/iob.text` agrees ---
+    /// storing `n` "turns off clock ready CSR<6>, delays 16 x `n`
+    /// microseconds, then turns clock ready back on".  Microcode 323 says
+    /// the opposite of its own board and writes the two's complement:
+    /// `((MD) (A-CONSTANT 1_20))` then `((MD) SUB MD A-T)` under the
+    /// comment ";Timer counts up, not down", and `doc/unaddr.text` says
+    /// increments too.  Discrepancy 74.  The wire list is followed here,
+    /// which costs nothing on System 100: that microcode is `INTR-OUTDEV`,
+    /// reached only with `A-UNIBUS-TIMED-OUTPUT-CSR-ADDRESS` set up, and
+    /// nothing in the release sets `CLOCK INT ENABLE` at all.
     pub const CLOCK_READY: u16 = 1 << 6;
     /// `SER INT ENABLE`: not one of the 74LS175's four but the second
     /// half of the 74LS74 at IOBSER 0D21, with `UBI7` on its `D`, the
@@ -287,6 +309,9 @@ pub struct IoBoard {
     usec: u32,
     /// What the interval timer was last loaded with, in units of 16 us.
     interval: u16,
+    /// When it was loaded, on the machine's clock, or `None` before any
+    /// write of [`CLOCK`]: what [`IoBoard::clock_ready`] counts from.
+    interval_loaded_at: Option<u64>,
     /// The mouse's two counters, twelve bits each.
     mouse_x: u16,
     mouse_y: u16,
@@ -304,9 +329,23 @@ impl IoBoard {
         self.csr
     }
 
-    /// What the interval timer holds.  Nothing counts it down.
+    /// What the interval timer was last loaded with.  It counts down from
+    /// there at [`INTERVAL_TICK_NS`] a count; [`IoBoard::clock_ready`] is
+    /// where it has got to.
     pub fn interval_timer(&self) -> u16 {
         self.interval
+    }
+
+    /// `CLOCK READY` at `ns`: the 74LS279 at CLKTIM 0D09, set from reset and
+    /// again by `-INTERVAL OVER`, cleared by `-LOAD INTERVAL`.  So it is
+    /// down from the write of [`CLOCK`] until the counters have taken the
+    /// loaded number of `16 USEC CLK` edges.  See [`csr::CLOCK_READY`] for
+    /// the direction, which is discrepancy 74.
+    pub fn clock_ready(&self, ns: u64) -> bool {
+        match self.interval_loaded_at {
+            None => true,
+            Some(at) => ns.saturating_sub(at) >= self.interval as u64 * INTERVAL_TICK_NS,
+        }
     }
 
     /// A word came in off the keyboard.  Sets `KBD READY`, which is what
@@ -323,25 +362,31 @@ impl IoBoard {
     }
 
     /// The vector of the Unibus interrupt the board is requesting at
-    /// `now`, if it is: `KBD.IREQ` is `KBD READY` and `KBD INT ENABLE`
-    /// through the 74LS08 at IOBKBD 0D26, `SER.IREQ` the serial port's
-    /// ready with `SER INT ENABLE` through the 74LS02 at IOBSER 0E11, and
-    /// each reaches the bus request through the 74S260 at 0E14.  With
-    /// more than one up, the vector is the one the board's latch would
-    /// name, [`SERIAL_VECTOR`]: the Chaosnet's before the serial port's
-    /// before the keyboard's.
+    /// `now`, if it is.  Three 74LS08s at IOBKBD 0D26 make `KBD.IREQ`,
+    /// `MOUSE.IREQ` and `CLOCK.IREQ`, each a ready bit with its enable, and
+    /// the 74LS32 at 0D25 ors the first two into `KBD/MOUSE.IREQ`;
+    /// `SER.IREQ` is the serial port's ready with `SER INT ENABLE` through
+    /// the 74LS02 at IOBSER 0E11.  All four reach the bus request through
+    /// the 74S260 at 0E14.
+    ///
+    /// With more than one up, the vector is the one the board's latch would
+    /// name --- see [`SERIAL_VECTOR`] for the two equations that make it:
+    /// the clock's before the Chaosnet's before the serial port's before
+    /// the keyboard and mouse's, which they share.
     pub fn interrupt_request(&self, now: u64) -> Option<u16> {
-        self.chaos
-            .as_ref()
-            .and_then(|c| c.interrupt_request())
+        (self.csr & csr::CLOCK_INT_ENABLE != 0 && self.clock_ready(now))
+            .then_some(CLOCK_VECTOR)
+            .or_else(|| self.chaos.as_ref().and_then(|c| c.interrupt_request()))
             .or_else(|| {
                 (self.csr & csr::SER_INT_ENABLE != 0
                     && (self.serial.rx_ready_at(now) || self.serial.tx_ready_at(now)))
                 .then_some(SERIAL_VECTOR)
             })
             .or_else(|| {
-                (self.csr & csr::KBD_READY != 0 && self.csr & csr::KBD_INT_ENABLE != 0)
-                    .then_some(KBD_VECTOR)
+                let kbd = self.csr & csr::KBD_READY != 0 && self.csr & csr::KBD_INT_ENABLE != 0;
+                let mouse =
+                    self.csr & csr::MOUSE_READY != 0 && self.csr & csr::MOUSE_INT_ENABLE != 0;
+                (kbd || mouse).then_some(KBD_VECTOR)
             })
     }
 
@@ -481,7 +526,10 @@ impl IoBoard {
                 (self.mouse_buttons as u16) << mouse::SHIFT | (self.mouse_y & mouse::COUNT)
             }
             MOUSE_X => self.quadrature() | (self.mouse_x & mouse::COUNT),
-            CSR => self.csr | csr::CLOCK_READY | csr::FLOATING,
+            CSR => {
+                let clock = if self.clock_ready(ns) { csr::CLOCK_READY } else { 0 };
+                self.csr | clock | csr::FLOATING
+            }
             // "Hardware synchronizes if you read this one first": the low
             // half latches the whole thing, so the high half cannot be from a
             // later microsecond than the low one.
@@ -514,7 +562,10 @@ impl IoBoard {
         }
         match r {
             CSR => self.csr = (self.csr & !csr::WRITABLE) | (v & csr::WRITABLE),
-            CLOCK => self.interval = v,
+            CLOCK => {
+                self.interval = v;
+                self.interval_loaded_at = Some(ns);
+            }
             // The 2651 takes `D0`..`D7`, which are `UBI0`..`UBI7` through
             // the 74LS244 at IOBSER 0E29.
             SERIAL_FIRST..=SERIAL_LAST => self.serial.write(r, v as u8, ns),
@@ -536,6 +587,7 @@ impl IoBoard {
             scancode,
             usec,
             interval,
+            interval_loaded_at,
             mouse_x,
             mouse_y,
             mouse_buttons,
@@ -546,6 +598,8 @@ impl IoBoard {
         w.u32(*scancode);
         w.u32(*usec);
         w.u16(*interval);
+        w.bool(interval_loaded_at.is_some());
+        w.u64(interval_loaded_at.unwrap_or(0));
         w.u16(*mouse_x);
         w.u16(*mouse_y);
         w.u8(*mouse_buttons);
@@ -564,6 +618,11 @@ impl IoBoard {
         self.scancode = r.u32()?;
         self.usec = r.u32()?;
         self.interval = r.u16()?;
+        self.interval_loaded_at = {
+            let loaded = r.bool()?;
+            let at = r.u64()?;
+            loaded.then_some(at)
+        };
         self.mouse_x = r.u16()?;
         self.mouse_y = r.u16()?;
         self.mouse_buttons = r.u8()?;
