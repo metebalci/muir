@@ -671,12 +671,35 @@ impl Client {
         link.number = link.number.wrapping_add(1);
         h.receive(now, &arriving(&p));
         self.drain(h, now);
-        let i = self
-            .replies
-            .iter()
-            .position(|r| r.starts_with(&format!("{tid} ")))
-            .unwrap_or_else(|| panic!("no reply to {tid}: replies {:?}", self.replies));
-        self.replies.remove(i)
+        self.take_reply(&tid)
+            .unwrap_or_else(|| panic!("no reply to {tid}: replies {:?}", self.replies))
+    }
+
+    /// [`Client::command`] for a command that need not have been answered
+    /// yet: the reply, if one has come, is left to be taken later.
+    fn send_command(&mut self, h: &mut Server, now: u64, cmd: &str) {
+        let link = self.control.as_mut().unwrap();
+        let bytes: Vec<u8> = cmd.chars().map(|c| c as u32 as u8).collect();
+        let p = Packet {
+            opcode: op::DAT,
+            forward: 0,
+            dest: self.server,
+            dest_index: link.theirs,
+            source: self.me,
+            source_index: link.mine,
+            number: link.number,
+            ack: link.last_received,
+            data: bytes,
+        };
+        link.number = link.number.wrapping_add(1);
+        h.receive(now, &arriving(&p));
+        self.drain(h, now);
+    }
+
+    /// The reply to `tid`, taken off the pile if it has come.
+    fn take_reply(&mut self, tid: &str) -> Option<String> {
+        let i = self.replies.iter().position(|r| r.starts_with(&format!("{tid} ")))?;
+        Some(self.replies.remove(i))
     }
 }
 
@@ -1885,4 +1908,164 @@ fn the_304_band_reaches_the_server_at_its_own_numbers() {
         packets.iter().any(|p| p.opcode == op::ANS && p.source == support::CHAOS_304.1),
         "and the server answered it"
     );
+}
+
+/// **A write is not put into place until the synchronous mark has come,
+/// however early the CLOSE arrives.**
+///
+/// MIT's own `sys/doc/chfile.text` sets both halves of this. Of CLOSE it
+/// says "a synchronous mark will be sent or awaited accordingly" ---
+/// sent when reading, awaited when writing. And of the order the two
+/// arrive in, its worked example of writing a file says to send "a SYNC
+/// mark on the DATA connection and a CLOSE on the CONTROL connection (in
+/// either order)". So a client that does everything the protocol asks of
+/// it may still have its CLOSE overtake its mark, the two travelling on
+/// different connections, and the server has to wait rather than take
+/// the CLOSE as the end of the data.
+///
+/// A server that renames on the CLOSE alone puts a file into place that
+/// is short of whatever had not arrived yet --- empty, if none of it
+/// had. That is not the truncation `chfile.text` warns about a paragraph
+/// later, which is a client's fault for not waiting for its EOF to be
+/// acknowledged; this one is the server's, and it strikes a correct
+/// client intermittently, on the timing of two connections.
+///
+/// **Ignored because the server does not keep this contract yet**, not
+/// because it needs anything the repository has not got: it fails on the
+/// first assertion, the file having gone into place on the CLOSE alone.
+/// `drain_incoming` throws the synchronous mark away without recording
+/// it, so `close` has nothing to await on. What would make it pass is
+/// the mark noted on the write as it arrives and `close` deferring until
+/// it has, the way the `stalled` arm already declines to put a short
+/// file into place. Run it with `cargo test -- --ignored`, and see
+/// issue 23.
+#[test]
+#[ignore = "the server renames on the CLOSE without awaiting the mark"]
+fn a_write_is_not_placed_until_the_synchronous_mark_has_come() {
+    let root = std::env::temp_dir().join(format!("muir-chaos-mark-{}", std::process::id()));
+    let dir = root.join("tree/sys");
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = Server::new(0o3060);
+    h.serve(Box::new(File::new(&root)));
+    let mut c = Client::new(0o3050, 0o3060);
+    c.connect(&mut h, 0);
+    let nl = NEWLINE as char;
+    c.command(&mut h, 10, "T1  LOGIN LISPM LISPM ");
+    c.listening = Some("O0001".into());
+    c.command(&mut h, 20, "T2  DATA-CONNECTION I0001 O0001");
+    let r =
+        c.command(&mut h, 30, &format!("T3 O0001 OPEN WRITE BINARY{nl}/tree/sys/late.qfasl{nl}"));
+    assert!(r.starts_with("T3 O0001 OPEN "), "{r:?}");
+
+    // The data, and then the CLOSE overtaking the mark.
+    c.send_data(&mut h, 40, file::BINARY_OP, &[0o215, 0o12, 0, 0o377]);
+    c.send_command(&mut h, 50, "T4 O0001 CLOSE");
+
+    let real = dir.join("late.qfasl");
+    let temporary = || {
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with('#'))
+    };
+    assert!(!real.exists(), "the file waits for the mark, and does not go into place on the CLOSE");
+    assert!(temporary(), "what has been written so far is still in the temporary");
+
+    // The mark, and now it may go into place.
+    c.send_data(&mut h, 60, file::SYNC_MARK_OP, &[]);
+    let r = c.take_reply("T4").expect("the CLOSE is answered once the mark has come");
+    assert!(r.starts_with("T4 O0001 CLOSE "), "{r:?}");
+    assert_eq!(std::fs::read(&real).unwrap(), [0o215, 0o12, 0, 0o377], "every byte sent");
+    assert!(!temporary(), "and the temporary is gone");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// **A file being read and a file being written on one data connection
+/// keep their own bytes.**
+///
+/// A data connection has two file handles and both halves may be busy at
+/// once. MIT's `sys/doc/chfile.text` says what each is for --- "the input
+/// file handle is used to describe the receive half of the DATA
+/// connection and the output file handle is use to describe the send
+/// half" --- and its `UNDATA-CONNECTION` implies "a CLOSE on each file
+/// handle of the DATA connection for which there is a file transfer in
+/// progress", each, so a transfer on both at the same time is the
+/// protocol's own case rather than an odd one.
+///
+/// The band does it whenever it compiles. `sys/qcfile.lisp`'s `QC-FILE`
+/// holds the source open in a `WITH-OPEN-STREAM` around the
+/// `WITH-OPEN-FILE` that writes the QFASL, so the read is still open on
+/// the receive half while the write runs on the send half, and it does
+/// both over the one data connection it already has.
+///
+/// This is the test of a bug that cost an afternoon. The poll drained
+/// every handle that had a transfer of any kind and handed what it found
+/// to that handle; both handles share one channel, so whichever came
+/// first took the lot, and when that was the input handle --- whose
+/// transfer is a read, which has no use for arriving data --- the write's
+/// bytes went on the floor and the rest of the poll cleared what was
+/// left. The QFASL went into place empty, `make-system` would not
+/// recompile it because it was newer than its source, and the band
+/// stopped minutes later on `SYS: CC; LCADMC QFASL > is not a QFASL
+/// file`. Three of the six QFASLs written across three runs were lost
+/// that way.
+///
+/// **The handles are named so that the input one sorts first, and that is
+/// what makes this test bite.** The poll walks the handles in order, and
+/// the drain that loses the bytes is the input handle's; had the output
+/// handle been walked first it would have found the write, put the bytes
+/// where they belong, and this test would have passed on the broken code.
+/// So `I0001` before `O0001` is not decoration: rename them to something
+/// that sorts the other way and the test still passes, against a service
+/// that has the bug back.
+#[test]
+fn a_read_and_a_write_on_one_data_connection_keep_their_own_bytes() {
+    let root = std::env::temp_dir().join(format!("muir-chaos-both-{}", std::process::id()));
+    let dir = root.join("tree").join("sys");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("source.lisp"), "(DEFUN F (X) X)").unwrap();
+
+    let mut h = Server::new(0o3060);
+    h.serve(Box::new(File::new(&root)));
+    let mut c = Client::new(0o3050, 0o3060);
+    c.connect(&mut h, 0);
+    let nl = NEWLINE as char;
+    c.command(&mut h, 10, "T1  LOGIN LISPM LISPM ");
+    c.listening = Some("O0001".into());
+    c.command(&mut h, 20, "T2  DATA-CONNECTION I0001 O0001");
+
+    // The source on the receive half, and the QFASL on the send half
+    // while that read is still open.
+    let r = c.command(
+        &mut h,
+        30,
+        &format!("T3 I0001 OPEN READ CHARACTER{nl}/tree/sys/source.lisp{nl}"),
+    );
+    assert!(r.starts_with("T3 I0001 OPEN "), "{r:?}");
+    let r =
+        c.command(&mut h, 40, &format!("T4 O0001 OPEN WRITE BINARY{nl}/tree/sys/source.qfasl{nl}"));
+    assert!(r.starts_with("T4 O0001 OPEN "), "{r:?}");
+
+    c.send_data(&mut h, 50, file::BINARY_OP, &[0o215, 0o12, 0, 0o377]);
+    c.send_data(&mut h, 60, file::SYNC_MARK_OP, &[]);
+    let r = c.command(&mut h, 70, "T5 O0001 CLOSE");
+    assert!(r.starts_with("T5 O0001 CLOSE "), "{r:?}");
+    assert_eq!(
+        std::fs::read(dir.join("source.qfasl")).unwrap(),
+        [0o215, 0o12, 0, 0o377],
+        "the write kept every byte it sent, with a read open beside it"
+    );
+
+    // And the read is untouched by the write: its file still comes down.
+    let read: Vec<u8> = c
+        .down
+        .iter()
+        .filter(|(o, _)| *o == file::CHARACTER_OP)
+        .flat_map(|(_, b)| b.clone())
+        .collect();
+    assert_eq!(text(&read), "(DEFUN F (X) X)", "and the read delivered its own file");
+
+    std::fs::remove_dir_all(&root).ok();
 }
