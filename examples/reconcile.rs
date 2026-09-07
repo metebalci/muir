@@ -106,6 +106,29 @@ const MOVES: &[Move] = &[
         to: "GND",
         why: Reason::Eco("ECO 2 of cadrtv/lmtv.eco, 18 June 1980"),
     },
+    // **MIT calls this pin a typo in their own change record**, which is
+    // stronger than the discrepancy that first found it. `cadr1/busint.eco`,
+    // under the heading `[WIRE LIST of 12/80]`:
+    //
+    //     4.  for 12/80 wirelist only!!    Fix typo
+    //
+    //     Signal          Delete          Add
+    //
+    //     LMX GRANT A     E9-5:C6-5
+    //     UBX GRANT A                     E9-5:F3-7
+    //
+    // Those are wrap posts, so `E9-5` is E09 pin 2 in a 14-pin body. The
+    // December 1980 wire list has `LMX GRANT A` beginning `E09-02(05)` and
+    // `UBX GRANT A` beginning `F03-04(07)`, which is the wire before the
+    // correction and the wire after it. So this move is not muir preferring
+    // an earlier drawing over a later wire list: it is MIT's own correction
+    // to that wire list, applied.
+    //
+    // Discrepancy 68 reached the same place by a different route --- the
+    // 1978 revision of `reqlm.drw` names the gate's fourth input `UBX GRANT
+    // A`, and a 9S42 there does the work the 74S51 and 74S08 do in the
+    // redrawing --- and its text says no ECO touches it. That was wrong, and
+    // the ECO is the better citation.
     Move {
         page: "REQLM",
         slot: "E09",
