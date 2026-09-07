@@ -21,13 +21,15 @@ fn the_start_says_what_the_run_is() {
     for line in [
         "engine: micro",
         "memory: 4 boards, 256 KW",
+        // The Chaosnet is the machine's and not the engine's, so `micro`
+        // has one too: `tests/micro_chaos.rs` boots the band over it.
+        "chaosnet: 3050, the server at 3060, ",
         "terminal: vnc://127.0.0.1:59",
         "stop: after 10 microcycles",
         "^C holds the machine at the prompt",
     ] {
         assert!(t.contains(line), "{line}:\n{t}");
     }
-    assert!(!t.contains("chaosnet:"), "micro has no Chaosnet:\n{t}");
 
     let out = muir().args(["--rtl", "--stop-after", "10", "--stop-at", "23731"]).run();
     let t = text(&out);

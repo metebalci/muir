@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use muir::engine::Engine;
 use muir::netlist::Netlist;
 use muir::part::{self, Drive, Level};
-use muir::rtl::Rtl;
 use muir::unibus::{IDLE_CHAOSNET, IDLE_KEYBOARD};
 use muir::wirelist;
 
@@ -247,11 +246,15 @@ pub fn quiet() -> Vec<(&'static str, Level)> {
     IDLE_CHAOSNET.iter().chain(IDLE_KEYBOARD).copied().collect()
 }
 
-/// Boots an `rtl` machine over the Chaosnet server, serving `file_root`, to
-/// the listener: the boot is at its prompt once the rows the `;Reading`
-/// line is printed in hold more than 400 lit pixels, and a moment more for
-/// the prompt to settle. Returns the microcycles it took.
-pub fn boot_to_the_prompt(e: &mut Rtl, file_root: PathBuf) -> u64 {
+/// Boots a machine over the Chaosnet server, serving `file_root`, to the
+/// listener: the boot is at its prompt once the rows the `;Reading` line
+/// is printed in hold more than 400 lit pixels, and a moment more for the
+/// prompt to settle. Returns the microcycles it took.
+///
+/// Any engine: the Chaosnet is the machine's and not the engine's, and
+/// every engine keeps the machine's clock, which is what the interface
+/// runs on.
+pub fn boot_to_the_prompt<E: Engine>(e: &mut E, file_root: PathBuf) -> u64 {
     // The band this boots is System 100's, whose own Chaosnet numbers are
     // what `chaos::Config` defaults to. A band reached at the wrong pair
     // gets neither the time nor its files and stops to ask for the date;
@@ -265,13 +268,13 @@ pub fn boot_to_the_prompt(e: &mut Rtl, file_root: PathBuf) -> u64 {
 /// The wait itself, for a machine whose Chaosnet is already plugged: a
 /// test that wants the ether's log on has to turn it on after the plug,
 /// so it does that and comes here.
-pub fn wait_for_the_prompt(e: &mut Rtl) -> u64 {
+pub fn wait_for_the_prompt<E: Engine>(e: &mut E) -> u64 {
     // The `;Reading at top level` line, which is the prompt appearing.
     // Where it lands depends on how tall the herald above it is --- six
     // lines on System 304's band, one fewer on System 100's --- so the
     // rows watched are the band the line falls in for either, and the
     // herald itself is above all of them.
-    let reading = |e: &Rtl| {
+    let reading = |e: &E| {
         let tv = &e.machine().simpletv;
         (84..130usize)
             .flat_map(|y| (0..muir::simpletv::WIDTH).map(move |x| (x, y)))
@@ -485,7 +488,7 @@ pub fn machine_with_pack(pack: &Path) -> Machine {
 }
 
 /// Lit pixels in rows `rows` of the screen.
-pub fn lit_rows(e: &Rtl, rows: std::ops::Range<usize>) -> usize {
+pub fn lit_rows<E: Engine>(e: &E, rows: std::ops::Range<usize>) -> usize {
     let tv = &e.machine().simpletv;
     rows.flat_map(|y| (0..muir::simpletv::WIDTH).map(move |x| (x, y)))
         .filter(|&(x, y)| tv.pixel(x, y))
@@ -498,7 +501,7 @@ pub fn lit_rows(e: &Rtl, rows: std::ops::Range<usize>) -> usize {
 /// and the microcode reads it within a few thousand microcycles, so the
 /// machine runs between words; a word it never reads fails the test
 /// instead of running for ever.
-pub fn type_at(e: &mut Rtl, k: &mut Keyboard, text: &str) {
+pub fn type_at<E: Engine>(e: &mut E, k: &mut Keyboard, text: &str) {
     for ch in text.chars() {
         let sym = if ch == '\n' { keysym::RETURN } else { ch as u32 };
         let shifted = ch.is_ascii_uppercase() || "~!@#$%^&*()_+{}|:\"<>?".contains(ch);
