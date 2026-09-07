@@ -8,10 +8,15 @@
  * Written by Mete Balci for Alfred M. Szmidt's ams/cadr4, where it reads
  * SUDS drawings into that project's VHDL, and taken from `soap/soap4.c`
  * there at aba5d5e, 4 September 2026.  It follows Brad Parker's `soap.c`
- * of 2004, whose own header is kept below.  Both projects are AGPL-3.0.
- * The copy is here, rather than read out of a
- * cadr4 checkout and patched, so that `data/*.netlist` can be regenerated
- * from this repository and MIT's drawings alone.
+ * of 2004, whose own header is kept below.  The copy is here, rather than
+ * read out of a cadr4 checkout and patched, so that the netlists in `data`
+ * can be regenerated from this repository and MIT's drawings alone.
+ *
+ * cadr4 and this project are both AGPL-3.0.  Brad Parker's original states
+ * no terms --- not here, and not in lisper/cpus-cadr, the repository it was
+ * published from, which carries no licence file --- so the AGPL covers the
+ * work done on it and cannot make a grant for what came before.
+ * `tools/README.md` has the detail.
  *
  * Three things differ from cadr4's copy:
  *

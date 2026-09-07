@@ -2,8 +2,14 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-/* 
+/*
  * unpack4.c: a new version of unpack.c for cadr4
+ *
+ * cadr4 and this project are both AGPL-3.0.  John Wilson's original states
+ * no terms --- not here and not in lisper/cpus-cadr, the repository it was
+ * published from, which carries no licence file --- so the AGPL covers the
+ * work done on it and cannot make a grant for what came before.
+ * tools/README.md has the detail.
  */
 
 /*

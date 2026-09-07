@@ -7,6 +7,42 @@ The documentation is a web page, kept up to date at
 engines, how the netlists are built and checked, and how to install it. This
 file is the short version.
 
+## Quick start
+
+Install `rustup`, then open a new shell so `cargo` is on the path:
+
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+You also need a C compiler, for the reader `tools/` builds for MIT's
+drawings: `xcode-select --install` on macOS, `build-essential` on Debian
+and Ubuntu, `gcc` on Fedora. Then build muir. The compiler version is
+pinned in `rust-toolchain.toml`, so the first `cargo` command here installs
+it, and nothing else is downloaded --- there are no crate dependencies.
+
+    git clone https://github.com/metebalci/muir
+    cd muir
+    cargo build --release
+
+Fetch the System 100 release, which is what the machine boots and is not
+part of the repository. It lands in `vendor/`, every file checked against
+its SHA-256 sum.
+
+    tools/fetch-system-100.sh
+
+Start a machine. That is the `rtl` engine running MIT's own boot PROM, with
+the pack on the disk controller's cable.
+
+    target/release/muir
+
+It prints where its terminal is, and boots. Point any VNC viewer at that
+address --- `vnc://127.0.0.1:5900` unless it says otherwise --- and you
+have the display, keyboard and mouse, which are the machine's only way in
+or out. RFB's `None` security is the only type offered, so no password.
+The boot ends at a Lisp Listener.
+
+[Install](#install) and [Running it](#running-it) below have the rest, and
+so does [the install page](https://muir.metebalci.com/#install).
+
 ## What this is
 
 The CADR is the second-generation MIT Lisp Machine, designed around 1978 by
@@ -418,5 +454,9 @@ which is nothing, and `data/README.md` says what is whose in the files made
 from it. `tools/soap4/` is the reader for MIT's drawings, C that came here
 from `ams/cadr4` under the AGPL: `soap4.c` follows Brad Parker's `soap.c` of
 2004 and `unpack4.c` John Wilson's `unpack.c` of 1993, each keeping its
-original header and naming its original author in its copyright line;
+original header and naming its original author in its copyright line.
+Neither original carries a licence --- not in the copies here and not in
+Brad Parker's own repository they were published from --- so the AGPL covers
+the work done on them and cannot make a grant for what came before it. That
+is the one open licensing question in this repository, and
 `tools/README.md` has the detail.
