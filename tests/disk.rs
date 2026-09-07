@@ -450,8 +450,8 @@ fn seeking_off_the_pack_is_a_seek_error_until_recalibrated() {
 // ---------------------------------------------------------------------------
 
 use muir::disk_unit::{
-    BIT_NS, ControllerLines, Ecc, INDEX_PULSE_NS, REVOLUTION_NS, SECTOR_PULSE_NS, Tag, Trident,
-    format, parse_sector, sector_image,
+    BIT_NS, ControllerLines, Ecc, INDEX_PULSE_NS, REVOLUTION_NS, SECTOR_NS, SECTOR_PULSE_NS, Tag,
+    Trident, format, parse_sector, sector_image,
 };
 
 /// Some words that are not all alike, from a seed.
@@ -587,10 +587,18 @@ fn selected() -> ControllerLines {
     ControllerLines { select: true, ..Default::default() }
 }
 
-/// **The drive pulses seventeen times a turn, the index pulse the long one**,
-/// and the two widths fall on either side of the controller's one-shot.
+/// **The drive pulses eighteen times a turn, the index pulse the long
+/// one**, and the two widths fall on either side of the controller's
+/// one-shot.
+///
+/// The index, then seventeen sector pulses a sector apart, and then the
+/// leftover `sys/doc/disk.text` describes --- "17. sector pulses per track,
+/// or one every 1164. bytes, with a little left over at the end of the
+/// track" --- which the index closes.  Seventeen sectors of 1,164 bytes are
+/// 19,788 of the track's 20,160, so the leftover is the shortest gap of the
+/// turn and the one that gives the block counter its 17.
 #[test]
-fn the_drive_pulses_seventeen_times_a_turn_with_one_long_one() {
+fn the_drive_pulses_eighteen_times_a_turn_with_one_long_one() {
     let mut d = Trident::new(Unit::blank(Geometry::T300), 1_000);
     let mut now = 1_000;
     let (mut pulses, mut last, mut began) = (Vec::new(), false, 0);
@@ -605,18 +613,21 @@ fn the_drive_pulses_seventeen_times_a_turn_with_one_long_one() {
         last = l.sector_index;
         now = d.next_change(now);
     }
-    assert_eq!(pulses.len(), 18, "seventeen, and the next turn's index");
+    assert_eq!(pulses.len(), 19, "eighteen, and the next turn's index");
     assert_eq!(pulses[0], (1_000, INDEX_PULSE_NS), "the index at power-on");
-    assert_eq!(pulses[17].1, INDEX_PULSE_NS, "and one revolution later");
-    assert!(pulses[1..17].iter().all(|&(_, w)| w == SECTOR_PULSE_NS));
+    assert_eq!(pulses[18].1, INDEX_PULSE_NS, "and one revolution later");
+    assert!(pulses[1..18].iter().all(|&(_, w)| w == SECTOR_PULSE_NS), "seventeen sector pulses");
     let spacing: Vec<u64> = pulses.windows(2).map(|w| w[1].0 - w[0].0).collect();
-    assert!(spacing.iter().all(|&s| s.abs_diff(REVOLUTION_NS / 17) <= 1), "{spacing:?}");
-    assert_eq!(pulses[17].0 - pulses[0].0, REVOLUTION_NS);
-    // The one-shot at DCTRID 0B09 is 2,250 ns, by the drawing; a sector's
-    // bits fit between its pulse and the next; the clock's halves are equal.
+    assert!(spacing[..17].iter().all(|&s| s == SECTOR_NS), "a sector apart: {spacing:?}");
+    assert_eq!(spacing[17], REVOLUTION_NS - 17 * SECTOR_NS, "the leftover");
+    assert_eq!(pulses[18].0 - pulses[0].0, REVOLUTION_NS);
+    // The one-shot at DCTRID 0B09 is 2,250 ns, by the drawing; the
+    // seventeen sectors leave a leftover rather than filling the turn; the
+    // clock's halves are equal.
     const {
         assert!(SECTOR_PULSE_NS < 2_250 && 2_250 < INDEX_PULSE_NS);
-        assert!(format::SECTOR as u64 * 8 * BIT_NS < REVOLUTION_NS / 17);
+        assert!(SECTOR_NS == format::SECTOR as u64 * 8 * BIT_NS);
+        assert!(17 * SECTOR_NS < REVOLUTION_NS);
         assert!(BIT_NS.is_multiple_of(2));
     }
 }
@@ -763,7 +774,7 @@ fn under_write_gate_the_drive_records_what_it_is_sent() {
     assert_eq!(d.unit.block_at(0, 0, 5), Some(data2));
 
     // Garbage is dropped and counted.
-    let began = sector_begins(&d, first + REVOLUTION_NS / 17, 6);
+    let began = sector_begins(&d, first + SECTOR_NS, 6);
     let first = began.div_ceil(BIT_NS) * BIT_NS;
     for k in 0..format::SECTOR * 8 {
         d.observe(
@@ -863,35 +874,63 @@ fn blank() -> (Controller, Vec<u32>) {
 
 /// **The block counter turns with the spindle.** `STATUS<31:24>`: "The
 /// block-counter of the selected unit.  This tells you its current
-/// rotational position."  A T-300 turns at 3,600 rpm with seventeen sector
-/// pulses a revolution, so the count steps once every 980 us and wraps at
-/// 17.  On the board the step lands as each pulse ends and the clear as
-/// the index pulse ends, so the count is one behind for a pulse's width:
+/// rotational position."  A T-300 turns at 3,600 rpm and pulses eighteen
+/// times a revolution --- the index and seventeen sector pulses a sector
+/// apart --- so the count steps once every 968 us, reaches 17 in the
+/// track's leftover, which holds no block, and clears at the index.  That
+/// 17 is the value `DCHECK-BLOCK-COUNTER` looks for.  On the board the step
+/// lands as each pulse ends and the clear as the index pulse ends, so the
+/// count is one behind for a pulse's width:
 /// `the_block_counter_follows_the_drives_sector_pulses` in
 /// `tests/cadrdc_netlist.rs` reads the netlist controller at these same
 /// offsets.  With no drive there are no pulses and the byte is zero.
 #[test]
 fn the_block_counter_turns_with_the_spindle() {
     let (mut d, _main) = blank();
-    let sector = |k: u64| k * REVOLUTION_NS / 17;
-    // 100 us into each sector of a turn and a quarter: the pulse over.
-    for k in 0..21u64 {
-        d.advance(sector(k) + 100_000);
-        assert_eq!(d.status() >> 24, (k % 17) as u32, "sector {k}");
+    // The `k`th pulse of the spindle: eighteen a turn, the eighteenth
+    // being the next index, which the leftover is short of a sector from.
+    let pulse = |k: u64| (k / 18) * REVOLUTION_NS + (k % 18) * SECTOR_NS;
+    // 100 us into each region of a turn and a quarter: the pulse over.
+    for k in 0..23u64 {
+        d.advance(pulse(k) + 100_000);
+        assert_eq!(d.status() >> 24, (k % 18) as u32, "pulse {k}");
     }
-    // 300 ns into sector 3, its pulse still on: the count is still 2.
-    d.advance(sector(3) + 300);
+    // 300 ns into the third sector pulse, still on: the count is still 2.
+    d.advance(pulse(3) + 300);
     assert_eq!(d.status() >> 24, 2, "during a sector pulse");
     // 2.5 us into the second turn's index pulse, longer than a sector
-    // pulse and not yet over: 16, the last sector's, until it ends.
-    d.advance(sector(17) + 2_500);
-    assert_eq!(d.status() >> 24, 16, "during the index pulse");
-    d.advance(sector(17) + 6_000);
+    // pulse and not yet over: 17, the leftover's, until it ends.
+    d.advance(pulse(18) + 2_500);
+    assert_eq!(d.status() >> 24, 17, "during the index pulse");
+    d.advance(pulse(18) + 6_000);
     assert_eq!(d.status() >> 24, 0, "after the index pulse");
     // No drive on the selected unit: nothing to count.
     let mut d = Controller::default();
-    d.advance(sector(5) + 100_000);
+    d.advance(pulse(5) + 100_000);
     assert_eq!(d.status() >> 24, 0, "no drive");
+}
+
+/// **The block counter shows every value CC asks for and no other.**
+/// `DCHECK-BLOCK-COUNTER` in `sys/cc/dcheck.lisp` reads `STATUS<31:24>`
+/// for half a second and holds what it saw to `'(0 1 2 ... 17)` ---
+/// "Vandals: Yes, a value of 17. can appear here" --- printing "Values not
+/// seen (octal)" for any of those it missed and "Erroneous values seen"
+/// for anything else.  A revolution is every value the counter can show,
+/// so this is that check on this model: sampled ten microseconds apart,
+/// which is fine enough for the leftover, the shortest region of the turn
+/// at 203 us.
+#[test]
+fn the_block_counter_shows_every_value_dcheck_wants() {
+    let (mut d, _main) = blank();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut now = 0;
+    while now < REVOLUTION_NS {
+        d.advance(now);
+        seen.insert(d.status() >> 24);
+        now += 10_000;
+    }
+    let want: std::collections::BTreeSet<u32> = (0..=17).collect();
+    assert_eq!(seen, want, "not seen: {:?}", want.difference(&seen).collect::<Vec<_>>());
 }
 
 /// **Reset takes effect in the store to the command register.** MIT:

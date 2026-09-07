@@ -432,7 +432,7 @@ fn the_disk_bus_is_the_drawings() {
 // ---------------------------------------------------------------------------
 
 use muir::disk_controller::REGS;
-use muir::disk_unit::{Geometry, OnCable, REVOLUTION_NS, Trident, Unit};
+use muir::disk_unit::{Geometry, OnCable, REVOLUTION_NS, SECTOR_NS, Trident, Unit};
 use muir::netlist::NetId;
 use muir::part::Level;
 use muir::xbus::XbusMaster;
@@ -1377,9 +1377,13 @@ fn quick_drive(now: u64) -> Trident {
 /// pulse's trailing edge and cleared, synchronously, on the trailing edge
 /// of a pulse the 2.25 us one-shot has timed out on --- the index. So with
 /// a drive turning, the status word says which sector is under the head,
-/// which is what `LOOP/BLOCK CTR EQ BLOCK` waits on. Read during and after
-/// every pulse for a turn and a quarter: while a pulse is on the count is
-/// still the last sector's, and the index pulse, the long one, holds 16
+/// which is what `LOOP/BLOCK CTR EQ BLOCK` waits on.
+///
+/// The drive pulses eighteen times a turn, the index and then seventeen
+/// sector pulses a sector apart, so the count runs 0 to 17 and the 17 is
+/// the track's leftover, which holds no block. Read during and after every
+/// pulse for a turn and a quarter: while a pulse is on the count is still
+/// the region before it, and the index pulse, the long one, holds that 17
 /// past a sector pulse's width and clears as it ends. The behavioural
 /// controller is held to the same readings in `tests/disk.rs`.
 #[test]
@@ -1390,8 +1394,8 @@ fn the_block_counter_follows_the_drives_sector_pulses() {
     let t0 = b.now;
     p.plug(&mut b, &n, quick_drive(t0));
     assert_eq!(p.drive().turn(t0), (0, 0), "an index pulse just beginning");
-    for k in 0..21u32 {
-        let began = t0 + k as u64 * REVOLUTION_NS / 17;
+    for k in 0..23u32 {
+        let began = t0 + (k as u64 / 18) * REVOLUTION_NS + (k as u64 % 18) * SECTOR_NS;
         // 300 ns in, the pulse still on: the count before it. Not at the
         // first pulse, which the counter meets holding its power-up zero.
         if k > 0 {
@@ -1399,17 +1403,17 @@ fn the_block_counter_follows_the_drives_sector_pulses() {
             let status = p.cycle(&mut b, REGS, None);
             assert_eq!(
                 status >> 24,
-                (k + 16) % 17,
+                (k + 17) % 18,
                 "during the pulse at {}: status {status:o}",
                 b.now
             );
         }
-        if k == 17 {
+        if k == 18 {
             // 2.5 us into the index pulse: a sector pulse would be over,
             // this one is not, and the clear has not landed.
             p.run(&mut b, began + 2_500);
             let status = p.cycle(&mut b, REGS, None);
-            assert_eq!(status >> 24, 16, "during the index pulse at {}: status {status:o}", b.now);
+            assert_eq!(status >> 24, 17, "during the index pulse at {}: status {status:o}", b.now);
             p.run(&mut b, began + 6_000);
             let status = p.cycle(&mut b, REGS, None);
             assert_eq!(status >> 24, 0, "after the index pulse at {}: status {status:o}", b.now);
@@ -1417,8 +1421,8 @@ fn the_block_counter_follows_the_drives_sector_pulses() {
         // 100 us in: the pulse over, the counter settled.
         p.run(&mut b, began + 100_000);
         let status = p.cycle(&mut b, REGS, None);
-        assert_eq!(p.drive().turn(b.now).0, k % 17, "the drive at {}", b.now);
-        assert_eq!(status >> 24, k % 17, "the block counter at {}: status {status:o}", b.now);
+        assert_eq!(p.drive().turn(b.now).0, k % 18, "the drive at {}", b.now);
+        assert_eq!(status >> 24, k % 18, "the block counter at {}: status {status:o}", b.now);
     }
     // And the drive is on line, on cylinder, selected: none of bits 9, 8, 5.
     let status = p.cycle(&mut b, REGS, None);
