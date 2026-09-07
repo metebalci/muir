@@ -49,6 +49,8 @@ stop: after 2000000 microcycles
 ^C holds the machine at the prompt; help lists muir&rsquo;s commands</pre>
       <p>Paths under the directory muir was run from are written relative to it, so the block stays readable wherever the tree lives.</p>
       <p>At the end it reports what it did: microcycles, wall time, the rate, and that rate against the machine&rsquo;s own 145&nbsp;ns microcycle &mdash; <code>2.42x hardware</code> is faster than a CADR, <code>hardware/3827</code> is that many times slower.</p>
+      <p><strong>That ratio is microcycles against microcycles, and the disk is outside it.</strong> Unless <code>chip</code> is given <code>--disk-controller netlist</code>, the disk is a behavioural model whose transfers complete inside the store to <code>START</code> and whose seeks take no time: <code>micro</code> and <code>rtl</code> have no other option. The machine it stands for spent milliseconds on a seek and spent them running the microcode&rsquo;s polling loop, so a 55&nbsp;ms seek on real hardware is about 380,000 microcycles that muir never executes. A program that seeks therefore finishes further ahead of the hardware than the ratio says, by an amount that depends on the program and is not quantified here.</p>
+      <p>On <code>--disk-controller netlist</code> it inverts: the drive takes its own time, the polling loop is executed through every gate on the board, and a seeking program is slower than the ratio rather than faster.</p>
 <pre class="cmd">rtl      2000000 microcycles    0.194 s     10328518 microcycles/s    1.50x hardware
        ran out at 2000000; PC 27501</pre>
       <p>Addresses in the flags and in what muir prints are octal, as MIT writes them.</p>

@@ -431,6 +431,20 @@ enum Which {
     Chip,
 }
 
+/// What the ratio does **not** include: the disk.
+///
+/// This is microcycles against microcycles. With the disk controller as a
+/// behavioural model --- always on `micro` and `rtl`, and on `chip` unless
+/// it is given `--disk-controller netlist` --- a transfer completes inside
+/// the store to `START` and a seek takes no time. The machine spent
+/// milliseconds on a seek and spent them running the microcode's polling
+/// loop, so a 55 ms seek is about 380,000 microcycles the hardware executes
+/// and muir does not. A program that seeks therefore finishes further ahead
+/// of the hardware than this says, by an amount that depends on the program.
+///
+/// On the netlist disk controller it inverts: the drive takes its own time,
+/// the polling loop runs through every gate on the board, and a seeking
+/// program comes out slower than this rather than faster.
 fn report(name: &str, cycles: u64, secs: f64) {
     let rate = cycles as f64 / secs;
     let ratio = rate / HARDWARE_CYCLES_PER_S;
