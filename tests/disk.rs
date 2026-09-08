@@ -943,7 +943,7 @@ fn the_block_counter_shows_every_value_dcheck_wants() {
 #[test]
 fn a_reset_stored_in_the_command_register_takes_effect_at_once() {
     let (mut d, mut main) = blank();
-    d.access_ns = 38_300_000;
+    d.timed = true;
     d.advance(1_000);
     main[CLP as usize] = 2 << 8;
     d.write(reg::COMMAND, 0, &mut main);
@@ -1343,4 +1343,116 @@ fn the_reversed_channel_answers_as_the_board_does() {
     // store into the command register.
     d.write(reg::COMMAND, 0, &mut main);
     assert_eq!(d.status() & status::OVERRUN, 0, "the next command clears it");
+}
+
+// --- the drive's own time ---------------------------------------------------
+
+/// **A seek takes as long as the heads take, and the controller is busy for
+/// it.** MIT: "0004 Seek. Initiates a seek to the cylinder specified in the
+/// disk address register."
+///
+/// Century Data's figures for the T-300 are 6 ms to the next cylinder and 55
+/// ms across the full 814, which is what `disk_unit::seek_ns` interpolates,
+/// so the length of a seek is the distance travelled and not a constant. The
+/// controller reports `STATUS<0>` clear for the whole of it --- that is the
+/// thing a driver waits on.
+#[test]
+fn a_seek_is_as_long_as_the_heads_take() {
+    use muir::disk_unit::seek_ns;
+    let (mut d, mut main) = blank();
+    d.timed = true;
+    let mut now = 1_000;
+    for (cylinder, want) in [(1u32, seek_ns(1)), (814, seek_ns(813)), (0, seek_ns(814))] {
+        d.advance(now);
+        d.write(reg::COMMAND, 0o4, &mut main);
+        d.write(reg::DISK_ADDRESS, cylinder << 16, &mut main);
+        d.write(reg::START, 0, &mut main);
+        assert_eq!(d.status() & status::NOT_ACTIVE, 0, "to {cylinder}: busy at the store");
+        d.advance(now + want - 1);
+        assert_eq!(d.status() & status::NOT_ACTIVE, 0, "to {cylinder}: still busy a ns before");
+        d.advance(now + want);
+        assert_ne!(d.status() & status::NOT_ACTIVE, 0, "to {cylinder}: done after {want} ns");
+        now += want + 1_000;
+    }
+    // Six milliseconds to the next cylinder and fifty-five across the pack,
+    // which is where the two ends of the interpolation are pinned.
+    assert_eq!(seek_ns(1), 6_000_000, "one cylinder");
+    assert_eq!(seek_ns(814), 55_000_323, "the full stroke, to a rounding of the per-cylinder step");
+    assert_eq!(seek_ns(0), 0, "and the heads already there have no move to make");
+}
+
+/// **A transfer waits for its block to come round, and then moves it.**
+///
+/// A T-300 turns once in 16.67 ms and lays seventeen sectors on a track, so
+/// what a read costs is where the block is when the operation starts. Two
+/// reads of the same block a known part of a turn apart differ by exactly
+/// that part, and both take a sector's time to move the block once it is
+/// under the head.
+#[test]
+fn a_transfer_waits_for_the_block_to_come_round() {
+    use muir::disk_unit::{REVOLUTION_NS, SECTOR_NS};
+    let done_at = |start: u64, block: u32| {
+        let (mut d, mut main) = blank();
+        d.timed = true;
+        d.advance(start);
+        read_block(&mut d, &mut main, block, 2);
+        assert_eq!(d.status() & status::NOT_ACTIVE, 0, "busy at the store");
+        // The one instant it becomes ready, found by asking either side of
+        // it rather than by trusting an arithmetic of the test's own.
+        let mut lo = start;
+        let mut hi = start + 2 * REVOLUTION_NS;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            d.advance(mid);
+            if d.status() & status::NOT_ACTIVE == 0 { lo = mid + 1 } else { hi = mid }
+        }
+        lo - start
+    };
+    // Block 0 is under the head at the index, so a read there waits for
+    // nothing and takes the sector alone.
+    assert_eq!(done_at(0, 0), SECTOR_NS, "block 0 at the index: no wait, one sector");
+    // A third of a turn later it has to come round again, which is the rest
+    // of the revolution.
+    let third = REVOLUTION_NS / 3;
+    assert_eq!(
+        done_at(third, 0),
+        REVOLUTION_NS - third + SECTOR_NS,
+        "a third of a turn in, block 0 is most of a revolution away"
+    );
+    // And a block just ahead of the head waits least. A third of a turn is
+    // 5.7 sectors in, so block 6 is the next to come round and block 5 has
+    // only just gone by --- which is nearly a whole revolution away again.
+    assert!(done_at(third, 6) < done_at(third, 0), "the next block round is the shortest wait");
+    assert!(done_at(third, 5) > done_at(third, 6), "and the one just missed is the longest");
+}
+
+/// **A driver's wait loop goes round, which is the whole point.** Software
+/// that stores into START and then polls `STATUS<0>` is what MIT's microcode
+/// does in `DISK-WAIT`; before the drive had a clock the first read already
+/// said done, so a loop with a bug in it would have run once and looked
+/// right.
+#[test]
+fn a_poll_for_completion_goes_round_more_than_once() {
+    let (mut d, mut main) = blank();
+    d.timed = true;
+    d.advance(1_000);
+    read_block(&mut d, &mut main, 3, 2);
+    // A microcycle a turn of the loop, which is what a microcode poll costs.
+    let mut now = 1_000;
+    let mut turns = 0u64;
+    while d.status() & status::NOT_ACTIVE == 0 {
+        now += 145;
+        d.advance(now);
+        turns += 1;
+        assert!(turns < 1_000_000, "the transfer never finished");
+    }
+    assert!(turns > 1_000, "the loop spun while the disk worked: {turns} turns");
+
+    // Off, which is how muir runs, the same read is done at the store and
+    // the loop is never entered. That is a deliberate default and not an
+    // oversight: see `Controller::timed`.
+    let (mut d, mut main) = blank();
+    d.advance(1_000);
+    read_block(&mut d, &mut main, 3, 2);
+    assert_ne!(d.status() & status::NOT_ACTIVE, 0, "off, the done comes with the words");
 }

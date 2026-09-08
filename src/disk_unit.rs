@@ -263,6 +263,12 @@ impl Unit {
             | (self.block & 0xff)
     }
 
+    /// Which cylinder the heads are over, which is what the length of the
+    /// next seek is measured from.
+    pub fn cylinder(&self) -> u32 {
+        self.cylinder
+    }
+
     /// Moves the heads.  False means the address is off the pack, which is a
     /// seek error and stops the transfer.
     pub fn seek(&mut self, cylinder: u32, head: u32, block: u32) -> bool {
@@ -628,6 +634,25 @@ pub const BIT_NS: u64 = 104;
 pub const SECTOR_PULSE_NS: u64 = 1_240;
 pub const INDEX_PULSE_NS: u64 = 4_000;
 
+/// What the heads take to settle once they are over the cylinder, and what
+/// each cylinder of travel costs on the way.
+///
+/// Century Data's figures for the T-300 are 6 ms to the next cylinder and
+/// 55 ms across the full 814, so a cylinder of travel is (55 - 6) / 813 ms
+/// and the settle is what is left of the 6.
+pub const SEEK_SETTLE_NS: u64 = 5_939_729;
+pub const SEEK_NS_PER_CYLINDER: u64 = 60_271;
+
+/// What a seek of `cylinders` takes, and nothing at all where the heads are
+/// already there --- which is not the same as a seek of none, the drive
+/// having no move to make and no settle to wait out.
+pub fn seek_ns(cylinders: u32) -> u64 {
+    match cylinders {
+        0 => 0,
+        n => SEEK_SETTLE_NS + u64::from(n) * SEEK_NS_PER_CYLINDER,
+    }
+}
+
 /// One sector on the cable: `format::SECTOR` bytes at [`BIT_NS`].
 ///
 /// **The spacing is the drive's sector length jumper, not a share of the
@@ -639,6 +664,18 @@ pub const INDEX_PULSE_NS: u64 = 4_000;
 /// are a sector apart from the index and the track's tail is short, which
 /// is where [`turn`]'s last region comes from.
 pub const SECTOR_NS: u64 = format::SECTOR as u64 * 8 * BIT_NS;
+
+/// How long from `now` until region `k` of the turn next comes under the
+/// head, and nothing at all if it is beginning there.
+///
+/// The turn is laid out in one place, where the drive's own pulses are
+/// spaced, so that anything timing a transfer measures it that way rather
+/// than by a share of the revolution.
+pub fn until(k: u32, now: u64) -> u64 {
+    let into = now % REVOLUTION_NS;
+    let at = began_of(u64::from(k));
+    if at >= into { at - into } else { REVOLUTION_NS - into + at }
+}
 
 /// When the pulse that begins region `k` falls, from the index: the one
 /// definition of the boundary, so that the region under the head and the
@@ -824,11 +861,8 @@ impl Trident {
     pub fn new(unit: Unit, now: u64) -> Trident {
         Trident {
             unit,
-            // 6 ms for one cylinder and 55 ms for the full 814: a
-            // per-cylinder step of (55 - 6) / 813 ms, and the settle is
-            // what is left of the 6.
-            seek_settle_ns: 5_939_729,
-            seek_ns_per_cylinder: 60_271,
+            seek_settle_ns: SEEK_SETTLE_NS,
+            seek_ns_per_cylinder: SEEK_NS_PER_CYLINDER,
             phase: now % REVOLUTION_NS,
             cylinder: 0,
             head: 0,

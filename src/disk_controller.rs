@@ -103,13 +103,27 @@ pub fn register(phys: u32) -> Option<u32> {
 /// make up its half of the status word, and the drives it has.
 #[derive(Default, Clone)]
 pub struct Controller {
-    /// How long a transfer takes before the controller is not-active again,
-    /// in nanoseconds. Zero, as `muir` runs it: a transfer completes inside
-    /// the store to START, since a machine spinning out a drive's
-    /// milliseconds of seek would only cost the run microcycles. A test
-    /// sets it to see the done wait. The words move at START either way;
-    /// what waits is the done.
-    pub access_ns: u64,
+    /// Whether an operation takes the drive's own time before the
+    /// controller reports itself not-active again.
+    ///
+    /// **Off, as `muir` runs it**, and that is a choice rather than an
+    /// oversight. A drive's milliseconds are microcycles of `DISK-WAIT` on
+    /// every engine, and **every count this project quotes was measured
+    /// without them**: the boot reaches `PROM-DISABLE` in 1,352,364
+    /// microcycles on `micro` with this off and 1,636,112 with it on, 21%
+    /// more, and 19 tests fail on the difference. Turning it on is a
+    /// decision about all of those numbers rather than about this model.
+    ///
+    /// On, an operation takes what the drive takes: a seek is
+    /// [`crate::disk_unit::seek_ns`] of the distance travelled, and a
+    /// transfer waits for its block to come round and then spends a
+    /// sector's time on each. So software that starts an operation and
+    /// polls sees the controller busy, which is what a driver's wait loop
+    /// is for --- and what the netlist controller does either way.
+    ///
+    /// The words move inside the store to START whichever it is. What
+    /// waits is the done.
+    pub timed: bool,
     /// When the transfer in flight is done, on the machine's clock.
     done_at: u64,
     /// The machine's clock as of the last time it spoke to the controller:
@@ -173,6 +187,43 @@ impl Controller {
     /// asked for its interrupt, so that a transfer's done can be timed.
     pub fn advance(&mut self, now: u64) {
         self.now = now;
+    }
+
+    /// The operation is done `ns` from now, or at once where the run has
+    /// not asked for the drive's time: [`Controller::timed`].
+    fn done_in(&mut self, ns: u64) {
+        self.done_at = self.now + if self.timed { ns } else { 0 };
+    }
+
+    /// How long an operation reaching `blocks` blocks takes: the heads'
+    /// move to the cylinder, then the wait for the addressed block to come
+    /// round, then a sector's time a block.
+    ///
+    /// The three are the drive's, not the controller's ---
+    /// [`crate::disk_unit::seek_ns`], [`crate::disk_unit::until`] and
+    /// [`crate::disk_unit::SECTOR_NS`] --- so this model and the drive on
+    /// the netlist controller's cable are timed off one set of numbers.
+    /// What is left out is the board's own sequencer, tens of microseconds
+    /// against the drive's milliseconds.
+    fn access_ns(&self, from: u32, to: u32, block: u32, blocks: u32) -> u64 {
+        let seek = crate::disk_unit::seek_ns(from.abs_diff(to));
+        let latency = crate::disk_unit::until(block, self.now + seek);
+        seek + latency + u64::from(blocks) * crate::disk_unit::SECTOR_NS
+    }
+
+    /// Read All and Write All go round the whole track, so what they take
+    /// is the heads' move, the wait for the addressed block, and then a
+    /// revolution.
+    fn track_ns(&self, from: u32, to: u32, block: u32) -> u64 {
+        let seek = crate::disk_unit::seek_ns(from.abs_diff(to));
+        seek + crate::disk_unit::until(block, self.now + seek) + crate::disk_unit::REVOLUTION_NS
+    }
+
+    /// Which cylinder the heads are over, for the seek an operation begins
+    /// with. No drive is cylinder 0, and a command that needs one has
+    /// already returned by the time this is asked.
+    fn heads_at(&self) -> u32 {
+        self.units[self.selected()].as_ref().map_or(0, Unit::cylinder)
     }
 
     /// `STATUS<0>`: no transfer in flight, or the one there is done.
@@ -427,14 +478,18 @@ impl Controller {
             // the microcode's on-line wait goes on reading `STATUS<9>`.
             return;
         }
+        // Where the heads are before the operation moves them, which is
+        // what the length of its seek is measured from.
+        let from = self.heads_at();
+        let (to, _, block) = decode_da(self.da);
         match self.cmd & 0o17 {
             0o00 => {
-                self.transfer(true, false, main);
-                self.done_at = self.now + self.access_ns;
+                let n = self.transfer(true, false, main);
+                self.done_in(self.access_ns(from, to, block, n));
             }
             0o10 => {
-                self.transfer(true, true, main);
-                self.done_at = self.now + self.access_ns;
+                let n = self.transfer(true, true, main);
+                self.done_in(self.access_ns(from, to, block, n));
             }
             0o11 => {
                 // "Writing while the disk is read-only causes a fault."
@@ -442,8 +497,8 @@ impl Controller {
                 if self.units[u].as_ref().is_some_and(|u| u.read_only) {
                     self.units[u].as_mut().unwrap().fault = true;
                 } else {
-                    self.transfer(false, false, main);
-                    self.done_at = self.now + self.access_ns;
+                    let n = self.transfer(false, false, main);
+                    self.done_in(self.access_ns(from, to, block, n));
                 }
             }
             // "Initiates a seek to the cylinder specified in the disk address
@@ -456,15 +511,31 @@ impl Controller {
             // through both.
             0o04 | 0o14 => {
                 let (cylinder, head, block) = decode_da(self.da);
-                match self.units[self.selected()].as_mut() {
+                let heads_moved = match self.units[self.selected()].as_mut() {
                     Some(u) => {
                         u.seek(cylinder, head, block);
+                        // **The attention is raised at the store and not
+                        // when the heads arrive**, where MIT has it "when
+                        // the seek completes". The controller is busy for
+                        // the move either way, which is what software
+                        // polling `STATUS<0>` sees; a program watching the
+                        // attention instead would see it early. Settling
+                        // that wants the flag carried with an instant, as
+                        // the done is.
                         u.attention = true;
+                        // The heads take the drive's own time to get
+                        // there, and the controller is busy for it.
+                        true
                     }
-                    // Sector 4 waits for on-cylinder, which no drive gives:
-                    // the board sits at its first step, busy, with `CMD2`
-                    // masking the empty cable's lossage.
-                    None => self.hang(),
+                    // Sector 4 waits for on-cylinder, which no drive
+                    // gives: the board sits at its first step, busy, with
+                    // `CMD2` masking the empty cable's lossage.
+                    None => false,
+                };
+                if heads_moved {
+                    self.done_in(crate::disk_unit::seek_ns(from.abs_diff(to)));
+                } else {
+                    self.hang();
                 }
             }
             0o05 | 0o15 => {
@@ -519,7 +590,7 @@ impl Controller {
             // track, round and round.
             0o02 => {
                 self.transfer_all(true, main);
-                self.done_at = self.now + self.access_ns;
+                self.done_in(self.track_ns(from, to, block));
             }
             // "0013 Write All.  Writes all bits of the disk starting at the
             // specified rotational position.  This is intended for
@@ -530,7 +601,7 @@ impl Controller {
                     self.units[u].as_mut().unwrap().fault = true;
                 } else {
                     self.transfer_all(false, main);
-                    self.done_at = self.now + self.access_ns;
+                    self.done_in(self.track_ns(from, to, block));
                 }
             }
             // 01, 03 and 12: the Write, Write All and Read All sectors
@@ -576,9 +647,9 @@ impl Controller {
             0o12 => self.hang(),
             0o03 => {
                 self.overrun = true;
-                self.done_at = self.now + self.access_ns;
+                self.done_in(self.access_ns(from, to, block, 1));
             }
-            0o01 => self.done_at = self.now + self.access_ns,
+            0o01 => self.done_in(self.access_ns(from, to, block, 1)),
             // `& 0o17` leaves four bits, and all sixteen are above.
             0o20.. => unreachable!("a command code is four bits"),
         }
@@ -639,7 +710,7 @@ impl Controller {
 
     /// One read, read-compare or write, from the disk address register
     /// through the command list.
-    fn transfer(&mut self, read: bool, compare: bool, main: &mut [u32]) {
+    fn transfer(&mut self, read: bool, compare: bool, main: &mut [u32]) -> u32 {
         self.read_compare_difference = false;
         self.dma_written.clear();
         self.ccw_cycle = false;
@@ -650,8 +721,9 @@ impl Controller {
         let i = self.selected();
         let mut unit = self.units[i].take().expect("the selected unit is online");
         let (cylinder, head, block) = decode_da(self.da);
+        let mut blocks = 0;
         if unit.seek(cylinder, head, block) {
-            self.command_list(&mut unit, read, compare, main);
+            blocks = self.command_list(&mut unit, read, compare, main);
             // "When a transfer is terminated by an error, the disk address
             // register contains the address of the block being transferred
             // when the error occurred.  When a transfer terminated normally,
@@ -660,6 +732,7 @@ impl Controller {
             self.da = unit.da(i as u32);
         }
         self.units[i] = Some(unit);
+        blocks
     }
 
     /// Read All and Write All: the same command list, with a track's bytes
@@ -766,7 +839,13 @@ impl Controller {
 
     /// The command list: one CCW per page, each naming where in physical
     /// memory the block goes, until one arrives with the More flag clear.
-    fn command_list(&mut self, unit: &mut Unit, read: bool, compare: bool, main: &mut [u32]) {
+    fn command_list(
+        &mut self,
+        unit: &mut Unit,
+        read: bool,
+        compare: bool,
+        main: &mut [u32],
+    ) -> u32 {
         // "Only bits <15:0> of the CLP can count; if you attempt to carry
         // into the high 8 bits you will wrap around."  `DCCLP` is where that
         // comes from: four 74LS569s at 0D21, 0D22, 0D23 and 0D25 count
@@ -774,13 +853,17 @@ impl Controller {
         // going nowhere, and the 74LS374 at 0D26 holds `XBAO<21:16>` as
         // `-LOAD CLP` latched it.
         let mut n = 0u32;
+        // Blocks that reached the pack or the page, which is what the
+        // operation's length is measured in; `n` is the CCW the list is on,
+        // which is one behind until the first block has moved.
+        let mut moved = 0u32;
         loop {
             let clp = self.clp & !0xffff | (self.clp.wrapping_add(n)) & 0xffff;
             self.last_memory_address = clp;
             self.ccw_cycle = true;
             let Some(&ccw) = main.get(clp as usize) else {
                 self.nxm = true;
-                return;
+                return moved;
             };
             self.ccw_cycle = false;
 
@@ -798,11 +881,11 @@ impl Controller {
             let mut from_disk = [0u32; BLOCK_WORDS];
             if read && !unit.read_block(&mut from_disk) {
                 unit.fault = true;
-                return;
+                return moved;
             }
             if page + BLOCK_WORDS > main.len() {
                 self.nxm = true;
-                return;
+                return moved;
             }
             let in_memory = &mut main[page..page + BLOCK_WORDS];
             match (read, compare) {
@@ -822,7 +905,7 @@ impl Controller {
                     let words: &[u32; BLOCK_WORDS] = (&*in_memory).try_into().unwrap();
                     if !unit.write_block(words) {
                         unit.fault = true;
-                        return;
+                        return moved;
                     }
                 }
             }
@@ -830,12 +913,13 @@ impl Controller {
             // MIT has it as "the last memory reference made by the disk
             // control", so for a page transfer it is the page's last word.
             self.last_memory_address = (page + BLOCK_WORDS - 1) as u32;
+            moved += 1;
 
             if !more {
-                return;
+                return moved;
             }
             if !unit.next_block() {
-                return;
+                return moved;
             }
             n += 1;
         }
@@ -928,7 +1012,7 @@ impl Controller {
     /// progress, and each unit's drive.
     pub fn save(&self, w: &mut crate::checkpoint::Writer) {
         let Controller {
-            access_ns,
+            timed,
             done_at,
             now,
             cmd,
@@ -943,7 +1027,10 @@ impl Controller {
             last_memory_address,
             units,
         } = self;
-        w.u64(*access_ns);
+        // A word, where a byte would do, so that the field keeps the
+        // width `access_ns` had here: a checkpoint written before this was
+        // a switch carries the flat time, and any of it means timed.
+        w.u64(u64::from(*timed));
         w.u64(*done_at);
         w.u64(*now);
         w.u32(*cmd);
@@ -968,7 +1055,7 @@ impl Controller {
     /// the checkpoint has one on, and no other.
     pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
         use crate::checkpoint::bad;
-        self.access_ns = r.u64()?;
+        self.timed = r.u64()? != 0;
         self.done_at = r.u64()?;
         self.now = r.u64()?;
         self.cmd = r.u32()?;
