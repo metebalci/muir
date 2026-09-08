@@ -282,7 +282,15 @@ impl Controller {
     /// running off the end of the pack, is here; `<12>` the start-block error
     /// and `<4>` multiple units selected.  None of them can happen here,
     /// and the boot PROM's `AWAIT-DRIVE-READY` requires bits 4, 5, 6, 8, 9
-    /// and 10 to be clear before it will go on.  `<14>`, the overrun, one
+    /// and 10 to be clear before it will go on.  `<12>` is not dead
+    /// everywhere, though: the netlist board raises it, from a drive told
+    /// to put a sector pulse where none belongs
+    /// ([`crate::disk_unit::Trident::spurious_pulse`]), measured by
+    /// `a_spurious_sector_pulse_raises_start_block_error` in
+    /// `tests/cadrdc_netlist.rs`.  It cannot here because this controller
+    /// has no start-block detector rather than because nothing could
+    /// produce the condition, which is why the drive's fault has no
+    /// counterpart on this side.  `<14>`, the overrun, one
     /// command does raise --- `0003`, the Write All sector entered with
     /// the memory channel reversed --- measured on the netlist board by
     /// `the_reversed_memory_channel_stores_where_it_should_fetch` in
