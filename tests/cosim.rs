@@ -91,6 +91,13 @@ fn engines_agree_on_memory() {
         }
     }
 
+    // `LC` is not in `Machine` on both engines, so it is asked for rather
+    // than read out of the two machines: `Engine::lc`, issue #32. Here it
+    // is 0 on both --- the boot PROM never moves the location counter, and
+    // this stops just short of `PROM-DISABLE` --- so what this says is that
+    // neither engine has touched it. A counter that steps is held by
+    // `traces`, an instruction at a time.
+    assert_eq!(a.lc(), b.lc(), "LC");
     let (x, y) = (a.machine(), b.machine());
     assert!(x.imem == y.imem, "control store");
     assert_eq!(x.mmem, y.mmem, "M memory");
@@ -649,16 +656,22 @@ fn a_map_write_whose_store_pops_into_a_fetch_still_lands() {
     assert_eq!(r.machine().vma, FETCH_WORD, "rtl: VMA is the fetch address by the end");
     assert_eq!(r.machine().l2_map[L2], MAP_WORD & 0o77777777, "rtl: the map word landed");
     assert_eq!(e.machine().vma, r.machine().vma, "micro: VMA");
+    // The counter the fetch address came from, which each engine keeps in
+    // its own place: `Engine::lc`, issue #32.
+    assert_eq!(e.lc(), r.lc(), "micro: LC");
+    assert_eq!(r.lc(), (FETCH_WORD << 2) + 2, "rtl: the counter stepped once, by a halfword");
     assert_eq!(e.machine().l2_map, r.machine().l2_map, "micro: the level-2 map");
     assert_eq!(e.machine().l1_map, r.machine().l1_map, "micro: the level-1 map");
 }
 
-/// Both engines' `VMA` and `MD` after each of `steps` executed
+/// Both engines' `VMA`, `MD` and `LC` after each of `steps` executed
 /// instructions.
 ///
-/// Not `LC`: `rtl` keeps the location counter in a field of its own and
-/// never in [`Machine`], where `micro` keeps it, so there is nothing to
-/// compare. `engines_agree_on_memory` leaves it out for the same reason.
+/// `LC` comes through [`Engine::lc`] and not out of [`Machine`], because
+/// `rtl` keeps the location counter in a field of its own: issue #32,
+/// which this helper's want of it is what found. It goes last in the line
+/// so that a test looking for a fetch address can still read the front of
+/// it.
 ///
 /// Executed instructions and not microcycles, for the reason
 /// `engines_agree_on_memory` gives: a cycle the pipeline inhibits runs on
@@ -677,7 +690,10 @@ fn traces(prom: &[Insn], set: &dyn Fn(&mut Machine), steps: usize) -> Vec<(Strin
         set(&mut m);
         m
     };
-    let show = |m: &Machine| format!("VMA {:o} MD {:o}", m.vma, m.md);
+    let show = |e: &dyn Engine| {
+        let m = e.machine();
+        format!("VMA {:o} MD {:o} LC {:o}", m.vma, m.md, e.lc())
+    };
     let mut e = Micro::new(make());
     e.boot();
     let mut r = Rtl::new(make());
@@ -692,7 +708,7 @@ fn traces(prom: &[Insn], set: &dyn Fn(&mut Machine), steps: usize) -> Vec<(Strin
             r.step().unwrap();
             r.executed().is_none()
         } {}
-        out.push((show(e.machine()), show(r.machine())));
+        out.push((show(&e), show(&r)));
     }
     out
 }

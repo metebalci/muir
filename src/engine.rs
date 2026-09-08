@@ -25,6 +25,23 @@ pub trait Engine {
     /// Where the next microinstruction will be fetched from.
     fn pc(&self) -> u16;
 
+    /// The location counter, [`crate::machine::LC_COUNTER`]: the byte
+    /// address the next macroinstruction comes from, `LC<25:2>` being the
+    /// word `VMA` takes at a fetch.
+    ///
+    /// **Where an engine keeps it is the engine's business, and this is
+    /// how anything holding two of them to the same machine reaches it.**
+    /// `micro` keeps it in [`Machine`], carrying `NEEDFETCH` above it in
+    /// the same word; `rtl` keeps the counters in a field of their own
+    /// beside the rest of its pipeline, with the byte-mode flags on page
+    /// FLAG. Mirroring one into the other's storage would be two places
+    /// holding one register with nothing keeping them in step, so the
+    /// register is asked for instead and the mask is what makes the
+    /// answers comparable.
+    fn lc(&self) -> u32 {
+        self.machine().lc & crate::machine::LC_COUNTER
+    }
+
     /// What the cpu drives onto `SPY<15:0>` while `-DBREAD` is low with
     /// `EADR<3:0>` at `eadr`: one of the sixteen diagnostic registers,
     /// [`crate::spy::IR_LOW`] to [`crate::spy::STAT_HIGH`], as the console
