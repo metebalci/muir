@@ -118,11 +118,12 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// the header each sector of a pack carries where it is not the one its
 /// address implies, version 17 the header compare error that carrying
 /// them makes possible, version 18 the checkword written after each of
-/// those headers, which is the other half of what a formatter lays down, and
-/// version 19 the spurious sector pulse a drive can be told to emit.
+/// those headers, which is the other half of what a formatter lays down, version 19 the spurious sector pulse a drive can be told to emit,
+/// and version 20 the checkword written after each data field with the two
+/// ECC errors a bad one gives.
 #[test]
-fn the_format_is_version_19_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 19, "a new version needs its own tests");
+fn the_format_is_version_20_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 20, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -130,14 +131,14 @@ fn the_format_is_version_19_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 19u32.to_le_bytes());
-    for other in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, u32::MAX] {
+    assert_eq!(&good[at..at + 4], 20u32.to_le_bytes());
+    for other in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, u32::MAX] {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 19"), "{err}");
+        assert!(err.contains("reads 20"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }
