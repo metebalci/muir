@@ -474,6 +474,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <this>[
             [--disk-pack <image>[,<unit>][,ro]] [--disk-use-multiplexor]
             [--io-board netlist|model]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
+            [--keyboard-mapping-trace]
             [--main-memory netlist|model]
             [--main-memory-boards <n>] [--no-auto-boot] [--prom <file>]
             [--resume <file>]
@@ -646,6 +647,25 @@ A simulator of the MIT CADR Lisp Machine.
                                is a copy to edit rather than a report:
                                `muir --keyboard-mapping-dump > my.keys`,
                                edit it, `muir --keyboard-mapping my.keys`.
+  --keyboard-mapping-trace     every keysym a viewer sends and what it
+                               became, on stderr, alongside the run. The
+                               other half of the same job: the dump says
+                               what a keysym means here, this says which
+                               keysym arrived, and a key that will not type
+                               needs both. A viewer chooses which X11
+                               keysym to send for a physical key, so muir
+                               is the only authority on what it received:
+                               `xev` reports what the host's X server
+                               thinks, which is not the same thing and
+                               differs most on the modifiers. Each line
+                               names the keysym by name and number, whether
+                               it went down or up, and the key it became
+                               --- spelled as --keyboard-mapping-dump
+                               spells it, so the line can be pasted into a
+                               mapping file --- or `no binding` where the
+                               mapping has nothing for it. A keysym held as
+                               a prefix says so rather than printing
+                               nothing. [default: off]
   --main-memory netlist|model  chip: main memory as MIT's board or as
                                rtl's model of it. [default: netlist]
   --main-memory-boards <n>     how many 64K-word boards, 1 to 60: main
@@ -833,6 +853,11 @@ const RC: &str = ".muirrc";
 /// would do anything with it but pass it on.
 static KEYS_IN_FORCE: std::sync::OnceLock<Mapping> = std::sync::OnceLock::new();
 
+/// Whether `--keyboard-mapping-trace` was given, for every keyboard this
+/// run builds: the lashup builds two, and a trace of one machine's keys
+/// and not the other's would say less than it appears to.
+static KEYS_TRACED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The keyboard mapping in force, as the prompt's `keys` prints it: what
 /// each of a viewer's keysyms means, and where the mapping came from.
 fn keys_in_force() -> String {
@@ -846,7 +871,9 @@ fn keys_in_force() -> String {
 
 /// A keyboard on the mapping this run settled on.
 fn a_keyboard() -> Keyboard {
-    Keyboard::with_mapping(KEYS_IN_FORCE.get().cloned().unwrap_or_default())
+    let mut k = Keyboard::with_mapping(KEYS_IN_FORCE.get().cloned().unwrap_or_default());
+    k.traced(KEYS_TRACED.load(std::sync::atomic::Ordering::Relaxed));
+    k
 }
 
 /// The keyboard mapping a run reads, beside its flags: `.muirkeys` in the
@@ -2377,6 +2404,7 @@ fn main() {
     let mut prom_file: Option<PathBuf> = None;
     let mut keyboard_file: Option<PathBuf> = None;
     let mut keyboard_dump = false;
+    let mut keyboard_trace = false;
     let mut resume: Option<PathBuf> = None;
     let mut stop_at: Option<u16> = None;
     let mut stop_at_prom: Option<u16> = None;
@@ -2588,6 +2616,7 @@ fn main() {
                 None => usage("--keyboard-mapping wants a file of key bindings"),
             },
             (None, "--keyboard-mapping-dump") => keyboard_dump = true,
+            (None, "--keyboard-mapping-trace") => keyboard_trace = true,
             (None, "--no-auto-boot") => auto_boot = false,
             (None, "--prom") => match args.next() {
                 Some(path) => prom_file = Some(PathBuf::from(path)),
@@ -2819,6 +2848,7 @@ fn main() {
     // the one part of it that is muir's own and so the user's to change.
     let (keyboard_map, keyboard_said) = keyboard_mapping(keyboard_file.as_deref());
     let _ = KEYS_IN_FORCE.set(keyboard_map);
+    KEYS_TRACED.store(keyboard_trace, std::sync::atomic::Ordering::Relaxed);
 
     // What this run is: said once here, and again by the prompt's `info`.
     let setup = {

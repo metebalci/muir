@@ -507,13 +507,7 @@ impl Mapping {
     /// is written out. And a position MIT's table leaves unnamed --- 0 is
     /// the first --- has no other name at all.
     pub fn dump(&self) -> String {
-        let key = |p: u8, shifted: bool| {
-            let name = key_name(p, shifted);
-            match key_of(&name) {
-                Ok(back) if back == (p, shifted) => name,
-                _ => position_name(p, shifted),
-            }
-        };
+        let key = key_written;
         let mut s = String::new();
         s.push_str("# muir's keyboard mapping, as --keyboard-mapping reads it:\n");
         s.push_str("# `key <keysym> <key>`, and `prefix <keysym> <keysym> <key>` for a\n");
@@ -547,6 +541,25 @@ impl Mapping {
             ));
         }
         s
+    }
+}
+
+/// **A key as a mapping file writes it**, which is its name where
+/// [`key_of`] reads that name back as the same position *and* the same
+/// plane, and `position <octal>` --- with `shifted` after it --- where it
+/// does not.
+///
+/// [`Mapping::dump`] writes its bindings with this and so does
+/// `--keyboard-mapping-trace`, from here rather than each its own way.
+/// That is the point of the trace: what it says a keysym became is what a
+/// `key` line has to say to bind it there, so a traced line can be pasted
+/// into a mapping file without translating anything. Two spellings for one
+/// key would defeat it.
+fn key_written(p: u8, shifted: bool) -> String {
+    let name = key_name(p, shifted);
+    match key_of(&name) {
+        Ok(back) if back == (p, shifted) => name,
+        _ => position_name(p, shifted),
     }
 }
 
@@ -819,6 +832,64 @@ pub struct Keyboard {
     /// Keysyms whose next release is to be dropped: a key the terminal
     /// has already sent whole, tapped rather than held.
     tapped: Vec<u32>,
+    /// `--keyboard-mapping-trace`: say what every keysym arrived as and
+    /// what it became.
+    trace: bool,
+}
+
+/// **What a keysym became**, which is what `--keyboard-mapping-trace`
+/// prints and the only thing that says which half of a key's journey is
+/// wrong. A viewer chooses the keysym it sends for a physical key --- RFC
+/// 6143 leaves that to it --- so muir is the only authority on which
+/// keysym arrived, and the mapping is the only authority on what it meant.
+///
+/// A key is named as [`key_written`] names it, which is the spelling
+/// [`Mapping::dump`] uses, so a traced line says what a `key` line would
+/// have to say.
+enum Went {
+    /// The mapping has nothing for it. The answer to "why does this key do
+    /// nothing".
+    Unbound,
+    /// Held as a prefix: nothing goes down the cable until the keysym after
+    /// it. **Saying so is the point** --- a prefix's press produces no key
+    /// by design, and printing nothing for it would look exactly like
+    /// [`Went::Unbound`].
+    HeldAsPrefix,
+    /// The prefix pressed again, which is the way out of a sequence begun
+    /// by mistake.
+    PrefixLetGo,
+    /// Looked up behind a standing prefix, and what was there.
+    Behind(u32, Option<(u8, bool)>),
+    /// Sent to a key: its position, the plane wanted, and whether the
+    /// terminal had to work the shift around it rather than the viewer's
+    /// own shift already giving that plane.
+    Sent { p: u8, shifted: bool, tapped: bool },
+    /// Nothing went down the cable, and why. Every one of these is by
+    /// design rather than a mapping that is short of a line.
+    Nothing(&'static str),
+}
+
+impl std::fmt::Display for Went {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Went::Unbound => write!(f, "no binding"),
+            Went::HeldAsPrefix => {
+                write!(f, "held as a prefix; the keysym after it is looked up behind it")
+            }
+            Went::PrefixLetGo => write!(f, "the prefix is let go, and nothing is sent"),
+            Went::Behind(first, None) => {
+                write!(f, "behind {}: no binding", keysym_name(first))
+            }
+            Went::Behind(first, Some((p, shifted))) => {
+                write!(f, "behind {}: {}", keysym_name(first), key_written(p, shifted))
+            }
+            Went::Sent { p, shifted, tapped: false } => write!(f, "{}", key_written(p, shifted)),
+            Went::Sent { p, shifted, tapped: true } => {
+                write!(f, "{}, tapped with the shift worked around it", key_written(p, shifted))
+            }
+            Went::Nothing(why) => write!(f, "nothing: {why}"),
+        }
+    }
 }
 
 impl Keyboard {
@@ -835,6 +906,14 @@ impl Keyboard {
     /// The mapping this keyboard is using.
     pub fn mapping(&self) -> &Mapping {
         &self.map
+    }
+
+    /// `--keyboard-mapping-trace`: print every keysym as it arrives and
+    /// what it became, **on stderr**, as every trace in muir does ---
+    /// `--chaos-trace` writes there too --- and because this one runs
+    /// alongside the machine where the prompt owns stdout.
+    pub fn traced(&mut self, on: bool) {
+        self.trace = on;
     }
 
     /// Whether a shifting key is down, at either of its positions.
@@ -930,11 +1009,43 @@ impl Keyboard {
     /// This whole function is the one place muir's keyboard invents
     /// anything; everything under it is MIT's.
     pub fn key(&mut self, keysym: u32, down: bool) {
+        if self.trace {
+            self.key_traced(keysym, down);
+            return;
+        }
+        self.resolve(keysym, down);
+    }
+
+    /// [`Keyboard::key`], and the line `--keyboard-mapping-trace` writes
+    /// for it: the keysym by name **and** number --- the name is what goes
+    /// in a mapping file, the number is what to write when there is none
+    /// --- whether it went down or up, and what it became.
+    ///
+    /// Returned as well as printed so that `tests/keyboard_mapping.rs` can
+    /// hold the wording, and the key's spelling, without capturing a
+    /// stream. The key is acted on either way: this is `key` with the line
+    /// handed back.
+    pub fn key_traced(&mut self, keysym: u32, down: bool) -> String {
+        let went = self.resolve(keysym, down);
+        let line = format!(
+            "keysym {keysym:#x} {} {}, {went}",
+            keysym_name(keysym),
+            if down { "down" } else { "up" }
+        );
+        if self.trace {
+            eprintln!("{line}");
+        }
+        line
+    }
+
+    /// [`Keyboard::key`]'s work, and what it did, which is the trace's to
+    /// print.
+    fn resolve(&mut self, keysym: u32, down: bool) -> Went {
         // A key the terminal has already sent whole: its release is not
         // owed to the machine.
         if !down && let Some(i) = self.tapped.iter().position(|&s| s == keysym) {
             self.tapped.remove(i);
-            return;
+            return Went::Nothing("its key was tapped and has gone already");
         }
         // A prefix standing: this keysym is looked up behind it.
         if let Some(first) = self.prefix {
@@ -943,36 +1054,43 @@ impl Keyboard {
                 // is the way out of a sequence begun by mistake.
                 if down {
                     self.prefix = None;
+                    return Went::PrefixLetGo;
                 }
-                return;
+                return Went::Nothing("a prefix acts on its press");
             }
             if !down {
-                return;
+                return Went::Nothing("the prefix stands until a key is pressed behind it");
             }
             self.prefix = None;
             self.tapped.push(keysym);
-            if let Some((p, wants)) = self.map.after_prefix(first, keysym) {
+            let behind = self.map.after_prefix(first, keysym);
+            if let Some((p, wants)) = behind {
                 self.behind_prefix(p, wants);
             }
-            return;
+            return Went::Behind(first, behind);
         }
         if self.map.is_prefix(keysym) {
             if down {
                 self.prefix = Some(keysym);
+                return Went::HeldAsPrefix;
             }
-            return;
+            return Went::Nothing("a prefix acts on its press");
         }
         if let Some((s, side)) = self.map.modifier(keysym) {
             let at = shifting(s);
-            let position = at.get(side).or(at.first()).copied();
-            if let Some(p) = position {
-                if down { self.press(p) } else { self.release(p) }
+            let Some(p) = at.get(side).or(at.first()).copied() else {
+                return Went::Nothing("the shifting key it names is on no position");
+            };
+            if down {
+                self.press(p)
+            } else {
+                self.release(p)
             }
-            return;
+            return Went::Sent { p, shifted: false, tapped: false };
         }
         let found = self.map.positions(keysym);
         if found.is_empty() {
-            return;
+            return Went::Unbound;
         }
         let shifted = self.holding(Shift::Shift);
         // Under a latched shifting key the key is tapped inside it and
@@ -980,7 +1098,7 @@ impl Keyboard {
         // for this key and no other.
         if !self.latched.is_empty() {
             if !down {
-                return;
+                return Went::Nothing("a latched shifting key holds for the press alone");
             }
             let (p, wants) =
                 found.iter().find(|&&(_, w)| w == shifted).copied().unwrap_or(found[0]);
@@ -989,7 +1107,7 @@ impl Keyboard {
             for q in std::mem::take(&mut self.latched) {
                 self.release(q);
             }
-            return;
+            return Went::Sent { p, shifted: wants, tapped: true };
         }
         // The position whose plane the viewer's own shift already gives.
         if let Some(&(p, _)) = found.iter().find(|&&(_, wants)| wants == shifted) {
@@ -998,15 +1116,16 @@ impl Keyboard {
             } else {
                 self.release(p)
             }
-            return;
+            return Went::Sent { p, shifted, tapped: false };
         }
         // Otherwise the shift is worked around the key.
         let (p, wants) = found[0];
         if !down {
             self.release(p);
-            return;
+            return Went::Sent { p, shifted: wants, tapped: false };
         }
         self.tap(p, wants);
+        Went::Sent { p, shifted: wants, tapped: true }
     }
 
     /// Words waiting to go down the cable.

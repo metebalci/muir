@@ -454,3 +454,58 @@ fn every_keysym_reads_back_as_itself() {
     assert!(dump.contains("key space Line\n"), "0x20 is `space`");
     assert!(!dump.contains("key  "), "no keysym is written as whitespace");
 }
+
+/// **What a keysym arrived as, and what it became.**
+///
+/// `--keyboard-mapping-dump` says what a keysym *means* here; this says
+/// which keysym came in, and a key that will not type needs both halves.
+/// muir is the only authority on the first: a VNC viewer chooses which X11
+/// keysym to send for a physical key, so `xev` reports what the host's own
+/// X server thinks and not what arrived here.
+///
+/// **The key is spelled as the mapping file spells it**, from
+/// `key_written`, which is what [`Mapping::dump`] writes its bindings with.
+/// That is the point of the flag rather than a nicety: the traced line
+/// says what a `key` line would have to say, so it can be pasted into a
+/// mapping and corrected there.
+#[test]
+fn the_trace_says_which_keysym_arrived_and_what_it_became() {
+    let map = "key F1 Line\nkey F2 position 132\nprefix Scroll_Lock 1 Roman II\n";
+    let mut k = Keyboard::with_mapping(Mapping::parse(map).expect("a mapping"));
+    // X11's numbers for the two keysyms `keyboard::keysym` has no name
+    // for, which is the case the trace prints the number for.
+    let (f2, scroll_lock) = (0xffbfu32, 0xff14u32);
+
+    // A binding, down and up, by the name a mapping file uses.
+    assert_eq!(k.key_traced(keysym::F1, true), "keysym 0xffbe F1 down, Line");
+    assert_eq!(k.key_traced(keysym::F1, false), "keysym 0xffbe F1 up, Line");
+
+    // **The answer to "why does this key do nothing".**
+    assert_eq!(k.key_traced(keysym::META_L, true), "keysym 0xffe7 Meta_L down, no binding");
+
+    // A prefix says it is held. Printing nothing here would look exactly
+    // like the line above, which is the failure the flag exists to tell
+    // apart from this.
+    assert_eq!(
+        k.key_traced(scroll_lock, true),
+        "keysym 0xff14 Scroll_Lock down, held as a prefix; \
+         the keysym after it is looked up behind it"
+    );
+    assert_eq!(k.key_traced('1' as u32, true), "keysym 0x31 1 down, behind Scroll_Lock: Roman II");
+    // And a keysym the prefix has nothing for says so as itself, not as an
+    // unbound key: the mapping wants a `prefix` line, not a `key` line.
+    k.key_traced(scroll_lock, true);
+    assert_eq!(
+        k.key_traced('9' as u32, true),
+        "keysym 0x39 9 down, behind Scroll_Lock: no binding"
+    );
+
+    // **The spelling is the dump's.** `(` is on two positions, so the one
+    // at 132 cannot be written as the character and the dump writes it
+    // out; the trace has to agree, or a line pasted from it would bind a
+    // different key.
+    let out = k.key_traced(f2, true);
+    assert_eq!(out, "keysym 0xffbf F2 down, position 132");
+    let dump = k.mapping().dump();
+    assert!(dump.contains("key F2 position 132\n"), "the dump spells it the same way\n{dump}");
+}
