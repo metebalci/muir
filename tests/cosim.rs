@@ -62,17 +62,32 @@ fn booted<E>(make: impl Fn(Machine) -> E, boot: impl Fn(&mut E), pack: &Path) ->
 /// control store words that came through the disk controller is the strongest
 /// thing the disk work has to stand on.
 ///
-/// **`M-GARBAGE` is what stops the count being pushed further.** It is where
-/// the microcode throws results away, so it holds whatever the last
-/// instruction discarded --- and the two engines are one microcycle apart in
-/// when they store it. Every other memory agrees at any count; that one
-/// agrees only where the offset happens to line up.
+/// **`A-DISK-STATUS` is what stops the count being pushed further**, and
+/// this runs to the last instruction before it: at 1,271,908 the word
+/// parts and never comes back. Its top eight bits are the disk's block
+/// counter, which is where the pack has turned to, and the two engines'
+/// clocks are not the same clock --- `micro` charges a mean memory wait
+/// and has no bus to wait on, `rtl` counts its stalls --- so from the
+/// first status read the microcode makes with the band running, the two
+/// see the pack at different sectors. The tail of this test holds that.
+///
+/// **`M-GARBAGE` is not what stops it**, which is what this comment used
+/// to say. `M 0` disagrees at many counts and so do `M 5`, `M 14`, `M 21`
+/// and `M 33` and a word of main memory: one engine has made a store the
+/// other has not, and a stop one instruction later has them agreeing
+/// again. It is the same stop artefact as the dead stack slot below, and
+/// `M 0` is only the most conspicuous of them because every discarded
+/// result goes there. Measured, not argued: every one of them is
+/// transient, and `A-DISK-STATUS` is the only word that parts for good.
 #[test]
 fn engines_agree_on_memory() {
     let Some(p) = pack() else { return };
-    // Just short of `PROM-DISABLE` at 1,262,276, by which point everything
-    // the boot PROM loads off the pack is in place.
-    const N: usize = 1_262_000;
+    // The last executed instruction at which every memory, `VMA`, `MD` and
+    // `LC` agree; `PROM-DISABLE` was at 1,262,276, so this is a little way
+    // into microcode 323 running.
+    const N: usize = 1_271_901;
+    /// Where `A-DISK-STATUS` lives: A-memory 323, `sys/ubin/ucadr.sym`.
+    const A_DISK_STATUS: usize = 0o323;
 
     let mut a = booted(Micro::new, Micro::boot, &p);
     let mut b = booted(Rtl::new, Rtl::boot, &p);
@@ -93,10 +108,11 @@ fn engines_agree_on_memory() {
 
     // `LC` is not in `Machine` on both engines, so it is asked for rather
     // than read out of the two machines: `Engine::lc`, issue #32. Here it
-    // is 0 on both --- the boot PROM never moves the location counter, and
-    // this stops just short of `PROM-DISABLE` --- so what this says is that
-    // neither engine has touched it. A counter that steps is held by
-    // `traces`, an instruction at a time.
+    // is 0 on both --- the band has not fetched a macroinstruction yet, and
+    // does not until 1,844,875 --- so what this says is that neither
+    // engine has touched it. A counter that steps is held by `traces`, an
+    // instruction at a time, and by
+    // `the_engines_hold_the_same_lc_until_their_clocks_part`.
     assert_eq!(a.lc(), b.lc(), "LC");
     let (x, y) = (a.machine(), b.machine());
     assert!(x.imem == y.imem, "control store");
@@ -118,6 +134,152 @@ fn engines_agree_on_memory() {
     assert_eq!(x.vma, y.vma, "VMA");
     assert_eq!(x.md, y.md, "MD");
     assert!(x.main == y.main, "main memory");
+
+    // **And what parts next**: thirteen instructions on, at 1,271,914,
+    // `A-DISK-STATUS` is the one word in any memory the two engines
+    // disagree about, and they disagree only in the eight bits above 23
+    // --- the block counter, which is where the pack has turned to. That
+    // is the ceiling on the count above: it cannot be raised past it, and
+    // the reason is the clock rather than anything either engine
+    // computes. Thirteen and not one, because a store in flight at the
+    // stop puts a word or two out for an instruction at a time; by here
+    // every one of those has landed on both.
+    let mut n = 0;
+    while n < 13 {
+        a.step().expect("micro halted early");
+        n += a.executed().is_some() as usize;
+    }
+    let mut n = 0;
+    while n < 13 {
+        b.step().expect("rtl halted early");
+        n += b.executed().is_some() as usize;
+    }
+    let (x, y) = (a.machine(), b.machine());
+    let (p, q) = (x.amem[A_DISK_STATUS], y.amem[A_DISK_STATUS]);
+    assert_ne!(p, q, "A-DISK-STATUS has parted: {p:o} and {q:o}");
+    assert_eq!(p & 0o77777777, q & 0o77777777, "and only above bit 23: {p:o} and {q:o}");
+    let mut but_that_word = x.amem;
+    but_that_word[A_DISK_STATUS] = q;
+    assert_eq!(but_that_word, y.amem, "A memory but that one word");
+    assert_eq!(x.mmem, y.mmem, "M memory");
+    assert!(x.imem == y.imem, "control store");
+    assert!(x.main == y.main, "main memory");
+    assert_eq!(x.md, y.md, "MD");
+}
+
+/// **A moving `LC`, held between the engines for as long as they are the
+/// same machine.**
+///
+/// `engines_agree_on_memory` compares the counter at a point where it is
+/// 0 on both, which says only that neither engine has touched it. This
+/// runs the two in lockstep from the button and compares it at **every**
+/// executed instruction, so a counter that moved early, or by the wrong
+/// step, or on one engine and not the other, is caught wherever it
+/// happens.
+///
+/// **The band does not fetch a macroinstruction until 1,844,875**, half a
+/// million instructions past `PROM-DISABLE`: the boot PROM never moves the
+/// counter, and microcode 323 spends that long initialising in microcode
+/// before it runs any macrocode. So `LC` is 0 for all but the last few
+/// hundred instructions of this run, and the assertion is worth making
+/// over all of them because 0 is what it should be.
+///
+/// **What ends it is the clock, and it is 483 instructions later.** At
+/// 1,845,358 the two engines execute different microinstructions for the
+/// first time. Both are at `INTRX0+2`, which MIT's interrupt microcode
+/// writes as `(JUMP-IF-BIT-CLEAR (BYTE-FIELD 1 4) READ-MEMORY-DATA
+/// INTRX1)` --- a branch on bit 4 of the word read from `A-TV-REGS-BASE`,
+/// which is the display board's vertical flag, and what MIT's comment two
+/// lines below calls "the roughly-60-cycle clock interrupt handler". `rtl`
+/// has the bit set and `micro` has not: the flag is up once a frame of
+/// [`muir::simpletv::FRAME_NS`] counted from power-on, and after 1.8
+/// million instructions `micro`'s clock stands 8 ms from `rtl`'s ---
+/// `micro` charges a mean memory wait and has no bus to wait on, `rtl`
+/// counts its stalls. So the two are on different sides of a frame
+/// boundary, `rtl` runs the clock handler and `micro` goes on to the disk.
+/// Neither is wrong; they are no longer the same machine.
+///
+/// **So a long comparison of a moving `LC` is not gettable between these
+/// two engines**, and the 483 instructions here are the whole of it. It
+/// wants two engines with the same clock --- `rtl` and `chip` --- over the
+/// band.
+#[test]
+fn the_engines_hold_the_same_lc_until_their_clocks_part() {
+    let Some(p) = pack() else { return };
+    /// The executed instruction at which `LC` first leaves zero: the band's
+    /// first macroinstruction fetch.
+    const LC_FIRST_MOVES: usize = 1_844_875;
+    /// The executed instruction at which the two engines first execute
+    /// different microinstructions.
+    const CLOCKS_PART: usize = 1_845_358;
+
+    let mut a = booted(Micro::new, Micro::boot, &p);
+    let mut b = booted(Rtl::new, Rtl::boot, &p);
+    let mut first_moved = 0;
+    let mut steps = Vec::new();
+    let mut last = 0;
+    for n in 1..CLOCKS_PART {
+        let ea = loop {
+            a.step().expect("micro halted early");
+            if let Some(e) = a.executed() {
+                break e;
+            }
+        };
+        let eb = loop {
+            b.step().expect("rtl halted early");
+            if let Some(e) = b.executed() {
+                break e;
+            }
+        };
+        assert_eq!(ea, eb, "the same microinstruction at {n}");
+        let lc = a.lc();
+        assert_eq!(lc, b.lc(), "LC at instruction {n}, micro PC {ea:o}");
+        if lc != 0 && first_moved == 0 {
+            first_moved = n;
+        }
+        if lc != last {
+            steps.push(lc as i64 - last as i64);
+            last = lc;
+        }
+    }
+    assert_eq!(first_moved, LC_FIRST_MOVES, "where the counter first leaves zero");
+    // It left zero, and then stepped. `LC<25:2>` is the fetch address and
+    // the two bits below it are the halfword, so a step of a whole
+    // macroinstruction is 4 and of a halfword 2; nothing else is a step
+    // this counter makes going forwards.
+    assert!(steps.len() > 1, "the counter moved more than once: {steps:?}");
+    for step in &steps[1..] {
+        assert!(*step == 2 || *step == 4, "a halfword or a word: {steps:?}");
+    }
+
+    // And the parting itself: both at `INTRX0+2` with different words in
+    // `MD`, differing in exactly the vertical flag, because the two
+    // engines' clocks have put them on different sides of a frame.
+    let (x, y) = (a.machine(), b.machine());
+    assert_eq!(x.md ^ y.md, muir::simpletv::mode::VERT, "MD differs in the vertical flag alone");
+    assert_ne!(
+        x.simpletv.vert_flag(x.ns),
+        y.simpletv.vert_flag(y.ns),
+        "and the flag itself is what differs"
+    );
+    assert_ne!(x.ns, y.ns, "the clocks have parted");
+    // The branch goes two ways: `micro` to `INTRX1`, `rtl` on into the
+    // clock handler at `INTRX0+3`. Addresses of microcode 323, named by
+    // `sys/ubin/ucadr.sym`.
+    let ea = loop {
+        a.step().expect("micro halted early");
+        if let Some(e) = a.executed() {
+            break e;
+        }
+    };
+    let eb = loop {
+        b.step().expect("rtl halted early");
+        if let Some(e) = b.executed() {
+            break e;
+        }
+    };
+    assert_eq!(ea, 0o25755, "micro takes INTRX1");
+    assert_eq!(eb, 0o25740, "rtl falls through to INTRX0+3");
 }
 
 /// **`micro`'s clock is the machine's periods.** Each of its microcycles is
