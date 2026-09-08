@@ -567,7 +567,11 @@ fn the_board_drives_the_bus_only_to_read() {
 /// **The refresh takes one slot a line.** `-REFRESH CYC` is low for
 /// exactly one slot, from 16,757 ns and every 16,000 after --- a line of
 /// the raster, [`LINE_NS`] --- and a cycle that would have been served
-/// then waits one slot more.
+/// then waits one slot more. **Every 16,000 while the frame is blank**:
+/// once the picture is on, the refresh competes with the shifter as the
+/// processor does and its own spacing slides, measured at 15,500 as well
+/// as 16,000 past 864,757 ns. So this is the blanking's rule too, and the
+/// window watched here ends well inside it.
 ///
 /// **And from the first line of the picture the shifter takes slots too,
 /// which this does not model.** The rule above is exact through the 54
