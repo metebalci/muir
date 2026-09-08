@@ -24,8 +24,12 @@
 //! different route than the sheets did: the parts list `*.prt`, which names
 //! every location that was stuffed and what went in it, and the DIP census
 //! `*.wls`, which counts the packages each part type takes. Four boards
-//! have a parts list and seven have a census. Only the SIMPLE TV has
-//! neither, and its count rests on the drawings alone.
+//! have a parts list and seven have a census. The SIMPLE TV has neither,
+//! and its count rests on the drawings alone; the disk multiplexor has
+//! neither either --- discrepancy 75 --- but has MIT's stuffing list,
+//! `cadrdc/dm.stf`, which places every body by location, and
+//! `the_multiplexors_count_agrees_with_mits_stuffing_list` holds it to
+//! that.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -42,6 +46,7 @@ const CADRIO: &str = include_str!("../data/CADRIO.netlist");
 const CADRDC: &str = include_str!("../data/CADRDC.netlist");
 const SIMPLETV: &str = include_str!("../data/SIMPLETV.netlist");
 const LISPMTV: &str = include_str!("../data/LISPMTV.netlist");
+const DM: &str = include_str!("../data/DM.netlist");
 
 /// Bypass capacitors, resistor and terminator packs, busbars, pull-up
 /// networks, and the bodies a sheet carries with no device in them. MIT's
@@ -111,6 +116,7 @@ fn every_board_has_the_parts_the_docs_claim() {
         ("CADRDC", CADRDC, 171),
         ("SIMPLETV", SIMPLETV, 171),
         ("LISPMTV", LISPMTV, 172),
+        ("DM", DM, 62),
     ] {
         let count = parts(&netlist::parse(text).unwrap()).len();
         assert_eq!(count, want, "{name}");
@@ -299,4 +305,55 @@ fn switches(n: &Netlist) -> usize {
         .map(|p| p.reference.as_str())
         .collect::<BTreeSet<_>>()
         .len()
+}
+
+/// **Against MIT's own stuffing list, for the board that has no parts list
+/// and no census.** `cadrdc/dm.stf` is the disk multiplexor as the
+/// stockroom saw it: every slot, and every body in it. It reached us the
+/// same way the sheets did, which is weaker than the `*.prt` files above,
+/// but it is made by different tooling for a different purpose and it is
+/// the only second count this board has --- there is no `dm.wlr` and
+/// `dm.wls` carries no census (discrepancy 75).
+///
+/// Both sides agree on 62 devices and on which 62 they are.
+#[test]
+fn the_multiplexors_count_agrees_with_mits_stuffing_list() {
+    let text = support::mit_text(&["cadrdc", "dm.stf"]);
+    // Every body MIT stuffs, by slot: a slot's second body is written
+    // `A07@02` and is the same location.
+    let mut slots: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut at: Option<String> = None;
+    for line in text.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        let loc = f.iter().position(|w| {
+            w.ends_with('(') && w.len() >= 4 && w.starts_with(|c: char| c.is_ascii_uppercase())
+        });
+        match loc {
+            Some(k) => {
+                at = Some(f[k][..f[k].len() - 1].split('@').next().unwrap().to_string());
+                let rest: Vec<&str> = f[k + 1..].iter().copied().filter(|w| *w != ")").collect();
+                if let (Some(slot), [body, ..]) = (&at, &rest[..]) {
+                    slots.entry(slot.clone()).or_default().insert(body.to_string());
+                }
+            }
+            None if f.len() == 3 && f[1].starts_with("DM") => {
+                if let Some(slot) = &at {
+                    slots.entry(slot.clone()).or_default().insert(f[0].to_string());
+                }
+            }
+            None => {}
+        }
+    }
+    assert!(slots.len() > 60, "read {} slots out of dm.stf", slots.len());
+    let theirs: BTreeSet<String> = slots
+        .into_iter()
+        .filter(|(_, bodies)| bodies.iter().any(|b| !is_passive(b)))
+        .map(|(slot, _)| slot)
+        .collect();
+    let ours: BTreeSet<String> = parts(&netlist::parse(DM).unwrap())
+        .iter()
+        .map(|r| r.strip_prefix('0').expect("a designator here is 0-prefixed").to_string())
+        .collect();
+    assert_eq!(ours, theirs, "the multiplexor's mounted devices");
+    assert_eq!(ours.len(), 62);
 }
