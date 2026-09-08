@@ -411,7 +411,7 @@ pub fn chip(
     io: &Netlist,
     tv: &Netlist,
 ) -> (Chip, Behavioural, FarEnd) {
-    let boards = Boards { memory: 32, io: Some(io), tv: Some(tv), disk: None };
+    let boards = Boards { memory: 32, io: Some(io), tv: Some(tv), ..Default::default() };
     let far = FarEnd::new(cpu, busint, memory, boards, 0, Machine::new());
     (Chip::new(cpu), Behavioural::new(), far)
 }

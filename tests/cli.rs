@@ -253,3 +253,50 @@ fn version_says_what_this_build_is() {
         );
     }
 }
+
+/// **A drive on a unit other than 0 wants the multiplexor's board.**
+///
+/// Not because the unit number is forced to 0. `UNIT<2:0>` reach one
+/// 74LS244's inputs on the controller and nothing else --- `cadrdc/dc.wlr`
+/// gives a direction per pin and none of the three has a `TO` --- so the
+/// board has no driver for them at all, and the six one-board jumpers
+/// ground them to stop three inputs floating. Unit 0 is the consequence.
+/// The DISK MULTIPLEXOR is what supplies the driver, and
+/// `--disk-use-multiplexor` fits it.
+///
+/// The model controller is behavioural and wants no board: it has
+/// addressed eight units all along, `disk_controller::UNITS`, so a pack in
+/// unit 3 is its business and it takes one.
+#[test]
+fn a_drive_past_unit_0_wants_the_multiplexor() {
+    let netlist =
+        ["--chip", "--main-memory", "netlist", "--disk-controller", "netlist", "--stop-after", "1"];
+    let with = |extra: &[&'static str]| -> Vec<&'static str> {
+        let mut args = netlist.to_vec();
+        args.extend_from_slice(extra);
+        args
+    };
+    refused(&with(&["--disk-pack", "nothing.img,3"]), "--disk-pack");
+    // With the board fitted the flag is taken, and the run then stops on
+    // the image, which is the next thing wrong with it.
+    let out = muir().args(with(&["--disk-use-multiplexor", "--disk-pack", "nothing.img,3"])).run();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(2), "the flag is taken:\n{err}");
+
+    // The model controller needs no board and takes the unit.
+    let out = muir().args(["--micro", "--disk-pack", "nothing.img,3", "--stop-after", "1"]).run();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(2), "the model controller takes unit 3:\n{err}");
+}
+
+/// **The multiplexor is a board, so it needs a board to hang off**, and
+/// one pack a drive.
+#[test]
+fn the_multiplexor_is_the_netlist_controllers_board() {
+    refused(&["--chip", "--disk-use-multiplexor", "--stop-after", "1"], "--disk-use-multiplexor");
+    refused(&["--micro", "--disk-use-multiplexor", "--stop-after", "1"], "--disk-use-multiplexor");
+    refused(
+        &["--micro", "--disk-pack", "a.img,1", "--disk-pack", "b.img,1", "--stop-after", "1"],
+        "--disk-pack",
+    );
+}
