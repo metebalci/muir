@@ -2447,6 +2447,15 @@ p5=IR9
 p6=IWRITE
 )
 
+# extracted from SUDS file 
+# bodies 0, points 0
+# SUDS version 23
+# nomemclature type MPG216
+# board type MPG216
+# draw by: TK
+# title 1: CADR
+# title 2: CONNECTOR PINS
+
 page CPINS
 
 # extracted from SUDS file 
