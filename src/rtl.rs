@@ -614,6 +614,36 @@ impl Rtl {
     /// crosses between the two processor boards on a connector pin, under
     /// the processor's name `-FUNCT1` and the ICMEM board's `-HALT`, which
     /// `Netlist::EXPLICIT_ALIASES` joins, so `chip` halts on it too.
+    ///
+    /// **What the ten would cost, measured.**  The flags are `-APE`,
+    /// `-MPE`, `-PDLPE`, `-DPE`, `-IPE`, `-SPE`, `-HIGHERR`, `-MEMPE`,
+    /// `-V0PE` and `-V1PE`, each the `CLK5A` register of a checker's
+    /// verdict in the 74S374s at OLORD2 1A03 and 1A05, and CC reads all
+    /// ten by name in `cc/ccwhy.lisp` to say why a machine stopped.
+    /// Carrying one verdict bit through [`Read`] and registering it at the
+    /// edge, with no checking behind it at all, costs **1.9%** of a band
+    /// run; checking two of the ten --- A memory and M memory --- costs
+    /// **8.5%** with a parity bit stored beside each word and **9.8%** with
+    /// a bitmap of the words never written, on 200,000,000 microcycles
+    /// from the same boot, best of three each way.  The two shapes cost the
+    /// same because what this path is sensitive to is state carried, not
+    /// arithmetic done.  Eight flags would remain.
+    ///
+    /// **And the parity bit is not always the board's to generate.**  A
+    /// memory's is: its RAM at MCTL 3B06 takes `LPARITY`, off the 93S48
+    /// generator at 4C09, so no program can choose it.  The dispatch
+    /// memory's travels as data --- PRAID's `P-D-MEM-D` in
+    /// `ucadr/praid.lisp` works out odd parity itself and writes it
+    /// through A memory location 0 as `CONS-DISP-PARITY-BIT` --- so that
+    /// one a program can get wrong on purpose, which is what a test of
+    /// `-DPE` would need.  `ucadr/mmtest.lisp`'s own "now turn on parity
+    /// checking" is commented out in System 100.
+    ///
+    /// Modelling any of it also means every way a word reaches a memory
+    /// without the machine writing it --- the boot PROM's programming
+    /// image, a band loaded from a pack, a checkpoint resumed --- carrying
+    /// parity too: a first attempt that missed the control store halted
+    /// the boot at 1,413,120 microcycles.
     fn err(&self) -> bool {
         self.halted
     }
