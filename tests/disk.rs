@@ -20,6 +20,7 @@ mod support;
 /// Xbus line of the same number.
 mod status {
     pub const READ_COMPARE_DIFFERENCE: u32 = 1 << 22;
+    pub const HEADER_COMPARE: u32 = 1 << 18;
     pub const TIMEOUT: u32 = 1 << 11;
     pub const OVERRUN: u32 = 1 << 14;
     pub const NXM: u32 = 1 << 20;
@@ -1445,6 +1446,58 @@ fn a_write_all_lays_down_the_header_it_is_given() {
     assert_eq!(second.data, data(2), "and its data, where it was written");
     assert!(second.header_checks, "the checkword is over the header as written");
     assert_ne!(second.header, header_of(&g, 0, 0, 1), "which is not the address's own header");
+}
+
+/// **A header that is not the address's own stops the transfer**, which is
+/// `STATUS<18>`: "Header Compare Error.  Indicates that a block-header read
+/// from disk failed to have the expected value.  This may be because the
+/// disk head is not positioned at the proper place, because the disk is not
+/// correctly formatted, or because the header wasn't read correctly.  This
+/// error stops the transfer."
+///
+/// The bit could not fire until the pack carried its own headers: a header
+/// recomputed from the address it is asked for agrees with that address by
+/// construction. Now a Write All can lay down a badly formatted track ---
+/// which is MIT's second reason, "because the disk is not correctly
+/// formatted" --- and an ordinary Read of it says so.
+///
+/// The first block of the track is honest and reads back; the second is
+/// the one that lies, and the transfer stops there with the bit up and the
+/// abort with it.
+#[test]
+fn a_header_that_is_not_the_addresss_own_stops_the_transfer() {
+    use muir::disk_unit::{header_of, sector_image_with_header};
+    let g = Geometry::T300;
+    let mut d = Controller::default();
+    d.attach(0, Unit::blank(g));
+    let mut main = vec![0u32; 1 << 16];
+
+    let data = |n: u32| std::array::from_fn::<u32, BLOCK_WORDS, _>(|i| n * 0x10000 + i as u32);
+    let mut bytes = Vec::new();
+    bytes.extend(sector_image_with_header(header_of(&g, 0, 0, 0), &data(1)));
+    bytes.extend(sector_image_with_header(3 << 16 | 9, &data(2)));
+    let words: Vec<u32> = bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
+    let pages = words.len().div_ceil(BLOCK_WORDS);
+    main[0o10000..0o10000 + words.len()].copy_from_slice(&words);
+    run(&mut d, &mut main, 0o13, 0, 16, pages as u32);
+    assert_eq!(d.status() & status::HEADER_COMPARE, 0, "formatting compares no header");
+
+    // Block 0 is honest: an ordinary Read of it is clean.
+    let mut back = vec![0u32; 1 << 16];
+    read_block(&mut d, &mut back, 0, 1);
+    d.advance(TIMEOUT_NS * 2);
+    let s = d.status();
+    assert_eq!(s & status::HEADER_COMPARE, 0, "block 0 compares: {s:o}");
+    assert_eq!(back[0o400..0o400 + BLOCK_WORDS], data(1), "and gives its data");
+
+    // Block 1 says it is block 9 of cylinder 3.
+    let mut back = vec![0u32; 1 << 16];
+    read_block(&mut d, &mut back, 1, 1);
+    d.advance(TIMEOUT_NS * 4);
+    let s = d.status();
+    assert_ne!(s & status::HEADER_COMPARE, 0, "block 1 does not compare: {s:o}");
+    assert_ne!(s & status::ABORTED, 0, "and the transfer is aborted: {s:o}");
+    assert_eq!(back[0o400..0o400 + BLOCK_WORDS], [0; BLOCK_WORDS], "nothing was moved");
 }
 
 /// **Which commands end in a timeout, measured on the netlist board.**

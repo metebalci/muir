@@ -141,6 +141,18 @@ pub struct Controller {
     /// of the disk". The other cause is a header whose checkword fails,
     /// which wants a pack that carries headers --- issue 51.
     header_ecc: bool,
+    /// `STATUS<18>`, "Header Compare Error.  Indicates that a block-header
+    /// read from disk failed to have the expected value.  This may be
+    /// because the disk head is not positioned at the proper place,
+    /// because the disk is not correctly formatted, or because the header
+    /// wasn't read correctly.  This error stops the transfer."
+    ///
+    /// It can fire since the pack carries its own headers: a Write All
+    /// lays down whatever the program wrote, and a Read or Write of that
+    /// block then finds a header that is not the address's own. Before
+    /// that the header was recomputed from the address on every read and
+    /// could not disagree with it --- issue 51.
+    header_compare: bool,
     /// `STATUS<22>`, "Read Compare Difference".
     read_compare_difference: bool,
     /// The first word of every page the last transfer put into memory,
@@ -297,6 +309,9 @@ impl Controller {
         if self.header_ecc {
             v |= 1 << 17;
         }
+        if self.header_compare {
+            v |= 1 << 18;
+        }
         // `<13>` "Transfer Aborted": `STOPPED BY ERROR`, preset while any
         // lossage stands, `Controller::lossage`.
         if self.lossage() {
@@ -423,8 +438,11 @@ impl Controller {
     /// the store on --- and that store clocks the flop clear too, so the
     /// latch never outlives the level here.
     fn lossage(&self) -> bool {
-        let transfer =
-            (self.timeout && self.not_active()) || self.nxm || self.overrun || self.header_ecc;
+        let transfer = (self.timeout && self.not_active())
+            || self.nxm
+            || self.overrun
+            || self.header_ecc
+            || self.header_compare;
         let disk = self.cmd & 0o4 == 0
             && match &self.units[self.selected()] {
                 None => true,
@@ -741,6 +759,7 @@ impl Controller {
     /// keeps counting, so a timeout still to come is kept.
     fn reset_errors(&mut self) {
         self.header_ecc = false;
+        self.header_compare = false;
         self.read_compare_difference = false;
         self.ccw_cycle = false;
         self.nxm = false;
@@ -783,6 +802,7 @@ impl Controller {
         self.timeout = false;
         self.overrun = false;
         self.header_ecc = false;
+        self.header_compare = false;
 
         let i = self.selected();
         let mut unit = self.units[i].take().expect("the selected unit is online");
@@ -817,6 +837,7 @@ impl Controller {
         self.timeout = false;
         self.overrun = false;
         self.header_ecc = false;
+        self.header_compare = false;
 
         let i = self.selected();
         let mut unit = self.units[i].take().expect("the selected unit is online");
@@ -944,6 +965,31 @@ impl Controller {
             // board, and the board is followed.
             let page = (ccw & 0x003f_ff00) as usize;
             let more = ccw & 1 != 0;
+
+            // "<18> Header Compare Error.  Indicates that a block-header
+            // read from disk failed to have the expected value ... This
+            // error stops the transfer."  The board strobes a header on a
+            // Read and on a Write and on nothing else --- `newdsk.31` at
+            // `024` to `027` and `124` to `127`, four bytes each --- and
+            // compares it against the disk address register.
+            //
+            // The three fields `DCDA` holds are what is compared:
+            // `<27:16>` cylinder, `<15:8>` head, `<7:0>` block. The two
+            // bits above them are the next-block address code, which the
+            // disk address register does not carry, so there is nothing
+            // here to compare them against. **Unverified**: whether the
+            // board's four byte-compares take the top byte against
+            // something else. The HEADER COMPARE page's own logic would
+            // settle it.
+            let (c, h, b) = unit.position();
+            let expected = disk_unit::header_of(&unit.geometry, c, h, b);
+            if unit
+                .header_at(c, h, b)
+                .is_some_and(|carried| carried & 0x0fff_ffff != expected & 0x0fff_ffff)
+            {
+                self.header_compare = true;
+                return moved;
+            }
 
             let mut from_disk = [0u32; BLOCK_WORDS];
             if read && !unit.read_block(&mut from_disk) {
@@ -1105,6 +1151,7 @@ impl Controller {
             clp,
             da,
             header_ecc,
+            header_compare,
             read_compare_difference,
             dma_written,
             ccw_cycle,
@@ -1124,6 +1171,7 @@ impl Controller {
         w.u32(*clp);
         w.u32(*da);
         w.bool(*header_ecc);
+        w.bool(*header_compare);
         w.bool(*read_compare_difference);
         w.u64s(&dma_written.iter().map(|&a| a as u64).collect::<Vec<_>>());
         w.bool(*ccw_cycle);
@@ -1150,6 +1198,7 @@ impl Controller {
         self.clp = r.u32()?;
         self.da = r.u32()?;
         self.header_ecc = r.bool()?;
+        self.header_compare = r.bool()?;
         self.read_compare_difference = r.bool()?;
         self.dma_written = r.u64s()?.into_iter().map(|a| a as usize).collect();
         self.ccw_cycle = r.bool()?;
