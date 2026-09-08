@@ -177,6 +177,120 @@ pub fn kinds(n: &Netlist) -> Kinds {
     }
 }
 
+/// **A body in MIT's stuffing list.** One row of a `*.stf`, which is a
+/// board as the stockroom saw it: six columns --- part number, DIP type,
+/// `CARD LOC`, body, file and position --- one row per body, and a further
+/// row carrying only body, file and position for each of that body's gates
+/// drawn elsewhere.
+pub struct Body {
+    /// The board location as MIT prints it: `B05`, or `1A01` on the
+    /// processor pair, whose designators carry a leading digit. A netlist
+    /// writes the one-section boards' designators with a leading `0` that
+    /// MIT's zero-suppressed column drops.
+    pub location: String,
+    /// **What tells two bodies at one location apart.** MIT writes the
+    /// second body at a location `B05@03` where the first is `B05`, and
+    /// this is that number, 0 for a body written without one.
+    ///
+    /// What the number itself means is **unverified**: no MIT file found so
+    /// far defines it, and nothing here needs it to. All that is used is
+    /// that bodies sharing a location carry different ones, which
+    /// `parts_mounted.rs` asserts over every body in every list it reads.
+    /// It is not read as a pin offset or a device number, and must not be
+    /// until something says so.
+    pub at: u16,
+    /// One entry per gate, in the order the file lists them: the `BODY`
+    /// column and the page it is drawn on. A quad NAND has four, and a
+    /// chip MIT drew across two sheets names both pages.
+    ///
+    /// **The gates of one body need not share a body name.** `dm.stf`'s
+    /// 74LS02 at D13 is `LS02L` three times on DMSEQ and `OLS02L` once on
+    /// DMSEL, one chip drawn under the name of the gate.
+    pub gates: Vec<(String, String)>,
+}
+
+impl Body {
+    /// The `BODY` column of the row that placed it, which is what a netlist
+    /// carries as a part's `kind`: `OLS14L`, `74LS569`, `CAP1`.
+    pub fn kind(&self) -> &str {
+        &self.gates[0].0
+    }
+
+    /// The pages the body is drawn on, each once.
+    pub fn pages(&self) -> BTreeSet<&str> {
+        self.gates.iter().map(|(_, page)| page.as_str()).collect()
+    }
+}
+
+/// MIT's stuffing list for a board, `mit/<parts>`, in the order it prints.
+///
+/// The row shape is exact, so this asserts it rather than passing over what
+/// it cannot read: from the location on, a row carries four fields, and a
+/// row with no location carries three. That holds for every row of the
+/// eight lists the tests read.
+pub fn stuffing_list(parts: &[&str]) -> Vec<Body> {
+    let text = mit_text(parts);
+    let mut out: Vec<Body> = Vec::new();
+    let mut in_table = false;
+    // Some of these lists are stored with CR line endings and some with LF.
+    for line in text.split(['\n', '\r']) {
+        // A form feed starts a printed page, which repeats the title and
+        // the column headings; the table resumes at the next heading.
+        if line.contains('\u{c}') {
+            in_table = false;
+        }
+        if line.contains("PART NUMBER") && line.contains("DIPTYPE") {
+            in_table = true;
+            continue;
+        }
+        if !in_table {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').map(str::trim).filter(|c| !c.is_empty()).collect();
+        if f.is_empty() {
+            continue;
+        }
+        match f.iter().position(|c| board_location(c).is_some()) {
+            Some(k) => {
+                let (location, at) = board_location(f[k]).unwrap();
+                assert_eq!(f.len() - k, 4, "{parts:?}: {line:?} is not a body row");
+                let gates = vec![(f[k + 1].to_string(), f[k + 2].to_string())];
+                out.push(Body { location, at, gates });
+            }
+            None => {
+                assert_eq!(f.len(), 3, "{parts:?}: {line:?} is not a gate row");
+                let body = out.last_mut().expect("a gate row before the body it continues");
+                body.gates.push((f[0].to_string(), f[1].to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// A `CARD LOC` entry: the board location, and the number that tells two
+/// bodies at one location apart. `B05( )` is `("B05", 0)` and `B05@03( )`
+/// is `("B05", 3)`. The parentheses hold the variable settings the column
+/// heading names, which are empty on every board here.
+fn board_location(field: &str) -> Option<(String, u16)> {
+    let (name, settings) = field.split_once('(')?;
+    if !settings.ends_with(')') {
+        return None;
+    }
+    let (name, at) = match name.split_once('@') {
+        Some((name, at)) => (name, at.parse().ok()?),
+        None => (name, 0),
+    };
+    // A letter and two digits, `B05`, after an optional section digit,
+    // which the processor pair's designators carry and no other board's do.
+    let b = name.as_bytes();
+    let row = b.len().checked_sub(3)?;
+    (row <= 1
+        && b[row].is_ascii_uppercase()
+        && b[row + 1..].iter().all(u8::is_ascii_digit)
+        && b[..row].iter().all(u8::is_ascii_digit))
+    .then(|| (name.to_string(), at))
+}
+
 /// MIT's census of a board by body, a `.wls` file: under "DIPTYPE  BODY
 /// NAME  # SECTION  TOTAL DIPS  #SPARE SECTIONS" a type starts at column 0
 /// and its further bodies are indented, and the count taken is each body's
