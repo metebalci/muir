@@ -703,6 +703,76 @@ fn sector_begins(d: &Trident, from: u64, k: u32) -> u64 {
     }
 }
 
+/// **A checkpoint holds the drive where it stood.** A drive part way
+/// round its spindle, part way through a seek, and part way through
+/// serialising a sector, saved and read back into a drive built fresh,
+/// puts the same thing on the cable at the same times as the drive it
+/// came from --- through the end of the sector and through the seek
+/// completing.
+///
+/// The last third of this test is the reason the first two matter: the
+/// same window run on a drive built fresh at the resume's instant, which
+/// is what a resume did before there was anything to read back. It
+/// disagrees, and the assertion is that it disagrees, so that this test
+/// cannot pass by saving nothing.
+#[test]
+fn a_checkpoint_holds_the_drive_where_it_stood() {
+    let data = words(11);
+    let mut unit = Unit::blank(Geometry::T300);
+    assert!(unit.write_block_at(3, 1, 2, &data));
+    let mut d = Trident::new(unit.clone(), 0);
+    // A seek slow enough to be still running when the save falls, which
+    // is a sector or so in: settling is the whole of it here, the three
+    // cylinders 30 ns more.
+    d.seek_settle_ns = 3_000_000;
+    d.seek_ns_per_cylinder = 10;
+    let sel = selected();
+    d.observe(0, sel);
+    // Head 1, then a seek to cylinder 3, then read gate: the arm moving,
+    // the head chosen and the gate open all at once.
+    d.observe(100, ControllerLines { bus: 1, head_tag: true, ..sel });
+    d.observe(200, ControllerLines { bus: 3, cylinder_tag: true, ..sel });
+    let reading = ControllerLines { bus: 1 << 6, control_tag: true, ..sel };
+    d.observe(300, reading);
+    // Part way into a sector, and with the seek still running: settling
+    // is 1,000 ns and three cylinders 30 more, from 200.
+    let at = sector_begins(&d, 300, 1) + 40 * BIT_NS;
+    let seek_ends = 200 + 3_000_000 + 30;
+    assert!(at < seek_ends, "the save is to fall while the arm is still moving");
+    let _ = d.lines(at);
+
+    let mut w = muir::checkpoint::Writer::new();
+    d.save(&mut w);
+    let saved = w.finish();
+    // Powered on at an instant of its own, as a resume's drive is: the
+    // far end is built fresh at the join's time, not at the button. A
+    // phase that did not come out of the checkpoint would be that
+    // instant's, and the track would have jumped.
+    let mut back = Trident::new(Unit::blank(Geometry::T300), 12_345_678);
+    back.load(&mut muir::checkpoint::Reader::new(&saved)).expect("the drive back");
+
+    // Both drives from the save onwards, stepped by the one that was
+    // saved and asked at every change it makes.
+    let mut fresh = Trident::new(unit, at);
+    fresh.observe(at, reading);
+    let mut now = at;
+    let mut differed = 0;
+    let end = at + 3 * SECTOR_NS;
+    assert!(seek_ends < end, "and the window is to see the arm arrive");
+    while now < end {
+        assert_eq!(back.lines(now), d.lines(now), "the cable at {now}");
+        if fresh.lines(now) != d.lines(now) {
+            differed += 1;
+        }
+        let next = d.next_change(now);
+        assert_eq!(back.next_change(now), next, "the next change at {now}");
+        assert!(next > now, "time moves");
+        now = next;
+    }
+    assert_eq!(back.unit.block_at(3, 1, 2), Some(data), "the pack came too");
+    assert!(differed > 0, "a drive built fresh is not this drive: that is what the save is for");
+}
+
 /// **Under read gate the drive serialises the sector under the head**, in
 /// MIT's format, one bit a clock from the sector pulse, ones in the gap.
 #[test]
@@ -733,6 +803,45 @@ fn under_read_gate_the_drive_serialises_the_sector_under_the_head() {
         (0..format::SECTOR * 8).map(|k| d.lines(first + k as u64 * BIT_NS).data.unwrap()).collect();
     let s = parse_sector(&bits).unwrap();
     assert_eq!((s.header, s.data), (3, [0u32; BLOCK_WORDS]));
+}
+
+/// **A checkpoint holds a sector half written.** The controller sends
+/// half a sector's bits, the run is checkpointed, and a drive read back
+/// from it takes the other half and drops the gate: the block lands on
+/// the pack whole. Bits under the head that the pack does not hold yet
+/// are the drive's alone --- nothing else in the machine has them --- so
+/// a checkpoint that did not carry them would put a torn sector on the
+/// pack, or none.
+#[test]
+fn a_checkpoint_holds_a_sector_half_written() {
+    let g = Geometry::T300;
+    let mut d = Trident::new(Unit::blank(g), 0);
+    let sel = selected();
+    d.observe(0, sel);
+    let writing = ControllerLines { bus: 1 << 7 | 1 << 2, control_tag: true, ..sel };
+    let data = words(3);
+    let image = sector_image(&g, 0, 0, 5, &data);
+    let bits = bits_of(&image);
+    let began = sector_begins(&d, 0, 5);
+    let first = began.div_ceil(BIT_NS) * BIT_NS;
+    let half = bits.len() / 2;
+    for (k, bit) in bits[..half].iter().enumerate() {
+        d.observe(first + k as u64 * BIT_NS, ControllerLines { write_data: Some(*bit), ..writing });
+    }
+
+    let mut w = muir::checkpoint::Writer::new();
+    d.save(&mut w);
+    let saved = w.finish();
+    let mut back = Trident::new(Unit::blank(g), 7_654_321);
+    back.load(&mut muir::checkpoint::Reader::new(&saved)).expect("the drive back");
+
+    for (k, bit) in bits[half..].iter().enumerate() {
+        let at = first + (half + k) as u64 * BIT_NS;
+        back.observe(at, ControllerLines { write_data: Some(*bit), ..writing });
+    }
+    back.observe(first + bits.len() as u64 * BIT_NS, sel);
+    assert_eq!(back.bad_writes, 0, "the sector parsed as the format");
+    assert_eq!(back.unit.block_at(0, 0, 5), Some(data), "and the block is on the pack");
 }
 
 /// **Under write gate the drive records what it is sent**, and when the

@@ -677,9 +677,28 @@ impl FarEnd {
         if let Some(u) = &self.unibus {
             u.save(w)?;
         }
+        self.xbus.save_devices(w)?;
         // Last, so that a checkpoint from before there were device boards
-        // still reads up to here.
-        self.xbus.save_devices(w)
+        // or drives still reads up to here. The drives are fielded rather
+        // than raw board bytes, so they go through a [`checkpoint::Writer`]
+        // of their own and then in as a counted blob, self-delimiting as
+        // every other field here is.
+        let mut disks = crate::checkpoint::Writer::new();
+        self.xbus.save_disks(&mut disks)?;
+        let bytes = disks.finish();
+        w.write_all(&(bytes.len() as u64).to_le_bytes())?;
+        w.write_all(&bytes)
+    }
+
+    /// Reads the drives on the disk controller's cable, and the
+    /// multiplexor between them, back from a checkpoint that has them;
+    /// they come last, after the device boards. See [`FarEnd::save`].
+    pub fn load_disks(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
+        let mut len = [0u8; 8];
+        r.read_exact(&mut len)?;
+        let mut bytes = vec![0u8; u64::from_le_bytes(len) as usize];
+        r.read_exact(&mut bytes)?;
+        self.xbus.load_disks(&mut crate::checkpoint::Reader::new(&bytes))
     }
 
     /// Reads the device boards --- the display, the disk controller ---
@@ -722,18 +741,12 @@ impl FarEnd {
     /// **Taken where [`FarEnd::quiet`] says it may be**, between cycles
     /// with nothing in flight: the caller runs on to such a point first.
     ///
-    /// **A netlist disk controller is refused.** Its drives are on its
-    /// cable rather than in the machine's model, and no drive's state and
-    /// no multiplexor's is in a checkpoint: a resume would bring them up
-    /// fresh, spindles at the index and heads at cylinder 0, in the middle
-    /// of whatever transfer the controller believed it had. That is a
-    /// checkpoint that silently loses the disk, so it is not written.
+    /// **A netlist disk controller comes too.** Its drives are on its own
+    /// cable rather than in the machine's model, and the multiplexor
+    /// between them is on the connector and not the backplane, so neither
+    /// is an Xbus device and both are written after the boards:
+    /// [`crate::xbus::Xbus::save_disks`].
     pub fn checkpoint(&self, w: &mut crate::checkpoint::Writer) -> std::io::Result<()> {
-        if self.buses.disk_board {
-            return Err(crate::checkpoint::bad(
-                "the drives on a netlist disk controller's cable are not in a checkpoint",
-            ));
-        }
         self.save(w)?;
         self.cables.save(w);
         self.xbus.save_exchange(w);
@@ -751,6 +764,7 @@ impl FarEnd {
         self.load(r)?;
         self.load_io_board(r)?;
         self.load_device_boards(r)?;
+        self.load_disks(r)?;
         self.cables.load(r)?;
         self.xbus.load_exchange(r)?;
         if let Some(u) = self.unibus.as_mut() {

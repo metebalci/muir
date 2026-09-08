@@ -197,4 +197,41 @@ impl Dm {
             assert!(n < 1_000_000, "the multiplexor's events never run out at {now}");
         }
     }
+    /// **The multiplexor into a checkpoint**: the board, and what each end
+    /// of every wire was last given, so that a resumed multiplexor does
+    /// not carry a level to the other end as though it had just been
+    /// driven. The wires themselves are the two netlists' and a resume
+    /// finds them again; the transition count is the board's own tally and
+    /// comes too, so that a run split by a checkpoint counts what one run
+    /// would have.
+    pub fn save(&self, w: &mut crate::checkpoint::Writer) -> std::io::Result<()> {
+        self.board.save(w)?;
+        w.u64(self.given.len() as u64);
+        for ends in &self.given {
+            for end in ends {
+                w.opt(*end, |w, l| w.level(l));
+            }
+        }
+        w.u64(self.transitions);
+        Ok(())
+    }
+
+    /// Back from a checkpoint; see [`Dm::save`].
+    pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        self.board.load(r)?;
+        let n = r.u64()?;
+        if n as usize != self.given.len() {
+            return Err(crate::checkpoint::bad(format!(
+                "a multiplexor of {n} wires, and this one has {}",
+                self.given.len()
+            )));
+        }
+        for k in 0..self.given.len() {
+            for end in 0..2 {
+                self.given[k][end] = r.opt(|r| r.level())?;
+            }
+        }
+        self.transitions = r.u64()?;
+        Ok(())
+    }
 }
