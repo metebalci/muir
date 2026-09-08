@@ -517,9 +517,11 @@ impl Mapping {
         let mut s = String::new();
         s.push_str("# muir's keyboard mapping, as --keyboard-mapping reads it:\n");
         s.push_str("# `key <keysym> <key>`, and `prefix <keysym> <keysym> <key>` for a\n");
-        s.push_str("# key reached by pressing one and then another. A file goes over\n");
-        s.push_str("# this rather than replacing it, so an edited copy of this file\n");
-        s.push_str("# says the same thing with the edit in it.\n");
+        s.push_str("# key reached by pressing one and then another. A keysym is one\n");
+        s.push_str("# word and the key is the rest of the line, which is why `Alt Mode`\n");
+        s.push_str("# and `Left Control` need no quoting. A file goes over this rather\n");
+        s.push_str("# than replacing it, so an edited copy of this file says the same\n");
+        s.push_str("# thing with the edit in it.\n");
         for (sym, &(p, shifted)) in &self.key {
             s.push_str(&format!("key {} {}\n", keysym_name(*sym), key(p, shifted)));
         }
@@ -710,6 +712,14 @@ const SHIFTS: [Shift; 11] = [
 /// function keys and arrows a mapping is likely to reach for.  A keysym
 /// with no name here is still written as a number.
 const KEYSYM_NAMES: &[(&str, u32)] = &[
+    // **The space, and it has to be here.** A keysym is written as one
+    // word, and `0x20` is the one keysym whose single-character spelling
+    // is whitespace: without a name it dumps as a bare space and the line
+    // it is on cannot be read back. X11 calls it `space`, and naming it
+    // is what makes "a keysym never contains whitespace" true of every
+    // keysym rather than of the ones anybody had tried --- the other two
+    // spellings, an X11 name and a number, cannot contain any.
+    ("space", 0x20),
     ("BackSpace", 0xff08),
     ("Tab", 0xff09),
     ("Linefeed", 0xff0a),
