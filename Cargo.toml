@@ -23,6 +23,20 @@ opt-level = 2
 # `examples/benchmark.rs` measured at 3% on the netlist. Opt-level is 3 already.
 # `-C target-cpu=native` measured nothing --- the target is `apple-m1` as it
 # is, and what a newer core adds is vector instructions the loop cannot use.
+#
+# **`codegen-units` is 16 rather than 1, and that costs the 3%.** At 1 with
+# opt-level 3, rustc 1.98.0 compiles `chaos::board::Turn::tc` so that it
+# produces a byte its own arithmetic cannot reach: seventeen counts from
+# zero, each able only to `wrapping_sub(1)`, leave the byte at 7, which is
+# not zero less anything from 0 to 17. `a_batched_run_of_terminal_counts_is
+# _a_stepped_one` is what catches it. Opt-level 2 is clean, 16 codegen units
+# are clean, and fat LTO is not implicated --- it is the pair. The whole
+# suite was run under the faulty pair first, so the extent is known: 695
+# tests, that one the only failure. Issue 79, and the user's call, in their
+# words: "naturally it has to run correct".
+#
+# The 3% comes back when the compiler does. Put `codegen-units = 1` back and
+# run `cargo test --release` --- if that test passes, this comment is spent.
 [profile.release]
 lto = "fat"
-codegen-units = 1
+codegen-units = 16
