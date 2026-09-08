@@ -1764,6 +1764,85 @@ fn the_start_block_check_begins_where_the_microcode_starts_it() {
     }
 }
 
+/// **`STATUS<23>` is a parity comparison, not an abort flag**, so a read
+/// torn part way through raises it or does not according to what had gone
+/// by --- which is the board's own arithmetic and not a fault of the
+/// model.
+///
+/// `INTERNAL PARITY ERROR` is the LS86 at DCSTS 0A16 taking `MEM SIDE
+/// PAR` against `DISK SIDE PAR`, and it drives `XBO23`. The two are
+/// running accumulators in 74LS273s --- `PAR IN = PAR XOR <incoming>`
+/// latched back into itself --- cleared together by `-RESET ERR` and
+/// clocked apart. The disk's takes `DISK DATA` gated by `DATA FIELD` at
+/// the LS08 0E05, data bits off the cable and not the header or preamble,
+/// latched at 0C12 on `BIT.CLK^`; the memory's takes `XB ODD PAR` gated by
+/// `-NEW CCW` at the LS08 0D14, each data word's parity over the Xbus and
+/// not the CCW fetch, latched at 0D24 on `CHAN.ACK.T1`. The parity of
+/// every word's parity is the parity of every bit in those words, so the
+/// two compute one quantity by two routes and agree when the same data has
+/// been through both sides. A transfer stopped in the middle leaves them
+/// wherever it stopped.
+///
+/// **That is what distinguishes the two readings, and it is measurable.**
+/// A bit the abort sets would come up on every torn read, with `<12>`. A
+/// parity comparison comes up on the tears where the accumulated parities
+/// differ and not on the others. Measured over tears every 40 us across
+/// the sector: `<12>` on all of them, `<23>` on some. So it is the second,
+/// and it is fidelity --- MIT's board computes this same XOR from these
+/// same two latches and would report the same. Issue 85.
+///
+/// The clean read is the other half: both sides see the whole block, the
+/// accumulators agree, and `<23>` is clear. That is asserted by
+/// [`a_spurious_sector_pulse_raises_start_block_error`], whose clean
+/// status is `220000001`.
+#[test]
+fn internal_parity_is_a_comparison_and_not_an_abort_flag() {
+    const START_BLOCK: u32 = 1 << 12;
+    const PARITY: u32 = 1 << 23;
+    let n = cadrdc();
+    let data = words(23);
+
+    let torn_at = |at: u64| -> u32 {
+        let mut b = controller(&n);
+        let mut p = Probe::new(&b);
+        let t0 = b.now;
+        let mut drive = quick_drive(t0);
+        assert!(drive.unit.write_block_at(0, 0, 2, &data));
+        drive.spurious_pulse = Some(2 * SECTOR_NS + at);
+        p.plug(&mut b, &n, drive);
+        p.with_memory(&b, 1 << 15);
+        p.run(&mut b, t0 + 10_000);
+        p.memory.as_mut().unwrap().words[CLP as usize] = PAGE;
+        b.cycle(REGS, Some(0o0));
+        b.cycle(REGS + 1, Some(CLP));
+        b.cycle(REGS + 2, Some(2));
+        p.cycle(&mut b, REGS + 3, Some(0));
+        p.run_to_done(&mut b, 2 * REVOLUTION_NS);
+        let settled = b.now + 20_000;
+        p.run(&mut b, settled);
+        b.cycle(REGS, None).1
+    };
+
+    // Well inside the data, so every one of these is a torn read rather
+    // than a pulse absorbed at the block boundary (issue 83).
+    let tears: Vec<(u64, u32)> =
+        [90_000u64, 130_000, 210_000, 250_000, 330_000, 530_000, 610_000, 650_000]
+            .iter()
+            .map(|&at| (at, torn_at(at)))
+            .collect();
+    for &(at, v) in &tears {
+        assert_ne!(v & START_BLOCK, 0, "the read at +{at} was torn: {v:o}");
+    }
+    let with = tears.iter().filter(|(_, v)| v & PARITY != 0).count();
+    assert!(
+        with > 0 && with < tears.len(),
+        "<23> follows the parities and not the abort: {with} of {} tears raise it, and a \
+         flag the abort set would be all of them --- {:?}",
+        tears.len(),
+        tears.iter().map(|&(at, v)| (at, v >> 23 & 1)).collect::<Vec<_>>()
+    );
+}
+
 /// **A write with a drive on the cable puts the page on the pack.**
 ///
 /// The other direction, sector 1 of the control store: the channel
