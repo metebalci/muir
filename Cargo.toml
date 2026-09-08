@@ -41,16 +41,24 @@ opt-level = 2
 # 1.100.0-nightly passes. So the pin is what makes it bite, and a point
 # release is not the way out --- 1.99 is.
 #
-# `rust-lang/rust#162398` is a report of the same shape, labelled
-# `I-miscompile`, `A-LLVM`, `O-AArch64`, `O-apple`: the loop vectorizer
-# producing `n % 4` for a negate-inside-reduction, which is what
-# `wrapping_sub(1)` accumulated across the caller's loop is. That fits, and
-# it explains why the fault needs `tc` inlined into that loop --- one
-# codegen unit gives it, sixteen do not, and a separate crate does not, so
-# extraction was never going to reproduce it. **It is not established as
-# the same defect.** That issue is closed as not planned, and it lists a
-# 1.100.0-nightly as affected where this test passes on one; nobody here
-# has tied the two together beyond the shape.
+# `rust-lang/rust#162398` reports the same shape: the loop vectorizer
+# producing `n % 4` for a negate-inside-reduction, on aarch64-apple,
+# labelled `I-miscompile`. That is what `wrapping_sub(1)` accumulated
+# across the caller's loop is, and it accounts for the one odd thing about
+# this fault --- it needs `tc` inlined into that loop, which one codegen
+# unit gives and sixteen do not, and which no separate crate can, so
+# extracting it to reduce it was never going to reproduce it.
+#
+# The issue is closed as `not_planned`, and what it turns on is in the
+# comments rather than the body: an LLVM maintainer writes "I think this
+# was fixed by llvm/llvm-project#210957 (which has since been
+# backported)", hedged as quoted, and the reporter then confirms a newer
+# nightly is correct. The body's affected nightly is `67854e511` of
+# 15 August and the working one `5a2be9f5f` of 6 September, so the version
+# list there is filing-time and not current. **Nobody here has tied that
+# defect to this one beyond the shape**, and the attribution upstream is
+# its author's guess; the four-toolchain measurement above is what this
+# comment rests on.
 #
 # **The 3% comes back with the pin.** When `rust-toolchain.toml` moves to
 # 1.99 or later, put `codegen-units = 1` back and run `cargo test
