@@ -201,6 +201,30 @@ impl Controller {
         self.done_at = self.now + if self.timed { ns } else { 0 };
     }
 
+    /// Raises the selected unit's attention `ns` from now.
+    ///
+    /// **MIT has the attention at the arrival and not at the store**: of
+    /// the seek, "An attention will occur when the seek completes", and of
+    /// the recalibrate, it "causes an attention when complete". This model
+    /// raised it as the command was stored, which is early by the whole of
+    /// the head move --- 6 ms to the next cylinder and 55 across the pack,
+    /// [`crate::disk_unit::seek_ns`].
+    ///
+    /// **The drive on the netlist controller's cable already had it
+    /// right**, which is the second source: [`crate::disk_unit::Trident`]
+    /// raises it where the seek settles, and `tests/disk.rs` holds it
+    /// there. So this is the behavioural model catching up with the
+    /// gate-level one.
+    ///
+    /// Charged like [`Controller::done_in`], so a model that is not
+    /// charging the drive's time raises it at once.
+    fn attention_in(&mut self, ns: u64) {
+        let at = self.now + if self.timed { ns } else { 0 };
+        if let Some(u) = self.units[self.selected()].as_mut() {
+            u.raise_attention(at);
+        }
+    }
+
     /// How long an operation reaching `blocks` blocks takes: the heads'
     /// move to the cylinder, then the wait for the addressed block to come
     /// round, then a sector's time a block.
@@ -294,7 +318,7 @@ impl Controller {
                 if u.fault {
                     v |= 1 << 6;
                 }
-                if u.attention {
+                if u.attention(self.now) {
                     v |= 1 << 2;
                 }
             }
@@ -311,7 +335,7 @@ impl Controller {
         }
         // `<1>` "Any Attention.  Some unit has an attention, you have to
         // select them one after another to find out which."
-        if self.units.iter().flatten().any(|u| u.attention) {
+        if self.units.iter().flatten().any(|u| u.attention(self.now)) {
             v |= 1 << 1;
         }
         // `<0>` "Not Active.  0 means the controller is busy, 1 means it is
@@ -429,7 +453,7 @@ impl Controller {
         let not_active = self.not_active();
         let done_enable = self.cmd & (1 << 11) != 0;
         let attention_enable = self.cmd & (1 << 10) != 0;
-        let any_attention = self.units.iter().flatten().any(|u| u.attention);
+        let any_attention = self.units.iter().flatten().any(|u| u.attention(self.now));
         not_active && (done_enable || (attention_enable && any_attention))
     }
 
@@ -526,15 +550,6 @@ impl Controller {
                 let heads_moved = match self.units[self.selected()].as_mut() {
                     Some(u) => {
                         u.seek(cylinder, head, block);
-                        // **The attention is raised at the store and not
-                        // when the heads arrive**, where MIT has it "when
-                        // the seek completes". The controller is busy for
-                        // the move either way, which is what software
-                        // polling `STATUS<0>` sees; a program watching the
-                        // attention instead would see it early. Settling
-                        // that wants the flag carried with an instant, as
-                        // the done is.
-                        u.attention = true;
                         // The heads take the drive's own time to get
                         // there, and the controller is busy for it.
                         true
@@ -545,7 +560,12 @@ impl Controller {
                     None => false,
                 };
                 if heads_moved {
-                    self.done_in(crate::disk_unit::seek_ns(from.abs_diff(to)));
+                    let ns = crate::disk_unit::seek_ns(from.abs_diff(to));
+                    self.done_in(ns);
+                    // "An attention will occur when the seek completes",
+                    // so it arrives with the heads and not with the
+                    // command: the same instant the done is charged at.
+                    self.attention_in(ns);
                 } else {
                     self.hang();
                 }
@@ -556,23 +576,31 @@ impl Controller {
                 // way the other commands do" and runs on an empty cable to
                 // done with no error; with no drive there is nothing to
                 // reset.
+                let (recalibrate, fault_clear) =
+                    (self.cmd & (1 << 9) != 0, self.cmd & (1 << 8) != 0);
                 let Some(u) = self.units[self.selected()].as_mut() else { return };
-                u.attention = false;
+                u.clear_attention();
                 // "<9> Recalibrate.  In combination with command 5, causes
                 // the disk to return the heads to cylinder 0" --- "without
                 // assuming the current position of the heads is correct.
                 // Recalibrate resets some error conditions in the drive, and
                 // causes an attention when complete."
-                if self.cmd & (1 << 9) != 0 {
+                let home = recalibrate.then(|| {
+                    let was = u.position().0;
                     u.seek(0, 0, 0);
                     u.fault = false;
                     u.seek_error = false;
-                    u.attention = true;
-                }
+                    crate::disk_unit::seek_ns(was)
+                });
                 // "<8> Fault Clear.  In combination with command 5, resets
                 // most fault conditions in the disk."
-                if self.cmd & (1 << 8) != 0 {
+                if fault_clear {
                     u.fault = false;
+                }
+                // "causes an attention when complete", and the heads come
+                // home from wherever they were.
+                if let Some(home) = home {
+                    self.attention_in(home);
                 }
             }
             // "0006 Offset clear.  Take the heads out of the offset state."
