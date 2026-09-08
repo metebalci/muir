@@ -133,12 +133,24 @@ fn bring_up(memory: &Netlist, switches: u8, powered_at: u64) -> Chip {
 /// what `lmtv.order` says: "The normal TV has x equal to 0, so the buffer
 /// starts at 17000000."
 ///
-/// The strap is therefore right here and the bus bit is not: both are
-/// driven low, where `ADR BANK SEL` should follow `ADR15`. The SIMPLE TV's
-/// drawings leave `ADR BANK SEL` a one-pin net (it has no wire list of its
-/// own, discrepancy 35), so joining the two is a pin move in the netlist
-/// builder rather than a level here. It only matters for an address in the
-/// 32K words above the ones the board has, which alias onto the buffer.
+/// So `MAPADR BANK` is a strap and is driven low here. **`ADR BANK SEL` is
+/// not, and must not be**: it is address bit 15 off the bus, and
+/// [`crate::netlist::Netlist::STRAP_PAGES`] joins it to `ADR15`, which the
+/// 74LS240 at XBADR 0F17 drives. Driving it here as well put two drivers
+/// on that bit, and the board then answered nothing at all in its control
+/// block: `ADR15` went unknown, so the 25LS2521 at XBADR 0F21 could not
+/// match `DEVADR 15`, so `-CTL RQ` was unknown and the 74S138 at NXBCTL
+/// 0F13 never enabled. A cycle to `017377760` was never acknowledged,
+/// where a frame-buffer cycle is answered in 757 ns, and the microcode's
+/// `INTRX0` --- which reads the TV control register, finds the vertical
+/// flag and writes it back to clear it --- halted the machine on that
+/// write. That was issue 60.
+///
+/// The join is the pin move this comment used to ask for --- the SIMPLE
+/// TV's drawings leave `ADR BANK SEL` a one-pin net, having no wire list
+/// of their own, discrepancy 35 --- and the level had to go when it
+/// landed. `MAPADR15` has no net on this board, so the pair's other join
+/// does nothing and `MAPADR BANK` stays the one-pin strap it reads as.
 fn straps(board: &Netlist) -> Vec<(NetId, Level)> {
     let mut out = Vec::new();
     let bit = |addr: u32, k: u32| if addr >> k & 1 != 0 { Level::High } else { Level::Low };
@@ -152,10 +164,10 @@ fn straps(board: &Netlist) -> Vec<(NetId, Level)> {
             out.push((net, bit(crate::simpletv::CONTROL, k)));
         }
     }
-    for name in ["ADR BANK SEL", "MAPADR BANK"] {
-        if let Some(net) = find(board, name) {
-            out.push((net, Level::Low));
-        }
+    // `MAPADR BANK` only: `ADR BANK SEL` is `ADR15` off the bus, not a
+    // strap, and driving it here fights the address buffer.
+    if let Some(net) = find(board, "MAPADR BANK") {
+        out.push((net, Level::Low));
     }
     // The disk controller's six lines from the DISK MULTIPLEXOR board ---
     // `UNIT0-2`, `MULTIPLE SELECT`, `ANY ATTENTION` and `SEL UNIT
