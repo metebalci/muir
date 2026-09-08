@@ -95,8 +95,11 @@ fn the_file_names_its_engine_and_refuses_other_files() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// **The format is version 11, and a file of another version is refused by
-/// number.** The version is bumped whenever a type changes what it writes,
+/// **A file of another version is refused by number**, and the version
+/// this build writes is the one this test's name carries --- the name is
+/// where the number lives, so that a bump has to be deliberate and the
+/// prose below cannot go stale behind it, as it did between versions 11
+/// and 13.  The version is bumped whenever a type changes what it writes,
 /// so a file from another build is read wrong or not at all; this pins
 /// which it is, and that the refusal names both versions. Version 3 added
 /// the serial port's registers to the I/O board's, version 4 the instant
