@@ -22,6 +22,8 @@ mod status {
     pub const READ_COMPARE_DIFFERENCE: u32 = 1 << 22;
     pub const HEADER_COMPARE: u32 = 1 << 18;
     pub const HEADER_ECC: u32 = 1 << 17;
+    pub const ECC_HARD: u32 = 1 << 16;
+    pub const ECC_SOFT: u32 = 1 << 15;
     pub const TIMEOUT: u32 = 1 << 11;
     pub const OVERRUN: u32 = 1 << 14;
     pub const NXM: u32 = 1 << 20;
@@ -1597,6 +1599,90 @@ fn a_header_that_compares_but_does_not_check_is_header_ecc() {
     assert_ne!(s & status::HEADER_ECC, 0, "and its checkword does not: {s:o}");
     assert_ne!(s & status::ABORTED, 0, "the transfer is aborted: {s:o}");
     assert_eq!(back[0o400..0o400 + BLOCK_WORDS], [0; BLOCK_WORDS], "nothing was moved");
+}
+
+/// **A block whose data checkword does not check is `<15>` where the burst
+/// can be located and `<16>` where it cannot, and the register says where.**
+///
+/// MIT: "ECC Soft.  Indicates that the error correcting code discovered an
+/// error, and was able to determine which data bits were in error.  The
+/// program can correct it, **see the ECC Register for how**", against "ECC
+/// Hard ... was unable to correct it.  The data read from disk is wrong,
+/// try reading again." Both stop the transfer.
+///
+/// A Write All lays down the data and the checkword, so a track can carry
+/// a block the code will fault --- and which bit it gives is
+/// [`muir::disk_unit::Ecc::trap`]'s answer and nothing else. Here the same
+/// block is laid down twice: once with a burst inside the eleven bits the
+/// code can carry, and once with one wider than that.
+///
+/// The soft case is followed all the way through: register 3 is read, its
+/// pattern XORed into the block at the bit address it gives, and the
+/// result is what was written --- which is the whole of what MIT tells a
+/// program to do with it.
+#[test]
+fn a_data_checkword_that_does_not_check_is_soft_or_hard() {
+    use muir::disk_unit::{Ecc, header_of, sector_image_laid};
+    let g = Geometry::T300;
+    let data: [u32; BLOCK_WORDS] = std::array::from_fn(|i| (i as u32).wrapping_mul(2_654_435_761));
+    let right = Ecc::over(&data.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>());
+
+    for (what, width, want_soft) in [("soft", 5usize, true), ("hard", 20, false)] {
+        let mut d = Controller::default();
+        d.attach(0, Unit::blank(g));
+        let mut main = vec![0u32; 1 << 16];
+
+        // The block with a burst in it, under the checkword the clean
+        // block had: what a pack with an error on it looks like.
+        let mut bad = data;
+        let at = 1000usize;
+        for k in 0..width {
+            if k == 0 || k == width - 1 || k % 3 == 0 {
+                bad[(at + k) / 32] ^= 1 << ((at + k) % 32);
+            }
+        }
+        let bytes = sector_image_laid(
+            header_of(&g, 0, 0, 0),
+            Ecc::over(&header_of(&g, 0, 0, 0).to_le_bytes()),
+            &bad,
+            right,
+        );
+        let words: Vec<u32> =
+            bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
+        let pages = words.len().div_ceil(BLOCK_WORDS);
+        main[0o10000..0o10000 + words.len()].copy_from_slice(&words);
+        run(&mut d, &mut main, 0o13, 0, 16, pages as u32);
+
+        let mut back = vec![0u32; 1 << 16];
+        read_block(&mut d, &mut back, 0, 1);
+        d.advance(TIMEOUT_NS * 4);
+        let s = d.status();
+        assert_ne!(s & status::ABORTED, 0, "{what}: the transfer is aborted: {s:o}");
+        assert_eq!(back[0o400..0o400 + BLOCK_WORDS], [0; BLOCK_WORDS], "{what}: nothing moved");
+        if !want_soft {
+            assert_ne!(s & status::ECC_HARD, 0, "hard: {s:o}");
+            assert_eq!(s & status::ECC_SOFT, 0, "and not soft: {s:o}");
+            continue;
+        }
+        assert_ne!(s & status::ECC_SOFT, 0, "soft: {s:o}");
+        assert_eq!(s & status::ECC_HARD, 0, "and not hard: {s:o}");
+
+        // Register 3, and MIT's instruction carried out: the pattern XORed
+        // in at the bit address gives back what was written. "Note that
+        // the bit position is off by 1; the first bit in the block is bit
+        // 1."
+        let ecc = d.read(3);
+        let (pattern, position) = (ecc >> 16, ecc & 0xffff);
+        assert_eq!(position as usize, at + 1, "the bit address, off by one: {ecc:#x}");
+        let mut fixed = bad;
+        for k in 0..16 {
+            if pattern >> k & 1 != 0 {
+                let bit = position as usize - 1 + k;
+                fixed[bit / 32] ^= 1 << (bit % 32);
+            }
+        }
+        assert_eq!(fixed, data, "the pattern restores the block");
+    }
 }
 
 /// **Which commands end in a timeout, measured on the netlist board.**

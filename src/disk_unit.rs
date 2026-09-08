@@ -74,6 +74,13 @@ pub struct Unit {
     /// what a pack formatted by anything sane has and what the vendored
     /// images are taken to have.
     headers: HashMap<u32, Header>,
+    /// The checkword each sector carries after its data, where it is not
+    /// the one over the data now. A Write All can lay down one that does
+    /// not check --- which is `STATUS<16>` or `STATUS<15>` on a later read,
+    /// depending on whether [`Ecc::trap`] can locate the burst --- and an
+    /// ordinary Write replaces it, because the board writes a fresh
+    /// checkword after every data field it writes.
+    data_checkwords: HashMap<u32, [u8; 4]>,
     /// MIT: "the read-only switch only applies when the drive is not
     /// selected".  Nothing models the switch; a pack opened here is writable.
     pub read_only: bool,
@@ -106,6 +113,7 @@ impl Clone for Unit {
             writable: self.writable,
             written: self.written.clone(),
             headers: self.headers.clone(),
+            data_checkwords: self.data_checkwords.clone(),
             read_only: self.read_only,
             cylinder: self.cylinder,
             head: self.head,
@@ -197,6 +205,7 @@ impl Unit {
             writable: false,
             written: HashMap::new(),
             headers: HashMap::new(),
+            data_checkwords: HashMap::new(),
             read_only: false,
             cylinder: 0,
             head: 0,
@@ -233,6 +242,22 @@ impl Unit {
         Some(*self.headers.get(&lba).unwrap_or(&Header::of(&self.geometry, cylinder, head, block)))
     }
 
+    /// The checkword the sector at this address carries after its data:
+    /// what a Write All laid down, or the one over the data where nothing
+    /// did. `None` for an address the geometry has no room for.
+    pub fn data_checkword_at(&mut self, cylinder: u32, head: u32, block: u32) -> Option<[u8; 4]> {
+        let lba = self.lba_of(cylinder, head, block)?;
+        if let Some(c) = self.data_checkwords.get(&lba) {
+            return Some(*c);
+        }
+        let data = self.block_at(cylinder, head, block)?;
+        let mut e = Ecc::default();
+        for w in &data {
+            e.feed(&w.to_le_bytes());
+        }
+        Some(e.checkword())
+    }
+
     /// Writes a whole sector where the heads are: the data, and the header
     /// the writer put in it, whatever it says. This is a Write All ---
     /// **the sector goes where the heads are and the header goes in it**,
@@ -246,14 +271,29 @@ impl Unit {
         block: u32,
         header: Header,
         data: &[u32; BLOCK_WORDS],
+        data_checkword: [u8; 4],
     ) -> bool {
         let Some(lba) = self.lba_of(cylinder, head, block) else { return false };
+        if !self.write_block_at(cylinder, head, block, data) {
+            return false;
+        }
         if header == Header::of(&self.geometry, cylinder, head, block) {
             self.headers.remove(&lba);
         } else {
             self.headers.insert(lba, header);
         }
-        self.write_block_at(cylinder, head, block, data)
+        // After the data, because an ordinary write clears it: only a
+        // Write All lays down a checkword of its own.
+        let mut e = Ecc::default();
+        for w in data {
+            e.feed(&w.to_le_bytes());
+        }
+        if data_checkword == e.checkword() {
+            self.data_checkwords.remove(&lba);
+        } else {
+            self.data_checkwords.insert(lba, data_checkword);
+        }
+        true
     }
 
     /// Where the heads are: cylinder, head, block.
@@ -317,6 +357,9 @@ impl Unit {
         data: &[u32; BLOCK_WORDS],
     ) -> bool {
         let Some(lba) = self.lba_of(cylinder, head, block) else { return false };
+        // "the board writes a fresh checkword after every data field it
+        // writes", so a bad one a Write All left is gone.
+        self.data_checkwords.remove(&lba);
         match (self.writable, self.image.as_mut()) {
             (true, Some(image)) => {
                 let mut bytes = [0u8; BLOCK_WORDS * 4];
@@ -721,6 +764,22 @@ pub fn sector_image_with_header(header: u32, data: &[u32; BLOCK_WORDS]) -> Vec<u
 /// This error stops the transfer." A model that recomputed the checkword
 /// could no more disagree with itself than one that recomputed the header.
 pub fn sector_image_written(header: u32, checkword: [u8; 4], data: &[u32; BLOCK_WORDS]) -> Vec<u8> {
+    let mut e = Ecc::default();
+    for w in data {
+        e.feed(&w.to_le_bytes());
+    }
+    sector_image_laid(header, checkword, data, e.checkword())
+}
+
+/// The same again with the data's checkword given too: the other half of
+/// what a formatter can get wrong, and what `STATUS<16>` and `STATUS<15>`
+/// are made of.
+pub fn sector_image_laid(
+    header: u32,
+    checkword: [u8; 4],
+    data: &[u32; BLOCK_WORDS],
+    data_checkword: [u8; 4],
+) -> Vec<u8> {
     use format::*;
     let mut s = Vec::with_capacity(SECTOR);
     s.resize(PREAMBLE + VFO_LOCK, 0xff);
@@ -731,13 +790,10 @@ pub fn sector_image_written(header: u32, checkword: [u8; 4], data: &[u32; BLOCK_
     s.resize(s.len() + VFO_RELOCK, 0xff);
     s.push(SYNC);
     s.push(PAD);
-    let mut ecc = Ecc::default();
     for w in data {
-        let b = w.to_le_bytes();
-        s.extend_from_slice(&b);
-        ecc.feed(&b);
+        s.extend_from_slice(&w.to_le_bytes());
     }
-    s.extend_from_slice(&ecc.checkword());
+    s.extend_from_slice(&data_checkword);
     s.resize(s.len() + POSTAMBLE, 0xff);
     debug_assert_eq!(s.len(), SECTOR);
     s
@@ -753,6 +809,8 @@ pub struct Sector {
     pub header_checkword: [u8; 4],
     pub header_checks: bool,
     pub data: [u32; BLOCK_WORDS],
+    /// The four bytes written after the data, whatever they are.
+    pub data_checkword: [u8; 4],
     pub data_checks: bool,
 }
 
@@ -811,7 +869,14 @@ pub fn parse_sector(bits: &[bool]) -> Option<Sector> {
     for (w, b) in data.iter_mut().zip(db.as_chunks::<4>().0) {
         *w = u32::from_le_bytes(*b);
     }
-    Some(Sector { header, header_checkword, header_checks, data, data_checks: ecc.checks() })
+    Some(Sector {
+        header,
+        header_checkword,
+        header_checks,
+        data,
+        data_checkword: dc.try_into().unwrap(),
+        data_checks: ecc.checks(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1705,6 +1770,7 @@ impl Unit {
             fault,
             attention_at,
             headers,
+            data_checkwords,
         } = self;
         w.u32(geometry.cylinders);
         w.u32(geometry.heads);
@@ -1730,6 +1796,13 @@ impl Unit {
             w.u32(*lba);
             w.u32(header.word);
             w.bytes(&header.checkword);
+        }
+        let mut written_checks: Vec<_> = data_checkwords.iter().collect();
+        written_checks.sort_by_key(|(lba, _)| **lba);
+        w.u64(written_checks.len() as u64);
+        for (lba, c) in written_checks {
+            w.u32(*lba);
+            w.bytes(c);
         }
     }
 
@@ -1783,6 +1856,22 @@ impl Unit {
                     crate::checkpoint::bad("a header checkword that is not four bytes")
                 })?;
                 Ok((lba, Header { word, checkword }))
+            })
+            .collect::<std::io::Result<_>>()?;
+        let n = r.u64()?;
+        if n > u64::from(geometry.blocks()) {
+            return Err(crate::checkpoint::bad(format!(
+                "{n} data checkwords on a pack of {} sectors",
+                geometry.blocks()
+            )));
+        }
+        self.data_checkwords = (0..n)
+            .map(|_| {
+                let lba = r.u32()?;
+                let c = r.bytes()?.try_into().map_err(|_| {
+                    crate::checkpoint::bad("a data checkword that is not four bytes")
+                })?;
+                Ok((lba, c))
             })
             .collect::<std::io::Result<_>>()?;
         Ok(())

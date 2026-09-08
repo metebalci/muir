@@ -153,6 +153,17 @@ pub struct Controller {
     /// that the header was recomputed from the address on every read and
     /// could not disagree with it --- issue 51.
     header_compare: bool,
+    /// `STATUS<16>` and `STATUS<15>`: "ECC Hard ... was unable to correct
+    /// it" and "ECC Soft ... was able to determine which data bits were in
+    /// error". Which one a failing data checkword gives is
+    /// [`crate::disk_unit::Ecc::trap`]'s answer, and nothing else tells
+    /// them apart.
+    ecc_hard: bool,
+    ecc_soft: bool,
+    /// Register 3 read back: "`<31:16>` Error pattern bits.  `<15:0>`
+    /// Error bit position", the whole of what MIT's "see the ECC Register
+    /// for how" points a program at.
+    ecc: u32,
     /// `STATUS<22>`, "Read Compare Difference".
     read_compare_difference: bool,
     /// The first word of every page the last transfer put into memory,
@@ -320,6 +331,12 @@ impl Controller {
         if self.header_compare {
             v |= 1 << 18;
         }
+        if self.ecc_hard {
+            v |= 1 << 16;
+        }
+        if self.ecc_soft {
+            v |= 1 << 15;
+        }
         // `<13>` "Transfer Aborted": `STOPPED BY ERROR`, preset while any
         // lossage stands, `Controller::lossage`.
         if self.lossage() {
@@ -450,7 +467,9 @@ impl Controller {
             || self.nxm
             || self.overrun
             || self.header_ecc
-            || self.header_compare;
+            || self.header_compare
+            || self.ecc_hard
+            || self.ecc_soft;
         let disk = self.cmd & 0o4 == 0
             && match &self.units[self.selected()] {
                 None => true,
@@ -490,9 +509,14 @@ impl Controller {
             // Trident, so the register is the address alone.
             1 => self.last_memory_address,
             2 => self.da,
-            // 3: ERROR CORRECTION.  No ECC error is ever generated, so there
-            // is never a pattern to report.
-            _ => 0,
+            // 3: ERROR CORRECTION.  "`<31:16>` Error pattern bits.
+            // `<15:0>` Error bit position.  When a soft ECC error occurs,
+            // this register tells where in the last block transferred the
+            // error was ... The error pattern should be XOR'ed into the
+            // contents of memory at the specified bit address, it may
+            // overlap across a word boundary.  Note that the bit position
+            // is off by 1; the first bit in the block is bit 1."
+            _ => self.ecc,
         }
     }
 
@@ -768,6 +792,8 @@ impl Controller {
     fn reset_errors(&mut self) {
         self.header_ecc = false;
         self.header_compare = false;
+        self.ecc_hard = false;
+        self.ecc_soft = false;
         self.read_compare_difference = false;
         self.ccw_cycle = false;
         self.nxm = false;
@@ -811,6 +837,8 @@ impl Controller {
         self.overrun = false;
         self.header_ecc = false;
         self.header_compare = false;
+        self.ecc_hard = false;
+        self.ecc_soft = false;
 
         let i = self.selected();
         let mut unit = self.units[i].take().expect("the selected unit is online");
@@ -846,6 +874,8 @@ impl Controller {
         self.overrun = false;
         self.header_ecc = false;
         self.header_compare = false;
+        self.ecc_hard = false;
+        self.ecc_soft = false;
 
         let i = self.selected();
         let mut unit = self.units[i].take().expect("the selected unit is online");
@@ -1028,6 +1058,31 @@ impl Controller {
                 unit.fault = true;
                 return moved;
             }
+            // The data field and the checkword written after it, read back
+            // through the code as the board's shift register reads them.
+            // A checkword that checks leaves the register at zero and
+            // there is nothing to report; one that does not is `<15>` if
+            // the burst can be located and `<16>` if it cannot, and either
+            // "stops the transfer".
+            if read && let Some(checkword) = unit.data_checkword_at(c, h, b) {
+                let mut e = disk_unit::Ecc::default();
+                for w in &from_disk {
+                    e.feed(&w.to_le_bytes());
+                }
+                e.feed(&checkword);
+                if e.raw() != 0 {
+                    match e.trap(BLOCK_WORDS * 32) {
+                        // "Note that the bit position is off by 1; the
+                        // first bit in the block is bit 1."
+                        Some((pattern, at)) => {
+                            self.ecc_soft = true;
+                            self.ecc = u32::from(pattern) << 16 | (at + 1) & 0xffff;
+                        }
+                        None => self.ecc_hard = true,
+                    }
+                    return moved;
+                }
+            }
             if page + BLOCK_WORDS > main.len() {
                 self.nxm = true;
                 return moved;
@@ -1096,7 +1151,14 @@ fn track_bytes(unit: &mut Unit, cylinder: u32, head: u32, block: u32) -> Vec<u8>
         let header = unit
             .header_at(cylinder, head, b)
             .unwrap_or_else(|| disk_unit::Header::of(&g, cylinder, head, b));
-        bytes.extend(disk_unit::sector_image_written(header.word, header.checkword, &data));
+        let data_checkword =
+            unit.data_checkword_at(cylinder, head, b).unwrap_or_else(|| disk_unit::Ecc::over(&[]));
+        bytes.extend(disk_unit::sector_image_laid(
+            header.word,
+            header.checkword,
+            &data,
+            data_checkword,
+        ));
         if b + 1 == g.blocks_per_track {
             bytes.resize(bytes.len() + format::LEFTOVER, 0xff);
         }
@@ -1157,7 +1219,7 @@ fn lay_down_track(unit: &mut Unit, cylinder: u32, head: u32, from: u32, bytes: &
         // its place. That is issue #8's missing track format rather than a
         // missing status bit.
         let laid = disk_unit::Header { word: s.header, checkword: s.header_checkword };
-        if !unit.write_sector_at(cylinder, head, block, laid, &s.data) {
+        if !unit.write_sector_at(cylinder, head, block, laid, &s.data, s.data_checkword) {
             return;
         }
         at += format::SECTOR;
@@ -1185,6 +1247,9 @@ impl Controller {
             da,
             header_ecc,
             header_compare,
+            ecc_hard,
+            ecc_soft,
+            ecc,
             read_compare_difference,
             dma_written,
             ccw_cycle,
@@ -1205,6 +1270,9 @@ impl Controller {
         w.u32(*da);
         w.bool(*header_ecc);
         w.bool(*header_compare);
+        w.bool(*ecc_hard);
+        w.bool(*ecc_soft);
+        w.u32(*ecc);
         w.bool(*read_compare_difference);
         w.u64s(&dma_written.iter().map(|&a| a as u64).collect::<Vec<_>>());
         w.bool(*ccw_cycle);
@@ -1232,6 +1300,9 @@ impl Controller {
         self.da = r.u32()?;
         self.header_ecc = r.bool()?;
         self.header_compare = r.bool()?;
+        self.ecc_hard = r.bool()?;
+        self.ecc_soft = r.bool()?;
+        self.ecc = r.u32()?;
         self.read_compare_difference = r.bool()?;
         self.dma_written = r.u64s()?.into_iter().map(|a| a as usize).collect();
         self.ccw_cycle = r.bool()?;
