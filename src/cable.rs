@@ -181,6 +181,44 @@ impl Cables {
         changed
     }
 
+    /// What each end was last given into a checkpoint.  It is the cables'
+    /// only state, and it has to be carried: an exchange drives a wire
+    /// only where what the end should be given differs from what it was
+    /// given, so a resume whose cables held nothing would drive every wire
+    /// again, and a board transitioned to carry a drive it already had
+    /// fires the edges of that instant a second time --- a 20 ns tap on
+    /// the bus interface's `XBUS ACK` delay line, in the run this was
+    /// found in.
+    pub fn save(&self, w: &mut crate::checkpoint::Writer) {
+        w.u64(self.given.len() as u64);
+        for &(a, b) in &self.given {
+            w.opt(a, crate::checkpoint::Writer::level);
+            w.opt(b, crate::checkpoint::Writer::level);
+        }
+    }
+
+    /// Back from a checkpoint, onto cables joining the same two netlists.
+    /// The boards' generations are not the ones the stamps were taken at
+    /// --- a load moves a board on --- so both ends are marked unread and
+    /// every wire is looked at again; with what each end was given back,
+    /// none of them needs carrying.
+    pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        let n = r.u64()? as usize;
+        if n != self.given.len() {
+            return Err(crate::checkpoint::bad(format!(
+                "{n} wires between the boards, and these cables have {}",
+                self.given.len()
+            )));
+        }
+        for g in self.given.iter_mut() {
+            let a = r.opt(crate::checkpoint::Reader::level)?;
+            let b = r.opt(crate::checkpoint::Reader::level)?;
+            *g = (a, b);
+        }
+        self.seen = (u64::MAX, u64::MAX);
+        Ok(())
+    }
+
     /// Settles the two boards against each other at `now`, with nothing
     /// behind the interface: carries the wires, lets each board respond,
     /// and again, until a pass moves nothing. [`FarEnd::join`] does this
@@ -671,6 +709,54 @@ impl FarEnd {
             Some(u) => u.load(r),
             None => Ok(()),
         }
+    }
+
+    /// **The whole far end into a checkpoint**, which [`FarEnd::save`] is
+    /// not: that writes the boards, and a machine picked up from it needs
+    /// what is behind them too --- the machine's model with the drive and
+    /// the display on it, the memory twins, and the cycle in flight,
+    /// [`Buses::save`].  `muir --checkpoint` on `chip` writes this;
+    /// `tests/chip.rs` writes the boards alone, because there the machine
+    /// behind them is `rtl`'s and is replayed rather than stored.
+    ///
+    /// **Taken where [`FarEnd::quiet`] says it may be**, between cycles
+    /// with nothing in flight: the caller runs on to such a point first.
+    ///
+    /// **A netlist disk controller is refused.** Its drives are on its
+    /// cable rather than in the machine's model, and no drive's state and
+    /// no multiplexor's is in a checkpoint: a resume would bring them up
+    /// fresh, spindles at the index and heads at cylinder 0, in the middle
+    /// of whatever transfer the controller believed it had. That is a
+    /// checkpoint that silently loses the disk, so it is not written.
+    pub fn checkpoint(&self, w: &mut crate::checkpoint::Writer) -> std::io::Result<()> {
+        if self.buses.disk_board {
+            return Err(crate::checkpoint::bad(
+                "the drives on a netlist disk controller's cable are not in a checkpoint",
+            ));
+        }
+        self.save(w)?;
+        self.cables.save(w);
+        self.xbus.save_exchange(w);
+        if let Some(u) = &self.unibus {
+            u.save_exchange(w);
+        }
+        self.buses.save(w);
+        Ok(())
+    }
+
+    /// The far end back from what [`FarEnd::checkpoint`] wrote, onto one
+    /// built as the flags say. The boards come first, in the order they
+    /// were written, and then what is behind them.
+    pub fn resume(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        self.load(r)?;
+        self.load_io_board(r)?;
+        self.load_device_boards(r)?;
+        self.cables.load(r)?;
+        self.xbus.load_exchange(r)?;
+        if let Some(u) = self.unibus.as_mut() {
+            u.load_exchange(r)?;
+        }
+        self.buses.load(r)
     }
 }
 

@@ -1011,6 +1011,73 @@ impl Xbus {
         self.disks.as_ref()?.dm.as_ref().map(|(_, dm)| dm)
     }
 
+    /// What each end of the backplane last put on every wire and was last
+    /// given on it, into a checkpoint.  The boards themselves are
+    /// netlists and save themselves, [`Xbus::save`]; this is what the
+    /// backplane holds of them, and it has to be carried for the same
+    /// reason [`crate::cable::Cables::save`] does --- a wire is driven
+    /// only where what an end should be given differs from what it was,
+    /// so a backplane that held nothing would drive every wire again and
+    /// fire that instant's edges twice.
+    pub fn save_exchange(&self, w: &mut crate::checkpoint::Writer) {
+        w.u64(self.wires.len() as u64);
+        w.u64(self.contrib.len() as u64);
+        for end in &self.contrib {
+            for &c in end {
+                w.opt(c, crate::checkpoint::Writer::level);
+            }
+        }
+        for wire in &self.given {
+            for &g in wire {
+                w.opt(g, crate::checkpoint::Writer::level);
+            }
+        }
+        for &low in &self.bus_low {
+            w.bool(low);
+        }
+        for &c in &self.changed {
+            w.bool(c);
+        }
+        w.bool(self.recombine);
+    }
+
+    /// Back from a checkpoint, onto a backplane with the same boards on
+    /// it.  Every end is marked unread --- a board's generation is not
+    /// what it was when its contribution was stamped --- so all of them
+    /// are asked again; asked, they answer what the checkpoint holds, and
+    /// no wire needs carrying.
+    pub fn load_exchange(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        let bad = crate::checkpoint::bad;
+        let wires = r.u64()? as usize;
+        let ends = r.u64()? as usize;
+        if (wires, ends) != (self.wires.len(), self.contrib.len()) {
+            return Err(bad(format!(
+                "{wires} wires and {ends} ends on the backplane, and this one has {} and {}",
+                self.wires.len(),
+                self.contrib.len()
+            )));
+        }
+        for end in self.contrib.iter_mut() {
+            for c in end.iter_mut() {
+                *c = r.opt(crate::checkpoint::Reader::level)?;
+            }
+        }
+        for wire in self.given.iter_mut() {
+            for g in wire.iter_mut() {
+                *g = r.opt(crate::checkpoint::Reader::level)?;
+            }
+        }
+        for low in self.bus_low.iter_mut() {
+            *low = r.bool()?;
+        }
+        for c in self.changed.iter_mut() {
+            *c = r.bool()?;
+        }
+        self.recombine = r.bool()?;
+        self.seen.iter_mut().for_each(|s| *s = u64::MAX);
+        Ok(())
+    }
+
     /// Writes the device boards, for the end of a checkpoint: after the
     /// interface, the memory boards and the I/O board, so that a checkpoint
     /// from before there were any still reads.

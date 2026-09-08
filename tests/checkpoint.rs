@@ -305,3 +305,206 @@ fn rtl_picks_up_where_the_checkpoint_left_off() {
     };
     resumes("rtl", build(), build(), 1_600_000, 100_000);
 }
+
+// --- chip -------------------------------------------------------------------
+
+const CPU: &str = include_str!("../data/CADR.netlist");
+const BUSINT: &str = include_str!("../data/BUSINT.netlist");
+const CADRM: &str = include_str!("../data/CADRM.netlist");
+const CADRIO: &str = include_str!("../data/CADRIO.netlist");
+const SIMPLETV: &str = include_str!("../data/SIMPLETV.netlist");
+
+/// How many memory boards the netlist machines here have. Fewer than the
+/// thirty-two `muir` gives one: the round trip is the same whatever the
+/// count, and each board is a netlist to build and a quarter of a megabyte
+/// of cells to compare.
+const BOARDS: usize = 4;
+
+/// A netlist machine as `muir --chip` builds one, with the boot PROM in the
+/// processor and the boards `--chip` runs by default on the backplane ---
+/// the memory, the I/O board and the display as netlists, the disk
+/// controller as the machine's model. `press` is the boot button: a run
+/// from power-on presses it, and a resume does not, because a checkpoint
+/// replaces everything the button and the power-on set.
+fn chip_machine(press: bool) -> (muir::chip::Chip, Behavioural, muir::cable::FarEnd) {
+    use muir::netlist;
+    use muir::part::Level;
+    let n = netlist::parse(CPU).unwrap();
+    let bus_n = netlist::parse(BUSINT).unwrap();
+    let mem_n = netlist::parse(CADRM).unwrap();
+    let io_n = netlist::parse(CADRIO).unwrap();
+    let tv_n = netlist::parse(SIMPLETV).unwrap();
+    let mut c = muir::chip::Chip::new(&n);
+    c.power_on();
+    c.load_prom(&n, &muir::prom::boot_prom_image());
+    c.settle();
+    let mut clk = Behavioural::new();
+    let boards = muir::cable::Boards {
+        memory: BOARDS,
+        io: Some(&io_n),
+        tv: Some(&tv_n),
+        ..Default::default()
+    };
+    let mut far = muir::cable::FarEnd::new(
+        &n,
+        &bus_n,
+        &mem_n,
+        boards,
+        0,
+        Machine::with_memory_boards(BOARDS),
+    );
+    far.join(&mut c, muir::clock::Clock::time_ns(&clk));
+    if press {
+        // The button, as `muir` presses it: `-BOOT1` held down, the board
+        // settled with it down, and twenty master clocks before it rises.
+        let boot = n.by_name_id("-BOOT1").unwrap();
+        c.set_net(boot, Level::Low);
+        c.settle();
+        for _ in 0..20 {
+            c.tick(&mut clk);
+        }
+        c.set_net(boot, Level::High);
+    }
+    (c, clk, far)
+}
+
+/// Runs `at_least` microcycles and then on to the first point a checkpoint
+/// may be taken at: the interface between cycles, no tap in flight on any
+/// board and no memory request up. Returns how many microcycles that took.
+fn run_to_quiet(
+    c: &mut muir::chip::Chip,
+    clk: &mut Behavioural,
+    far: &mut muir::cable::FarEnd,
+    at_least: u64,
+) -> u64 {
+    use muir::clock::Clock;
+    let n = muir::netlist::parse(CPU).unwrap();
+    let memrq = n.by_name_id("MEMRQ").unwrap();
+    let mut ran = 0;
+    let mut last = clk.phase_ns();
+    loop {
+        far.tick_with(c, clk);
+        let p = clk.phase_ns();
+        let wrapped = p < last;
+        last = p;
+        if !wrapped {
+            continue;
+        }
+        ran += 1;
+        if ran >= at_least
+            && far.quiet()
+            && c.next_tap().is_none()
+            && c.net(memrq) != muir::part::Level::High
+        {
+            return ran;
+        }
+        assert!(ran < at_least + 1000, "no quiet microcycle within a thousand of {at_least}");
+    }
+}
+
+/// A netlist machine's whole state as a checkpoint holds it, in the four
+/// pieces it is written in, each named: a difference is reported as the
+/// piece it is in and how far into it, because the whole is megabytes of
+/// nets and cells.
+fn chip_pieces(
+    c: &muir::chip::Chip,
+    clk: &Behavioural,
+    far: &muir::cable::FarEnd,
+) -> Vec<(&'static str, Vec<u8>)> {
+    let piece = |f: &dyn Fn(&mut Writer)| {
+        let mut w = Writer::new();
+        f(&mut w);
+        w.finish()
+    };
+    vec![
+        ("the processor", piece(&|w| c.save(w).unwrap())),
+        ("the clock", piece(&|w| clk.save(w).unwrap())),
+        ("the boards", piece(&|w| far.save(w).unwrap())),
+        ("what is behind the buses", piece(&|w| far.buses.save(w))),
+    ]
+}
+
+/// The pieces run together, which is what a checkpoint's body is.
+fn chip_body(c: &muir::chip::Chip, clk: &Behavioural, far: &muir::cable::FarEnd) -> Vec<u8> {
+    let mut w = Writer::new();
+    c.save(&mut w).unwrap();
+    clk.save(&mut w).unwrap();
+    far.checkpoint(&mut w).expect("the boards this machine has are all in a checkpoint");
+    w.finish()
+}
+
+/// The two machines' states piece by piece, saying which piece differs and
+/// where rather than printing megabytes of them.
+fn same_state(
+    what: &str,
+    a: (&muir::chip::Chip, &Behavioural, &muir::cable::FarEnd),
+    b: (&muir::chip::Chip, &Behavioural, &muir::cable::FarEnd),
+) {
+    for ((name, x), (_, y)) in chip_pieces(a.0, a.1, a.2).iter().zip(chip_pieces(b.0, b.1, b.2)) {
+        assert_eq!(x.len(), y.len(), "{what}: {name} is a different length");
+        if let Some(at) = x.iter().zip(&y).position(|(p, q)| p != q) {
+            let end = (at + 16).min(x.len());
+            panic!(
+                "{what}: {name} differs at byte {at} of {}: {:?} against {:?}",
+                x.len(),
+                &x[at..end],
+                &y[at..end]
+            );
+        }
+    }
+}
+
+/// **`chip` picks up where the checkpoint left off.** The netlist machine
+/// is not an [`Engine`] and its state is not arrays: the processor's
+/// scratchpads and control store are the RAM chips' own cells, and the
+/// rest is every net's level, every part's bits, and the oscillators and
+/// one-shots of five boards mid-pulse. So this is the same check
+/// [`resumes`] makes of the other two engines, made of the pieces `muir
+/// --chip` runs: saved at a quiet microcycle in the boot PROM, loaded onto
+/// a machine built and not booted, and the two the same board a thousand
+/// microcycles later.
+///
+/// The boot PROM alone, so nothing here needs `vendor/`.
+#[test]
+fn chip_picks_up_where_the_checkpoint_left_off() {
+    use muir::clock::Clock;
+    let (mut c, mut clk, mut far) = chip_machine(true);
+    let at = run_to_quiet(&mut c, &mut clk, &mut far, 400);
+    let body = chip_body(&c, &clk, &far);
+
+    let (mut c2, _, mut far2) = chip_machine(false);
+    let mut r = Reader::new(&body);
+    c2.load(&mut r).unwrap();
+    let mut clk2 = Behavioural::load(&mut r).unwrap();
+    far2.resume(&mut r).unwrap();
+    r.done().unwrap();
+    same_state("the checkpoint loads and saves as itself", (&c, &clk, &far), (&c2, &clk2, &far2));
+    assert_eq!(chip_body(&c2, &clk2, &far2), body, "the checkpoint loads and saves as itself");
+    // The cables joined, as a resume joins them: each board holds what
+    // the others are driving onto it, and that is the checkpoint's, so
+    // this carries nothing and moves no board.
+    far2.join(&mut c2, clk2.time_ns());
+
+    // The same board, microcycle for microcycle, a thousand on. The PC is
+    // read off the nets: there is no `Engine::pc` here.
+    let n = muir::netlist::parse(CPU).unwrap();
+    let pc_nets = c.bus_nets(&n, "PC", 14);
+    let mut last = (clk.phase_ns(), clk2.phase_ns());
+    let mut ran = 0;
+    while ran < 1000 {
+        far.tick_with(&mut c, &mut clk);
+        far2.tick_with(&mut c2, &mut clk2);
+        let p = (clk.phase_ns(), clk2.phase_ns());
+        if p.0 < last.0 {
+            ran += 1;
+            assert_eq!(
+                c2.read(&pc_nets),
+                c.read(&pc_nets),
+                "the PC {ran} microcycles past the checkpoint at {at}"
+            );
+        }
+        assert_eq!(p, (p.0, p.0), "the two clocks in step at microcycle {ran}");
+        last = p;
+    }
+    same_state("the same state 1000 microcycles on", (&c, &clk, &far), (&c2, &clk2, &far2));
+}

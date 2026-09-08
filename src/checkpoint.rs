@@ -27,6 +27,7 @@ use std::io::{self, Error, ErrorKind};
 use std::path::Path;
 
 use crate::clock::Speed;
+use crate::part::Level;
 
 const MAGIC: &[u8; 16] = b"muir checkpoint\n";
 
@@ -75,6 +76,17 @@ impl Writer {
         self.u8(s as u8);
     }
 
+    /// A net's level, as [`crate::chip::Chip`] writes one: the four a wire
+    /// can be in, low, high, floating and unknown.
+    pub fn level(&mut self, l: Level) {
+        self.u8(match l {
+            Level::Low => 0,
+            Level::High => 1,
+            Level::Z => 2,
+            Level::X => 3,
+        });
+    }
+
     /// A flag, then the value if there is one.
     pub fn opt<T>(&mut self, v: Option<T>, put: impl FnOnce(&mut Writer, T)) {
         self.bool(v.is_some());
@@ -112,6 +124,23 @@ impl Writer {
 
     pub fn finish(self) -> Vec<u8> {
         self.0
+    }
+}
+
+/// The netlist boards write themselves as raw bytes through
+/// [`std::io::Write`] --- [`crate::chip::Chip::save`] is every net and
+/// every cell, and a field at a time would cost more than the board ---
+/// and a `chip` checkpoint carries them beside the fielded types.  Their
+/// bytes go in where they are written, self-delimiting as every other
+/// field is: each carries its own counts.
+impl io::Write for Writer {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -168,6 +197,16 @@ impl<'a> Reader<'a> {
             2 => Speed::Normal,
             3 => Speed::Fast,
             v => return Err(bad(format!("{v} for a speed"))),
+        })
+    }
+
+    pub fn level(&mut self) -> io::Result<Level> {
+        Ok(match self.u8()? {
+            0 => Level::Low,
+            1 => Level::High,
+            2 => Level::Z,
+            3 => Level::X,
+            v => return Err(bad(format!("{v} for a level"))),
         })
     }
 
@@ -243,6 +282,21 @@ impl<'a> Reader<'a> {
             0 => Ok(()),
             n => Err(bad(format!("{n} bytes left over"))),
         }
+    }
+}
+
+/// The other side of [`impl io::Write for Writer`](Writer#impl-Write-for-Writer):
+/// the boards read their own bytes back.  A read past the end gives no
+/// bytes, so [`std::io::Read::read_exact`] fails with
+/// [`std::io::ErrorKind::UnexpectedEof`] --- which is how the far end
+/// tells a checkpoint written before a board was stored from one that has
+/// it.
+impl io::Read for Reader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = buf.len().min(self.data.len() - self.at);
+        buf[..n].copy_from_slice(&self.data[self.at..self.at + n]);
+        self.at += n;
+        Ok(n)
     }
 }
 

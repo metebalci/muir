@@ -2381,7 +2381,7 @@ impl DebugOut {
 }
 
 impl MemoryBoard {
-    fn save(&self, w: &mut crate::checkpoint::Writer) {
+    pub(crate) fn save(&self, w: &mut crate::checkpoint::Writer) {
         let MemoryBoard {
             idle_at,
             release_at,
@@ -2400,7 +2400,7 @@ impl MemoryBoard {
         w.bool(in_reset);
     }
 
-    fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<MemoryBoard> {
+    pub(crate) fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<MemoryBoard> {
         Ok(MemoryBoard {
             idle_at: r.u64()?,
             release_at: r.u64()?,

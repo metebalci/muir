@@ -566,3 +566,174 @@ impl Buses {
         true
     }
 }
+
+// --- Checkpoints ------------------------------------------------------------
+
+impl Intr {
+    fn save(self, w: &mut crate::checkpoint::Writer) {
+        match self {
+            Intr::Idle { served } => {
+                w.u8(0);
+                w.bool(served);
+            }
+            Intr::Requesting => w.u8(1),
+            Intr::Granted { vector } => {
+                w.u8(2);
+                w.u16(vector);
+            }
+            Intr::Interrupting => w.u8(3),
+            Intr::Done => w.u8(4),
+        }
+    }
+
+    fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<Intr> {
+        Ok(match r.u8()? {
+            0 => Intr::Idle { served: r.bool()? },
+            1 => Intr::Requesting,
+            2 => Intr::Granted { vector: r.u16()? },
+            3 => Intr::Interrupting,
+            4 => Intr::Done,
+            v => return Err(crate::checkpoint::bad(format!("{v} for the interrupt cycle"))),
+        })
+    }
+}
+
+impl Buses {
+    /// What is behind the buses into a checkpoint: the machine's model,
+    /// the memory twins, and the cycle in flight on either bus.  The
+    /// boards are not here --- they are netlists and save themselves,
+    /// [`crate::cable::FarEnd::save`] --- and neither are the nets, which
+    /// are the netlist's and come back with it.
+    ///
+    /// Which boards are behind the buses and which are netlists is written
+    /// first and held to at the load, because it says what the rest means:
+    /// a checkpoint whose I/O board answered here would put its registers
+    /// nowhere on a machine whose board is a netlist.
+    pub fn save(&self, w: &mut crate::checkpoint::Writer) {
+        let Buses {
+            machine,
+            memory_boards,
+            memory_twins,
+            memory,
+            xsync: _,
+            xinit: _,
+            xsync_was,
+            xinit_was,
+            xbus_pending,
+            io_board,
+            tv_board,
+            disk_board,
+            asserting,
+            xrq: _,
+            xack: _,
+            xwr: _,
+            xintr: _,
+            xignpar: _,
+            xaddr: _,
+            xdata: _,
+            msyn: _,
+            ssyn: _,
+            c1: _,
+            br5: _,
+            bg5: _,
+            sack: _,
+            bbsy: _,
+            intr: _,
+            interrupting,
+            ubaddr: _,
+            ubdata: _,
+            xbus_answered,
+            unibus_answered,
+            unibus_holding,
+            // The I/O board's answer times hold nothing: the board's clock
+            // runs from power-on and every time it gives is worked out
+            // from the instant it is asked.
+            io_timing: busint::IoBoardTiming {},
+            unibus_pending,
+        } = self;
+        w.bool(*memory_boards);
+        w.bool(*memory_twins);
+        w.bool(*io_board);
+        w.bool(*tv_board);
+        w.bool(*disk_board);
+        machine.save(w);
+        w.u64(memory.len() as u64);
+        for m in memory {
+            m.save(w);
+        }
+        w.bool(*xsync_was);
+        w.bool(*xinit_was);
+        w.opt(*xbus_pending, |w, (at, addr, write, board)| {
+            w.u64(at);
+            w.u32(addr);
+            w.bool(write);
+            w.u8(board);
+        });
+        w.u64(asserting.len() as u64);
+        for &l in asserting {
+            w.opt(l, crate::checkpoint::Writer::level);
+        }
+        interrupting.save(w);
+        w.opt(*xbus_answered, crate::checkpoint::Writer::bool);
+        w.opt(*unibus_answered, crate::checkpoint::Writer::bool);
+        w.bool(*unibus_holding);
+        w.opt(*unibus_pending, |w, (at, msyn)| {
+            w.u64(at);
+            w.u64(msyn);
+        });
+    }
+
+    /// Back from a checkpoint, onto buses built as the flags say: the same
+    /// boards behind them, and the same machine under it --- the pack the
+    /// drive holds and the Chaosnet on the cable are the flags' again, as
+    /// they are on the other two engines.
+    pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        let bad = crate::checkpoint::bad;
+        for (what, is) in [
+            ("main memory on the backplane", &mut self.memory_boards),
+            ("the memory twins", &mut self.memory_twins),
+            ("an I/O board netlist", &mut self.io_board),
+            ("a display netlist", &mut self.tv_board),
+            ("a disk controller netlist", &mut self.disk_board),
+        ] {
+            let was = r.bool()?;
+            if was != *is {
+                return Err(bad(format!(
+                    "{what}: {} in the checkpoint, {} here",
+                    if was { "yes" } else { "no" },
+                    if *is { "yes" } else { "no" }
+                )));
+            }
+        }
+        self.machine.load(r)?;
+        let n = r.u64()? as usize;
+        if n != self.memory.len() {
+            return Err(bad(format!(
+                "{n} memory twins, and these buses have {}",
+                self.memory.len()
+            )));
+        }
+        for m in self.memory.iter_mut() {
+            *m = busint::MemoryBoard::load(r)?;
+        }
+        self.xsync_was = r.bool()?;
+        self.xinit_was = r.bool()?;
+        self.xbus_pending = r.opt(|r| Ok((r.u64()?, r.u32()?, r.bool()?, r.u8()?)))?;
+        let n = r.u64()? as usize;
+        if n != self.asserting.len() {
+            return Err(bad(format!(
+                "{n} nets held on the Xbus, and this interface has {}",
+                self.asserting.len()
+            )));
+        }
+        for a in self.asserting.iter_mut() {
+            *a = r.opt(crate::checkpoint::Reader::level)?;
+        }
+        self.interrupting = Intr::load(r)?;
+        self.xbus_answered = r.opt(crate::checkpoint::Reader::bool)?;
+        self.unibus_answered = r.opt(crate::checkpoint::Reader::bool)?;
+        self.unibus_holding = r.bool()?;
+        self.unibus_pending = r.opt(|r| Ok((r.u64()?, r.u64()?)))?;
+        Ok(())
+    }
+}

@@ -126,6 +126,19 @@
 //! MIT's own, because recovered copies of the boot PROM are not all the
 //! same program. A checkpoint carries the 512 words it ran, so `--resume`
 //! brings its own and the two flags are refused together.
+//!
+//! `--checkpoint` and `--resume` work on all three engines. On `micro`
+//! and `rtl` a checkpoint is [`Machine`] and the engine's own state; on
+//! `chip` there are no arrays to write, so it is the boards --- every
+//! net, every part's cells and every oscillator and one-shot of the
+//! processor, the bus interface, the memory boards, the I/O board and the
+//! display --- with the machine behind the buses and what each end of
+//! each bus is driving onto the others. It is taken at the first
+//! microcycle from the stop with no bus cycle in flight and no transition
+//! on its way down a delay line, which is the only kind of instant it
+//! describes, and those microcycles are counted and said. `chip` wants
+//! `--disk-controller model` for it: the netlist controller's drives are
+//! on its own cable and are not in a checkpoint.
 
 use std::io::IsTerminal;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -515,14 +528,21 @@ A simulator of the MIT CADR Lisp Machine.
                                and deletes under it. [default:
                                vendor/run/file-root when present; with no
                                root the server answers no FILE at all]
-  --checkpoint <file>          micro, rtl: write the machine's whole state
-                               to <file> when the run stops, for --resume
-                               to start from: the engine, the processor's
-                               memories and registers, main memory, the
-                               display, the I/O board, and the drive with
-                               every block written to its pack. The
-                               prompt's checkpoint writes one as the run
-                               goes, and the run goes on.
+  --checkpoint <file>          write the machine's whole state to <file>
+                               when the run stops, for --resume to start
+                               from: the engine, the processor's memories
+                               and registers, main memory, the display, the
+                               I/O board, and the drive with every block
+                               written to its pack. On chip it is the
+                               boards themselves --- every net, every cell
+                               and every timer of the processor, the bus
+                               interface, the memory, the I/O board and the
+                               display --- taken at the first microcycle
+                               from the stop with no bus cycle in flight,
+                               and it wants --disk-controller model, whose
+                               drives are in the machine. The prompt's
+                               checkpoint writes one as the run goes, and
+                               the run goes on.
   -c, --config <file>          the file of flags to read before the command
                                line, which must be there. Without it muir
                                reads .muirrc in the directory it was run
@@ -693,12 +713,16 @@ A simulator of the MIT CADR Lisp Machine.
                                copies of the boot PROM are not all the same
                                program. [default: MIT's own, built in ---
                                System 100's sys/ubin/promh.mcr, version 9]
-  --resume <file>              micro, rtl: start from a checkpoint instead
-                               of cold: the engine that wrote it, the same
-                               pack under it, the Chaosnet plugged in
-                               afresh, and as many memory boards as it had,
-                               which --main-memory-boards may not gainsay.
-                               The stops count from here.
+  --resume <file>              start from a checkpoint instead of cold:
+                               the engine that wrote it, the same pack
+                               under it, the Chaosnet plugged in afresh,
+                               and as many memory boards as it had, which
+                               --main-memory-boards may not gainsay. On
+                               chip the boards on the backplane have to be
+                               the checkpoint's too, and the button is not
+                               pressed: what it would set is what the
+                               checkpoint replaces. The stops count from
+                               here.
   --stop-after <microcycles>   how many to run, then stop. [default:
                                none; the run goes on until a --stop-at, a
                                halt or ^C]
@@ -1871,6 +1895,130 @@ fn write_screenshot(path: &Path, tv: &muir::simpletv::SimpleTv) {
     }
 }
 
+/// **A netlist machine's whole state**: the microcycles run, the display
+/// board on the backplane, the processor, its clock, and the far end with
+/// the boards and the machine behind them.  Written where
+/// [`FarEnd::quiet`] says it may be, which is what [`chip_to_quiet`] runs
+/// on to.
+///
+/// The display board is here because it is the one thing about the
+/// backplane the far end does not hold: which netlist a board was built
+/// from shows only as [`Chip`]'s fingerprint, and a resume with the wrong
+/// `--tv-board` would be refused as "a different board or a different
+/// build" rather than as the flag it is.  The rest --- how many memory
+/// boards, and whether each of main memory, the I/O board, the display
+/// and the disk controller is a netlist --- is [`muir::buses::Buses`]'s
+/// own and is refused there.
+fn write_chip_checkpoint(
+    path: &Path,
+    cpu: &Chip,
+    clk: &Behavioural,
+    far: &FarEnd,
+    tv_board: TvBoard,
+    ran: u64,
+) {
+    let mut w = muir::checkpoint::Writer::new();
+    w.u64(ran);
+    w.u8(tv_board as u8);
+    let written =
+        cpu.save(&mut w).and_then(|()| clk.save(&mut w)).and_then(|()| far.checkpoint(&mut w));
+    if let Err(err) = written {
+        eprintln!("checkpoint: {} not written: {err}", path.display());
+        return;
+    }
+    let boards = far.buses.machine.memory_boards();
+    match muir::checkpoint::write(path, "chip", boards, &w.finish()) {
+        Ok(n) => eprintln!("checkpoint: {} at {ran} microcycles, {n} bytes", path.display()),
+        Err(err) => eprintln!("checkpoint: could not write {}: {err}", path.display()),
+    }
+}
+
+/// Loads a `chip` checkpoint onto a netlist machine built as the flags say
+/// and not booted, and says which microcycle it resumed at; or says why
+/// not and exits.  The cables are joined after it, so that each board
+/// holds what the others drive onto it.
+fn resume_chip(
+    cpu: &mut Chip,
+    clk: &mut Behavioural,
+    far: &mut FarEnd,
+    tv_board: TvBoard,
+    (path, c): &(PathBuf, Checkpoint),
+) -> u64 {
+    if c.engine != "chip" {
+        usage(&format!("--resume {}: a {} checkpoint, and this is chip", path.display(), c.engine));
+    }
+    let refuse =
+        |err: std::io::Error| -> ! { usage(&format!("--resume {}: {err}", path.display())) };
+    let mut r = muir::checkpoint::Reader::new(&c.body);
+    let ran = r.u64().unwrap_or_else(|e| refuse(e));
+    let board = r.u8().unwrap_or_else(|e| refuse(e));
+    let name = |b: u8| if b == TvBoard::LispmTv as u8 { "lispm-tv" } else { "simple-tv" };
+    if board != tv_board as u8 {
+        usage(&format!(
+            "--resume {}: a {} checkpoint, and --tv-board is {}",
+            path.display(),
+            name(board),
+            name(tv_board as u8)
+        ));
+    }
+    cpu.load(&mut r)
+        .and_then(|()| {
+            *clk = Behavioural::load(&mut r)?;
+            far.resume(&mut r)
+        })
+        .and_then(|()| r.done())
+        .unwrap_or_else(|e| refuse(e));
+    far.join(cpu, clk.time_ns());
+    eprintln!(
+        "resumed: {} at {ran} microcycles, {} ns, {} memory boards",
+        path.display(),
+        clk.time_ns(),
+        far.buses.machine.memory_boards()
+    );
+    ran
+}
+
+/// Runs on to the first point a netlist machine may be checkpointed at,
+/// and says how many microcycles that took, or `None` if it did not come.
+///
+/// **Not every microcycle boundary is one.** A checkpoint carries no bus
+/// cycle in flight and no transition on its way down a delay line ---
+/// [`FarEnd::quiet`] and [`Chip::taps_pending`] are what say so --- and no
+/// memory request from the processor, whose answer would be owed to a
+/// cycle the checkpoint does not describe.  Between cycles those are all
+/// true, and a machine reaches such a point within a few microcycles: the
+/// longest anything holds them is the bus timeout, about twelve
+/// microseconds, which is eighty microcycles.  The bound is well past
+/// that, and a machine that never comes quiet is told about rather than
+/// checkpointed wrong.
+fn chip_to_quiet(
+    cpu: &mut Chip,
+    clk: &mut Behavioural,
+    far: &mut FarEnd,
+    memrq: netlist::NetId,
+) -> Option<u64> {
+    let quiet = |cpu: &Chip, far: &FarEnd| {
+        far.quiet() && cpu.next_tap().is_none() && cpu.net(memrq) != Level::High
+    };
+    if quiet(cpu, far) {
+        return Some(0);
+    }
+    let mut ran = 0;
+    let mut last = clk.phase_ns();
+    while ran < 1000 {
+        far.tick_with(cpu, clk);
+        let p = clk.phase_ns();
+        if p < last {
+            ran += 1;
+            if quiet(cpu, far) {
+                return Some(ran);
+            }
+        }
+        last = p;
+    }
+    None
+}
+
 /// Loads the checkpoint read from `path` into `e`, built and booted as the
 /// flags say, or says why not and exits.
 fn resume_engine<E: Engine>(name: &str, e: &mut E, (path, c): &(PathBuf, Checkpoint)) {
@@ -2092,38 +2240,49 @@ fn attend_chip(
     }
 }
 
-/// Runs a netlist machine: the eight things the command line has to say
-/// about one, the memory board count among them.
+/// Runs a netlist machine: what the command line has to say about one,
+/// the memory board count among them, and [`Run`] for the rest.
 #[allow(clippy::too_many_arguments)]
 fn time_chip(
     image: &[u64],
-    stop: Stop,
     packs: &[Pack],
     boards: Boards,
     memory_boards: usize,
     chaos: muir::chaos::Config,
     terminal: Option<&mut Terminal>,
-    capture: Option<(PathBuf, bool)>,
-    setup: &str,
-    clocks: bool,
-    hold: bool,
+    run: Run,
+    resume: Option<(PathBuf, Checkpoint)>,
+    tv_board: TvBoard,
 ) {
+    let Run { stop, capture, checkpoint, setup, hold, clocks } = run;
     let ChipMachine {
         mut cpu,
         mut clk,
         mut far,
+        bus: _,
         pc_nets,
         promdisable,
         srun,
         errhalt,
         stathalt,
         boot,
-        ..
-    } = chip_machine(image, packs, boards, memory_boards, chaos, !hold);
+        // A resume brings the board up but does not press the button: what
+        // the button and the power-on set is what the checkpoint replaces.
+    } = chip_machine(image, packs, boards, memory_boards, chaos, !hold && resume.is_none());
     // One microcycle is however many clock transitions it takes for the phase
     // to wrap, not a fixed number of them.
     let t = Instant::now();
+    // Where the checkpoint left the machine, which the microcycles this
+    // run makes are counted from; `ran` is this run's own, as it is on the
+    // other two engines, so that `--stop-after` is a window on the run and
+    // not on the machine's whole life.
+    let resumed_at = match &resume {
+        Some(p) => resume_chip(&mut cpu, &mut clk, &mut far, tv_board, p),
+        None => 0,
+    };
     let mut ran = 0;
+    // `MEMRQ`, for the quiet point a checkpoint is taken at.
+    let memrq = netlist::parse(NETLIST).unwrap().by_name_id("MEMRQ").unwrap();
     let mut last = clk.phase_ns();
     let prom_enabled = |c: &Chip| c.net(promdisable) != Level::High;
     // As [`machrun_low`] is on the other two engines, off the nets rather
@@ -2298,8 +2457,26 @@ fn time_chip(
                         println!("prompt: not on chip yet --- the registers and the scratchpads");
                         println!("        are the parts' own cells here, not arrays to read off");
                     }
-                    Ok(Some(Command::Checkpoint(_))) => {
-                        println!("prompt: not on chip yet --- checkpoints are the other engines'");
+                    Ok(Some(Command::Checkpoint(path))) => {
+                        let path = path.unwrap_or_else(|| timestamped("chk"));
+                        match chip_to_quiet(&mut cpu, &mut clk, &mut far, memrq) {
+                            Some(on) => {
+                                ran += on;
+                                write_chip_checkpoint(
+                                    &path,
+                                    &cpu,
+                                    &clk,
+                                    &far,
+                                    tv_board,
+                                    resumed_at + ran,
+                                );
+                            }
+                            None => println!(
+                                "checkpoint: the machine has a bus cycle or a delay line in \
+                                 flight and has not come quiet in a thousand microcycles; \
+                                 nothing written"
+                            ),
+                        }
                     }
                     Ok(Some(Command::Quit)) => {
                         quit = true;
@@ -2331,6 +2508,25 @@ fn time_chip(
     if let Some((path, rec)) = capture.as_mut() {
         rec.sample(&far.buses.machine.simpletv, clk.time_ns(), wall_clock());
         write_capture(path, rec);
+    }
+    // The checkpoint last, and at the first quiet microcycle from here:
+    // the stop falls where it falls, and a machine part way through a bus
+    // cycle is not a machine a checkpoint describes.  Those microcycles
+    // are the run's like any other, so they are counted and said.
+    if let Some(path) = &checkpoint {
+        match chip_to_quiet(&mut cpu, &mut clk, &mut far, memrq) {
+            Some(on) => {
+                if on > 0 {
+                    eprintln!("checkpoint: {on} microcycles on to a quiet one");
+                }
+                write_chip_checkpoint(path, &cpu, &clk, &far, tv_board, resumed_at + ran + on);
+            }
+            None => eprintln!(
+                "checkpoint: {} not written: the machine has a bus cycle or a delay line in \
+                 flight and has not come quiet in a thousand microcycles",
+                path.display()
+            ),
+        }
     }
     if let Some(term) = terminal {
         serve_last_screen(term, &far.buses.machine.simpletv);
@@ -2720,11 +2916,20 @@ fn main() {
         usage("--prom and --resume: the checkpoint carries the PROM it ran");
     }
     if checkpoint.is_some() || resume.is_some() {
-        if which == Which::Chip {
-            usage("--checkpoint and --resume are micro and rtl for now, not chip");
-        }
         if cabled == 1 {
             usage("--checkpoint and --resume are one machine on its own, not the lashup");
+        }
+        // On `chip` the drives are on the controller's own cable when the
+        // controller is a netlist, and no drive's state and no
+        // multiplexor's is in a checkpoint: a resume would bring them up
+        // fresh, spindles at the index and heads at cylinder 0, in the
+        // middle of whatever transfer the controller believed it had.
+        // The model controller keeps its drives in the machine, which is
+        // saved.
+        if which == Which::Chip && disk_controller {
+            usage(
+                "--checkpoint and --resume on chip want --disk-controller model: the drives on a netlist controller's cable are not in a checkpoint",
+            );
         }
     }
     // A checkpoint is read before the machine is built, so that the machine
@@ -3164,18 +3369,24 @@ fn main() {
                 let remote = Remote::debuggee(end, reader, stream);
                 time_chip_debuggee(remote, stop, pc_nets, promdisable, terminal.as_mut());
             } else {
+                let run = Run {
+                    stop,
+                    capture,
+                    checkpoint,
+                    setup: &setup,
+                    hold: !auto_boot,
+                    clocks: capture_tv_time,
+                };
                 time_chip(
                     &image,
-                    stop,
                     packs,
                     on_the_buses,
                     boards,
                     chaos,
                     terminal.as_mut(),
-                    capture,
-                    &setup,
-                    capture_tv_time,
-                    !auto_boot,
+                    run,
+                    resume,
+                    tv_board,
                 );
             }
         }
