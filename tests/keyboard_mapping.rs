@@ -275,7 +275,7 @@ fn a_bad_line_is_refused_and_says_where() {
     }
 }
 
-/// **muir reads the file and can say what is in force.** `--keyboard`
+/// **muir reads the file and can say what is in force.** `--keyboard-mapping`
 /// names one, the start line says which file a run read, and the
 /// prompt's `keys` prints the mapping so that a user who cannot type a
 /// key can find out what would.
@@ -286,7 +286,13 @@ fn muir_reads_a_mapping_and_prints_it() {
     std::fs::write(&file, "key F13 Greek\n").unwrap();
 
     let mut child = muir()
-        .args(["--micro", "--keyboard", file.to_str().unwrap(), "--stop-after", "1000000000"])
+        .args([
+            "--micro",
+            "--keyboard-mapping",
+            file.to_str().unwrap(),
+            "--stop-after",
+            "1000000000",
+        ])
         .stdin(Stdio::piped())
         .start();
     let mut stdin = child.stdin();
@@ -307,4 +313,111 @@ fn muir_reads_a_mapping_and_prints_it() {
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("keyboard: built in"), "the default needs no file:\n{t}");
+}
+
+/// **A mapping written out and read back is the same mapping**, which is
+/// what makes `--keyboard-mapping-dump` a starting point to edit rather
+/// than a report about the bindings.
+///
+/// Held for the built-in mapping, and for the two bindings a name alone
+/// cannot carry back. A character names the **first** position of MIT's
+/// table that gives it: `(` is the shifted plane of the key at 71 and the
+/// unshifted plane of the key at 132, and a bare `(` reads back as 71, so
+/// a binding to the one at 132 cannot be written as a character. And a
+/// position the table leaves unnamed --- 0 is the first --- has no name
+/// at all. Both are written `position <octal>`, with `shifted` after it
+/// for the shifted plane.
+#[test]
+fn a_mapping_written_out_reads_back_the_same() {
+    let round = |m: &Mapping, why: &str| {
+        let text = m.dump();
+        let back = Mapping::parse(&text).unwrap_or_else(|e| panic!("{why}: {e}\n{text}"));
+        assert_eq!(&back, m, "{why}: the dump is not the mapping\n{text}");
+    };
+    round(&Mapping::default(), "the built-in mapping");
+
+    // `(` on both planes, and a position nothing names.
+    let unnamed = keyboard::TABLE
+        .iter()
+        .position(|k| matches!(k, Key::None))
+        .expect("MIT's table leaves positions unfilled");
+    for line in [
+        "key F1 (",
+        &format!("key F1 position {unnamed:o}"),
+        "key F1 position 71 shifted",
+        "key F1 position 132",
+        // `)` on the shifted plane of the key at 171, which another key
+        // gives first, and a named key carrying the shifted plane, which
+        // its name cannot say at all.
+        "key F1 position 171 shifted",
+        "key F1 position 1 shifted",
+    ] {
+        let m = Mapping::parse(line).unwrap_or_else(|e| panic!("{line}: {e}"));
+        round(&m, line);
+    }
+
+    // And the awkward one end to end. A bare `(` is the key at 71 on its
+    // shifted plane, so that binding may be written as the character;
+    // the `(` at 132 may not, and is written out.
+    assert_eq!(
+        Mapping::parse("key F1 (").expect("a bare character"),
+        Mapping::parse("key F1 position 71 shifted").expect("is the first position giving it"),
+    );
+    let named = Mapping::parse("key F1 position 71 shifted").expect("that one");
+    assert!(named.dump().contains("key F1 ("), "a name that reads back is used");
+    let out = Mapping::parse("key F1 position 132").expect("the other one");
+    assert!(out.dump().contains("key F1 position 132"), "and one that would lie is not");
+    // The plane is part of the spelling, and a name that cannot carry it
+    // is not used: `)` is on the shifted plane of the key at 171 and
+    // another key gives it first, and `Roman II` at 1 has no plane in its
+    // name at all.
+    for (line, want) in [
+        ("key F1 position 171 shifted", "key F1 position 171 shifted"),
+        ("key F1 position 1 shifted", "key F1 position 1 shifted"),
+    ] {
+        let m = Mapping::parse(line).unwrap_or_else(|e| panic!("{line}: {e}"));
+        assert_eq!(m.dump().lines().last(), Some(want), "{line} is written out in full");
+    }
+}
+
+/// **`--keyboard-mapping-dump` writes a file `--keyboard-mapping` reads,
+/// and nothing else.**
+///
+/// The point is the round trip through the program, not only through
+/// [`Mapping::dump`]: dump, edit, feed it back, and the edit is the only
+/// difference. So stdout has to carry the mapping alone --- no start
+/// line, no machine --- which is why the flag stops before a terminal is
+/// bound. muir's start banner is on stderr, so nothing else has to be
+/// held back for this.
+#[test]
+fn the_dump_is_a_file_the_mapping_flag_reads() {
+    let dump = |extra: &[&str]| {
+        let mut args = vec!["--keyboard-mapping-dump"];
+        args.extend_from_slice(extra);
+        let out = muir().args(args).run();
+        assert!(out.status.success(), "muir failed:\n{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).expect("the dump is text")
+    };
+    let built_in = dump(&[]);
+    // Every line is the format's own: a comment, a key or a prefix.
+    for line in built_in.lines() {
+        let kind = line.split_whitespace().next().unwrap_or("");
+        assert!(
+            line.starts_with('#') || kind == "key" || kind == "prefix",
+            "stdout carries the mapping alone, not {line:?}"
+        );
+    }
+    assert!(built_in.lines().any(|l| l.starts_with("key ")), "and it has bindings in it");
+
+    let dir = scratch("keyboard-dump");
+    let file = dir.join("my.keys");
+    std::fs::write(&file, &built_in).unwrap();
+    let again = dump(&["--keyboard-mapping", file.to_str().unwrap()]);
+    assert_eq!(again, built_in, "fed back unedited it says the same thing");
+
+    // And an edit is the only difference the next time round.
+    std::fs::write(&file, format!("{built_in}key F5 Terminal\n")).unwrap();
+    let edited = dump(&["--keyboard-mapping", file.to_str().unwrap()]);
+    let added: Vec<&str> = edited.lines().filter(|l| !built_in.lines().any(|b| b == *l)).collect();
+    assert_eq!(added, ["key F5 Terminal"], "the edit, and nothing else:\n{edited}");
 }
