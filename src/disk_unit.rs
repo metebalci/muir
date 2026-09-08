@@ -67,13 +67,13 @@ pub struct Unit {
     /// vendored pack --- fetched material they must leave as fetched.
     writable: bool,
     written: HashMap<u32, [u32; BLOCK_WORDS]>,
-    /// The header each sector carries, where it is not the one its address
-    /// implies: a Write All writes whatever the program put in memory, and
-    /// what it wrote is what a later Read or Write compares against the
-    /// disk address register. Absent is [`header_of`]'s, which is what a
-    /// pack formatted by anything sane has and what the vendored images
-    /// are taken to have.
-    headers: HashMap<u32, u32>,
+    /// What each sector carries in its header, where it is not what the
+    /// address implies: a Write All writes whatever the program put in
+    /// memory, and what it wrote is what a later Read or Write reads back.
+    /// Absent is [`header_of`]'s word with a checkword over it, which is
+    /// what a pack formatted by anything sane has and what the vendored
+    /// images are taken to have.
+    headers: HashMap<u32, Header>,
     /// MIT: "the read-only switch only applies when the drive is not
     /// selected".  Nothing models the switch; a pack opened here is writable.
     pub read_only: bool,
@@ -114,6 +114,38 @@ impl Clone for Unit {
             fault: self.fault,
             attention_at: self.attention_at,
         }
+    }
+}
+
+/// A sector's header as it was written: the word, and the four bytes
+/// written after it.
+///
+/// The two are separate because a formatter can get either wrong on its
+/// own. A word that is not the address's own is `STATUS<18>`, header
+/// compare; a checkword that does not check the word is `STATUS<17>`,
+/// header ECC. MIT notes that the second usually shows as the first ---
+/// "Unfortunately most header ECC errors show up as header compare errors
+/// instead" --- which follows from the order the board does them in: the
+/// four `HEADER STROBE` steps at `024` to `027` compare as the bytes come
+/// in, and `033` sets the ECC error afterwards, so a header whose bytes
+/// are wrong stops the transfer before its checkword is ever judged.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Header {
+    pub word: u32,
+    pub checkword: [u8; 4],
+}
+
+impl Header {
+    /// Whether the checkword checks the word, which is what `033` asks.
+    pub fn checks(&self) -> bool {
+        self.checkword == Ecc::over(&self.word.to_le_bytes())
+    }
+
+    /// The header a sector at this address carries when nothing has
+    /// written another: [`header_of`] with a checkword over it.
+    pub fn of(g: &Geometry, cylinder: u32, head: u32, block: u32) -> Header {
+        let word = header_of(g, cylinder, head, block);
+        Header { word, checkword: Ecc::over(&word.to_le_bytes()) }
     }
 }
 
@@ -196,9 +228,9 @@ impl Unit {
     /// The header the sector at this address carries: what a Write All
     /// laid down, or [`header_of`] where nothing did. `None` for an
     /// address the geometry has no room for.
-    pub fn header_at(&self, cylinder: u32, head: u32, block: u32) -> Option<u32> {
+    pub fn header_at(&self, cylinder: u32, head: u32, block: u32) -> Option<Header> {
         let lba = self.lba_of(cylinder, head, block)?;
-        Some(*self.headers.get(&lba).unwrap_or(&header_of(&self.geometry, cylinder, head, block)))
+        Some(*self.headers.get(&lba).unwrap_or(&Header::of(&self.geometry, cylinder, head, block)))
     }
 
     /// Writes a whole sector where the heads are: the data, and the header
@@ -212,11 +244,11 @@ impl Unit {
         cylinder: u32,
         head: u32,
         block: u32,
-        header: u32,
+        header: Header,
         data: &[u32; BLOCK_WORDS],
     ) -> bool {
         let Some(lba) = self.lba_of(cylinder, head, block) else { return false };
-        if header == header_of(&self.geometry, cylinder, head, block) {
+        if header == Header::of(&self.geometry, cylinder, head, block) {
             self.headers.remove(&lba);
         } else {
             self.headers.insert(lba, header);
@@ -586,13 +618,24 @@ pub fn header_of(g: &Geometry, cylinder: u32, head: u32, block: u32) -> u32 {
 /// model that recomputed the header from the address it was asked for
 /// could never disagree with itself, which is what issue 51 is about.
 pub fn sector_image_with_header(header: u32, data: &[u32; BLOCK_WORDS]) -> Vec<u8> {
+    sector_image_written(header, Ecc::over(&header.to_le_bytes()), data)
+}
+
+/// The same again, with the header's checkword given rather than computed.
+///
+/// **A formatter can write a checkword that does not check**, and MIT's
+/// `<17>` is what a later Read makes of it: "Header ECC Error.  Indicates
+/// that the error-correcting code of a block header failed to check ...
+/// This error stops the transfer." A model that recomputed the checkword
+/// could no more disagree with itself than one that recomputed the header.
+pub fn sector_image_written(header: u32, checkword: [u8; 4], data: &[u32; BLOCK_WORDS]) -> Vec<u8> {
     use format::*;
     let mut s = Vec::with_capacity(SECTOR);
     s.resize(PREAMBLE + VFO_LOCK, 0xff);
     s.push(SYNC);
     let hb = header.to_le_bytes();
     s.extend_from_slice(&hb);
-    s.extend_from_slice(&Ecc::over(&hb));
+    s.extend_from_slice(&checkword);
     s.resize(s.len() + VFO_RELOCK, 0xff);
     s.push(SYNC);
     s.push(PAD);
@@ -612,6 +655,10 @@ pub fn sector_image_with_header(header: u32, data: &[u32; BLOCK_WORDS]) -> Vec<u
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Sector {
     pub header: u32,
+    /// The four bytes written after the header, whatever they are: a
+    /// formatter may lay down a checkword that does not check, and
+    /// `STATUS<17>` is what a later Read makes of it.
+    pub header_checkword: [u8; 4],
     pub header_checks: bool,
     pub data: [u32; BLOCK_WORDS],
     pub data_checks: bool,
@@ -660,6 +707,7 @@ pub fn parse_sector(bits: &[bool]) -> Option<Sector> {
     ecc.feed(&hb);
     ecc.feed(&hc);
     let header_checks = ecc.checks();
+    let header_checkword: [u8; 4] = hc.try_into().unwrap();
     let header = u32::from_le_bytes(hb.try_into().unwrap());
     let at = after_sync(bits, at + 64)?;
     let db = take_bits(bits, at + 8, format::DATA * 8)?;
@@ -671,7 +719,7 @@ pub fn parse_sector(bits: &[bool]) -> Option<Sector> {
     for (w, b) in data.iter_mut().zip(db.as_chunks::<4>().0) {
         *w = u32::from_le_bytes(*b);
     }
-    Some(Sector { header, header_checks, data, data_checks: ecc.checks() })
+    Some(Sector { header, header_checkword, header_checks, data, data_checks: ecc.checks() })
 }
 
 // ---------------------------------------------------------------------------
@@ -1541,7 +1589,8 @@ impl Unit {
         w.u64(carried.len() as u64);
         for (lba, header) in carried {
             w.u32(*lba);
-            w.u32(*header);
+            w.u32(header.word);
+            w.bytes(&header.checkword);
         }
     }
 
@@ -1588,7 +1637,15 @@ impl Unit {
                 geometry.blocks()
             )));
         }
-        self.headers = (0..n).map(|_| Ok((r.u32()?, r.u32()?))).collect::<std::io::Result<_>>()?;
+        self.headers = (0..n)
+            .map(|_| {
+                let (lba, word) = (r.u32()?, r.u32()?);
+                let checkword = r.bytes()?.try_into().map_err(|_| {
+                    crate::checkpoint::bad("a header checkword that is not four bytes")
+                })?;
+                Ok((lba, Header { word, checkword }))
+            })
+            .collect::<std::io::Result<_>>()?;
         Ok(())
     }
 }
