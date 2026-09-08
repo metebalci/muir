@@ -856,13 +856,19 @@ fn the_board_answers_its_control_registers() {
 /// **no response time at all**. So the board's own answer has to be
 /// measured --- and measuring it is harder than it looks.
 ///
-/// **The answer varies in steps of 500 ns, which is 32 dots of the 64 MHz
-/// dot clock: the video fetch has the buffer and an access waits for it.**
-/// A read is 870 ns and sometimes 1370 or 1870; a write is 560 and
-/// sometimes 1060; the control registers, which address no RAM, are a flat
-/// 180.
+/// **The buffer's answer is a sawtooth**, not a constant and not a step
+/// function: `base + (next fetch boundary - t)`. The video fetch has the
+/// buffer for one period in 500 ns --- 32 dots of the 64 MHz dot clock ---
+/// and an access waits for it, so the wait shrinks as the request lands
+/// later and jumps a whole period when it crosses a boundary. Walking the
+/// phase 100 ns a step gives `760, 660, 560, 960, 860`: **-100 each step,
+/// +400 across the boundary, and nothing else.**
 ///
-/// **Three ways this measurement lies, all of them met here.**
+/// The control registers do not wait for a fetch --- they address no RAM
+/// --- but they are not flat either: 150 to 180 over the phase of the
+/// board's own clock, the shape the memory board's 470--500 has.
+///
+/// **Four ways this measurement lies, all of them met here.**
 ///
 /// - **Back-to-back accesses look constant.** `XbusMaster::cycle` advances
 ///   the clock by the cycle's own duration, so a request issued at
@@ -876,8 +882,20 @@ fn the_board_answers_its_control_registers() {
 ///   (`the_sync_program_makes_a_frame`), so a sweep in the first
 ///   microseconds is of a board that is scanning and fetching nothing.
 ///   Contention cannot appear there whatever the stride.
-/// - **A read is not a write.** They differ by 310 ns at the base, and
-///   sweeping one says nothing about the other.
+/// - **A read is not a write.** They differ at the base, and sweeping one
+///   says nothing about the other.
+/// - **A stride longer than one cycle is not a stride longer than three.**
+///   Issuing a read, a control access and a write at each step puts the
+///   second and third back to back behind the first, so only the first is
+///   ever on the grid --- the artefact above, surviving inside the fix for
+///   it. That is what made the control registers look constant. **One
+///   cycle per step**, and one sweep per kind.
+///
+/// And one more, which is not a lie but a limit: an access takes up to
+/// 1.7 us where a line's unblanked stretch is 12, so a request that starts
+/// while the board is fetching can finish after it has stopped. Blanking
+/// is checked **after** each access as well as before, and a sample that
+/// spans the end of a line is dropped rather than explained.
 ///
 /// Each of those produced a different wrong answer before this one, and
 /// each was flat or varying for a reason that had nothing to do with the
@@ -899,49 +917,91 @@ fn what_the_board_takes_to_answer_is_measured() {
     }
     assert!(b.now < deadline, "no unblanked line in two frames");
 
-    let origin = b.now + 500;
-    let (mut read, mut write, mut control_ns) = (Vec::new(), Vec::new(), Vec::new());
-    for step in 0..40u64 {
-        let at = origin + step * 2005;
-        if b.now < at {
-            b.run(at);
+    // **One cycle per step.** Three cycles a step puts the second and
+    // third back to back after the first, so only the first is ever on the
+    // stride --- the artefact this stride exists to avoid, surviving inside
+    // the fix for it. Each kind gets its own sweep.
+    //
+    // **And the sweep stops when the line does.** The fetch's phase is
+    // continuous while the board is fetching; a blanked stretch fetches
+    // nothing, so a sample the far side of one is not on the same ramp.
+    let sweep = |b: &mut XbusMaster, write: Option<u32>| -> Vec<u64> {
+        let origin = b.now + 500;
+        let mut out = Vec::new();
+        for step in 0..8u64 {
+            let at = origin + step * STRIDE_NS;
+            if b.now < at {
+                b.run(at);
+            }
+            if b.chip.net(blanking) != Level::Low {
+                break;
+            }
+            let ns = b.cycle(buffer, write).0;
+            // **Blanking is checked after as well as before.** An access
+            // takes up to 1.7 us and a line's unblanked stretch is 12, so a
+            // request issued while the board is fetching can finish after
+            // it has stopped --- and that sample is not on the ramp.
+            if b.chip.net(blanking) != Level::Low {
+                break;
+            }
+            out.push(ns);
         }
-        read.push(b.cycle(buffer, None).0);
-        control_ns.push(b.cycle(control, None).0);
-        write.push(b.cycle(buffer, Some(0o525252)).0);
-    }
-    // The first of each is the run-up and is dropped rather than averaged
-    // in: it answers differently from every one after it.
-    for v in [&mut read, &mut write, &mut control_ns] {
-        v.remove(0);
-    }
-    eprintln!("read    {read:?}");
-    eprintln!("write   {write:?}");
-    eprintln!("control {control_ns:?}");
+        out
+    };
+    let read = sweep(&mut b, None);
+    eprintln!("read {} samples: {read:?}", read.len());
 
-    // **The shape, which is the finding.** The control registers are flat;
-    // the buffer is not, and what it varies by is one fetch period.
-    const FETCH_NS: u64 = 500;
-    let flat = |v: &[u64]| v.iter().all(|x| x == &v[0]);
-    assert!(flat(&control_ns), "the control registers are a constant: {control_ns:?}");
-    for (what, v) in [("read", &read), ("write", &write)] {
-        let base = *v.iter().min().expect("samples");
-        assert!(!flat(v), "{what} does not vary, so the stride is wrong again: {v:?}");
-        for &ns in v {
-            assert_eq!(
-                (ns - base) % FETCH_NS,
-                0,
-                "{what} varies by {} ns, which is not a fetch period: {v:?}",
-                ns - base
-            );
-        }
-        assert!(ns_ok(base), "{what} base {base} ns");
+    // **A sawtooth, and this is what says the mechanism is the fetch.** The
+    // stride is 2005 ns and the fetch period 500, so each request lands
+    // 5 ns later in the period than the last and waits 5 ns less --- until
+    // it crosses a boundary and waits a whole period more. So consecutive
+    // samples differ by -5, or by +495, and by nothing else.
+    assert!(read.len() >= 5, "too few samples inside one unblanked line: {read:?}");
+    let steps: Vec<i64> = read.windows(2).map(|w| w[1] as i64 - w[0] as i64).collect();
+    let walk = -(STRIDE_NS as i64 % FETCH_NS as i64);
+    for (k, &d) in steps.iter().enumerate() {
+        assert!(
+            d == walk || d == walk + FETCH_NS as i64,
+            "sample {k} moved {d} ns; a fetch sawtooth moves {walk} or {}: {read:?}",
+            walk + FETCH_NS as i64
+        );
     }
-    assert!(ns_ok(control_ns[0]), "control {} ns", control_ns[0]);
-    assert!(read[0] != write[0], "a read and a write are not the same access");
+    for &ns in &read {
+        assert!(ns > 0 && ns < muir::busint::TIMEOUT_NS, "{ns} ns is not an answer");
+    }
+    let jumps = steps.iter().filter(|&&d| d != walk).count();
+    eprintln!("{} samples, {jumps} boundary crossings, walking {walk} ns a step", read.len());
+    assert!(jumps > 0, "no boundary crossed, so the period is not shown: {read:?}");
+
+    // The control registers address no RAM and wait for no fetch.
+    let control_ns: Vec<u64> = (0..8)
+        .map(|k| {
+            b.run(b.now + 500 + k * 5);
+            b.cycle(control, None).0
+        })
+        .collect();
+    // **Not flat --- but not the buffer's shape either.** It tracks the
+    // phase of the board's own clock over tens of nanoseconds, the way the
+    // memory board's 470--500 does, and never by a fetch period. Saying
+    // "flat" here was an artefact of measuring it back to back behind
+    // another access.
+    let (lo, hi) =
+        (*control_ns.iter().min().expect("samples"), *control_ns.iter().max().expect("samples"));
+    assert!(
+        hi - lo < FETCH_NS,
+        "the control registers wait for a fetch, which they should not: {control_ns:?}"
+    );
+    eprintln!("control {lo}-{hi} ns over {} offsets", control_ns.len());
 }
 
-/// An answer at all, and inside what the interface would give up on.
-fn ns_ok(ns: u64) -> bool {
-    ns > 0 && ns < muir::busint::TIMEOUT_NS
-}
+/// One video fetch: 32 dots of the 64 MHz dot clock.
+const FETCH_NS: u64 = 500;
+
+/// Long enough that no access overlaps the next --- the longest is under
+/// 2 us --- and its remainder over [`FETCH_NS`] is the phase the request
+/// gains each step. 100 ns, so a boundary is crossed every few steps and
+/// the sawtooth shows inside one unblanked line: **a line is 768 dots,
+/// 12 us, and holds six accesses at this stride.** A finer walk needs more
+/// lines than one, and the fetch's phase does not survive the blanked
+/// stretch between them.
+const STRIDE_NS: u64 = 2100;
