@@ -894,6 +894,13 @@ parse_points(void)
 
         HALF_WORD known_bits[] = {
             0000000,
+            // CPIN alone, with no text and nothing else: the DISK
+            // MULTIPLEXOR's CABLES page, cadrdc/dmcabl.drw.  The two
+            // values below are this same bit with others set, and the
+            // CPIN rule further down is written on the bit rather than
+            // on the whole word, so the point is read correctly once it
+            // is let through.
+            0001000,
             0040000,
             0011000,
             0051000,

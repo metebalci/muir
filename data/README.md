@@ -46,6 +46,7 @@ them instead.
 | `CADRDC.netlist` | disk controller, the pages `dc.book` names | 27 | 294 | 171 | `tools/cadrdc-netlist.sh` |
 | `SIMPLETV.netlist` | SIMPLE TV display | 29 | 384 | 171 | `tools/simpletv-netlist.sh` |
 | `LISPMTV.netlist` | LISPM TV, the four- and eight-bit display that replaced it | 25 | 265 | 172 | `tools/lispmtv-netlist.sh` |
+| `DM.netlist` | disk multiplexor, one controller to eight drives; its cable is not in it | 11 | 149 | 62 | `tools/dm-netlist.sh` |
 
 A `part` line is one gate, not one device: a quad NAND is four lines under
 the one designator, which is why the records run well ahead of the parts.
@@ -54,7 +55,10 @@ lines, switches, LED digits --- and not the bypass capacitors, resistor
 packs and busbars, which are on the sheets and in MIT's parts lists but are
 nothing the engines compute. `tests/parts_mounted.rs` counts both, and holds
 every board but the SIMPLE TV to MIT's own count of the same one: the parts
-list `*.prt`, the DIP census `*.wls`, or both.
+list `*.prt`, the DIP census `*.wls`, the stuffing list `*.stf`, or more
+than one of them. The disk multiplexor is the board with only the third:
+it has no parts list and no census, and `cadrdc/dm.wls` is a page list
+with no census table in it (discrepancy 75).
 
 Each is read out of MIT's SUDS drawings in `mit/<board>/*.drw` by
 `tools/soap4`, and then held to MIT's own wire list for the same board ---
