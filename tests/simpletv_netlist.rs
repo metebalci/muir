@@ -848,34 +848,40 @@ fn the_board_answers_its_control_registers() {
     assert!(answer(buffer, Some(0o525252)).is_some(), "the frame buffer answered a write");
 }
 
-/// **What the board takes to answer, which is the number `rtl` has not
-/// got.** `rtl` charges every device [`muir::busint::IDEAL_DEVICE_NS`],
-/// which is zero, so a display access costs it the protocol's deskew and
-/// nothing else. Issue 66 asked which of two figures was wrong;
-/// `cadr1/xspec.text.3` cannot say, because it constrains the master at
-/// every turn and gives a slave **no response time at all** --- its whole
-/// entry is "`-XBUS.ACK` Asserted by the slave in response to
-/// `-XBUS.RQ`. No delay necessary following assertion of good read data".
-/// So the board's own answer has to be measured, and this measures it.
+/// **What the board takes to answer, and it is not one number.** `rtl`
+/// charges every device [`muir::busint::IDEAL_DEVICE_NS`], which is zero,
+/// so a display access costs it the protocol's deskew and nothing else.
+/// Issue 66 asked which of two figures was wrong; `cadr1/xspec.text.3`
+/// cannot say, constraining the master at every turn and giving a slave
+/// **no response time at all**. So the board's own answer has to be
+/// measured --- and measuring it is harder than it looks.
 ///
-/// **The board answers in a constant time**, which was not the expected
-/// result and took three attempts to establish:
+/// **The answer varies in steps of 500 ns, which is 32 dots of the 64 MHz
+/// dot clock: the video fetch has the buffer and an access waits for it.**
+/// A read is 870 ns and sometimes 1370 or 1870; a write is 560 and
+/// sometimes 1060; the control registers, which address no RAM, are a flat
+/// 180.
 ///
-/// - Cycles issued back to back gave 715 to 1195 ns and looked like a
-///   distribution. They are not: `XbusMaster::cycle` advances the clock by
-///   the cycle's own duration, so each request went out wherever the last
-///   one left off. That measures a sequence, not a phase.
-/// - Swept properly but in the first microseconds after settling, the
-///   answer was flat --- but the board blanks 54 lines end to end before
-///   the first unblanked one (`the_sync_program_makes_a_frame`), so it was
-///   scanning and fetching nothing. A flat answer there says nothing about
-///   contention.
-/// - Swept on an **unblanked line**, where the video fetch is running and
-///   could contend for the buffer, the answer is flat as well. That is the
-///   measurement, and it says the fetch does not delay a processor access.
+/// **Three ways this measurement lies, all of them met here.**
 ///
-/// So a twin for this board is a constant rather than a function of the
-/// fetch phase, which is what makes one affordable.
+/// - **Back-to-back accesses look constant.** `XbusMaster::cycle` advances
+///   the clock by the cycle's own duration, so a request issued at
+///   `b.now`, or on a stride shorter than a cycle, always lands at the same
+///   phase relative to the last one. That reads as a constant and is an
+///   artefact of the stride. **The stride must exceed the longest cycle**,
+///   which is why it is 2005 ns here and not the 5 ns of the phase step.
+/// - **A blanked line fetches nothing.** The board runs MIT's sync program
+///   out of reset (`the_sync_prom_is_fetched_out_of_reset`) and blanks 54
+///   lines end to end before the first unblanked one
+///   (`the_sync_program_makes_a_frame`), so a sweep in the first
+///   microseconds is of a board that is scanning and fetching nothing.
+///   Contention cannot appear there whatever the stride.
+/// - **A read is not a write.** They differ by 310 ns at the base, and
+///   sweeping one says nothing about the other.
+///
+/// Each of those produced a different wrong answer before this one, and
+/// each was flat or varying for a reason that had nothing to do with the
+/// board.
 #[test]
 fn what_the_board_takes_to_answer_is_measured() {
     use muir::part::Level;
@@ -886,51 +892,56 @@ fn what_the_board_takes_to_answer_is_measured() {
     let buffer = muir::simpletv::BUFFER + 0o51763;
     let control = muir::simpletv::CONTROL;
 
-    // On an unblanked line: out of reset the board runs MIT's sync program
-    // from the 74S472 (`the_sync_prom_is_fetched_out_of_reset`), and only
-    // an unblanked line fetches anything to contend with.
     let blanking = b.net("BLANKING");
     let deadline = b.now + 2 * LINE_NS * LINES_A_FRAME;
     while b.chip.net(blanking) != Level::Low && b.now < deadline {
         b.run(b.now + 500);
     }
     assert!(b.now < deadline, "no unblanked line in two frames");
-    eprintln!("first unblanked line at {} ns", b.now);
 
-    // 5 ns steps, fine enough to catch a phase dependence on the 64 MHz
-    // dot clock's 15.625 ns period, which 25 ns steps could alias past.
     let origin = b.now + 500;
-    let mut buffer_ns = Vec::new();
-    let mut control_ns = Vec::new();
+    let (mut read, mut write, mut control_ns) = (Vec::new(), Vec::new(), Vec::new());
     for step in 0..40u64 {
-        for (at, addr, into) in [
-            (origin + step * 5, buffer, &mut buffer_ns),
-            (origin + step * 5, control, &mut control_ns),
-        ] {
-            if b.now < at {
-                b.run(at);
-            }
-            into.push(b.cycle(addr, None).0);
+        let at = origin + step * 2005;
+        if b.now < at {
+            b.run(at);
         }
+        read.push(b.cycle(buffer, None).0);
+        control_ns.push(b.cycle(control, None).0);
+        write.push(b.cycle(buffer, Some(0o525252)).0);
     }
-    // The first access after the run-up is the odd one out and is dropped:
-    // it answers slower than every one after it.
-    let first = (buffer_ns.remove(0), control_ns.remove(0));
-    eprintln!("first access after the run-up: buffer {} ns, control {} ns", first.0, first.1);
-    let flat =
-        |v: &[u64]| -> Option<u64> { v.first().copied().filter(|f| v.iter().all(|x| x == f)) };
-    let buffer_at = flat(&buffer_ns).unwrap_or_else(|| panic!("buffer varies: {buffer_ns:?}"));
-    let control_at = flat(&control_ns).unwrap_or_else(|| panic!("control varies: {control_ns:?}"));
-    eprintln!(
-        "buffer {buffer_at} ns, control {control_at} ns, flat over {} offsets",
-        buffer_ns.len()
-    );
+    // The first of each is the run-up and is dropped rather than averaged
+    // in: it answers differently from every one after it.
+    for v in [&mut read, &mut write, &mut control_ns] {
+        v.remove(0);
+    }
+    eprintln!("read    {read:?}");
+    eprintln!("write   {write:?}");
+    eprintln!("control {control_ns:?}");
 
-    // The shape, which is the finding: constant, and inside what the
-    // interface would give up on. The values are printed rather than
-    // pinned --- a twin is what should pin them, by reproducing them.
-    assert!(buffer_at > control_at, "the buffer is the slower of the two");
-    for ns in [buffer_at, control_at] {
-        assert!(ns > 0 && ns < muir::busint::TIMEOUT_NS, "{ns} ns is not an answer");
+    // **The shape, which is the finding.** The control registers are flat;
+    // the buffer is not, and what it varies by is one fetch period.
+    const FETCH_NS: u64 = 500;
+    let flat = |v: &[u64]| v.iter().all(|x| x == &v[0]);
+    assert!(flat(&control_ns), "the control registers are a constant: {control_ns:?}");
+    for (what, v) in [("read", &read), ("write", &write)] {
+        let base = *v.iter().min().expect("samples");
+        assert!(!flat(v), "{what} does not vary, so the stride is wrong again: {v:?}");
+        for &ns in v {
+            assert_eq!(
+                (ns - base) % FETCH_NS,
+                0,
+                "{what} varies by {} ns, which is not a fetch period: {v:?}",
+                ns - base
+            );
+        }
+        assert!(ns_ok(base), "{what} base {base} ns");
     }
+    assert!(ns_ok(control_ns[0]), "control {} ns", control_ns[0]);
+    assert!(read[0] != write[0], "a read and a write are not the same access");
+}
+
+/// An answer at all, and inside what the interface would give up on.
+fn ns_ok(ns: u64) -> bool {
+    ns > 0 && ns < muir::busint::TIMEOUT_NS
 }
