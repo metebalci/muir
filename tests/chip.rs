@@ -819,8 +819,11 @@ fn cpu_clock(n: &netlist::Netlist) -> netlist::NetId {
 /// a timeout a hang. Time is what the bound was always about.
 const HANG_BOUND_NS: u64 = 60_000;
 
-/// Writes a checkpoint: the microcycle, the processor, the clock and the
-/// bus interface board, in that order.
+/// Writes a checkpoint, in the one format `muir --chip --checkpoint`
+/// writes: [`muir::cable::write_checkpoint`]. So a file this harness makes
+/// is one the binary can resume, and the other way round --- which is what
+/// lets `vendor/run/chk/at-535000.chk` come out of an ordinary run instead
+/// of out of this test driven by hand.
 fn checkpoint(
     p: &std::path::Path,
     cycle: usize,
@@ -828,11 +831,10 @@ fn checkpoint(
     clk: &muir::clock::Behavioural,
     far: &FarEnd,
 ) {
-    let mut f = std::io::BufWriter::new(std::fs::File::create(p).unwrap());
-    std::io::Write::write_all(&mut f, &(cycle as u64).to_le_bytes()).unwrap();
-    c.save(&mut f).unwrap();
-    clk.save(&mut f).unwrap();
-    far.save(&mut f).unwrap();
+    match muir::cable::write_checkpoint(p, cycle as u64, chosen().tv_board, c, clk, far) {
+        Ok(_) => {}
+        Err(e) => panic!("{}: {e}", p.display()),
+    }
 }
 
 /// How many microcycles `rtl` runs before it is where `chip` is when the
@@ -847,21 +849,27 @@ const RTL_START_STEPS: usize = 2;
 /// and says which microcycle it resumed at. A `MUIR_RESUME` that names a
 /// file which is not there is a mistake, not a cold run, and fails.
 ///
-/// The processor, the clock and the bus interface board come from the
-/// file. `rtl` catches up by being run, which is why it is not stored: it
-/// has had [`RTL_START_STEPS`] more than the loop count, the alignment
-/// before the loop and one at the top of each iteration. And the far end
-/// of the cables is given `rtl`'s machine: past the first bus cycle it has
-/// state --- main memory as the boot left it, the controller's registers
-/// and the drive's attention, the pack's written blocks --- which is what
-/// `rtl` holds once the two agree. A fresh far end put the disk's attention
-/// flags a cycle out and looked like a divergence.
+/// **Everything but `rtl` comes out of the file**: the processor, its
+/// clock, and the whole far end --- the bus interface, the memory boards,
+/// the I/O board, the device boards, the drives on a netlist controller's
+/// cable, what each end of each bus was given, and the machine behind the
+/// buses. `rtl` is not stored because it runs the whole trace in under a
+/// second, so it is replayed: [`RTL_START_STEPS`] more than the loop
+/// count, the alignment before the loop and one at the top of each
+/// iteration.
 ///
-/// A checkpoint written before the board was stored ends after the clock,
-/// and the board is built fresh instead. That is the board before its
-/// first Unibus cycle --- not yet Unibus master, its registers clear ---
-/// and is only right for a checkpoint taken before the boot's first, at
-/// 537,841; the one such file in use is `at-535000.chk`.
+/// **The far end's machine used to be `rtl`'s, and is the file's now.**
+/// Before the two roads wrote one format the file carried no machine, so
+/// the far end was handed `r.m.clone()` after the replay: past the first
+/// bus cycle a far end has state --- main memory as the boot left it, the
+/// controller's registers and the drive's attention, the pack's written
+/// blocks --- and a *fresh* one put the disk's attention flags a cycle out
+/// and looked like a divergence. The checkpoint holds that state itself
+/// now, so it is read rather than borrowed, and the reason the fresh one
+/// was wrong does not apply to it.
+///
+/// A file of another format version, or of another engine, or made with a
+/// different display board, is refused by name rather than read wrong.
 fn resume_from_checkpoint(
     c: &mut Chip,
     clk: &mut muir::clock::Behavioural,
@@ -872,63 +880,34 @@ fn resume_from_checkpoint(
     use muir::engine::Engine;
     let p = std::path::PathBuf::from(std::env::var("MUIR_RESUME").ok()?);
     assert!(p.exists(), "MUIR_RESUME names {}, and there is no such checkpoint", p.display());
-    let mut f = std::io::BufReader::new(std::fs::File::open(&p).unwrap());
-    let mut at = [0u8; 8];
-    std::io::Read::read_exact(&mut f, &mut at).unwrap();
-    let at = u64::from_le_bytes(at) as usize;
-    c.load(&mut f).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-    *clk = muir::clock::Behavioural::load(&mut f).unwrap();
-    let eof = |e: &std::io::Error| e.kind() == std::io::ErrorKind::UnexpectedEof;
-    let board = match far.board.load(&mut f) {
-        Ok(()) => "with the bus interface board as it was",
-        Err(e) if eof(&e) => {
-            "with a fresh bus interface board, which is only right before the boot's first Unibus cycle"
-        }
-        Err(e) => panic!("{}: the bus interface board: {e}", p.display()),
-    };
-    // The memory boards, if the checkpoint has them; else their cells are
-    // filled from `rtl`'s memory once it has caught up.
-    let memory = match far.xbus.load(&mut f) {
-        Ok(()) => "the memory boards as they were",
-        Err(e) if eof(&e) => "the memory boards filled from rtl's memory",
-        Err(e) => panic!("{}: the memory boards: {e}", p.display()),
-    };
-    let io = match far.load_io_board(&mut f) {
-        Ok(()) => "the I/O board as it was",
-        Err(e) if eof(&e) => {
-            "a fresh I/O board, which is only right before the boot's Unibus reset"
-        }
-        Err(e) => panic!("{}: the I/O board: {e}", p.display()),
-    };
-    let devices = match far.load_device_boards(&mut f) {
-        Ok(()) => "the device boards as they were",
-        Err(e) if eof(&e) => {
-            // Powered on now, not at time 0, so their oscillators start here.
-            far.xbus.repower_devices(clk.time_ns());
-            "fresh device boards, the display's buffer empty until redrawn"
-        }
-        Err(e) => panic!("{}: the device boards: {e}", p.display()),
-    };
-    let disks = match far.load_disks(&mut f) {
-        Ok(()) => "the drives as they were",
-        // A file from before the drives were written, or one written with
-        // the model controller, where there are none on a cable.
-        Err(e) if eof(&e) => "no drives on a cable",
-        Err(e) => panic!("{}: the drives: {e}", p.display()),
-    };
+    let file = muir::checkpoint::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let mut it =
+        muir::cable::read_checkpoint(&file).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let want = chosen().tv_board;
+    assert_eq!(
+        it.tv_board,
+        want,
+        "{}: a {} checkpoint, and this harness has the {want}",
+        p.display(),
+        it.tv_board
+    );
+    let at = it.ran as usize;
+    it.processor(c).unwrap_or_else(|e| panic!("{}: the processor: {e}", p.display()));
+    *clk = it.clock().unwrap_or_else(|e| panic!("{}: the clock: {e}", p.display()));
+    it.far_end(far).unwrap_or_else(|e| panic!("{}: the far end: {e}", p.display()));
+    // `rtl` is not in the file and does not need to be: it runs the whole
+    // trace in under a second, so it is replayed rather than stored. It
+    // has had [`RTL_START_STEPS`] more than the loop count, the alignment
+    // before the loop and one at the top of each iteration.
     for _ in 0..at + RTL_START_STEPS {
         r.step().expect("rtl halted while catching up");
     }
-    far.buses.machine = r.m.clone();
-    // And its memory twins, where main memory is twins here too.
-    far.buses.memory = r.busint().memory_boards().to_vec();
-    if memory.starts_with("the memory boards filled") {
-        far.xbus.load_from(&r.m.main);
-    }
     far.join(c, clk.time_ns());
     eprintln!(
-        "resumed from {} at microcycle {at}, {board}, {memory}, {io}, {devices}, {disks}",
-        p.display()
+        "resumed from {} at microcycle {at}, {} ns, with every board and the machine behind \
+         the buses as they were",
+        p.display(),
+        clk.time_ns()
     );
     Some(at)
 }

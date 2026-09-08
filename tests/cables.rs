@@ -11,7 +11,7 @@
 
 mod support;
 
-use muir::cable::{Boards, FarEnd, busint_board};
+use muir::cable::{Boards, FarEnd};
 use muir::chip::Chip;
 use muir::clock::{Behavioural, Clock};
 use muir::machine::Machine;
@@ -32,26 +32,30 @@ fn net_named(n: &netlist::Netlist, name: &str) -> netlist::NetId {
         .unwrap_or_else(|| panic!("no net {name}"))
 }
 
-/// The processor as a checkpoint holds it, with its clock, and the bus
-/// interface board if the checkpoint has one; `None`, with the skip line
-/// and how to make the file, when the checkpoint is not there. The
-/// checkpoint holds the board because a board built fresh is not the board
-/// that has been on the bus: it is not Unibus master, and its error
-/// register is clear. `at-535000.chk` is from before the boot's first
-/// Unibus cycle, and a fresh board is right for it.
-fn resume(label: &str) -> Option<(Chip, Behavioural, u64, Option<Chip>)> {
+/// The processor as a checkpoint holds it, with its clock and the
+/// microcycle it was taken at; `None`, with the skip line and how to make
+/// the file, when the checkpoint is not there.
+///
+/// **Only the front of the file is read.** A `chip` checkpoint is the
+/// processor, its clock and then the whole far end --- boards, buses and
+/// the machine behind them, [`muir::cable::write_checkpoint`] --- and the
+/// far end each test here builds is not that one: they run 32 memory
+/// boards, or 2, or 4 with an I/O board, against a fresh
+/// [`Machine`]. The body is a stream, so this takes the two pieces it
+/// wants and stops rather than building a backplane to match.
+///
+/// `at-535000.chk` is from before the boot's first Unibus cycle, so a
+/// board built fresh here is the right one: not yet Unibus master, its
+/// error register clear.
+fn resume(label: &str) -> Option<(Chip, Behavioural, u64)> {
     let Some(p) = support::vendor(&["run", "chk", &format!("{label}.chk")]) else {
-        eprintln!(
-            "  `MUIR_COSIM_CYCLES=540000 MUIR_CHECKPOINT_AT=535000 cargo test --release --test \
-             chip chip_agrees_with_rtl` writes it, in about ten minutes, with the System 100 \
-             pack fetched"
-        );
+        eprintln!("  {MAKES_IT}");
         return None;
     };
+    let file = muir::checkpoint::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let mut it =
+        muir::cable::read_checkpoint(&file).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
     let n = netlist::parse(CPU).unwrap();
-    let mut f = std::io::BufReader::new(std::fs::File::open(&p).unwrap());
-    let mut at = [0u8; 8];
-    std::io::Read::read_exact(&mut f, &mut at).unwrap();
     // As `tests/chip.rs` builds the board before loading into it: powered,
     // with the boot PROM, settled.
     let image: Vec<u64> = muir::prom::boot_prom_image();
@@ -59,20 +63,19 @@ fn resume(label: &str) -> Option<(Chip, Behavioural, u64, Option<Chip>)> {
     c.power_on();
     c.load_prom(&n, &image);
     c.settle();
-    c.load(&mut f).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-    let clk = Behavioural::load(&mut f).unwrap();
-    // The interface board, if the file goes on: built as `busint_board`
-    // builds it, for the pull-ups a checkpoint does not carry, and loaded
-    // over.
-    let bus_n = netlist::parse(BUSINT).unwrap();
-    let mut b = busint_board(&bus_n);
-    let busint = match b.load(&mut f) {
-        Ok(()) => Some(b),
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => None,
-        Err(e) => panic!("{}: the bus interface board: {e}", p.display()),
-    };
-    Some((c, clk, u64::from_le_bytes(at), busint))
+    it.processor(&mut c).unwrap_or_else(|e| panic!("{}: the processor: {e}", p.display()));
+    let clk = it.clock().unwrap_or_else(|e| panic!("{}: the clock: {e}", p.display()));
+    Some((c, clk, it.ran))
 }
+
+/// What writes `vendor/run/chk/at-535000.chk`, which no fetch produces:
+/// an ordinary run of the binary, with the System 100 pack fetched, in
+/// about five minutes. `--tv model` because that is the one board this
+/// harness and `muir --chip` differ over, and a checkpoint carries which
+/// boards were on the backplane.
+const MAKES_IT: &str = "`cargo run --release -- --chip --tv model --disk-pack \
+     vendor/run/disk-sys-100-0.img,ro --stop-after 535000 --checkpoint \
+     vendor/run/chk/at-535000.chk` writes it, in about five minutes";
 
 /// **The boot PROM's first bus cycle crosses the cables.**
 ///
@@ -86,13 +89,14 @@ fn resume(label: &str) -> Option<(Chip, Behavioural, u64, Option<Chip>)> {
 /// --- printed the same way; what is asserted, that a request was made and
 /// acknowledged within the window, is the same.
 #[test]
-#[ignore = "needs vendor/run/chk/at-535000.chk, which no fetch produces: `MUIR_COSIM_CYCLES=540000 \
-            MUIR_CHECKPOINT_AT=535000 cargo test --release --test chip chip_agrees_with_rtl` \
-            writes it, in about ten minutes, with the System 100 pack fetched"]
+#[ignore = "needs vendor/run/chk/at-535000.chk, which no fetch produces: `cargo run --release \
+            -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
+            --checkpoint vendor/run/chk/at-535000.chk` writes it, in about five minutes, with the \
+            System 100 pack fetched"]
 fn the_first_bus_cycles_cross_the_cables() {
     let cpu_n = netlist::parse(CPU).unwrap();
     let bus_n = netlist::parse(BUSINT).unwrap();
-    let Some((mut cpu, mut clk, at, _)) = resume("at-535000") else { return };
+    let Some((mut cpu, mut clk, at)) = resume("at-535000") else { return };
     eprintln!("resumed at microcycle {at}, {} ns", clk.time_ns());
     let mem_n = netlist::parse(CADRM).unwrap();
     let mut far =
@@ -216,13 +220,14 @@ fn the_first_bus_cycles_cross_the_cables() {
 /// of page 0 through the interface, every parity cell on the board is what
 /// `parity` says of the word beside it.
 #[test]
-#[ignore = "needs vendor/run/chk/at-535000.chk, which no fetch produces: `MUIR_COSIM_CYCLES=540000 \
-            MUIR_CHECKPOINT_AT=535000 cargo test --release --test chip chip_agrees_with_rtl` \
-            writes it, in about ten minutes, with the System 100 pack fetched"]
+#[ignore = "needs vendor/run/chk/at-535000.chk, which no fetch produces: `cargo run --release \
+            -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
+            --checkpoint vendor/run/chk/at-535000.chk` writes it, in about five minutes, with the \
+            System 100 pack fetched"]
 fn the_interface_writes_the_parity_the_boards_are_filled_with() {
     let cpu_n = netlist::parse(CPU).unwrap();
     let bus_n = netlist::parse(BUSINT).unwrap();
-    let Some((mut cpu, mut clk, at, _)) = resume("at-535000") else { return };
+    let Some((mut cpu, mut clk, at)) = resume("at-535000") else { return };
     let mem_n = netlist::parse(CADRM).unwrap();
     // Two boards are enough: page 0 is on the first.
     let mut far =
@@ -272,16 +277,17 @@ fn the_interface_writes_the_parity_the_boards_are_filled_with() {
 /// with the I/O board on both, whose microsecond clock never lets it
 /// sleep.
 #[test]
-#[ignore = "needs vendor/run/chk/at-535000.chk, which no fetch produces: `MUIR_COSIM_CYCLES=540000 \
-            MUIR_CHECKPOINT_AT=535000 cargo test --release --test chip chip_agrees_with_rtl` \
-            writes it, in about ten minutes, with the System 100 pack fetched"]
+#[ignore = "needs vendor/run/chk/at-535000.chk, which no fetch produces: `cargo run --release \
+            -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
+            --checkpoint vendor/run/chk/at-535000.chk` writes it, in about five minutes, with the \
+            System 100 pack fetched"]
 fn the_optimisations_are_on_the_same_nets_as_the_slow_way() {
     let cpu_n = netlist::parse(CPU).unwrap();
     let bus_n = netlist::parse(BUSINT).unwrap();
     let mem_n = netlist::parse(CADRM).unwrap();
     let io_n = netlist::parse(CADRIO).unwrap();
-    let Some((mut cpu_a, mut clk_a, at, _)) = resume("at-535000") else { return };
-    let (mut cpu_b, mut clk_b, _, _) = resume("at-535000").unwrap();
+    let Some((mut cpu_a, mut clk_a, at)) = resume("at-535000") else { return };
+    let (mut cpu_b, mut clk_b, _) = resume("at-535000").unwrap();
     let mut a = FarEnd::new(
         &cpu_n,
         &bus_n,
