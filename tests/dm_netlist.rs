@@ -320,9 +320,16 @@ fn the_drive_ports_carry_the_controllers_own_per_unit_signals() {
 /// them too.** MIT's change order lists the eight drive connectors with
 /// pins to decommit and remove before wire-wrapping, and the eight are
 /// four patterns twice over: `J1` and `J5` alike, `J2` and `J6`, `J3` and
-/// `J7`, `J4` and `J8`. The board is built the same way --- units 0 to 3
-/// on one set of drivers, receivers and terminators, units 4 to 7 on
-/// another, with no part shared between the halves.
+/// `J7`, `J4` and `J8`. That is what the change order establishes: eight
+/// connectors in two groups of four given identical treatment.
+///
+/// The board is built the same way --- units 0 to 3 on one set of drivers,
+/// receivers and terminators, units 4 to 7 on another --- which is this
+/// test's own reading of `data/DM.netlist` and not something `dm.eco`
+/// says. **One part spans the halves**: the 100 ohm pack at 0B11 pulls up
+/// `ATTENTION/` and `COMPSECIDX/` lines from both. The active parts
+/// respect the split and the pull-ups do not, a `SIP100-8` being eight
+/// resistors spent where they are needed rather than one bank at a time.
 ///
 /// The parts are the controller's own cable parts, which is the other half
 /// of the corroboration: the 75107 and 75110 differential pairs, the 75452
@@ -386,6 +393,6 @@ fn the_drive_ports_are_two_banks_of_four() {
 #[test]
 fn the_bodies_without_a_model_are_the_two_known_ones() {
     let k = support::kinds(&dm());
-    assert_eq!(k.unknown, ["25LS2538"], "bodies with no pinout");
+    assert!(k.unknown.is_empty(), "every body has a pinout: {:?}", k.unknown);
     assert_eq!(k.silent, ["26S02"], "bodies with a pinout and no behaviour");
 }
