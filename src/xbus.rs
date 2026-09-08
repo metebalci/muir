@@ -151,7 +151,7 @@ fn bring_up(memory: &Netlist, switches: u8, powered_at: u64) -> Chip {
 /// of their own, discrepancy 35 --- and the level had to go when it
 /// landed. `MAPADR15` has no net on this board, so the pair's other join
 /// does nothing and `MAPADR BANK` stays the one-pin strap it reads as.
-fn straps(board: &Netlist) -> Vec<(NetId, Level)> {
+pub fn straps(board: &Netlist) -> Vec<(NetId, Level)> {
     let mut out = Vec::new();
     let bit = |addr: u32, k: u32| if addr >> k & 1 != 0 { Level::High } else { Level::Low };
     for k in 16..22 {

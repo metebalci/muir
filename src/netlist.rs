@@ -336,7 +336,7 @@ impl Netlist {
     /// board's read-out path did not run. It runs now, and with them
     /// floating the shifted-in bits were unknown and `MECL VIDEO OUT` never
     /// went low: the picture was one level and a high impedance.
-    const STRAP_PAGES: &'static [(&'static str, &'static [(&'static str, &'static str)])] = &[
+    pub const STRAP_PAGES: &'static [(&'static str, &'static [(&'static str, &'static str)])] = &[
         (
             // NRAADR is the SIMPLE TV's own name for the page; its presence is
             // what says this netlist is that board.
@@ -569,7 +569,7 @@ impl Netlist {
     /// ATTENTION`, `DF2` `ANY ATTENTION`, `DH2` `UNIT 0 ATTENTION`, `DM2`
     /// `MULTIPLE SELECT`, `EP2`/`ER2`/`ES2` `UNIT0`/`UNIT1`/`UNIT2`, and
     /// `DN1` and `ET1` on the ground net.
-    const ONE_BOARD_JUMPERS: &'static [(&'static str, &'static str)] = &[
+    pub const ONE_BOARD_JUMPERS: &'static [(&'static str, &'static str)] = &[
         ("UNIT 0 ATTENTION", "ANY ATTENTION"),      // DF2 : DH2
         ("UNIT 0 ATTENTION", "SEL UNIT ATTENTION"), // DE2 : DF2
         ("GND", "MULTIPLE SELECT"),                 // DN1 : DM2
@@ -578,7 +578,7 @@ impl Netlist {
         ("GND", "UNIT0"),                           // EP2 : ER2
     ];
 
-    const HAND_JUMPERS: &'static [(&'static str, &'static [(&'static str, &'static str)])] = &[(
+    pub const HAND_JUMPERS: &'static [(&'static str, &'static [(&'static str, &'static str)])] = &[(
         "DCEDGE",
         &[
             ("GND", "-TIMEOUT ENB"), // J5-16 : J5-41
