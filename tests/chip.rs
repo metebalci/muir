@@ -56,17 +56,26 @@ const HARNESS: Chosen =
 /// timing being the board's either way.
 ///
 /// `MUIR_TV` is the model by default, and that is the one board this
-/// harness does not run as `muir --chip` runs it. `rtl` has no timing twin
+/// harness does not run as `muir --chip` runs it: `rtl` has no timing twin
 /// for the display as it has for memory and the I/O board, so with the
-/// display netlist on the backplane the two machines keep different time
-/// as soon as the band touches it. Measured, on the System 100 pack:
+/// display netlist on the backplane the two machines stop keeping the same
+/// time. Measured, on the System 100 pack:
 /// `MUIR_COSIM_CYCLES=2000000 MUIR_TV=netlist` fails at microcycle
-/// 1422296, `chip` taking 580 ns over a cycle `rtl` gives 145, at PC
-/// 25334 --- which is just past `PROM-DISABLE`, so it is the band's first
-/// reach for the display and not anything the boot PROM does. The same run
-/// with the model display agrees over all 2000000 microcycles and 16384
-/// distinct PCs. `MUIR_TV_BOARD=lispm-tv` puts the LISPM TV there in place
-/// of the SIMPLE TV.
+/// 1422296, `chip` taking 580 ns over a cycle `rtl` gives 145, at `rtl` PC
+/// 25333. The same run with the model display agrees over all 2000000
+/// microcycles and 16384 distinct PCs.
+///
+/// The stretched cycle is not the display's. 25332 is
+/// `DISK-RECALIBRATE-WAIT` in the band's symbol table, and the microcode
+/// there is `((VMA-START-READ) A-DISK-REGS-BASE)` followed by
+/// `(CHECK-PAGE-READ-NO-INTERRUPT)`, so 25333 is the wait on a read of the
+/// **disk** registers --- and the disk controller is the model on both
+/// sides of the comparison. A netlist display sitting on the backplane
+/// changes how long another device takes to answer. That is issue 60's,
+/// not this file's; what this file needs from it is only that the two
+/// machines cannot be compared with the display netlist in place.
+/// `MUIR_TV_BOARD=lispm-tv` puts the LISPM TV there in place of the SIMPLE
+/// TV.
 ///
 /// `MUIR_DISK_CONTROLLER` is the model by default, and there it agrees
 /// with `muir --chip` --- but by coincidence rather than by decision,
