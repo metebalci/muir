@@ -545,3 +545,139 @@ fn the_board_drives_the_bus_only_to_read() {
     assert_eq!(b.level("READ"), Level::High, "a read is one");
     assert_eq!(b.level("-XDRIVE"), Level::Low, "and the board drives the bus");
 }
+
+/// **What the board takes to answer an Xbus cycle is not a number.**
+///
+/// The frame buffer is one RAM with three users --- the processor over the
+/// Xbus, the refresh, and the video shifter reading the picture out --- and
+/// the board hands it to them a slot at a time. `PROC CYC` at NRAADR 0D12
+/// is what switches the RAM address multiplexers at 0A11-0B12 between the
+/// processor's `RAM ADR IN` and the shifter's `TVMA`, so a processor cycle
+/// waits for a slot of its own.
+///
+/// **The slots are every 500 ns**, which is `cadrtv/lmtv.order`'s "an
+/// instruction every 32 bits of video ... or roughly every 1/2
+/// microsecond", **and every acknowledgement this board ever gives lands
+/// on that grid**, 257 ns into each one, counted from power-on. A request
+/// is answered at the **second** slot strictly after it: the slot it
+/// arrives in sees it, and the next one serves it. So the answer takes
+/// between 501 and 1000 ns depending on where in the grid the request
+/// falls, and a single figure for it is a sample rather than a constant.
+///
+/// **The refresh takes one slot a line.** `-REFRESH CYC` is low for
+/// exactly one slot, from 16,757 ns and every 16,000 after --- a line of
+/// the raster, [`LINE_NS`] --- and a cycle that would have been served
+/// then waits one slot more.
+///
+/// **And from the first line of the picture the shifter takes slots too,
+/// which this does not model.** The rule above is exact through the 54
+/// lines of the frame that carry no dots (966 lines against the 912 that
+/// carry 768 dots, both counted by `the_sync_program_makes_a_frame`), and
+/// the first cycle it fails to predict is in line 54. That is measured and
+/// asserted here, so that this test says where the rule ends as well as
+/// where it holds: a timing twin for this board in `rtl` --- issue 66 ---
+/// needs the shifter's own fetches, and the grid and the refresh are not
+/// enough for one.
+#[test]
+fn the_board_answers_on_its_own_slots() {
+    use muir::part::Level;
+    use muir::xbus::XbusMaster;
+
+    /// The slots the RAM is handed out in, and the offset into each at
+    /// which the board acknowledges. Measured here.
+    const SLOT_NS: u64 = 500;
+    const ACK_INTO_SLOT_NS: u64 = 257;
+    /// One line of the raster: [`muir::simpletv::FRAME_NS`] over the 966
+    /// lines `the_sync_program_makes_a_frame` counts.
+    const LINE_NS: u64 = 16_000;
+    /// When the first refresh cycle begins, and every [`LINE_NS`] after
+    /// it. The slot it takes is the one that would have been answered
+    /// [`SLOT_NS`] later.
+    const FIRST_REFRESH_NS: u64 = 16_757;
+    /// The first line of the picture: 966 lines less the 912 that carry
+    /// dots.
+    const PICTURE_LINE: u64 = 54;
+
+    let n = simpletv();
+
+    // The refresh, off the board rather than inferred: `-REFRESH CYC` low
+    // for one slot, once a line.
+    let mut b = XbusMaster::new(&n, 0);
+    let cyc = b.net("-REFRESH CYC");
+    let (mut last, mut edges) = (b.chip.net(cyc), Vec::new());
+    while b.now < 100_000 {
+        let next = b.chip.next_tap().filter(|&t| t > b.now).unwrap_or(b.now + 1);
+        b.run(next.min(100_000));
+        let now = b.chip.net(cyc);
+        if now != last {
+            edges.push((b.now, now));
+            last = now;
+        }
+    }
+    let falls: Vec<u64> = edges.iter().filter(|(_, l)| *l == Level::Low).map(|&(t, _)| t).collect();
+    let rises: Vec<u64> =
+        edges.iter().filter(|(_, l)| *l == Level::High).map(|&(t, _)| t).collect();
+    assert_eq!(falls[0], FIRST_REFRESH_NS, "when the first refresh cycle begins");
+    assert!(falls.windows(2).all(|w| w[1] - w[0] == LINE_NS), "one refresh a line: {falls:?}");
+    assert!(
+        falls.iter().zip(&rises).all(|(f, r)| r - f == SLOT_NS),
+        "and it is one slot long: {edges:?}"
+    );
+
+    // Where the acknowledgement lands, for a write and for a read, at
+    // every phase of the grid the requests happen to fall on.
+    // The acknowledgements the refresh takes: the slot it holds the RAM
+    // for would have been answered at its end.
+    let blocked = FIRST_REFRESH_NS + SLOT_NS;
+    let refresh_slot = |s: u64| s >= blocked && (s - blocked).is_multiple_of(LINE_NS);
+    let predict = |t: u64| {
+        let mut seen = (t / SLOT_NS) * SLOT_NS + ACK_INTO_SLOT_NS;
+        if seen <= t {
+            seen += SLOT_NS;
+        }
+        let serve = seen + SLOT_NS;
+        if refresh_slot(serve) { serve + SLOT_NS } else { serve }
+    };
+    let mut b = XbusMaster::new(&n, 0);
+    let (mut blanking, mut first_miss) = (0, None);
+    // Two lines past the first of the picture, which is where the rule is
+    // to stop holding.
+    while b.now < (PICTURE_LINE + 2) * LINE_NS {
+        b.run(b.now + 1 + (b.now * 53) % (SLOT_NS - 1));
+        let t0 = b.now;
+        let write = t0.is_multiple_of(2);
+        b.request(muir::simpletv::BUFFER + 21491, write.then_some(0o525252));
+        let mut guard = 0;
+        while !b.acked() {
+            let next = b.chip.next_tap().filter(|&t| t > b.now).unwrap_or(b.now + 1);
+            b.run(next);
+            guard += 1;
+            assert!(guard < 100_000, "the board never acknowledged a cycle from {t0}");
+        }
+        let ack = b.now;
+        assert_eq!(
+            ack % SLOT_NS,
+            ACK_INTO_SLOT_NS,
+            "every acknowledgement is on the grid: {ack} for a request at {t0}"
+        );
+        assert!(
+            (SLOT_NS + 1..=2 * SLOT_NS).contains(&(ack - t0)) || refresh_slot(ack - SLOT_NS),
+            "between one slot and two, or three across a refresh: {} from {t0}",
+            ack - t0
+        );
+        if ack == predict(t0) {
+            blanking += u64::from(t0 / LINE_NS < PICTURE_LINE);
+        } else if first_miss.is_none() {
+            first_miss = Some((t0, t0 / LINE_NS, ack, predict(t0)));
+        }
+        b.run(b.now + XbusMaster::RELEASE_NS);
+        b.release();
+    }
+    let (at, line, ack, wanted) =
+        first_miss.expect("the shifter takes slots once the picture is on");
+    eprintln!(
+        "{blanking} cycles through the blanking predicted; first miss at {at}, line {line}:          acknowledged at {ack} where the grid and the refresh alone say {wanted}"
+    );
+    assert!(blanking > 500, "the blanking was sampled: {blanking} cycles");
+    assert_eq!(line, PICTURE_LINE, "the rule holds until the picture starts, and stops there");
+}
