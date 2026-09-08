@@ -44,7 +44,14 @@ use crate::netlist::{NetId, Netlist};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pin {
-    /// `3E05`, `A25`, `J12`, or `A28@20` when two packs share a location.
+    /// `3E05`, `A25`, `J12`, or `A28@20` when a location holds more than
+    /// one body: MIT names the second one at a location with an `@nn`, and
+    /// it is not only packs that share one. Three of the disk controller's
+    /// are pairs of 75452 drivers, DCTRSG `A02`/`A02@03`, `B01`/`B01@03`
+    /// and `B03`/`B03@03`, two devices apiece in one footprint --- and MIT
+    /// gives both bodies of a pair the same pin numbers, so nothing but the
+    /// `@nn` tells them apart. What the number itself means is
+    /// **unverified**; no MIT file found so far defines it.
     pub location: String,
     pub number: u8,
     /// The drawing, from the `FILE` column; empty when it was cut off or

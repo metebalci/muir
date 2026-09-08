@@ -17,6 +17,19 @@ use support::mit;
 
 const NETLIST: &str = include_str!("../data/CADR.netlist");
 
+/// Every board muir has a netlist for, for the checks that are of all of
+/// them rather than of the processor pair.
+const BOARDS: [(&str, &str); 8] = [
+    ("BUSINT", include_str!("../data/BUSINT.netlist")),
+    ("CADR", NETLIST),
+    ("CADRDC", include_str!("../data/CADRDC.netlist")),
+    ("CADRIO", include_str!("../data/CADRIO.netlist")),
+    ("CADRM", include_str!("../data/CADRM.netlist")),
+    ("DM", include_str!("../data/DM.netlist")),
+    ("LISPMTV", include_str!("../data/LISPMTV.netlist")),
+    ("SIMPLETV", include_str!("../data/SIMPLETV.netlist")),
+];
+
 #[test]
 fn parses_to_the_expected_shape() {
     let n = netlist::parse(NETLIST).unwrap();
@@ -109,6 +122,79 @@ fn gate_records_merge_into_packages() {
         let c = pkgs.iter().filter(|p| p.page == "BCTERM" && p.reference == r).count();
         assert_eq!(c, 2, "BCTERM {r} is two distinct packages");
     }
+}
+
+/// **Every place a designator names two bodies, on all eight boards.**
+///
+/// [`Netlist::packages`] merges records that share a page, a designator and
+/// a type when their pins are disjoint, and where a pin is claimed twice it
+/// makes two packages instead --- a designator being a board location, and
+/// MIT putting two bodies in one. This is the census of that, pinned here
+/// because the count belongs to these files and not to the format: three of
+/// the twenty are on the processor pair, where they are all resistor packs
+/// on one page, and it was once written down as if that were the whole of
+/// it. The memory board and the SIMPLE TV have none at all.
+///
+/// **Eight of the twenty are devices**, and that is the half worth having:
+/// a reader deciding whether a citation by designator is safe must not be
+/// told it is only ever resistors. Seven are pairs of 8-pin 75452 drivers
+/// in one 16-pin footprint, which MIT's own files write `B05` and `B05@03`
+/// and these files cannot. The eighth is not a pair at all --- see
+/// `chip::wire_oscillators`, and `parts_mounted.rs`, which holds each of
+/// these locations to what MIT's stuffing list stuffs there.
+#[test]
+fn a_designator_can_name_two_bodies() {
+    let mut split = Vec::new();
+    for (name, text) in BOARDS {
+        let n = netlist::parse(text).unwrap();
+        let mut seen: BTreeMap<(&str, &str, &str), Vec<Vec<u8>>> = BTreeMap::new();
+        for part in &n.parts {
+            let pins: Vec<u8> = part.pins.iter().map(|&(pin, _)| pin).collect();
+            let bodies = seen.entry((&part.page, &part.reference, &part.kind)).or_default();
+            match bodies.iter_mut().find(|had| !had.iter().any(|p| pins.contains(p))) {
+                Some(had) => had.extend(&pins),
+                None => bodies.push(pins),
+            }
+        }
+        for ((page, reference, kind), bodies) in seen {
+            if bodies.len() > 1 {
+                split.push(format!("{name} {page} {reference} {kind} x{}", bodies.len()));
+            }
+        }
+    }
+    split.sort();
+    assert_eq!(
+        split,
+        [
+            "BUSINT LMDATA 0A28 SIP180/390-8 x2",
+            "BUSINT LMDATA 0A29 SIP180/390-8 x2",
+            "BUSINT LMDATA 0A30 SIP180/390-8 x2",
+            "CADR BCTERM 1B15 SIP220/330-8 x2",
+            "CADR BCTERM 1B20 SIP220/330-8 x2",
+            "CADR BCTERM 1B25 SIP220/330-8 x2",
+            // One 74LS124, not two: the drawing gives each of its two VCO
+            // sections a body of its own and both of them the package's
+            // ground and supply pins, so the records collide. `dc.stf`
+            // stuffs one device at B04 and `chip::wire_oscillators` takes
+            // each section from whichever record carries its pins.
+            "CADRDC DCTMOT 0B04 74LS124 x2",
+            "CADRDC DCTRSG 0A01 SIP100-8 x2",
+            "CADRDC DCTRSG 0A02 75452 x2",
+            "CADRDC DCTRSG 0B01 75452 x2",
+            "CADRDC DCTRSG 0B03 75452 x2",
+            "CADRIO LMMYNM 0D11 P SIP1000-10 x2",
+            "DM DMIO 0B05 75452 x2",
+            "DM DMIO 0B06 SIP100-8 x2",
+            "DM DMIO 0B11 SIP100-8 x2",
+            "DM DMIO 0B15 75452 x2",
+            "DM DMIO 0B16 SIP100-8 x2",
+            "DM DMSEQ 0D12 75452 x2",
+            "DM DMSEQ 0D15 75452 x2",
+            "LISPMTV ECLVID 0E08 RES x2",
+        ]
+    );
+    let devices = split.iter().filter(|s| s.contains("75452") || s.contains("74LS124")).count();
+    assert_eq!((split.len(), devices), (20, 8));
 }
 
 /// Every unnamed net carries a name from another end, and all of them must
@@ -321,17 +407,7 @@ fn only_the_dot_clock_is_named_twice_by_case() {
 #[test]
 fn no_board_spells_one_net_two_ways() {
     let mut clashes = Vec::new();
-    let boards: [(&str, &str); 8] = [
-        ("BUSINT", include_str!("../data/BUSINT.netlist")),
-        ("CADR", include_str!("../data/CADR.netlist")),
-        ("CADRDC", include_str!("../data/CADRDC.netlist")),
-        ("CADRIO", include_str!("../data/CADRIO.netlist")),
-        ("CADRM", include_str!("../data/CADRM.netlist")),
-        ("DM", include_str!("../data/DM.netlist")),
-        ("LISPMTV", include_str!("../data/LISPMTV.netlist")),
-        ("SIMPLETV", include_str!("../data/SIMPLETV.netlist")),
-    ];
-    for (name, text) in boards {
+    for (name, text) in BOARDS {
         let n = netlist::parse(text).unwrap();
         let mut used = std::collections::BTreeSet::new();
         for part in &n.parts {

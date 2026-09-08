@@ -94,12 +94,37 @@ impl Netlist {
     ///
     /// A `part` record in the file is a **gate**, not a package: a quad NAND
     /// appears as up to four records sharing one reference designator, each
-    /// carrying one gate's pins. 1243 records are 1084 packages.
+    /// carrying one gate's pins. In `data/CADR.netlist`, 1243 records are
+    /// 1084 packages.
     ///
-    /// Records sharing a designator are merged when their pins are disjoint.
-    /// Where they overlap the designator has genuinely been reused for two
-    /// different parts, which happens three times, all resistor packs on page
-    /// BCTERM.
+    /// Records sharing a page, a designator and a type are merged when their
+    /// pins are disjoint. Two things leave them apart, and only the first is
+    /// a second device:
+    ///
+    /// - **a pin claimed twice.** A designator is a board location, and MIT
+    ///   puts two devices in one: two 8-pin 75452 drivers go in the footprint
+    ///   of a 16-pin DIP. MIT's own files name the second one `B05@03` where
+    ///   the first is `B05`; these do not, no designator in any
+    ///   `data/*.netlist` carrying an `@`, so both come out `0B05` and the
+    ///   pins are all that separate them. It happens 20 times over the eight
+    ///   files --- and **eight of the twenty are devices**, not packs: the
+    ///   multiplexor's four 75452 pairs, the disk controller's three, and the
+    ///   74LS124 at CADRDC DCTMOT 0B04, whose two VCO sections are drawn as
+    ///   two bodies that each repeat the supply pins where `cadrdc/dc.stf`
+    ///   stuffs one device. `tests/netlist.rs` has the census, and the count
+    ///   belongs to these files rather than to the format: three of the
+    ///   twenty are in `data/CADR.netlist`, where they are indeed all
+    ///   resistor packs on BCTERM, and the memory board and the SIMPLE TV
+    ///   have none at all.
+    /// - **two body names for one chip**, which is no second device: `OS00L`
+    ///   for a NAND drawn with inverted inputs beside the `74S00` its
+    ///   fellows are drawn as, one 74S00 at BUSINT DATCTL 0B20. So there are
+    ///   more packages here than there are chips.
+    ///
+    /// Which splits are second devices is not a question this file can
+    /// answer. `tests/parts_mounted.rs` answers it, holding every board
+    /// location to MIT's own stuffing list, which does name the second
+    /// device at a location.
     pub fn packages(&self) -> Vec<Package> {
         let mut out: Vec<Package> = Vec::new();
         for part in &self.parts {
