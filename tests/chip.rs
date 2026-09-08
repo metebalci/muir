@@ -29,44 +29,200 @@ const CADRDC: &str = include_str!("../data/CADRDC.netlist");
 /// words `rtl`'s machine has.
 const MEMORY_BOARDS: usize = 32;
 
-/// `MUIR_NO_SLEEP=1` turns every optimisation off, the slow way: every
-/// board stepped at every edge of its own clock instead of sleeping,
-/// every wire carried at every exchange ([`FarEnd::unoptimised`]).
-/// `MUIR_MAIN_MEMORY=model` and `MUIR_IO_BOARD=model` run those from the
-/// machine's models instead of as netlists, the timing being the board's
-/// either way; netlists unless told. `MUIR_TV=netlist` puts the display
-/// netlist on the backplane --- it answers the boot's every access --- but
-/// `rtl` has no timing twin for it yet as it has for memory and the I/O
-/// board, so a comparison against `rtl` diverges at the boot's first
-/// display write (`chip` 870 ns, `rtl` 145); until the twin exists these
-/// tests run the model display unless told, where `muir` runs the
-/// netlist. `MUIR_TV_BOARD=lispm-tv` puts the LISPM TV there in place of
-/// the SIMPLE TV. `MUIR_DISK_CONTROLLER=netlist` puts the disk controller
-/// netlist there, with the pack in unit 0 on its cable as a drive; its
-/// transfers then take the drive's time, milliseconds a block, where the
-/// model's take none, so the model is the default for that one too.
+/// Which boards this harness puts behind the bus interface as netlists,
+/// and how many memory boards are on the backplane.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Chosen {
+    memory: usize,
+    io: bool,
+    tv: bool,
+    tv_board: &'static str,
+    disk: bool,
+}
+
+/// What this harness builds when the environment says nothing, which is
+/// what CI runs. `muir --chip` builds the same machine but for the
+/// display, and [`muir_builds_this_harnesss_machine_but_for_the_display`]
+/// is what holds the two together.
+const HARNESS: Chosen =
+    Chosen { memory: MEMORY_BOARDS, io: true, tv: false, tv_board: "simple-tv", disk: false };
+
+/// [`HARNESS`] with the environment's answer wherever it gives one. A
+/// board is a netlist when its variable says `netlist` and the machine's
+/// model when it says `model`, whichever way round that board's default
+/// runs; anything else leaves the default alone.
+///
+/// `MUIR_MAIN_MEMORY` and `MUIR_IO_BOARD` are netlists by default, the
+/// timing being the board's either way.
+///
+/// `MUIR_TV` is the model by default, and that is the one board this
+/// harness does not run as `muir --chip` runs it. `rtl` has no timing twin
+/// for the display as it has for memory and the I/O board, so with the
+/// display netlist on the backplane the two machines keep different time
+/// as soon as the band touches it. Measured, on the System 100 pack:
+/// `MUIR_COSIM_CYCLES=2000000 MUIR_TV=netlist` fails at microcycle
+/// 1422296, `chip` taking 580 ns over a cycle `rtl` gives 145, at PC
+/// 25334 --- which is just past `PROM-DISABLE`, so it is the band's first
+/// reach for the display and not anything the boot PROM does. The same run
+/// with the model display agrees over all 2000000 microcycles and 16384
+/// distinct PCs. `MUIR_TV_BOARD=lispm-tv` puts the LISPM TV there in place
+/// of the SIMPLE TV.
+///
+/// `MUIR_DISK_CONTROLLER` is the model by default, and there it agrees
+/// with `muir --chip` --- but by coincidence rather than by decision,
+/// which is what [`muir_builds_this_harnesss_machine_but_for_the_display`]
+/// is for. The netlist controller takes the pack in unit 0 on its cable as
+/// a drive, and its transfers then take the drive's time, milliseconds a
+/// block, where the model's take none.
+fn chosen() -> Chosen {
+    let asked = |what: &str, default: bool| match std::env::var(what).as_deref() {
+        Ok("netlist") => true,
+        Ok("model") => false,
+        _ => default,
+    };
+    Chosen {
+        memory: if asked("MUIR_MAIN_MEMORY", true) { HARNESS.memory } else { 0 },
+        io: asked("MUIR_IO_BOARD", HARNESS.io),
+        tv: asked("MUIR_TV", HARNESS.tv),
+        tv_board: match std::env::var("MUIR_TV_BOARD").as_deref() {
+            Ok("lispm-tv") => "lispm-tv",
+            _ => HARNESS.tv_board,
+        },
+        disk: asked("MUIR_DISK_CONTROLLER", HARNESS.disk),
+    }
+}
+
+/// The far end [`chosen`] asks for. `MUIR_NO_SLEEP=1` turns every
+/// optimisation off, the slow way: every board stepped at every edge of
+/// its own clock instead of sleeping, every wire carried at every exchange
+/// ([`FarEnd::unoptimised`]).
 fn far_end(n: &netlist::Netlist, machine: muir::machine::Machine) -> FarEnd {
+    let c = chosen();
     let bus_n = netlist::parse(BUSINT).unwrap();
     let mem_n = netlist::parse(CADRM).unwrap();
     let io_n = netlist::parse(CADRIO).unwrap();
-    let tv_n = netlist::parse(match std::env::var("MUIR_TV_BOARD").as_deref() {
-        Ok("lispm-tv") => LISPMTV,
-        _ => SIMPLETV,
-    })
-    .unwrap();
+    let tv_n = netlist::parse(if c.tv_board == "lispm-tv" { LISPMTV } else { SIMPLETV }).unwrap();
     let disk_n = netlist::parse(CADRDC).unwrap();
-    let model = |what: &str| std::env::var(what).is_ok_and(|v| v == "model");
-    let netlist_asked = |what: &str| std::env::var(what).is_ok_and(|v| v == "netlist");
-    let boards = if model("MUIR_MAIN_MEMORY") { 0 } else { MEMORY_BOARDS };
-    let io = if model("MUIR_IO_BOARD") { None } else { Some(&io_n) };
-    let tv = if netlist_asked("MUIR_TV") { Some(&tv_n) } else { None };
-    let disk = if netlist_asked("MUIR_DISK_CONTROLLER") { Some(&disk_n) } else { None };
-    let boards = Boards { memory: boards, io, tv, disk, ..Default::default() };
+    let boards = Boards {
+        memory: c.memory,
+        io: c.io.then_some(&io_n),
+        tv: c.tv.then_some(&tv_n),
+        disk: c.disk.then_some(&disk_n),
+        ..Default::default()
+    };
     let mut far = FarEnd::new(n, &bus_n, &mem_n, boards, 0, machine);
     if std::env::var("MUIR_NO_SLEEP").is_ok() {
         far.unoptimised();
     }
     far
+}
+
+/// `muir --chip` and this harness must build the same machine, or the
+/// difference must be one this file has written down with its reason.
+///
+/// They differ over one board: the display, and [`chosen`] says why. Every
+/// other board is `muir`'s. A difference that is not this one is a
+/// difference nobody decided, and the way such a difference shows up
+/// otherwise is a `chip` run that halts where the whole test suite is
+/// green --- which is how issue 60 was found, at 25 minutes of wall clock
+/// a bisect.
+///
+/// The reason for the display's exception is that the comparison is wrong
+/// with the netlist board on the backplane, not that the board is dear to
+/// run. Measured on the whole of this file, at the 40 microcycles the
+/// default runs and in the debug build CI builds: 6.58 to 6.83 s of CPU
+/// with the model display against 7.37 to 7.67 s with the netlist, and
+/// wall clock inside the noise either way because the tests run in
+/// parallel. Every test here passes with the netlist display; it is the
+/// long comparison [`chip_agrees_with_rtl`] that does not.
+///
+/// `muir` is asked what it built rather than trusted to have kept a copy
+/// of its defaults in step: `--stop-after 0` prints the banner and stops,
+/// and the `memory:` and `boards:` lines of it are the machine the binary
+/// actually assembled. `MUIR_RC` points at a file that is not there, so
+/// that a `.muirrc` in the directory or the home one cannot answer for it.
+#[test]
+fn muir_builds_this_harnesss_machine_but_for_the_display() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_muir"))
+        .args(["--chip", "--stop-after", "0"])
+        .env("MUIR_RC", "/nonexistent/.muirrc")
+        .output()
+        .expect("muir did not run");
+    // The banner is on stderr, the run's own lines on stdout.
+    let banner = String::from_utf8_lossy(&out.stderr).into_owned();
+    let line = |head: &str| {
+        banner
+            .lines()
+            .find(|l| l.starts_with(head))
+            .unwrap_or_else(|| panic!("no `{head}` line in muir's banner:\n{banner}"))
+            .to_string()
+    };
+    // `netlist` or `model`, the word after a label on a banner line.
+    let kind = |line: &str, label: &str| {
+        let rest =
+            line.split(label).nth(1).unwrap_or_else(|| panic!("no `{label}` on muir's `{line}`"));
+        match rest.split_whitespace().next().map(|w| w.trim_end_matches(',')) {
+            Some("netlist") => true,
+            Some("model") => false,
+            other => panic!("muir says `{label}` is {other:?} on `{line}`"),
+        }
+    };
+    let memory = line("memory: ");
+    let boards = line("boards: ");
+    let tv_board = boards
+        .split("TV ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().nth(1))
+        .map(|word| word.trim_end_matches(','))
+        .unwrap_or_else(|| panic!("no TV board named on muir's `{boards}`"));
+    let muirs = Chosen {
+        memory: if memory.ends_with("netlist boards on the Xbus") {
+            memory
+                .trim_start_matches("memory: ")
+                .split_once(" boards")
+                .and_then(|(n, _)| n.parse().ok())
+                .unwrap_or_else(|| panic!("no board count on muir's `{memory}`"))
+        } else if memory.ends_with(", model") {
+            0
+        } else {
+            panic!("muir's `{memory}` says neither netlist boards nor model")
+        },
+        io: kind(&boards, "I/O board "),
+        tv: kind(&boards, "TV "),
+        tv_board: match tv_board {
+            "simple-tv" => "simple-tv",
+            "lispm-tv" => "lispm-tv",
+            other => panic!("muir names the TV board `{other}` on `{boards}`"),
+        },
+        disk: kind(&boards, "disk controller "),
+    };
+
+    let same = |what: &str| {
+        format!(
+            "muir --chip and tests/chip.rs disagree over the {what}, and nothing here says \
+             they should.\n  muir:    {muirs:?}\n  harness: {HARNESS:?}\nEither follow \
+             muir in HARNESS, or write the reason for the difference into `chosen` and \
+             into this test beside the display's."
+        )
+    };
+    assert_eq!(muirs.memory, HARNESS.memory, "{}", same("memory boards"));
+    assert_eq!(muirs.io, HARNESS.io, "{}", same("I/O board"));
+    assert_eq!(muirs.tv_board, HARNESS.tv_board, "{}", same("kind of TV board"));
+    assert_eq!(muirs.disk, HARNESS.disk, "{}", same("disk controller"));
+    assert!(
+        !boards.contains("multiplexor"),
+        "muir --chip now puts a DISK MULTIPLEXOR on by default and this harness does not: \
+         `{boards}`"
+    );
+    assert!(
+        muirs.tv && !HARNESS.tv,
+        "the display is meant to be the one board these two differ over --- muir's netlist, \
+         the harness's model, because `rtl` has no timing twin for it. muir says {} and the \
+         harness says {}. If `rtl` has grown the twin, turn the display on in HARNESS and \
+         delete this assertion; if muir has stopped running the netlist, ask why.",
+        if muirs.tv { "netlist" } else { "model" },
+        if HARNESS.tv { "netlist" } else { "model" },
+    );
 }
 
 fn build() -> Chip {
@@ -786,11 +942,8 @@ fn hang_dump(far: &FarEnd) {
         }
     }
     eprintln!("{line}");
-    let tv_n = netlist::parse(match std::env::var("MUIR_TV_BOARD").as_deref() {
-        Ok("lispm-tv") => LISPMTV,
-        _ => SIMPLETV,
-    })
-    .unwrap();
+    let tv_n =
+        netlist::parse(if chosen().tv_board == "lispm-tv" { LISPMTV } else { SIMPLETV }).unwrap();
     for (j, d) in far.xbus.devices.iter().enumerate() {
         let mut line = format!("hang: device {j}");
         for name in [
