@@ -685,3 +685,101 @@ fn the_board_answers_on_its_own_slots() {
     assert!(blanking > 500, "the blanking was sampled: {blanking} cycles");
     assert_eq!(line, PICTURE_LINE, "the rule holds until the picture starts, and stops there");
 }
+
+/// **The board runs MIT's sync program out of reset**, which nothing here
+/// checked: the raster test above walks `cpt.prom` by hand, and a hand walk
+/// says what the program means rather than that the board executes it.
+///
+/// Out of reset the 74LS273 at NTVINC 0A07 is cleared, so its `-SYNC PROM
+/// ENB` on pin 19 is low: the 74S472 at NSYRAM 0C05 is enabled and the
+/// board fetches MIT's program. The eight 2147s that hold a program the
+/// software loads instead take their chip select from `SYNC PROM ENB`, the
+/// **other** net --- the 74S37O at NTVINC 0C11 inverts the first into the
+/// second --- so with the PROM enabled the RAMs are deselected, which is
+/// the state this checks.
+///
+/// **`SYNC PROM ENB` has no pull-up and does not need one.** Its only
+/// driver is that open-collector inverter, so the net is either pulled low
+/// or released, and a released open collector is `Level::Z`, which every
+/// TTL input reads as a one ([`muir::part::Level::read_open`]). A pull-up
+/// would give exactly that. The net is therefore `Z` for the whole of this
+/// test and the RAMs stay deselected, which is right rather than a float
+/// that happens not to bite.
+///
+/// What this does **not** say is what the board does in a booted machine.
+/// `-SYNC PROM ENB` is a software-written register bit, so microcode that
+/// writes it moves the board on to the program in its RAMs, and what runs
+/// then is whatever was loaded there.
+#[test]
+fn the_sync_prom_is_fetched_out_of_reset() {
+    use muir::part::Level;
+    use muir::xbus::XbusMaster;
+
+    let n = simpletv();
+    let id = |name: &str| n.by_name_id(&format!("'{name}'")).or_else(|| n.by_name_id(name));
+    let id = |name: &str| id(name).unwrap_or_else(|| panic!("no net {name}"));
+    let address: Vec<_> = (0..9).map(|k| id(&format!("SYNC ADR {k}"))).collect();
+    let data: Vec<_> = (0..8).map(|k| id(&format!("SYNC {k}"))).collect();
+
+    // Who is on the RAMs' chip select: the eight 2147s that read it and the
+    // one open-collector inverter that drives it, and nothing else. That is
+    // the whole of the net, and it is why `Z` below is the driver releasing
+    // rather than the driver missing.
+    let on: BTreeSet<String> = n
+        .parts
+        .iter()
+        .flat_map(|p| p.pins.iter().map(move |&(pin, net)| (p, pin, net)))
+        .filter(|&(_, _, net)| net == id("SYNC PROM ENB"))
+        .map(|(p, pin, _)| format!("{} {} p{pin}", p.reference, p.kind))
+        .collect();
+    let want: BTreeSet<String> = (1..=4)
+        .flat_map(|k| [format!("0A0{k} 2147 p10"), format!("0B0{k} 2147 p10")])
+        .chain(["0C11 74S37O p6".to_string()])
+        .collect();
+    assert_eq!(on, want, "the chip select's own parts");
+
+    let mut b = XbusMaster::new(&n, 0);
+    assert_eq!(b.chip.net(id("-SYNC PROM ENB")), Level::Low, "the PROM is enabled out of reset");
+
+    let word = |b: &XbusMaster, nets: &[netlist::NetId]| -> Option<u32> {
+        nets.iter().enumerate().try_fold(0, |w, (k, &net)| match b.chip.net(net).read_open(true) {
+            Some(bit) => Some(w | (bit as u32) << k),
+            None => None,
+        })
+    };
+    // MIT's own program, to compare what comes off the PROM against.
+    let image = muir::prom::parse_mit(include_str!("../mit/cadrtv/cpt.prom")).expect("cpt.prom");
+    let (mut addresses, mut words, mut codes) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    // A millisecond, sampled every 250 ns, which is finer than the
+    // program's instruction every 500 ns. A frame is sixteen of these, so
+    // what this sees is the start of the program rather than all 297
+    // words of it.
+    for k in 1..=4_000u64 {
+        b.run(k * 250);
+        assert_eq!(b.chip.net(id("SYNC PROM ENB")), Level::Z, "the RAMs stay deselected");
+        let at = word(&b, &address).expect("the address is driven");
+        let w = word(&b, &data).expect("the PROM answers");
+        // **The word is MIT's own at that address**, which is what makes
+        // this the board running `cpt.prom` rather than the board running
+        // something. An address line that did not reach the PROM would
+        // still give a program, and would give the wrong words.
+        assert_eq!(
+            Some(w as u8),
+            image.get(at as usize).copied(),
+            "address {at} answered {w:#04x}"
+        );
+        addresses.insert(at);
+        words.insert(w);
+        codes.insert((w >> 4) & 3);
+    }
+
+    // The program is fetched rather than the address standing still, and
+    // what comes back is a program rather than one word over and over.
+    assert!(addresses.len() > 64, "the sync counter walks: {} addresses", addresses.len());
+    assert!(addresses.contains(&4), "and starts where the program does");
+    assert!(words.len() > 8, "the PROM answers with a program: {} words", words.len());
+    // `lmtv.order` gives the slot owner as bits 5 and 4 of the instruction,
+    // and MIT's program uses all four: the processor, the refresh, the
+    // display and the idle slot.
+    assert_eq!(codes, BTreeSet::from([0, 1, 2, 3]), "every slot owner appears");
+}
