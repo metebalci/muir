@@ -494,6 +494,54 @@ fn the_far_ends_board_is_reset_at_power_on() {
     assert_eq!(first, Some(195_890), "when KBD READY rose on the board that was not reset");
 }
 
+/// **The mains clocks the board\'s time-of-day counter.** The `CLOCK`
+/// register at `764124` reads the two 74393s at CLKTOD 0D22 and 0D23, a
+/// free-running count of mains cycles since power-on. They are clocked by
+/// `60 Hz`, the output of the 74LS14 Schmitt trigger at 0D20, whose input
+/// is the network at C20 that `cadrio/clk60h.drw` labels `2.5 VAC, 60 Hz`,
+/// `150 ohm series` --- the mains arriving at the board\'s edge pin `FV2`
+/// as `POWER LINE ^`.
+///
+/// Nothing drove it before [`muir::unibus::MAINS_PERIOD`], so the counter
+/// stood still on the netlist board where the behavioural model\'s counted.
+///
+/// The count is taken twice, a tenth of a second apart, and the difference
+/// asserted rather than either reading: what the counter stands at depends
+/// on where the mains happened to be at power-on, which on the machine is
+/// whatever the mains was doing, and the difference does not.
+#[test]
+fn the_mains_clocks_the_time_of_day_counter() {
+    use muir::unibus::Unibus;
+    let n = cadrio();
+    let bus_n = netlist::parse(include_str!("../data/BUSINT.netlist")).unwrap();
+    let mut u = Unibus::new(&bus_n, &n, 0, 0o3050);
+    let sixty = n.by_name_id("\'60 Hz\'").expect("60 Hz");
+    let scl: Vec<_> = (0..8).map(|k| n.by_name_id(&format!("SCL{k}")).expect("SCL")).collect();
+    let count = |u: &Unibus| -> u32 {
+        scl.iter()
+            .enumerate()
+            .map(|(k, &net)| ((u.board.net(net) == Level::High) as u32) << k)
+            .sum()
+    };
+    let mut edges = 0;
+    let mut was = u.board.net(sixty);
+    let mut first = None;
+    for t in (0..120_000_000u64).step_by(100_000) {
+        u.transition_due(t);
+        let now = u.board.net(sixty);
+        if now != was {
+            edges += 1;
+            was = now;
+        }
+        if t == 20_000_000 {
+            first = Some(count(&u));
+        }
+    }
+    let first = first.expect("the twenty-millisecond reading");
+    assert_eq!(count(&u) - first, 6, "mains cycles counted in a tenth of a second");
+    assert!(edges >= 13, "the trigger toggled {edges} times in 120 ms");
+}
+
 /// **The board lets go of the data lines after a write and after a read.**
 /// A Unibus device drives the data lines only while answering a read; the
 /// far end found the lines held low at rest before a read of the
