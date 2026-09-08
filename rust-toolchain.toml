@@ -1,5 +1,22 @@
 # Pinned so every machine builds muir with the same compiler.  The project has
 # no dependencies, so this file is the whole of its build environment.
+#
+# **This is a beta, and deliberately.**  1.98.0 miscompiles
+# `chaos::board::Turn::tc` at `opt-level = 3` with `codegen-units = 1`: it
+# produces a byte the function's own arithmetic cannot reach, seventeen counts
+# from zero each able only to `wrapping_sub(1)` leaving the byte at 7.  Measured
+# on that test, 1.98.0 and 1.98.1 fail and 1.99.0-beta.4 passes, and two
+# nightlies of one channel put the change in a window --- `e71c0f1e3` of 18
+# August and `f7d782a3b` of 19 August fail, `cea272fa3` of 7 September passes.
+# Issue 79 has the whole of it, including the upstream report it matches.
+#
+# The alternative was `codegen-units = 16`, which is also correct and costs the
+# 3% that one codegen unit buys.  This pin keeps both.
+#
+# **When 1.99 ships, change the channel below to it.  That is the only edit.**
+# `codegen-units` stays at 1 and nothing else moves; the beta is here only until
+# its release is.  `channel = "1.99.0-beta.4"` names an exact toolchain rather
+# than following the beta channel, so it stays reproducible in the meantime.
 [toolchain]
-channel = "1.98.0"
+channel = "1.99.0-beta.4"
 components = ["clippy", "rustfmt"]
