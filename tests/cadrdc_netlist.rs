@@ -1933,3 +1933,128 @@ fn the_reversed_read_all_hangs_to_the_watchdog() {
     assert_eq!(bad, 0, "and puts nothing on the disk");
     assert_eq!(block2, Some([0; muir::disk_unit::BLOCK_WORDS]), "block 2 untouched");
 }
+
+/// **The cable to the DISK MULTIPLEXOR, as MIT's wire list has it.** The
+/// controller's edge connector is the `DCEDGE` page of `cadrdc/dc.wlr`:
+/// fifty-three posts, of which twenty-four are ground, one is `NC`, and
+/// the twenty-eight below are the cable. This is the controller's half of issue
+/// #1's cable, pinned here so that the multiplexor is wired to something
+/// checked rather than to a reading of the drawings.
+///
+/// Nothing else in this project reads `DCEDGE`, so without this the six
+/// one-board jumpers in `src/netlist.rs` would be the only record of what
+/// these posts carry, and they name six of the twenty-eight.
+///
+/// **Three posts carry two labels, and they are the fan-out.** `DR2` is
+/// `DISK.CLK^` and `UNIT.0.CLOCK^`, `DS2` is `READ DATA` and `UNIT 0 READ
+/// DATA`, `DT2` is `BLOCK.CLK^` and `UNIT.0.SECTOR^`. On a one-board
+/// machine those are the same wire because there is one drive; a
+/// multiplexor is the thing that makes them different, taking the
+/// controller's single `DISK.CLK^`, `READ DATA` and `BLOCK.CLK^` and
+/// choosing which of eight units they come from. The names are asserted
+/// here in full, both labels, so that the pair is on the record before
+/// anything is wired between them.
+///
+/// Four copies of `dc.wlr` are on the tapes and agree on every post they
+/// share; the two older ones lack `DD2` and `EL2`/`EM2`/`EN2`, which were
+/// added later. The copy in `mit/` is the newest, and is the one with all
+/// fifty-three.
+#[test]
+fn the_multiplexor_cable_is_mits_edge_connector() {
+    let n = netlist::parse(CADRDC).unwrap();
+    let signals = support::wire_list(&n, &["cadrdc", "dc.wlr"]);
+    let mut posts: BTreeMap<String, String> = BTreeMap::new();
+    for s in &signals {
+        for p in s.pins.iter().filter(|p| p.body == "CON" && p.page == "DCEDGE") {
+            posts.insert(p.location.clone(), s.names.join(" = "));
+        }
+    }
+    assert_eq!(posts.len(), 53, "posts on the DCEDGE connector");
+    let grounds = posts.values().filter(|v| *v == "GND").count();
+    assert_eq!(grounds, 24, "of them ground");
+    let signal_posts: BTreeMap<&str, &str> = posts
+        .iter()
+        .filter(|(_, v)| *v != "GND" && *v != "NC")
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let want: BTreeMap<&str, &str> = BTreeMap::from([
+        ("DD2", "XINIT"),
+        ("DE2", "SEL UNIT ATTENTION"),
+        ("DF2", "ANY ATTENTION"),
+        ("DH2", "UNIT 0 ATTENTION"),
+        ("DJ2", "-LOAD DA"),
+        ("DL2", "NO SELECT"),
+        ("DM2", "MULTIPLE SELECT"),
+        ("DN2", "WRITE DATA"),
+        ("DP2", "WRITE GATE"),
+        ("DR2", "DISK.CLK^ = UNIT.0.CLOCK^"),
+        ("DS2", "READ DATA = UNIT 0 READ DATA"),
+        ("DT2", "BLOCK.CLK^ = UNIT.0.SECTOR^"),
+        ("DU2", "BLOCK.CTR0"),
+        ("DV2", "BLOCK.CTR1"),
+        ("ED2", "BLOCK.CTR2"),
+        ("EE2", "BLOCK.CTR3"),
+        ("EF2", "BLOCK.CTR4"),
+        ("EH2", "BLOCK.CTR5"),
+        ("EJ2", "BLOCK.CTR6"),
+        ("EK2", "BLOCK.CTR7"),
+        ("EL2", "XBI28"),
+        ("EM2", "XBI29"),
+        ("EN2", "XBI30"),
+        ("EP2", "UNIT0"),
+        ("ER2", "UNIT1"),
+        ("ES2", "UNIT2"),
+        ("ET2", "-CYLINDER TAG"),
+        ("EU2", "-HEAD TAG"),
+    ]);
+    assert_eq!(signal_posts, want, "the cable's posts and what each carries");
+}
+
+/// **The six one-board jumpers are the multiplexor's nets, and only those
+/// six.** `cadrdc/disk.hand` heads them "not to be installed if this DC is
+/// associated with a DM board", so a controller with a multiplexor beside
+/// it must have them off and the multiplexor drives those nets instead ---
+/// which is what `netlist::parse_with_multiplexor` is for.
+///
+/// Held from both sides: with the jumpers the three attention nets are one
+/// and the unit number and `MULTIPLE SELECT` are ground; without them all
+/// six stand apart, ready for the cable. The address and timeout jumpers
+/// are not the multiplexor's and stay either way, so the board answers at
+/// its own address in both.
+#[test]
+fn a_multiplexor_leaves_the_one_board_jumpers_off() {
+    let one = netlist::parse(CADRDC).unwrap();
+    let dm = netlist::parse_with_multiplexor(CADRDC).unwrap();
+    let id = |n: &Netlist, name: &str| n.by_name_id(name).unwrap_or_else(|| panic!("{name}"));
+
+    // Jumpered: the three attentions are one net, and the unit number and
+    // MULTIPLE SELECT are on ground.
+    let attention = id(&one, "'UNIT 0 ATTENTION'");
+    assert_eq!(id(&one, "'ANY ATTENTION'"), attention, "ANY ATTENTION is unit 0's");
+    assert_eq!(id(&one, "'SEL UNIT ATTENTION'"), attention, "and so is SEL UNIT ATTENTION");
+    let gnd = id(&one, "GND");
+    for net in ["'MULTIPLE SELECT'", "UNIT0", "UNIT1", "UNIT2"] {
+        assert_eq!(id(&one, net), gnd, "{net} is grounded on the one-board controller");
+    }
+
+    // With a multiplexor: six nets of their own, for it to drive.
+    let mut apart = BTreeSet::new();
+    for net in [
+        "'UNIT 0 ATTENTION'",
+        "'ANY ATTENTION'",
+        "'SEL UNIT ATTENTION'",
+        "'MULTIPLE SELECT'",
+        "UNIT0",
+        "UNIT1",
+        "UNIT2",
+    ] {
+        let net = id(&dm, net);
+        assert_ne!(net, id(&dm, "GND"), "no multiplexor net is grounded");
+        apart.insert(net);
+    }
+    assert_eq!(apart.len(), 7, "the six jumpers leave seven nets standing apart");
+
+    // The address and timeout jumpers are not the multiplexor's.
+    assert_eq!(id(&dm, "'-TIMEOUT ENB'"), id(&dm, "GND"), "the timeout enable stays");
+    assert_eq!(id(&dm, "AD14"), id(&dm, "HI1"), "and the address jumpers stay");
+}

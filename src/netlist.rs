@@ -162,6 +162,18 @@ fn find(up: &mut [NetId], mut x: NetId) -> NetId {
 /// with the series resistors joined and the wires MIT added by hand after
 /// wrapping, `Netlist::HAND_JUMPERS`.
 pub fn parse(text: &str) -> Result<Netlist, String> {
+    let mut n = parse_with_multiplexor(text)?;
+    n.apply_one_board_jumpers();
+    Ok(n)
+}
+
+/// The netlist of a disk controller that has a DISK MULTIPLEXOR beside it:
+/// [`parse`] without `cadrdc/disk.hand`'s six one-board jumpers, whose own
+/// heading is "not to be installed if this DC is associated with a DM
+/// board". The six nets are then the multiplexor's to drive, and on any
+/// other board this is [`parse`] exactly, there being no `DCEDGE` page for
+/// the jumpers to land on.
+pub fn parse_with_multiplexor(text: &str) -> Result<Netlist, String> {
     let mut n = parse_wired(text)?;
     n.merge_series_resistors();
     n.apply_hand_jumpers();
@@ -499,23 +511,41 @@ impl Netlist {
     /// holds the wired netlist to the list and the parsed one to the
     /// jumpers. Keyed by page, as [`Netlist::STRAP_PAGES`] is; DCEDGE has no
     /// parts, so the page list is what says the board is here.
+    /// The six of `cadrdc/disk.hand`'s first paragraph, which is headed
+    /// "not to be installed if this DC is associated with a DM board".
+    /// They stand in for the DISK MULTIPLEXOR: with one drive and no
+    /// multiplexor board, "any attention" and "selected unit attention"
+    /// are both just unit 0's attention, `MULTIPLE SELECT` is grounded and
+    /// the unit number is forced to 0. [`parse`] applies them, which is
+    /// the one-board machine and the default; [`parse_with_multiplexor`]
+    /// leaves them off, and then these six nets are the multiplexor's to
+    /// drive.
+    ///
+    /// The posts are the controller's edge connector and `cadrdc/dc.wlr`
+    /// says what each carries, on its `DCEDGE` page: `DE2` `SEL UNIT
+    /// ATTENTION`, `DF2` `ANY ATTENTION`, `DH2` `UNIT 0 ATTENTION`, `DM2`
+    /// `MULTIPLE SELECT`, `EP2`/`ER2`/`ES2` `UNIT0`/`UNIT1`/`UNIT2`, and
+    /// `DN1` and `ET1` on the ground net.
+    const ONE_BOARD_JUMPERS: &'static [(&'static str, &'static str)] = &[
+        ("UNIT 0 ATTENTION", "ANY ATTENTION"),      // DF2 : DH2
+        ("UNIT 0 ATTENTION", "SEL UNIT ATTENTION"), // DE2 : DF2
+        ("GND", "MULTIPLE SELECT"),                 // DN1 : DM2
+        ("GND", "UNIT2"),                           // ES2 : ET1
+        ("GND", "UNIT1"),                           // ER2 : ES2
+        ("GND", "UNIT0"),                           // EP2 : ER2
+    ];
+
     const HAND_JUMPERS: &'static [(&'static str, &'static [(&'static str, &'static str)])] = &[(
         "DCEDGE",
         &[
-            ("UNIT 0 ATTENTION", "ANY ATTENTION"),      // DF2 : DH2
-            ("UNIT 0 ATTENTION", "SEL UNIT ATTENTION"), // DE2 : DF2
-            ("GND", "MULTIPLE SELECT"),                 // DN1 : DM2
-            ("GND", "UNIT2"),                           // ES2 : ET1
-            ("GND", "UNIT1"),                           // ER2 : ES2
-            ("GND", "UNIT0"),                           // EP2 : ER2
-            ("GND", "-TIMEOUT ENB"),                    // J5-16 : J5-41
-            ("HI1", "AD14"),                            // J5-1 : J5-2
-            ("HI1", "AD13"),                            // J5-3 : J5-4
-            ("HI1", "AD6"),                             // J5-5 : J5-6
-            ("HI1", "AD5"),                             // J5-7 : J5-8
-            ("HI1", "AD4"),                             // J5-9 : J5-10
-            ("HI1", "AD3"),                             // J5-11 : J5-12
-            ("HI1", "AD2"),                             // J5-13 : J5-14
+            ("GND", "-TIMEOUT ENB"), // J5-16 : J5-41
+            ("HI1", "AD14"),         // J5-1 : J5-2
+            ("HI1", "AD13"),         // J5-3 : J5-4
+            ("HI1", "AD6"),          // J5-5 : J5-6
+            ("HI1", "AD5"),          // J5-7 : J5-8
+            ("HI1", "AD4"),          // J5-9 : J5-10
+            ("HI1", "AD3"),          // J5-11 : J5-12
+            ("HI1", "AD2"),          // J5-13 : J5-14
         ],
     )];
 
@@ -559,6 +589,20 @@ impl Netlist {
     }
 
     /// Applies [`Netlist::HAND_JUMPERS`] for every board whose page is here.
+    /// The one-board jumpers, when there is no multiplexor to drive their
+    /// nets instead: [`Netlist::ONE_BOARD_JUMPERS`].
+    fn apply_one_board_jumpers(&mut self) {
+        if !self.pages.iter().any(|p| p == "DCEDGE") {
+            return;
+        }
+        for &(a, b) in Self::ONE_BOARD_JUMPERS {
+            let (Some(keep), Some(gone)) = (self.id_either(a), self.id_either(b)) else {
+                continue;
+            };
+            self.join(keep, gone);
+        }
+    }
+
     fn apply_hand_jumpers(&mut self) {
         for &(page, jumpers) in Self::HAND_JUMPERS {
             if !self.pages.iter().any(|p| p == page) {
