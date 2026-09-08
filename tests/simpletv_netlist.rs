@@ -783,3 +783,68 @@ fn the_sync_prom_is_fetched_out_of_reset() {
     // display and the idle slot.
     assert_eq!(codes, BTreeSet::from([0, 1, 2, 3]), "every slot owner appears");
 }
+
+/// **The board answers its own control registers, and not only its frame
+/// buffer.** `cadrtv/lmtv.order` runs them from `173777x0` with `x` 6,
+/// which is [`muir::simpletv::CONTROL`]; the 25LS2521 comparators at XBADR
+/// match `ADR3..21` against the `DEVADR` straps to decide that a cycle is
+/// the control block's, and the 74S138 at NXBCTL 0F13 picks the register
+/// out of `ADR0..2`.
+///
+/// **This is issue 60.** `ADR BANK SEL` is address bit 15 off the bus, not
+/// a strap --- `crate::netlist`'s NRAADR page joins it to `ADR15`, which
+/// the 74LS240 at XBADR 0F17 drives --- and `xbus::straps` drove it low as
+/// well. Two drivers on one bit, agreeing at idle and fighting whenever
+/// the bus put bit 15 the other way, which a cycle to the control block
+/// does: `ADR15` went unknown, the comparator could not match `DEVADR 15`,
+/// and the board answered nothing here at all. The microcode's `INTRX0`
+/// reads the TV control register, finds the vertical flag set and writes
+/// it back to clear it, and `muir --chip` halted on that write at
+/// 2,340,964 microcycles.
+///
+/// So the frame buffer is checked beside the registers: it was answered
+/// throughout, because its own comparator at 0F22 matches `MAPADR 16..21`
+/// and bit 15 is no part of it. A test on the buffer alone saw nothing
+/// wrong for as long as this bug existed.
+#[test]
+fn the_board_answers_its_control_registers() {
+    use muir::xbus::XbusMaster;
+
+    let n = simpletv();
+    // Long enough that a board which never answers has plainly not: the
+    // bus interface gives a device 4.7 to 5.5 us before it calls the
+    // address missing, `busint::TIMEOUT_NS`.
+    const PATIENCE_NS: u64 = 20_000;
+    let answer = |addr: u32, write: Option<u32>| -> Option<u64> {
+        let mut b = XbusMaster::new(&n, 0);
+        b.run(3_000);
+        let at = b.now;
+        b.request(addr, write);
+        while b.now < at + PATIENCE_NS {
+            let next = b.chip.next_tap().filter(|&t| t > b.now).unwrap_or(b.now + 1);
+            b.run(next.min(at + PATIENCE_NS));
+            if b.acked() {
+                return Some(b.now - at);
+            }
+        }
+        None
+    };
+    for k in 0..muir::simpletv::CONTROL_WORDS {
+        for write in [None, Some(0o525252)] {
+            let addr = muir::simpletv::CONTROL + k;
+            let took = answer(addr, write).unwrap_or_else(|| {
+                panic!(
+                    "the board never answered {addr:o}, register {k} of its control block, \
+                     in {PATIENCE_NS} ns"
+                )
+            });
+            assert!(took < 1_000, "register {k} answered in {took} ns");
+        }
+    }
+    // And the frame buffer still does, on its own slower path: the RAM is
+    // handed out a slot at a time and `the_board_answers_on_its_own_slots`
+    // is what says how.
+    let buffer = muir::simpletv::BUFFER + 21_491;
+    assert!(answer(buffer, None).is_some(), "the frame buffer answered a read");
+    assert!(answer(buffer, Some(0o525252)).is_some(), "the frame buffer answered a write");
+}
