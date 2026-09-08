@@ -8,6 +8,7 @@
 //! the parser changes, the tests say so rather than the chip engine quietly
 //! simulating a different machine.
 
+use muir::part;
 use muir::{netlist, wirelist};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -487,4 +488,96 @@ fn no_board_spells_one_net_two_ways() {
         eprintln!("{c}");
     }
     assert!(clashes.is_empty(), "{} nets are spelled two ways", clashes.len());
+}
+
+/// **A level or a jumper the harness applies must not land on a net the
+/// board already drives.** `xbus::straps` drives the address straps the
+/// drawings leave as one-pin nets, and [`netlist::Netlist::HAND_JUMPERS`]
+/// and [`netlist::Netlist::ONE_BOARD_JUMPERS`] join nets to a supply or to
+/// each other. All three describe wire-wrap the board was built with, and
+/// wire-wrap goes on a net nothing on the board drives. Where a part
+/// drives one, the strap is not a strap.
+///
+/// **This is issue 60.** `xbus::straps` drove `ADR BANK SEL` low while the
+/// NRAADR page of [`netlist::Netlist`] joined it to `ADR15`, which the
+/// 74LS240 at XBADR 0F17 drives off the bus. The two agreed at idle and
+/// fought on any cycle that put bit 15 the other way, and the SIMPLE TV
+/// then answered nothing at all in its control block. The join and the
+/// level were each right when written; the pin move that made them
+/// contradictory landed in a different file from the one that had to
+/// change, and no reading of either caught it for a day.
+///
+/// **`support::no_net_has_two_push_pull_drivers` cannot see this**, and it
+/// is the check built to find two drivers on a net: it walks `n.parts`,
+/// and a level the harness applies has no part record. Nor would a
+/// totem-pole rule have caught this one --- the part that fought the strap
+/// is a three-state buffer whose enables are grounded, so it drives
+/// always. Any output is a conflict here; a resistor is not, because
+/// pulling a rail up is a pull-up pack's whole purpose and `HI1` is
+/// exactly that.
+///
+/// Nothing is excepted today. If a strap ever legitimately meets a driver,
+/// it goes in the list below with the reason, and the list is asserted
+/// rather than its length --- see [`a_designator_can_name_two_bodies`] for
+/// why all twenty of those are spelled out.
+#[test]
+fn no_strap_or_jumper_lands_on_a_driven_net() {
+    let mut conflicts: Vec<String> = Vec::new();
+    for (board, text) in BOARDS {
+        let n = netlist::parse(text).unwrap();
+        // Every net a part drives, and with what. A resistor pulling a
+        // rail is not a driver fighting anything.
+        let mut driven: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+        for p in &n.parts {
+            let Some(po) = part::pinout(&p.kind) else { continue };
+            for &(pin, net) in &p.pins {
+                if let Some(d) = po.drive_of(pin)
+                    && !matches!(d, part::Drive::PullUp | part::Drive::Passive)
+                {
+                    driven
+                        .entry(net)
+                        .or_default()
+                        .push(format!("{} {} ({}) p{pin} {d:?}", p.page, p.reference, p.kind));
+                }
+            }
+        }
+        let mut against = |what: &str, net: u32| {
+            if let Some(who) = driven.get(&net) {
+                conflicts.push(format!("{board} {what} {} against {}", n.net(net), who.join(", ")));
+            }
+        };
+        for (net, _) in muir::xbus::straps(&n) {
+            against("strap", net);
+        }
+        for &(page, jumpers) in netlist::Netlist::HAND_JUMPERS {
+            if !n.pages.iter().any(|p| p == page) {
+                continue;
+            }
+            for &(a, b) in jumpers {
+                for side in [a, b] {
+                    if let Some(id) = n.by_name_id(side) {
+                        against("hand jumper", id);
+                    }
+                }
+            }
+        }
+        // The one-board jumpers go on the disk controller and only there,
+        // gated on its DCEDGE page exactly as `apply_one_board_jumpers`
+        // gates them. On the multiplexor itself `UNIT0..2` are the
+        // 74LS175 at DMSEL 0F05's to drive, which is the whole point of
+        // taking the jumpers off when a multiplexor is fitted.
+        if n.pages.iter().any(|p| p == "DCEDGE") {
+            for &(a, b) in netlist::Netlist::ONE_BOARD_JUMPERS {
+                for side in [a, b] {
+                    if let Some(id) = n.by_name_id(side) {
+                        against("one-board jumper", id);
+                    }
+                }
+            }
+        }
+    }
+    conflicts.sort();
+    conflicts.dedup();
+    let none: [String; 0] = [];
+    assert_eq!(conflicts, none, "a harness level or jumper is on a net the board drives");
 }
