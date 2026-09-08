@@ -431,7 +431,7 @@ fn the_disk_bus_is_the_drawings() {
 // The sequencer
 // ---------------------------------------------------------------------------
 
-use muir::disk_controller::REGS;
+use muir::disk_controller::{Controller, REGS};
 use muir::disk_unit::{Geometry, OnCable, REVOLUTION_NS, SECTOR_NS, Trident, Unit};
 use muir::netlist::NetId;
 use muir::part::Level;
@@ -2057,4 +2057,182 @@ fn a_multiplexor_leaves_the_one_board_jumpers_off() {
     // The address and timeout jumpers are not the multiplexor's.
     assert_eq!(id(&dm, "'-TIMEOUT ENB'"), id(&dm, "GND"), "the timeout enable stays");
     assert_eq!(id(&dm, "AD14"), id(&dm, "HI1"), "and the address jumpers stay");
+}
+
+// --- the model and the board, against each other ----------------------------
+
+/// **Which bits of the status word the two implementations are held to.**
+///
+/// The disk controller is modelled twice --- behaviourally in
+/// `src/disk_controller.rs` and gate-for-gate in `data/CADRDC.netlist` ---
+/// and until this section nothing put the same commands to both. Four
+/// closed issues were that gap: #8, #34, #36 and #69, each found by a
+/// person reading the two side by side rather than by anything failing.
+///
+/// **Held**: the status bits below, and the words the channel moves.
+///
+/// **Free, and measured rather than assumed**:
+///
+/// - `<31:24>`, the block counter, which is "the current rotational
+///   position" of the drive. The board's drive here has its seek and
+///   settle times cut to nothing so the tests run; the model charges
+///   [`muir::disk_unit::seek_ns`]. So the two are at different points of
+///   the turn when the transfer ends --- 2 against 17 on the read below
+///   --- and the number is right in both.
+/// - `<22>`, read-compare difference. MIT: "This bit is undefined unless
+///   the command is read-compare." The board leaves it **set** after a
+///   plain read and the model leaves it **clear**; undefined is undefined,
+///   and holding either to the other would be inventing a rule MIT does
+///   not give.
+///
+/// Timing is free throughout, which is the declaration `busint`'s
+/// `IDEAL_DEVICE_NS` already makes: the model answers in no time where the
+/// board takes gate delays.
+const PAIRED: u32 = !(0xffu32 << 24) & !(1 << 22);
+
+/// The behavioural controller with the same pack under it as the board's
+/// drive, charging the drive's own time.
+fn model_with(block: u32, data: &[u32; muir::disk_unit::BLOCK_WORDS]) -> (Controller, Vec<u32>) {
+    let mut unit = Unit::blank(Geometry::T300);
+    assert!(unit.write_block_at(0, 0, block, data), "the pack takes the block");
+    let mut d = Controller::default();
+    d.attach(0, unit);
+    d.timed = true;
+    (d, vec![0; 1 << 16])
+}
+
+/// Puts one command to the model and runs it to done: the four register
+/// writes the board is given, in the same order.
+fn model_command(d: &mut Controller, main: &mut [u32], at: u64, cmd: u32, clp: u32, da: u32) {
+    d.advance(at);
+    d.write(0, cmd, main);
+    d.write(1, clp, main);
+    d.write(2, da, main);
+    d.write(3, 0, main);
+    // Timing is free, so this only has to be past the drive's own worst
+    // case: a full stroke is 55 ms and a revolution 16.67.
+    d.advance(at + 200_000_000);
+}
+
+/// **The two implementations move the same words and answer the same
+/// status.** A read of one block through the board and through the model,
+/// from the same pack, compared bit for bit under [`PAIRED`].
+///
+/// This is the first thing that puts one command to both. What it holds is
+/// small on purpose --- one command, one block --- because the value is
+/// the seam existing rather than its coverage: #69 was an attention raised
+/// at the wrong instant on one of the two, and nothing but a person
+/// reading both would have seen it.
+#[test]
+fn the_model_and_the_board_read_a_block_alike() {
+    let block = 2;
+    let data = words(21);
+
+    let n = cadrdc();
+    let store = control_store();
+    let mut b = controller(&n);
+    let mut p = Probe::new(&b);
+    let t0 = b.now;
+    let mut drive = quick_drive(t0);
+    assert!(drive.unit.write_block_at(0, 0, block, &data));
+    p.plug(&mut b, &n, drive);
+    p.with_memory(&b, 1 << 15);
+    p.run(&mut b, t0 + 10_000);
+    let (board, written) = read_block(&mut p, &mut b, &store, block, PAGE);
+
+    let (mut d, mut main) = model_with(block, &data);
+    main[CLP as usize] = PAGE;
+    model_command(&mut d, &mut main, t0, 0, CLP, block);
+    let model = d.status();
+
+    let page = PAGE as usize;
+    eprintln!("board {board:o}, model {model:o}, differing outside PAIRED {:o}", board ^ model);
+    assert_eq!(main[page..page + 256], data[..], "the model put the block in memory");
+    let moved: Vec<u32> = written.iter().map(|&(_, w)| w).collect();
+    assert_eq!(moved, data.to_vec(), "the board put the same words in memory");
+    assert_eq!(board & PAIRED, model & PAIRED, "board {board:o} against model {model:o}");
+    // And what is free is free because it differs, not because nobody
+    // looked: the block counter is the drive's rotational position and
+    // these two drives are not at the same point of the turn.
+    assert_ne!(board >> 24, model >> 24, "the block counters are the free half");
+}
+
+/// **A controller with nothing on its cable answers the same word on both.**
+///
+/// `tests/disk.rs` asserts the model reads `0o21441` and its comment calls
+/// that "the word the netlist board reads" --- **while reading nothing**.
+/// That is the restated-constant shape: two copies that agree because one
+/// person wrote both. This reads it off the board.
+#[test]
+fn the_model_and_the_board_agree_with_no_drive() {
+    let n = cadrdc();
+    let mut b = controller(&n);
+    let mut p = Probe::new(&b);
+    let settled = b.now + 10_000;
+    p.run(&mut b, settled);
+    let board = p.cycle(&mut b, REGS, None);
+
+    let mut d = Controller::default();
+    d.advance(0);
+    let model = d.status();
+
+    eprintln!("no drive: board {board:o}, model {model:o}");
+    assert_eq!(board & PAIRED, model & PAIRED, "board {board:o} against model {model:o}");
+    assert_eq!(board & PAIRED, 0o21441, "not active, no select, off line, off cylinder, aborted");
+}
+
+/// **A seek ends with the same bits up on both.** The command MIT
+/// describes as "Initiates a seek to the cylinder specified in the disk
+/// address register.  An attention will occur when the seek completes":
+/// run past the heads' arrival on each, the attention, the any-attention
+/// and the not-active must be up together.
+///
+/// **And this is where the paired seam's reach ends, which is worth
+/// knowing.** #69 was the model raising this attention as the command was
+/// stored, where the board's drive raises it when the heads arrive ---
+/// and *this test would not have caught it*, measured: with #69 reverted
+/// it still passes, because an attention raised early is still up at the
+/// end. What catches it is
+/// `tests/disk.rs::the_attention_comes_when_the_seek_completes` on one
+/// side and `a_seek_with_a_drive_moves_the_heads` on the other, each
+/// holding its own implementation to an instant.
+///
+/// That is not a gap to close but the consequence of timing being free
+/// between the two: the board's drive here has its seek cut to
+/// microseconds and the model charges the real
+/// [`muir::disk_unit::seek_ns`], so there is no instant to compare. What
+/// pairing adds is the end state --- that both arrive at the same three
+/// bits --- and a divergence in *which* bits, which is what #8, #34 and
+/// #36 were.
+#[test]
+fn the_model_and_the_board_end_a_seek_alike() {
+    let cylinder = 100u32;
+    let da = cylinder << 16;
+
+    let n = cadrdc();
+    let mut b = controller(&n);
+    let mut p = Probe::new(&b);
+    let t0 = b.now;
+    p.plug(&mut b, &n, quick_drive(t0));
+    p.run(&mut b, t0 + 10_000);
+    b.cycle(REGS, Some(0o4));
+    b.cycle(REGS + 2, Some(da));
+    p.cycle(&mut b, REGS + 3, Some(0));
+    p.run_to_done(&mut b, 40_000);
+    // The board's drive is the quick one, so its heads are there in
+    // microseconds; the wait is the drive's and not the board's.
+    let arrived = b.now + 250_000;
+    p.run(&mut b, arrived);
+    let board = p.cycle(&mut b, REGS, None);
+
+    let (mut d, mut main) = model_with(0, &words(1));
+    model_command(&mut d, &mut main, t0, 0o4, 0, da);
+    let model = d.status();
+
+    eprintln!("seek: board {board:o}, model {model:o}");
+    assert_eq!(board & PAIRED, model & PAIRED, "board {board:o} against model {model:o}");
+    // And the bits themselves, so that the two agreeing on nothing would
+    // not pass: the seek is done and the drive is asking.
+    assert_eq!(board & 0o7, 0o7, "not active, any attention, attention: {board:o}");
+    assert_eq!(model & 0o7, 0o7, "and the same three on the model: {model:o}");
 }
