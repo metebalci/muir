@@ -88,8 +88,24 @@ const HARNESS: Chosen =
 /// specification gives a slave no response time at all --- every figure in
 /// it constrains the master --- and the only bound is the interface's own
 /// `busint::TIMEOUT_NS`, 4.7 to 5.5 microseconds, of which this is a
-/// fifth. What this file needs is only that the two machines cannot be
-/// compared with the display netlist in place.
+/// fifth. So the model display is a decision about what this run
+/// compares, and not a gap waiting on a timing twin. A device the two
+/// engines keep different time for turns the nanosecond assertion below
+/// into a measurement of the device instead of the processor --- and that
+/// assertion is the only place `ILONG` and the speed bits are held across
+/// the whole boot. Peripherals that are the model on both sides charge
+/// both engines the same nanoseconds for a device access, which leaves
+/// the processor's own timing as the one thing that can fail it. That is
+/// what this default is for.
+///
+/// The netlist boards are not put out of reach by it; they get a run of
+/// their own. `MUIR_COSIM_ARCH=1` compares the same signals over the same
+/// microcycles with the nanoseconds free, which is the mode for putting a
+/// peripheral netlist on the backplane and asking what it computes rather
+/// than when. The two are halves of one decision --- this default holds
+/// the processor's time, that mode holds the boards' logic --- and what
+/// the second one cannot compare is written on the assertion it drops.
+///
 /// `MUIR_TV_BOARD=lispm-tv` puts the LISPM TV there in place of the SIMPLE
 /// TV.
 ///
@@ -1083,6 +1099,69 @@ fn chip_agrees_with_rtl() {
         .map(|v| v.split(',').map(|s| s.parse().unwrap()).collect())
         .unwrap_or_default();
     let memrq = n.by_name_id("MEMRQ").unwrap();
+    // `MUIR_COSIM_ARCH=1` runs the **architectural** comparison: the same
+    // signals, the same memories, and the nanoseconds free.
+    //
+    // **It is a second mode and not a weakening of the first.** The
+    // timed comparison below holds `chip` and `rtl` to the same nanosecond
+    // over the whole boot, which is the only place `ILONG` and the speed
+    // bits are held to being read the same way across two million
+    // microcycles --- `tests/clock.rs::speed_table_matches_the_mux` and
+    // `chip_and_rtl_take_a_speed_change_on_the_same_cycle` hold pieces of
+    // it, and no unit test replaces that run. So the default is unchanged
+    // and this is what you ask for instead.
+    //
+    // What it buys is the machine `muir --chip` actually builds. `rtl`
+    // idealises the timing of every device it does not model
+    // (`busint::IDEAL_DEVICE_NS` is 0 and its doc says every figure
+    // depending on it is a lower bound), so a netlist peripheral on the
+    // backplane cannot keep `rtl`'s nanoseconds --- not for want of a
+    // model of that board, but because the two are deliberately not trying
+    // to agree. With the clock free they can be asked the question that is
+    // left: **do the two machines compute the same thing.**
+    //
+    // A selective excusal --- letting the nanoseconds differ only where a
+    // microcycle waited on an idealised device --- was considered and is
+    // not possible from in here. The comment on the timed assertion says
+    // why: the PC is where the time was charged and not what spent it, so
+    // a stretched cycle cannot be attributed to the device that caused it
+    // without the trace.
+    //
+    // **And this mode has a limit of its own, measured rather than
+    // foreseen: it runs until the machine reads a register a clock keeps.**
+    // With `MUIR_TV=netlist` it clears the timing divergence at 1,422,296
+    // --- a frame-buffer write taking 580 ns where `rtl` charges 145 ---
+    // and parts 2,257 microcycles later at 1,424,553 on `M`, `rtl` holding
+    // `0xd00000f` where the board holds `0xe00000f`. That word is the disk
+    // status register, which the report below prints from both engines'
+    // controllers at the parting: the two disagree in `STATUS<31:24>`, the
+    // selected drive's block counter, 13 against 14.
+    //
+    // The two are **not** a sector apart. The clocks ended 14,579 ns apart
+    // and a sector is [`muir::disk_unit::SECTOR_NS`], 968,448: `rtl` was
+    // 346 ns into sector 14's pulse, and the count steps only as the pulse
+    // ends, so its counter still read 13; `chip`, 14,925 ns in, was past
+    // the pulse and read 14. So the parting lands inside the one-pulse
+    // window the counter is one behind in, which
+    // [`muir::disk_controller::Controller::status`] documents on
+    // `STATUS<31:24>`: 1,240 ns of every 968,448. It lands there because
+    // the microcode is reading that register in a loop --- every PC in the
+    // report, 25333 to 25336, is inside `DISK-RECALIBRATE-WAIT`, which
+    // System 100's own symbol table puts at 25332 with the next label at
+    // 25337. Which is the hazard MIT documents on the register itself:
+    // "you must read it twice and check that it came out the same both
+    // times".
+    //
+    // So this is the mode's boundary and not a defect it found: a value
+    // read out of a device that keeps its own time is not architectural
+    // state, and two clocks free to drift at all will eventually read one
+    // from opposite sides of a step. `tests/cadrdc_netlist.rs`'s paired
+    // seam had already declared this same field free between the model and
+    // the board, for the same reason and from the other direction. What
+    // would settle it is one clock for both engines' devices rather than
+    // each its own, leaving the processor as the only thing compared; that
+    // is not built.
+    let architectural = std::env::var("MUIR_COSIM_ARCH").is_ok_and(|v| v != "0");
     let checkpoint_dir = dir
         .clone()
         .unwrap_or_else(|| [env!("CARGO_MANIFEST_DIR"), "vendor", "run", "chk"].iter().collect());
@@ -1418,7 +1497,7 @@ fn chip_agrees_with_rtl() {
         // With main memory as twins on this side too, the far end's twin,
         // clocked off the netlist interface's `-XBUS SYNC`, is held to
         // `rtl`'s, clocked off its own microcycles.
-        {
+        if !architectural {
             let board_time = match far.xbus.boards.first() {
                 Some(b) => b.net(time_for_refresh) == Level::High,
                 None => far.buses.memory[0].time_for_refresh(clk.time_ns()),
@@ -1441,7 +1520,7 @@ fn chip_agrees_with_rtl() {
         // what checks that `ILONG` and the speed bits are being read the same
         // way. Deltas, because `chip` has been running since the button.
         let ns_now = (clk.time_ns(), r.ns());
-        if cycle > 0 {
+        if cycle > 0 && !architectural {
             let (dc, dr) = (ns_now.0 - ns_was.0, ns_now.1 - ns_was.1);
             if dc != dr {
                 // **The PC here is where the time was charged, not what
@@ -1515,13 +1594,37 @@ fn chip_agrees_with_rtl() {
             r.signals()[1].1
         ),
         None => eprintln!(
-            "chip and rtl agree over {} microcycles; memory board transitions {} ({} a microcycle), {} of {} asleep now",
+            "chip and rtl agree over {} microcycles{}; memory board transitions {} ({} a microcycle), {} of {} asleep now",
             cycles + 1,
+            if architectural {
+                " on architectural state, the clocks free"
+            } else {
+                " to the nanosecond"
+            },
             far.xbus.transitions,
             far.xbus.transitions / (cycles as u64 + 1 - resumed as u64).max(1),
             far.xbus.boards.iter().filter(|b| b.asleep()).count(),
             far.xbus.boards.len()
         ),
+    }
+    // What the free clocks came to. In the architectural mode the two are
+    // no longer held together, so how far apart they drifted is the first
+    // thing to know about any disagreement --- and the disk status register
+    // is printed with them because its top byte, `STATUS<31:24>`, is the
+    // selected drive's block counter, which
+    // [`muir::disk_controller::Controller::status`] derives from the
+    // controller's own `now`. A register like that is not architectural
+    // state: two clocks that have drifted at all will eventually read it
+    // across a sector-pulse boundary and get answers one apart.
+    if architectural {
+        eprintln!(
+            "the clocks ended {} ns apart (chip {}, rtl {}); disk status chip {:#x}, rtl {:#x}",
+            (clk.time_ns() as i128 - r.ns() as i128).abs(),
+            clk.time_ns(),
+            r.ns(),
+            far.buses.machine.disk.status(),
+            r.m.disk.status()
+        );
     }
     match lc_seen.iter().rev().find(|&&v| v != 0) {
         Some(last) => eprintln!(
