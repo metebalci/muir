@@ -1083,6 +1083,9 @@ fn chip_agrees_with_rtl() {
         "DC" => 10,
         // `OPC0..OPC13`, the last stage of the OPCS shift registers.
         "OPC" => 14,
+        // `LC0..LC25`, the 74S169 counters on page LC:
+        // [`muir::machine::LC_COUNTER`] is the same 26 bits.
+        "LC" => 26,
         _ => 32,
     };
     // Resolved once. Every bus is read at every clock transition, and
@@ -1255,6 +1258,14 @@ fn chip_agrees_with_rtl() {
     let mut arrived: Option<u64> = None;
     // Generator cycles the cpu sat out, which are `rtl`'s waits.
     let mut sat_out = 0usize;
+    // Whether the location counter was ever anything but zero, and how
+    // many values it took. `LC` is compared like every other signal, but
+    // the boot PROM never moves it and the band does not fetch its first
+    // macroinstruction until microcycle 2,093,265 --- measured on `rtl`
+    // --- so a run shorter than that compares nothing but zero against
+    // zero. Said at the end, so that a run cannot look like it held the
+    // counter when it never saw one move. Issue 71.
+    let mut lc_seen = std::collections::BTreeSet::new();
     for cycle in resumed..limit {
         if let (Some(d), Some(pc)) = (&dir, arrived.take())
             && let Some(label) = labels.get(&pc)
@@ -1286,6 +1297,7 @@ fn chip_agrees_with_rtl() {
         // comparison: nothing would have been compared past it.
         r.step().unwrap_or_else(|h| panic!("rtl halted at microcycle {cycle}: {h:?}"));
         let want = r.signals();
+        lc_seen.insert(want.last().expect("LC is the signal on the end").1);
         reached.insert(want[0].1);
         arrived = Some(want[0].1);
         // Every value each signal takes anywhere in this microcycle.
@@ -1495,6 +1507,16 @@ fn chip_agrees_with_rtl() {
             far.xbus.transitions / (cycles as u64 + 1 - resumed as u64).max(1),
             far.xbus.boards.iter().filter(|b| b.asleep()).count(),
             far.xbus.boards.len()
+        ),
+    }
+    match lc_seen.iter().rev().find(|&&v| v != 0) {
+        Some(last) => eprintln!(
+            "LC took {} values, the last {last:o}: a moving counter was compared",
+            lc_seen.len()
+        ),
+        None => eprintln!(
+            "LC was zero throughout: the run ended before the band's first macroinstruction \
+             fetch at microcycle 2093265, so nothing held a moving counter"
         ),
     }
     eprintln!(
@@ -3462,6 +3484,52 @@ fn chip_and_rtl_arbitrate_a_debug_cycle_against_a_running_processor_alike() {
         assert_eq!(a.word(&c, 0o100 + k), r.machine().amem[0o100 + k], "read {k}");
     }
     eprintln!("{done} reads of the error status parked alike on both, at {} ns", r.ns());
+}
+
+/// **`LC` is one counter and both engines hold it.** `chip_agrees_with_rtl`
+/// compares it over the band (issue 71), and what that rests on is the
+/// netlist's `LC0..LC25` and `rtl`'s field being the same twenty-six bits
+/// in the same order --- which the long run cannot show until the band
+/// fetches its first macroinstruction, two million microcycles in.
+///
+/// So it is shown here in a few microcycles instead. The PROM is filled
+/// with `((LOCATION-COUNTER) SETA A-MEM-3)` --- an ALU instruction whose
+/// destination is `IR<25>` clear, `IR<23:22>` clear and `IR<21:19>` = 1,
+/// the low group's `LC` --- so every cycle writes the same word to the
+/// counter and it stands. The word has alternating bits, so a net read in
+/// the wrong order, or a width one short, does not read back as itself.
+#[test]
+fn chip_and_rtl_hold_the_same_location_counter() {
+    use muir::engine::Engine;
+
+    /// Alternating bits across the counter's twenty-six.
+    const WORD: u32 = 0o252525252;
+    // Inside the counter, and its top bit set, so all twenty-six are
+    // exercised and a width one short cannot read back as itself.
+    const _: () = assert!(WORD & muir::machine::LC_COUNTER == WORD && WORD >> 25 == 1);
+
+    let n = netlist::parse(NETLIST).unwrap();
+    let mut m = muir::machine::Machine::new();
+    m.amem[3] = WORD;
+    let to_lc = muir::isa::Insn::new(
+        muir::isa::asm::ALU | muir::isa::asm::SETA | muir::isa::asm::a_src(3) | (1 << 19),
+    );
+    m.load_prom(&vec![to_lc; 512]);
+    let (mut c, mut clk, mut far, mut r) = same_program(&n, &m);
+    let clk0 = cpu_clock(&n);
+    for _ in 0..8 {
+        generator_cycle(&mut c, &mut far, &mut clk, clk0);
+    }
+    meet(&n, &mut c, &mut far, &mut clk, &mut r, clk0);
+
+    let lc = c.bus_nets(&n, "LC", 26);
+    assert_eq!(c.read(&lc) as u32, WORD, "the board's LC0..LC25");
+    assert_eq!(r.lc(), WORD, "rtl's counter");
+    // And the name and width the cosimulation asks for are these: the
+    // signal it compares is read exactly this way.
+    let (name, value) = *r.signals().last().unwrap();
+    assert_eq!(name, "LC", "LC is the signal on the end");
+    assert_eq!(value, WORD as u64, "and it is what the comparison sees");
 }
 
 /// **A speed change is taken on the same generator cycle by the board and
