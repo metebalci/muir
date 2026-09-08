@@ -448,7 +448,7 @@ machine.
                every board modelled here, and a snapshot of System 100's own
                sys tree, which the boot PROM comes from. mit/README.md
     data/      what is made from mit/ by a script in tools/, each
-               cross-checked or labelled: the seven netlists, the disk
+               cross-checked or labelled: the eight netlists, the disk
                controller's microcode, the cable tables. data/README.md
     src/       the simulator, the muir binary and diskpack
     tests/     the checks
