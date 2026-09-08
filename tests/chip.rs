@@ -1157,10 +1157,32 @@ fn chip_agrees_with_rtl() {
     // state, and two clocks free to drift at all will eventually read one
     // from opposite sides of a step. `tests/cadrdc_netlist.rs`'s paired
     // seam had already declared this same field free between the model and
-    // the board, for the same reason and from the other direction. What
-    // would settle it is one clock for both engines' devices rather than
-    // each its own, leaving the processor as the only thing compared; that
-    // is not built.
+    // the board, for the same reason and from the other direction.
+    //
+    // **The reach of this mode ends there, and one shared device clock
+    // would not extend it** --- issue 87 asked, and this is the answer.
+    // The drift grows: 435 ns at 1,422,296 and 14,579 at 1,424,553, about
+    // 6 ns a microcycle, so it passes a microsecond-clock tick every 160 or
+    // so. And the microsecond clock is readable --- Unibus 764120,
+    // [`muir::ioboard::USEC_LOW`] --- which `DISK-SWAP-HANDLER` reads
+    // twice around every disk wait, accumulating the difference into
+    // `A-DISK-WAIT-TIME`. So from the band's first page fault the drift is
+    // inside stored state and not at a register, where no field can be
+    // declared free.
+    //
+    // A shared clock does not fix that, because under `chip` that register
+    // is the netlist I/O board's own counters on the netlist's oscillator:
+    // making them read `rtl`'s time means not running the board, and the
+    // boards are what the mode exists to put on the backplane.
+    // `tests/cadrio_netlist.rs` reaches the same place from a third
+    // direction --- it holds the board to the model on seven of its
+    // registers and not on the microsecond clock's two halves, which it
+    // reads and reports instead.
+    //
+    // So the mode is what it did here: a bounded window past a timing
+    // divergence, long enough to show whether the processor parts before
+    // the machine consults a clock. It is not a way to compare a peripheral
+    // netlist over a whole boot, and nothing is pending to make it one.
     let architectural = std::env::var("MUIR_COSIM_ARCH").is_ok_and(|v| v != "0");
     let checkpoint_dir = dir
         .clone()
