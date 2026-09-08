@@ -25,6 +25,7 @@ pub mod dcmicro;
 pub mod disk_controller;
 pub mod disk_unit;
 pub mod diskpack;
+pub mod dm;
 pub mod engine;
 pub mod ioboard;
 pub mod isa;

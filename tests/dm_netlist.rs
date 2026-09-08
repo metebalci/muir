@@ -368,3 +368,21 @@ fn the_drive_ports_are_two_banks_of_four() {
         "the drive end is built of the controller's own cable parts"
     );
 }
+
+/// **What `src/part.rs` makes of the multiplexor's bodies**, as the other
+/// boards' netlist tests ask of theirs. Two kinds have no pinout at all,
+/// and one of them is why the board cannot yet be run: the **25LS2538** at
+/// DMSECT 0E05 is the decoder that turns `UNIT<2:0>` into `ADDRESS UNIT
+/// <n>`, so without it nothing on the board can choose a unit. `SIP1000-10`
+/// is a resistor pack. The `26S02` has a pinout and no behaviour, which is
+/// the one-shot handled by `src/chip.rs`.
+///
+/// Written as an equality rather than an emptiness so that a body arriving
+/// unmodelled is caught, and so that modelling either of these fails here
+/// and says to update it.
+#[test]
+fn the_bodies_without_a_model_are_the_two_known_ones() {
+    let k = support::kinds(&dm());
+    assert_eq!(k.unknown, ["25LS2538", "SIP1000-10"], "bodies with no pinout");
+    assert_eq!(k.silent, ["26S02"], "bodies with a pinout and no behaviour");
+}
