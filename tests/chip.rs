@@ -16,7 +16,6 @@ use muir::cable::{Boards, FarEnd};
 use muir::chip::{Chip, REPLACED};
 use muir::chip::{MEMS, Ram};
 use muir::netlist;
-use muir::part;
 
 const NETLIST: &str = include_str!("../data/CADR.netlist");
 const BUSINT: &str = include_str!("../data/BUSINT.netlist");
@@ -881,9 +880,23 @@ fn resume_from_checkpoint(
     use muir::engine::Engine;
     let p = std::path::PathBuf::from(std::env::var("MUIR_RESUME").ok()?);
     assert!(p.exists(), "MUIR_RESUME names {}, and there is no such checkpoint", p.display());
-    let file = muir::checkpoint::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-    let mut it =
-        muir::cable::read_checkpoint(&file).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    // **A checkpoint this build cannot read is a file to make again**, and
+    // saying only the version number leaves the reader to work that out.
+    // Two things go stale: the format's version, which moved five times on
+    // the day this was written, and a board's `Chip::fingerprint`, which
+    // moves under a resume whenever `data/CADR.netlist` is regenerated ---
+    // "saved from a different board or a different build". Neither is the
+    // reader's mistake, and `MUIR_CHECKPOINT_AT` on a run of this test is
+    // what makes a current one.
+    let stale = |e: &dyn std::fmt::Display| -> ! {
+        panic!(
+            "{}: {e}\n  a checkpoint from another build, not a broken file: \
+             MUIR_CHECKPOINT_AT=<microcycles> on a run of this test writes a current one",
+            p.display()
+        )
+    };
+    let file = muir::checkpoint::read(&p).unwrap_or_else(|e| stale(&e));
+    let mut it = muir::cable::read_checkpoint(&file).unwrap_or_else(|e| stale(&e));
     let want = chosen().tv_board;
     assert_eq!(
         it.tv_board,
