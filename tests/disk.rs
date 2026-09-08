@@ -1384,6 +1384,69 @@ fn write_all_formats_a_track_an_ordinary_read_can_read() {
     }
 }
 
+/// **A header a Write All lays down is the header the pack then carries.**
+///
+/// "The format is determined by the program that uses the Write All
+/// operation to format the disk", and the header is the part of the format
+/// that says where the sector thinks it is: `<27:16>` cylinder, `<15:8>`
+/// head, `<7:0>` block. A formatter may write anything there, and MIT's
+/// own controller never checks it while formatting --- `cadrdc/newdsk.31`
+/// strobes a header only in the Read sector, `024` to `027`, and the Write
+/// sector, `124` to `127`.
+///
+/// **So the sector goes where the heads are and the header goes in it.**
+/// Until issue 51 this model placed each block at the address its *header*
+/// named, because `Unit` stored blocks by address and had nowhere to put a
+/// header. A pack so written could never disagree with itself, and the
+/// five status bits that are facts about bits read back off the pack ---
+/// `<18>` header compare, `<17>` header ECC, `<16>` and `<15>` data ECC,
+/// `<12>` start block --- had nothing to fire on.
+///
+/// Here a track is laid down whose second sector claims to be block 9 of
+/// cylinder 3. A Read All of the track it was written to reads it back
+/// **where it was written, saying what it was told to say**.
+#[test]
+fn a_write_all_lays_down_the_header_it_is_given() {
+    use muir::disk_unit::{format, header_of, parse_sector, sector_image_with_header};
+    let g = Geometry::T300;
+    let mut d = Controller::default();
+    d.attach(0, Unit::blank(g));
+    let mut main = vec![0u32; 1 << 16];
+
+    // Two sectors for track 0, the second one lying about where it is.
+    let liar = 3 << 16 | 9;
+    let data = |n: u32| std::array::from_fn::<u32, BLOCK_WORDS, _>(|i| n * 0x10000 + i as u32);
+    let mut bytes = Vec::new();
+    bytes.extend(sector_image_with_header(header_of(&g, 0, 0, 0), &data(1)));
+    bytes.extend(sector_image_with_header(liar, &data(2)));
+    let words: Vec<u32> = bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
+    let pages = words.len().div_ceil(BLOCK_WORDS);
+    main[0o10000..0o10000 + words.len()].copy_from_slice(&words);
+    run(&mut d, &mut main, 0o13, 0, 16, pages as u32);
+    assert_eq!(d.status() & status::TIMEOUT, 0, "no timeout: {:o}", d.status());
+
+    // Read the track back and parse the two sectors out of it.
+    let mut back = vec![0u32; 1 << 16];
+    let pages = (2 * format::SECTOR).div_ceil(BLOCK_WORDS * 4) as u32 + 1;
+    run(&mut d, &mut back, 0o02, 0, 16, pages);
+    let read: Vec<u8> = back[0o10000..0o10000 + pages as usize * BLOCK_WORDS]
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect();
+    let bits: Vec<bool> = read.iter().flat_map(|&b| (0..8).map(move |k| b >> k & 1 != 0)).collect();
+    let first = parse_sector(&bits).expect("the first sector");
+    let second = parse_sector(&bits[format::SECTOR * 8..]).expect("the second sector");
+
+    assert_eq!(first.header, header_of(&g, 0, 0, 0), "the honest sector is unchanged");
+    assert_eq!(first.data, data(1), "with its data");
+    // The point: it is the second sector of track 0 --- where the heads
+    // were --- and it says it is block 9 of cylinder 3.
+    assert_eq!(second.header, liar, "the second sector carries the header it was given");
+    assert_eq!(second.data, data(2), "and its data, where it was written");
+    assert!(second.header_checks, "the checkword is over the header as written");
+    assert_ne!(second.header, header_of(&g, 0, 0, 1), "which is not the address's own header");
+}
+
 /// **Which commands end in a timeout, measured on the netlist board.**
 ///
 /// A timeout is `STATUS<11>`, "a disk operation took longer than 2.5

@@ -67,6 +67,13 @@ pub struct Unit {
     /// vendored pack --- fetched material they must leave as fetched.
     writable: bool,
     written: HashMap<u32, [u32; BLOCK_WORDS]>,
+    /// The header each sector carries, where it is not the one its address
+    /// implies: a Write All writes whatever the program put in memory, and
+    /// what it wrote is what a later Read or Write compares against the
+    /// disk address register. Absent is [`header_of`]'s, which is what a
+    /// pack formatted by anything sane has and what the vendored images
+    /// are taken to have.
+    headers: HashMap<u32, u32>,
     /// MIT: "the read-only switch only applies when the drive is not
     /// selected".  Nothing models the switch; a pack opened here is writable.
     pub read_only: bool,
@@ -98,6 +105,7 @@ impl Clone for Unit {
             image: self.image.as_ref().map(|f| f.try_clone().expect("a second handle on the pack")),
             writable: self.writable,
             written: self.written.clone(),
+            headers: self.headers.clone(),
             read_only: self.read_only,
             cylinder: self.cylinder,
             head: self.head,
@@ -156,6 +164,7 @@ impl Unit {
             image: None,
             writable: false,
             written: HashMap::new(),
+            headers: HashMap::new(),
             read_only: false,
             cylinder: 0,
             head: 0,
@@ -182,6 +191,37 @@ impl Unit {
     /// being one thing and not two.
     pub fn clear_attention(&mut self) {
         self.attention_at = u64::MAX;
+    }
+
+    /// The header the sector at this address carries: what a Write All
+    /// laid down, or [`header_of`] where nothing did. `None` for an
+    /// address the geometry has no room for.
+    pub fn header_at(&self, cylinder: u32, head: u32, block: u32) -> Option<u32> {
+        let lba = self.lba_of(cylinder, head, block)?;
+        Some(*self.headers.get(&lba).unwrap_or(&header_of(&self.geometry, cylinder, head, block)))
+    }
+
+    /// Writes a whole sector where the heads are: the data, and the header
+    /// the writer put in it, whatever it says. This is a Write All ---
+    /// **the sector goes where the heads are and the header goes in it**,
+    /// which is the way round a formatter works. A header naming another
+    /// address is not an error and not a redirection; it is a pack a later
+    /// Read will fail to compare against.
+    pub fn write_sector_at(
+        &mut self,
+        cylinder: u32,
+        head: u32,
+        block: u32,
+        header: u32,
+        data: &[u32; BLOCK_WORDS],
+    ) -> bool {
+        let Some(lba) = self.lba_of(cylinder, head, block) else { return false };
+        if header == header_of(&self.geometry, cylinder, head, block) {
+            self.headers.remove(&lba);
+        } else {
+            self.headers.insert(lba, header);
+        }
+        self.write_block_at(cylinder, head, block, data)
     }
 
     /// Where the heads are: cylinder, head, block.
@@ -519,14 +559,37 @@ pub fn sector_image(
     block: u32,
     data: &[u32; BLOCK_WORDS],
 ) -> Vec<u8> {
+    sector_image_with_header(header_of(g, cylinder, head, block), data)
+}
+
+/// The header a sector at this address carries when the pack was formatted
+/// by an address-preserving formatter: `<31:30>` the next block address
+/// code, `<27:16>` cylinder, `<15:8>` head, `<7:0>` block.
+///
+/// It is what a sector *should* say and not necessarily what it does: a
+/// Write All writes whatever the program put in memory, and
+/// [`Unit::header_at`] is what the pack actually carries.
+pub fn header_of(g: &Geometry, cylinder: u32, head: u32, block: u32) -> u32 {
+    format::next_block_code(g, cylinder, head, block) << 30
+        | (cylinder & 0xfff) << 16
+        | (head & 0xff) << 8
+        | (block & 0xff)
+}
+
+/// A sector image around `header`, whatever it says.
+///
+/// **The header is given rather than computed** because the pack carries
+/// the one that was written into it. A Write All lays down headers of the
+/// program's choosing --- "The format is determined by the program that
+/// uses the Write All operation to format the disk" --- and a later Read
+/// or Write compares what it finds against the disk address register. A
+/// model that recomputed the header from the address it was asked for
+/// could never disagree with itself, which is what issue 51 is about.
+pub fn sector_image_with_header(header: u32, data: &[u32; BLOCK_WORDS]) -> Vec<u8> {
     use format::*;
     let mut s = Vec::with_capacity(SECTOR);
     s.resize(PREAMBLE + VFO_LOCK, 0xff);
     s.push(SYNC);
-    let header = next_block_code(g, cylinder, head, block) << 30
-        | (cylinder & 0xfff) << 16
-        | (head & 0xff) << 8
-        | (block & 0xff);
     let hb = header.to_le_bytes();
     s.extend_from_slice(&hb);
     s.extend_from_slice(&Ecc::over(&hb));
@@ -1454,6 +1517,7 @@ impl Unit {
             seek_error,
             fault,
             attention_at,
+            headers,
         } = self;
         w.u32(geometry.cylinders);
         w.u32(geometry.heads);
@@ -1472,6 +1536,13 @@ impl Unit {
         w.bool(*seek_error);
         w.bool(*fault);
         w.u64(*attention_at);
+        let mut carried: Vec<_> = headers.iter().collect();
+        carried.sort_by_key(|(lba, _)| **lba);
+        w.u64(carried.len() as u64);
+        for (lba, header) in carried {
+            w.u32(*lba);
+            w.u32(*header);
+        }
     }
 
     /// Back from a checkpoint, into a drive holding a pack of the same
@@ -1510,6 +1581,14 @@ impl Unit {
         self.seek_error = r.bool()?;
         self.fault = r.bool()?;
         self.attention_at = r.u64()?;
+        let n = r.u64()?;
+        if n > u64::from(geometry.blocks()) {
+            return Err(crate::checkpoint::bad(format!(
+                "{n} headers on a pack of {} sectors",
+                geometry.blocks()
+            )));
+        }
+        self.headers = (0..n).map(|_| Ok((r.u32()?, r.u32()?))).collect::<std::io::Result<_>>()?;
         Ok(())
     }
 }
