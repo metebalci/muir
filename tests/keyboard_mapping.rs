@@ -421,3 +421,36 @@ fn the_dump_is_a_file_the_mapping_flag_reads() {
     let added: Vec<&str> = edited.lines().filter(|l| !built_in.lines().any(|b| b == *l)).collect();
     assert_eq!(added, ["key F5 Terminal"], "the edit, and nothing else:\n{edited}");
 }
+
+/// **Every keysym reads back as itself, and the space is why this is here.**
+///
+/// A keysym is one word --- `two()` takes the line's first word and leaves
+/// the rest for the key, which is what lets `Alt Mode` and `Left Control`
+/// go unquoted --- so a keysym that contains whitespace is a line that
+/// cannot be read back. `0x20` was one: it has no name, its
+/// single-character spelling is a space, and `key 0x20 Line` dumped as
+/// `key   Line` and came back "wants a keysym and what it means".
+///
+/// The fix is to name it, X11's `space`, and the reason to prefer a name
+/// over quoting is that it closes the question rather than the case. A
+/// keysym is written in one of three ways --- an X11 name, which is a C
+/// identifier; a number in decimal or `0x` hexadecimal; or a single
+/// character in `' '..='~'`, whose only whitespace member is `0x20`. Name
+/// that one and no keysym can contain whitespace at all.
+///
+/// So this binds **every keysym in the sixteen-bit space** and holds the
+/// whole lot to the round trip in one go, rather than the one that bit.
+#[test]
+fn every_keysym_reads_back_as_itself() {
+    let mut text = String::new();
+    for sym in 0..=0xffffu32 {
+        text.push_str(&format!("key {sym:#x} Line\n"));
+    }
+    let m = Mapping::parse(&text).expect("every keysym is a keysym");
+    let dump = m.dump();
+    let back = Mapping::parse(&dump).expect("and the dump of them is a mapping");
+    assert_eq!(back, m, "a keysym the dump cannot say");
+    // Not vacuous, and the one that bit: the space is written by name.
+    assert!(dump.contains("key space Line\n"), "0x20 is `space`");
+    assert!(!dump.contains("key  "), "no keysym is written as whitespace");
+}
