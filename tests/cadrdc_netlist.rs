@@ -1613,6 +1613,82 @@ fn a_read_with_a_drive_puts_the_block_in_memory() {
     }
 }
 
+/// **A spurious sector pulse raises `STATUS<12>`, start block error.**
+///
+/// MIT's own description is of a drive at fault rather than a mark gone
+/// missing: `<12>` "indicates that a start-of-block (sector pulse)
+/// happened at a time when it should not have. Either the disk is
+/// incorrectly formatted or it is generating spurious sector pulses." The
+/// board carries the detection --- the LS74 two-stage synchroniser at
+/// DCHDCM 0D15 clocked off the drive's composite pulse, `BAD START BLOCK`
+/// at the LS08 0D16, and `ERR IF START BLOCK` asserted through nearly all
+/// of the read in `cadrdc/newdsk.31` --- and until
+/// [`Trident::spurious_pulse`] nothing could give it one to catch: the
+/// spindle's pulses come from a fixed revolution and are right by
+/// construction. Issue 81.
+///
+/// **The same read three times, the drive the only difference.** Clean,
+/// `<12>` is clear. With a pulse halfway through the sector being read,
+/// `<12>` comes up and `<13>` with it --- "Transfer Aborted", the error
+/// stopping the transfer, which is what an error is meant to do. And with
+/// the same pulse in a sector the read never reaches, the status comes
+/// back **bit for bit the clean one**: the board is detecting a pulse
+/// during its read rather than being upset by an injected fault, which is
+/// the difference between this test and one that would pass on any
+/// disturbance at all.
+///
+/// `<23>`, internal parity, also comes up on the faulty read. That is not
+/// asserted here and has not been chased: a read torn open mid-sector has
+/// no reason to leave the parity chain happy, but nobody has shown that is
+/// what happens.
+///
+/// One offset is left out deliberately. A pulse in the first microseconds
+/// of block 2's own sector does not raise an error --- it hangs the
+/// controller until the watchdog, which is a different behaviour from this
+/// one and wants an issue rather than a line here.
+#[test]
+fn a_spurious_sector_pulse_raises_start_block_error() {
+    const START_BLOCK: u32 = 1 << 12;
+    const ABORTED: u32 = 1 << 13;
+    let n = cadrdc();
+    let data = words(23);
+
+    let read = |fault: Option<u64>| -> u32 {
+        let mut b = controller(&n);
+        let mut p = Probe::new(&b);
+        let t0 = b.now;
+        let mut drive = quick_drive(t0);
+        assert!(drive.unit.write_block_at(0, 0, 2, &data));
+        drive.spurious_pulse = fault;
+        p.plug(&mut b, &n, drive);
+        p.with_memory(&b, 1 << 15);
+        p.run(&mut b, t0 + 10_000);
+        p.memory.as_mut().unwrap().words[CLP as usize] = PAGE;
+        b.cycle(REGS, Some(0o0));
+        b.cycle(REGS + 1, Some(CLP));
+        b.cycle(REGS + 2, Some(2));
+        p.cycle(&mut b, REGS + 3, Some(0));
+        p.run_to_done(&mut b, 3 * REVOLUTION_NS / 17);
+        let settled = b.now + 20_000;
+        p.run(&mut b, settled);
+        b.cycle(REGS, None).1
+    };
+
+    let clean = read(None);
+    assert_eq!(clean & ERRORS, 0, "no fault, no error: {clean:o}");
+    assert_eq!(clean & START_BLOCK, 0, "and <12> clear: {clean:o}");
+
+    let torn = read(Some(2 * SECTOR_NS + SECTOR_NS / 2));
+    assert_ne!(torn & START_BLOCK, 0, "a pulse mid-read raises <12>: {torn:o}");
+    assert_ne!(torn & ABORTED, 0, "and <13>, the transfer aborted: {torn:o}");
+
+    let elsewhere = read(Some(8 * SECTOR_NS + SECTOR_NS / 2));
+    assert_eq!(
+        elsewhere, clean,
+        "a pulse the read never reaches changes nothing: {elsewhere:o} against {clean:o}"
+    );
+}
+
 /// **A write with a drive on the cable puts the page on the pack.**
 ///
 /// The other direction, sector 1 of the control store: the channel
