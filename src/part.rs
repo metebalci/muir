@@ -296,6 +296,12 @@ fn table(base: &str) -> Option<Pinout> {
         // CYC` on `POL` 4 and `E` 16, `-OE` 5 grounded, and the four bank
         // enables out on 3, 2, 1 and 19 into the 74S37 drivers.
         "25LS2539" => p(20, &[1, 2, 3, 19, 8, 9, 11, 12], TriState, Family),
+        // Am25LS2538, one-of-eight decoder with three-state outputs and
+        // polarity control; the pins and the function are in `behaviour`
+        // below. **The outputs are not contiguous**: `Y0` to `Y7` are on
+        // 3, 2, 1, 19, 18, 8, 9 and 11, which is the thing about this part
+        // nobody would guess.
+        "25LS2538" => p(20, &[1, 2, 3, 8, 9, 11, 18, 19], TriState, Datasheet),
         // SN74LS569A, four-bit up/down counter with three-state outputs:
         // `memads` 0F15/0F17 count refresh rows, clocked on 2 by `-BUSY`,
         // outputs 16, 15, 14, 13 enabled on 17 by `-REFRESH CYC`, the
@@ -973,6 +979,29 @@ fn decode4(i: &[bool], k: u8) -> Level {
     }
     let sel = !i[1] && (i[3] as u8 | (i[4] as u8) << 1) == k;
     lv(sel != i[2])
+}
+
+/// One output of an Am25LS2538 decoder (`am25ls2538.pdf`): `i` is `OE1/`,
+/// `OE2/`, `E1/`, `E2/`, `E3`, `E4`, `POL`, `A`, `B`, `C`, and `k` which
+/// output.
+///
+/// AMD's own pin description, quoted: the two `OE` are "When both the OE1
+/// and OE2 inputs are LOW, the Y outputs are enabled. If either OE1 or OE2
+/// input is HIGH, the Y outputs are in the high-impedance state." The four
+/// enables must all be satisfied together --- "A HIGH on either the E1 or
+/// E2 input forces all decoded functions to be disabled", "A LOW on either
+/// the E3 or E4 input forces all the decoded functions to be inhibited" ---
+/// and `POL` is "A LOW on the polarity control input forces the output to
+/// the active-HIGH state while a HIGH on the polarity control input forces
+/// the Y outputs to the active-LOW state". `A` is the least significant
+/// select and `C` the most.
+fn decode8(i: &[bool], k: u8) -> Level {
+    if i[0] || i[1] {
+        return Level::Z;
+    }
+    let enabled = !i[2] && !i[3] && i[4] && i[5];
+    let sel = enabled && (i[7] as u8 | (i[8] as u8) << 1 | (i[9] as u8) << 2) == k;
+    lv(sel != i[6])
 }
 
 const fn lv(b: bool) -> Level {
@@ -3910,6 +3939,44 @@ pub fn behaviour(kind: &str) -> Option<Behaviour> {
                     g(2, &[5, 16, 4, 17, 18], |i, _| decode4(i, 1)),
                     g(1, &[5, 16, 4, 17, 18], |i, _| decode4(i, 2)),
                     g(19, &[5, 16, 4, 17, 18], |i, _| decode4(i, 3)),
+                ]
+            },
+        ),
+        // Am25LS2538, one-of-eight decoder with three-state outputs and
+        // polarity control. `A`, `B`, `C` on 6, 7 and 17, `A` least
+        // significant; `E1/` 16 and `E2/` 15 active low, `E3` 14 and `E4`
+        // 13 active high, all four wanted together; `POL` 12 choosing the
+        // sense; `OE1/` 4 and `OE2/` 5 gating the three-state drivers
+        // independently of the decode; and `Y0`..`Y7` on 3, 2, 1, 19, 18,
+        // 8, 9, 11. [`decode8`] quotes AMD's own wording for each.
+        //
+        // **From the sheet and not from the board** (`am25ls2538.pdf`),
+        // whose own PIN DESCRIPTION table has as its first row
+        // `6, 7, 17 | A, B, C`. Two printings were compared and agree pin
+        // for pin: that standalone one, document 03664B pages 9-131 to
+        // 9-137, and AMD's 1983 Bipolar Microprocessor Logic and Interface
+        // data book at page 9-145. The AC numbers are on the last page of
+        // the standalone printing if the board ever wants them.
+        //
+        // DMSECT 0E05 is the only one, and every pin of it agrees: `UNIT0`,
+        // `UNIT1` and `UNIT2` on `A`, `B` and `C` --- the plain mapping,
+        // least significant to least significant --- and `ADDRESS UNIT 0`
+        // to `7` on the eight outputs in order, which lands the scrambled
+        // 3, 2, 1, 19, 18, 8, 9, 11 exactly. `OE1/`, `OE2/`, `E1/` and
+        // `E2/` are grounded and `E3` is `HI6`, so on that board `-LOAD DA`
+        // on `E4` is the only live enable, and `POL` grounded makes
+        // `ADDRESS UNIT <n>` active high.
+        "25LS2538" => comb(
+            const {
+                &[
+                    g(3, &[4, 5, 16, 15, 14, 13, 12, 6, 7, 17], |i, _| decode8(i, 0)),
+                    g(2, &[4, 5, 16, 15, 14, 13, 12, 6, 7, 17], |i, _| decode8(i, 1)),
+                    g(1, &[4, 5, 16, 15, 14, 13, 12, 6, 7, 17], |i, _| decode8(i, 2)),
+                    g(19, &[4, 5, 16, 15, 14, 13, 12, 6, 7, 17], |i, _| decode8(i, 3)),
+                    g(18, &[4, 5, 16, 15, 14, 13, 12, 6, 7, 17], |i, _| decode8(i, 4)),
+                    g(8, &[4, 5, 16, 15, 14, 13, 12, 6, 7, 17], |i, _| decode8(i, 5)),
+                    g(9, &[4, 5, 16, 15, 14, 13, 12, 6, 7, 17], |i, _| decode8(i, 6)),
+                    g(11, &[4, 5, 16, 15, 14, 13, 12, 6, 7, 17], |i, _| decode8(i, 7)),
                 ]
             },
         ),

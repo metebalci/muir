@@ -49,16 +49,38 @@ fn attentions(dm: &mut Dm, n: &Netlist, raised: &[u8], unit: u8) -> (Level, Leve
         let level = if raised.contains(&u) { Level::Low } else { Level::High };
         dm.board.drive(net(n, &format!("TRIDENT.{u}.ATTENTION/")), level);
     }
-    for b in 0..3 {
+    // The unit number is not the controller's to assert on the cable: it
+    // is the multiplexor's to latch and report back. The 74LS175 at 0F05
+    // takes the disk address's `XBI28`, `XBI29` and `XBI30` --- bits
+    // <30:28>, three bits for eight units --- on the rising edge of
+    // `-LOAD DA`, and its Q outputs are `UNIT0`, `UNIT1` and `UNIT2`,
+    // which go both to the decoder here and back to the controller on
+    // `EP2`, `ER2` and `ES2`. Its `-CLR` is `POWER OK`.
+    dm.board.drive(net(n, "'POWER OK'"), Level::High);
+    for (b, x) in (28..31).enumerate() {
         let level = if unit >> b & 1 != 0 { Level::High } else { Level::Low };
-        dm.board.drive(net(n, &format!("UNIT{b}")), level);
+        dm.board.drive(net(n, &format!("XBI{x}")), level);
     }
-    // The unit number alone selects nothing. `-LOAD DA` enables the
-    // 25LS2538 decoder at 0E05 that makes `ADDRESS UNIT <n>` of it, and the
-    // addressed drive has to answer `SELECTED/` before the 25LS2521
-    // comparator at 0F03 gives `SELECT OK` and the 74S00 at 0D04 enables
-    // that unit's buffer. So the drive answers here, as a drive does.
+    // The 74LS175 takes its D inputs on a clock edge, so the load is an
+    // edge and not a level: the board is transitioned across it.
     dm.board.drive(net(n, "'-LOAD DA'"), Level::Low);
+    dm.board.settle_all();
+    dm.board.transition(100);
+    dm.board.drive(net(n, "'-LOAD DA'"), Level::High);
+    dm.board.settle_all();
+    dm.board.transition(200);
+    // `-LOAD DA` is on the 25LS2538's `E4` as well as the register's
+    // clock, and AMD's sheet calls `E4` an **active HIGH** enable: "A LOW
+    // on either the E3 or E4 input forces all the decoded functions to be
+    // inhibited". So one signal both takes the address and turns the
+    // decode on, and the decode is live once the load is over --- the
+    // opposite of what a leading minus suggests to a reader who takes the
+    // name for the sense.
+    //
+    // Then the addressed drive has to answer `SELECTED/` before the
+    // 25LS2521 comparator at 0F03 gives `SELECT OK` and the 74S00 at 0D04
+    // enables that unit's buffer. So the drive answers here, as a drive
+    // does.
     for u in 0..8u8 {
         let level = if u == unit { Level::Low } else { Level::High };
         dm.board.drive(net(n, &format!("TRIDENT.{u}.SELECTED/")), level);
@@ -142,7 +164,6 @@ fn any_attention_is_the_eight_units_ored() {
 /// that ORed the eight into this signal too, gives the same answer for
 /// every unit number; the board does not.
 #[test]
-#[ignore = "the 25LS2538 unit decoder has no pinout in src/part.rs, so no unit is ever selected"]
 fn selected_unit_attention_follows_the_unit_number() {
     let (dc, dmn) = boards();
     let mut dm = Dm::new(&dc, &dmn, 0);
