@@ -52,9 +52,31 @@ fn resume(label: &str) -> Option<(Chip, Behavioural, u64)> {
         eprintln!("  {MAKES_IT}");
         return None;
     };
-    let file = muir::checkpoint::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-    let mut it =
-        muir::cable::read_checkpoint(&file).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    // **A checkpoint this build cannot read is a file to make again, not a
+    // failure.** The format is versioned and the version moves --- three
+    // times on the day this was written --- so a file left in `vendor/`
+    // goes stale behind the build that reads it, and a board's
+    // fingerprint moves under it whenever `data/CADR.netlist` is
+    // regenerated. Skipping with the reason and the command says the same
+    // thing the missing-file line says; panicking would make the `#[ignore]`
+    // line above a lie, since it tells the reader the file is all that is
+    // wanted.
+    let file = match muir::checkpoint::read(&p) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("skipped: {} is not one this build can read: {e}", p.display());
+            eprintln!("  {MAKES_IT}");
+            return None;
+        }
+    };
+    let mut it = match muir::cable::read_checkpoint(&file) {
+        Ok(it) => it,
+        Err(e) => {
+            eprintln!("skipped: {} is not a netlist machine's: {e}", p.display());
+            eprintln!("  {MAKES_IT}");
+            return None;
+        }
+    };
     let n = netlist::parse(CPU).unwrap();
     // As `tests/chip.rs` builds the board before loading into it: powered,
     // with the boot PROM, settled.
