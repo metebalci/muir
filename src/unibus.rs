@@ -553,6 +553,54 @@ impl Unibus {
         self.board.save(w)
     }
 
+    /// What each end of the Unibus was last given, and the mains network's
+    /// phase, into a checkpoint.  The wires are carried for the reason
+    /// [`crate::cable::Cables::save`] gives; the mains is here because it
+    /// cannot be worked out from the time --- the count is what says where
+    /// the line is, and a board whose count started at zero would be owed
+    /// every half cycle of the 60 Hz line since power-on and would take
+    /// the first of them at time 0, before the resume's own instant.
+    ///
+    /// Not here, as they are not on the other two engines: the Chaosnet
+    /// cable and the mouse, which a resume plugs in afresh and which say
+    /// then when they next move.
+    pub fn save_exchange(&self, w: &mut crate::checkpoint::Writer) {
+        w.u64(self.given.len() as u64);
+        for g in &self.given {
+            for &e in g {
+                w.opt(e, crate::checkpoint::Writer::level);
+            }
+        }
+        for &c in &self.changed {
+            w.bool(c);
+        }
+        w.u64(self.mains_toggles);
+    }
+
+    /// Back from a checkpoint, onto a Unibus with the same board on it.
+    /// Both ends are marked unread, as [`crate::xbus::Xbus::load_exchange`]
+    /// marks them and for the same reason.
+    pub fn load_exchange(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        let n = r.u64()? as usize;
+        if n != self.given.len() {
+            return Err(crate::checkpoint::bad(format!(
+                "{n} wires on the Unibus, and this one has {}",
+                self.given.len()
+            )));
+        }
+        for g in self.given.iter_mut() {
+            for e in g.iter_mut() {
+                *e = r.opt(crate::checkpoint::Reader::level)?;
+            }
+        }
+        for c in self.changed.iter_mut() {
+            *c = r.bool()?;
+        }
+        self.mains_toggles = r.u64()?;
+        self.seen = [u64::MAX; 2];
+        Ok(())
+    }
+
     pub fn load(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
         if let Some(c) = self.chaos.as_mut() {
             c.reattach();
