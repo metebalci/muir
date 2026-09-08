@@ -1614,8 +1614,28 @@ extern "C" fn on_interrupt(_signal: std::ffi::c_int) {
     INTERRUPTS.fetch_add(1, Ordering::SeqCst);
 }
 
-/// `SIGINT`, 2 on every Unix, and `SIG_DFL`, 0.
+/// **How many `SIGUSR1`s have come**: `kill -USR1` on a run asks it where
+/// it is, and the run answers between two microcycles and carries on.
+///
+/// A long `chip` run has no prompt --- the process has a terminal and
+/// nothing else --- so before this the only way to know where one was
+/// was to infer it from what it had touched. Issue 86 has a run whose
+/// state was read from pack mtimes, then from lit pixels, then from a
+/// block-by-block comparison, two of the three retracted, over six hours,
+/// with `pc` unanswered throughout.
+static DUMPS: AtomicU32 = AtomicU32::new(0);
+
+extern "C" fn on_dump(_signal: std::ffi::c_int) {
+    DUMPS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// `SIGINT`, 2 on every Unix; `SIGUSR1`, 30 on macOS and the BSDs and 10
+/// on Linux; and `SIG_DFL`, 0.
 const SIGINT: std::ffi::c_int = 2;
+#[cfg(target_os = "linux")]
+const SIGUSR1: std::ffi::c_int = 10;
+#[cfg(not(target_os = "linux"))]
+const SIGUSR1: std::ffi::c_int = 30;
 const SIG_DFL: usize = 0;
 
 // POSIX `signal`, declared here as `localtime_r` is: the handler is a
@@ -1632,6 +1652,27 @@ fn catch_interrupts() {
     // which is safe to do in a signal handler.
     let handler: extern "C" fn(std::ffi::c_int) = on_interrupt;
     unsafe { signal(SIGINT, handler as *const () as usize) };
+    // `SIGUSR1` is taken by every engine and acted on by `chip`, which is
+    // the one with no prompt. Every engine, because the default action
+    // for it is to kill the process: a signal sent to the wrong run of a
+    // pair would otherwise end a run that had been going for hours.
+    let dump: extern "C" fn(std::ffi::c_int) = on_dump;
+    unsafe { signal(SIGUSR1, dump as *const () as usize) };
+}
+
+/// This run's own process id, for the banner line that says how to ask it
+/// where it is.
+fn pid() -> u32 {
+    std::process::id()
+}
+
+/// Whether `SIGUSR1` has come since this was last asked, as
+/// [`interrupted`] is for ^C.
+fn asked_where(seen: &mut u32) -> bool {
+    let now = DUMPS.load(Ordering::SeqCst);
+    let asked = now > *seen;
+    *seen = now;
+    asked
 }
 
 /// Whether ^C has been pressed since this was last asked.
@@ -2385,6 +2426,7 @@ fn time_chip(
     let mut quit = false;
     catch_interrupts();
     let mut interrupts_seen = 0;
+    let mut asks_seen = 0;
     while !quit && ran < stop.after && !stop.reached(cpu.read(&pc_nets) as u16, prom_enabled(&cpu))
     {
         let mut wrapped = false;
@@ -2426,6 +2468,15 @@ fn time_chip(
             continue;
         }
         last_check = Instant::now();
+        // **`kill -USR1` asks a run where it is**, and it answers here,
+        // between two microcycles, and goes on. It does not hold the
+        // machine: a reader that stopped the run would be no use for the
+        // long timing runs this exists for, and this costs one atomic
+        // load against the `Instant::now` above it, which the comment
+        // there already calls free at this rate. Issue 86.
+        if asked_where(&mut asks_seen) {
+            say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
+        }
         let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
         if poll || !held {
             attend_chip(&mut far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse);
@@ -3262,6 +3313,13 @@ fn main() {
             writeln!(s, "stop: none; a halt or ^C").unwrap();
         } else {
             writeln!(s, "stop: {}", stops.join(", ")).unwrap();
+        }
+        // `chip` is the engine with no prompt, and the one whose runs go
+        // for hours; the person watching one needs to be told this exists
+        // or it does not pay. Issue 86.
+        if which == Which::Chip {
+            writeln!(s, "where: kill -USR1 {} prints the PC and IR, and the run goes on", pid())
+                .unwrap();
         }
         if !auto_boot {
             writeln!(
