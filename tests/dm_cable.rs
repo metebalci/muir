@@ -247,15 +247,27 @@ fn the_unit_number_crosses_the_cable_to_the_controller() {
 /// A cable that took both halves from one board would index the wrong one
 /// without saying so.
 ///
-/// The round trip, all of it the multiplexor's own gates: the board is
-/// given unit 3 and decodes it to `ADDRESS UNIT 3`, the 75452 at 0B05
-/// puts `TRIDENT.3.SELECT/` down, the drive sees the select and answers
-/// `SELECTED/`, the 25LS2521 at 0F03 compares the eight `ADDRESS UNIT n`
-/// against the eight `UNIT n SELECTED` and raises `SELECT OK`, and the
-/// S00L at 0D04 takes that with `UNIT 3 SELECTED` to pull `-UNIT 3 ENB`
-/// down, which is what enables that port's buffers on to the shared
-/// lines. Nothing here tells the drive which unit it is: it is on port 3
-/// and the board chooses port 3.
+/// The round trip, all of it the multiplexor's own gates. The board is
+/// given unit 3 and decodes it to `ADDRESS UNIT 3`; a 75452 on page
+/// `DMIO` puts `TRIDENT.3.SELECT/` down; the drive sees the select and
+/// answers `SELECTED/`; the 25LS2521 at 0F03 on page `DMSEL` compares the
+/// eight `ADDRESS UNIT n` against the eight `UNIT n SELECTED` and raises
+/// `SELECT OK`; and an S00L gate at 0D04 takes that with `UNIT 3
+/// SELECTED` to pull `-UNIT 3 ENB` down, which is what enables that
+/// port's buffers on to the shared lines.
+///
+/// **Only the comparator is shared; the rest of that chain is unit 3's
+/// own**, and the parts are spread per unit rather than being one driver
+/// each --- so nothing above generalises to another unit's path. Nor does
+/// a designator name one package here: the multiplexor reuses them, 19 of
+/// its 79 across records whose pins collide, and `0B05` alone covers the
+/// select drivers of units 0 to 3. The 75452 gate meant is the one whose
+/// input is `ADDRESS UNIT 3` and whose output is `TRIDENT.3.SELECT/`.
+/// MIT left no wire list of this board (`tools/dm-netlist.sh`), so there
+/// is nothing that could settle the designators.
+///
+/// Nothing here tells the drive which unit it is: it is on port 3 and the
+/// board chooses port 3.
 #[test]
 fn a_drive_on_a_multiplexor_port_answers_the_select() {
     use muir::chip::Chip;
