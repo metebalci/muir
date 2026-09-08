@@ -973,14 +973,27 @@ impl Controller {
             // `024` to `027` and `124` to `127`, four bytes each --- and
             // compares it against the disk address register.
             //
-            // The three fields `DCDA` holds are what is compared:
-            // `<27:16>` cylinder, `<15:8>` head, `<7:0>` block. The two
-            // bits above them are the next-block address code, which the
-            // disk address register does not carry, so there is nothing
-            // here to compare them against. **Unverified**: whether the
-            // board's four byte-compares take the top byte against
-            // something else. The HEADER COMPARE page's own logic would
-            // settle it.
+            // **Three of those four compares check anything, and the
+            // fourth compares the read byte against itself.** On page
+            // DCHDCM the 25LS2521 at C22 has `RSH<7:0>` on its A inputs
+            // and `HDCM<7:0>` on its B, and `HDCM` comes off four 74LS153
+            // muxes selected by `UPC<1:0>`, whose four data inputs are
+            // `RSH`, `BLOCK`, `HEAD` and `CYL` in that order. At select 0
+            // the expected byte *is* the read byte, so nothing can
+            // miscompare; `newdsk.31` requires the alignment in its own
+            // words, "Low order 2 bits of this location must be 00, used
+            // by header compare logic", above `024`.
+            //
+            // MIT's wire list is the board as built and says the same:
+            // `RSH7` reaches `A27-06`, whose pin name there is `D00`, and
+            // `HDCM7` leaves `A27-07` as `B0` for `C22-18`. Drawing and
+            // wire list agree, and the wire list is what is followed.
+            //
+            // So what is compared is the three fields `DCDA` holds ---
+            // `<27:16>` cylinder, `<15:8>` head, `<7:0>` block --- and the
+            // header's top byte, which carries the next-block address
+            // code, has no counterpart in the register and is not compared
+            // at all. Hence the mask.
             let (c, h, b) = unit.position();
             let expected = disk_unit::header_of(&unit.geometry, c, h, b);
             if unit
