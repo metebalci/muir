@@ -47,43 +47,23 @@ fn pages_mit_names() -> Vec<String> {
         .collect()
 }
 
-/// Every body `dm.stf` places, as `(location, body, page)`.
+/// Every gate `dm.stf` places, as `(location, body, page)`.
 ///
-/// The columns are `PART NUMBER / DIPTYPE / LOC / BODY / FILE / POS`, and
-/// the list is written the way a person reads it: a row with a `LOC(  )`
-/// in it opens a slot, rows under it with three fields are further bodies
-/// in that same slot, and a part number or a diptype is left blank when it
-/// is the same as the row above.  A slot holding two bodies --- a package
-/// and the bypass capacitor beside it --- writes the second `A07@02`.
+/// [`support::stuffing_list`] reads the file --- one body a row, and a
+/// three-field row under it for each further gate of that body --- and this
+/// spreads each body back over the pages its gates are drawn on, so the
+/// count here is of gates and compares with the netlist's records. The
+/// location is MIT's without the number that tells two bodies at one
+/// location apart: `A07@02` is a second body at `A07`, and the netlist
+/// writes both `0A07`.
 fn stuffing() -> Vec<(String, String, String)> {
-    let text = mit_text(&["cadrdc", "dm.stf"]);
-    let mut out = Vec::new();
-    let mut at: Option<String> = None;
-    for line in text.lines() {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        let loc = f.iter().position(|w| {
-            w.ends_with('(')
-                && w[..w.len() - 1].len() >= 3
-                && w.starts_with(|c: char| c.is_ascii_uppercase())
-        });
-        match loc {
-            Some(k) => {
-                at = Some(f[k][..f[k].len() - 1].to_string());
-                let rest: Vec<&str> = f[k + 1..].iter().copied().filter(|w| *w != ")").collect();
-                if let (Some(slot), [body, page, ..]) = (&at, &rest[..]) {
-                    out.push((slot.clone(), body.to_string(), page.to_string()));
-                }
-            }
-            // A further body in the slot above: body, file, position.
-            None if f.len() == 3 && f[1].starts_with("DM") => {
-                if let Some(slot) = &at {
-                    out.push((slot.clone(), f[0].to_string(), f[1].to_string()));
-                }
-            }
-            None => {}
-        }
-    }
-    out
+    support::stuffing_list(&["cadrdc", "dm.stf"])
+        .into_iter()
+        .flat_map(|b| {
+            let location = b.location;
+            b.gates.into_iter().map(move |(body, page)| (location.clone(), body, page))
+        })
+        .collect()
 }
 
 /// Every body the netlist has, as `(reference, kind, page)`, with the
@@ -140,12 +120,9 @@ fn every_body_mit_stuffs_is_in_the_netlist() {
     let netlist = extracted();
     assert!(stf.len() > 140, "parsed {} bodies out of dm.stf", stf.len());
 
-    // A slot's second body is `A07@02` in the list and `0A07` in the
-    // netlist, so the comparison is on the slot without the suffix.
-    let plain = |s: &str| s.split('@').next().unwrap_or(s).to_string();
     let mut want: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     for (slot, body, page) in &stf {
-        *want.entry((plain(slot), body.clone(), page.clone())).or_default() += 1;
+        *want.entry((slot.clone(), body.clone(), page.clone())).or_default() += 1;
     }
     for (slot, kind, page) in &netlist {
         if let Some(c) = want.get_mut(&(slot.clone(), kind.clone(), page.clone())) {
@@ -170,8 +147,7 @@ fn every_body_mit_stuffs_is_in_the_netlist() {
 
     // And nothing the other way round: every body the drawings carry is
     // one MIT stuffed.
-    let placed: BTreeSet<(String, String, String)> =
-        stf.iter().map(|(s, b, p)| (plain(s), b.clone(), p.clone())).collect();
+    let placed: BTreeSet<(String, String, String)> = stf.iter().cloned().collect();
     let extra: BTreeSet<&(String, String, String)> =
         netlist.iter().filter(|k| !placed.contains(*k)).collect();
     assert!(extra.is_empty(), "bodies the drawings carry and dm.stf does not place: {extra:?}");
