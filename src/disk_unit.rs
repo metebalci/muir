@@ -79,7 +79,13 @@ pub struct Unit {
     pub fault: bool,
     /// `STATUS<2>`, "Selected Unit Attention.  Reset using the At Ease
     /// command."
-    pub attention: bool,
+    ///
+    /// **When it becomes true, not whether it is**, because MIT has it
+    /// "when the seek completes" and the heads take the drive's own time
+    /// to arrive: [`Unit::raise_attention`] is given the instant, as
+    /// [`crate::disk_controller::Controller`]'s done is. `u64::MAX` is no
+    /// attention, which is where the At Ease command puts it.
+    attention_at: u64,
 }
 
 /// A second handle on the same read-only image, and the written blocks and
@@ -98,7 +104,7 @@ impl Clone for Unit {
             block: self.block,
             seek_error: self.seek_error,
             fault: self.fault,
-            attention: self.attention,
+            attention_at: self.attention_at,
         }
     }
 }
@@ -156,8 +162,26 @@ impl Unit {
             block: 0,
             seek_error: false,
             fault: false,
-            attention: false,
+            attention_at: u64::MAX,
         }
+    }
+
+    /// `STATUS<2>` at `now`: the attention is up once the instant it was
+    /// raised for has come.
+    pub fn attention(&self, now: u64) -> bool {
+        now >= self.attention_at
+    }
+
+    /// Raises it at `at`, which for a seek is when the heads arrive.
+    pub fn raise_attention(&mut self, at: u64) {
+        self.attention_at = at;
+    }
+
+    /// "0005 At ease.  Resets attention on the selected unit."  A seek
+    /// still on its way loses its attention with it, which is the flag
+    /// being one thing and not two.
+    pub fn clear_attention(&mut self) {
+        self.attention_at = u64::MAX;
     }
 
     /// Where the heads are: cylinder, head, block.
@@ -1429,7 +1453,7 @@ impl Unit {
             block,
             seek_error,
             fault,
-            attention,
+            attention_at,
         } = self;
         w.u32(geometry.cylinders);
         w.u32(geometry.heads);
@@ -1447,7 +1471,7 @@ impl Unit {
         w.u32(*block);
         w.bool(*seek_error);
         w.bool(*fault);
-        w.bool(*attention);
+        w.u64(*attention_at);
     }
 
     /// Back from a checkpoint, into a drive holding a pack of the same
@@ -1485,7 +1509,7 @@ impl Unit {
         self.block = r.u32()?;
         self.seek_error = r.bool()?;
         self.fault = r.bool()?;
-        self.attention = r.bool()?;
+        self.attention_at = r.u64()?;
         Ok(())
     }
 }

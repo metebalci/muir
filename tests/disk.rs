@@ -1490,6 +1490,78 @@ fn a_seek_is_as_long_as_the_heads_take() {
     assert_eq!(seek_ns(0), 0, "and the heads already there have no move to make");
 }
 
+/// **The attention comes with the heads, not with the command.** MIT, of
+/// the seek: "Initiates a seek to the cylinder specified in the disk
+/// address register.  **An attention will occur when the seek
+/// completes**"; and of the recalibrate, that it "causes an attention when
+/// complete".
+///
+/// This model raised it as the command was stored, which is early by the
+/// whole of the head move --- 6 ms to the next cylinder and 55 across the
+/// pack. **No program in the release could tell**: the boot PROM's
+/// `AWAIT-DRIVE-READY` waits on bits 4, 5, 6, 8, 9 and 10 and never looks
+/// at the attention, and CC's `sys/cc/ccdisk.lisp` --- the one MIT
+/// program that does, `(cc-disk-wait-idle 4)`, "wait for selected unit
+/// atention" --- reaches it only through `cc-disk-op`, which has already
+/// waited for `STATUS<0>`. So this is fidelity rather than a bug fixed,
+/// and the second source is the gate-level model: the drive on the netlist
+/// controller's cable raises it where the seek settles, which
+/// `a_seek_takes_the_drives_time` above holds it to.
+///
+/// **The recalibrate is the one a program can see the difference in**, and
+/// only because the controller does not go busy for it: the attention is
+/// the whole of what says the heads are home.
+#[test]
+fn the_attention_comes_when_the_seek_completes() {
+    use muir::disk_unit::seek_ns;
+    let (mut d, mut main) = blank();
+    d.timed = true;
+    let mut now = 1_000;
+    let mut from = 0u32;
+    for cylinder in [1u32, 400] {
+        // The heads travel from where the last seek left them, so the
+        // distance is what times it and not the cylinder's number.
+        let want = seek_ns(cylinder.abs_diff(from));
+        from = cylinder;
+        d.advance(now);
+        d.write(reg::COMMAND, 0o4, &mut main);
+        d.write(reg::DISK_ADDRESS, cylinder << 16, &mut main);
+        d.write(reg::START, 0, &mut main);
+        assert_eq!(d.status() & status::ATTENTION, 0, "to {cylinder}: not at the store");
+        assert_eq!(d.status() & status::ANY_ATTENTION, 0, "to {cylinder}: nor any-attention");
+        d.advance(now + want - 1);
+        assert_eq!(d.status() & status::ATTENTION, 0, "to {cylinder}: nor a ns before arrival");
+        d.advance(now + want);
+        assert_ne!(d.status() & status::ATTENTION, 0, "to {cylinder}: up on arrival");
+        assert_ne!(
+            d.status() & status::ANY_ATTENTION,
+            0,
+            "to {cylinder}: and any-attention with it"
+        );
+        // The same instant the controller stops being busy, which is the
+        // other half of the seek MIT describes.
+        assert_ne!(d.status() & status::NOT_ACTIVE, 0, "to {cylinder}: and the seek is done");
+        // "0005 At ease.  Resets attention on the selected unit."
+        d.write(reg::COMMAND, 0o5, &mut main);
+        d.write(reg::START, 0, &mut main);
+        assert_eq!(d.status() & status::ATTENTION, 0, "to {cylinder}: at ease resets it");
+        now += want + 1_000;
+    }
+
+    // The recalibrate brings the heads home from wherever they are, and
+    // its attention is the whole of what says so: the controller does not
+    // go busy for it.
+    let home = seek_ns(400);
+    d.advance(now);
+    d.write(reg::COMMAND, 0o1005, &mut main);
+    d.write(reg::START, 0, &mut main);
+    assert_eq!(d.status() & status::ATTENTION, 0, "the recalibrate is not home at the store");
+    d.advance(now + home - 1);
+    assert_eq!(d.status() & status::ATTENTION, 0, "nor a ns before");
+    d.advance(now + home);
+    assert_ne!(d.status() & status::ATTENTION, 0, "and is when the heads arrive");
+}
+
 /// **A transfer waits for its block to come round, and then moves it.**
 ///
 /// A T-300 turns once in 16.67 ms and lays seventeen sectors on a track, so
