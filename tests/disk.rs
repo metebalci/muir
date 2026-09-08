@@ -21,6 +21,7 @@ mod support;
 mod status {
     pub const READ_COMPARE_DIFFERENCE: u32 = 1 << 22;
     pub const HEADER_COMPARE: u32 = 1 << 18;
+    pub const HEADER_ECC: u32 = 1 << 17;
     pub const TIMEOUT: u32 = 1 << 11;
     pub const OVERRUN: u32 = 1 << 14;
     pub const NXM: u32 = 1 << 20;
@@ -1497,6 +1498,61 @@ fn a_header_that_is_not_the_addresss_own_stops_the_transfer() {
     let s = d.status();
     assert_ne!(s & status::HEADER_COMPARE, 0, "block 1 does not compare: {s:o}");
     assert_ne!(s & status::ABORTED, 0, "and the transfer is aborted: {s:o}");
+    assert_eq!(back[0o400..0o400 + BLOCK_WORDS], [0; BLOCK_WORDS], "nothing was moved");
+}
+
+/// **A header whose checkword does not check is `STATUS<17>`, and it only
+/// shows where the header itself compares.**
+///
+/// MIT: "Header ECC Error.  Indicates that the error-correcting code of a
+/// block header failed to check.  **Unfortunately most header ECC errors
+/// show up as header compare errors instead.**  Maybe this can be fixed?
+/// This error stops the transfer."
+///
+/// That sentence is not a curiosity, it is the order the board works in:
+/// the four `HEADER STROBE` steps at `024` to `027` compare bytes as they
+/// come in and `033` sets the ECC error four steps later, so a header
+/// whose bytes are wrong has already stopped the transfer. What reaches
+/// the ECC check is a header that **compares and does not check** --- and
+/// that is what this lays down: the address's own header word, with a
+/// checkword that is not its.
+#[test]
+fn a_header_that_compares_but_does_not_check_is_header_ecc() {
+    use muir::disk_unit::{Ecc, header_of, sector_image_written};
+    let g = Geometry::T300;
+    let mut d = Controller::default();
+    d.attach(0, Unit::blank(g));
+    let mut main = vec![0u32; 1 << 16];
+
+    let data = |n: u32| std::array::from_fn::<u32, BLOCK_WORDS, _>(|i| n * 0x10000 + i as u32);
+    let right = header_of(&g, 0, 0, 0);
+    let second = header_of(&g, 0, 0, 1);
+    let mut wrong = Ecc::over(&second.to_le_bytes());
+    wrong[0] ^= 1;
+    let mut bytes = Vec::new();
+    bytes.extend(sector_image_written(right, Ecc::over(&right.to_le_bytes()), &data(1)));
+    bytes.extend(sector_image_written(second, wrong, &data(2)));
+    let words: Vec<u32> = bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
+    let pages = words.len().div_ceil(BLOCK_WORDS);
+    main[0o10000..0o10000 + words.len()].copy_from_slice(&words);
+    run(&mut d, &mut main, 0o13, 0, 16, pages as u32);
+
+    // Block 0 is whole.
+    let mut back = vec![0u32; 1 << 16];
+    read_block(&mut d, &mut back, 0, 1);
+    d.advance(TIMEOUT_NS * 2);
+    let s = d.status();
+    assert_eq!(s & (status::HEADER_ECC | status::HEADER_COMPARE), 0, "block 0 is clean: {s:o}");
+
+    // Block 1's header says the right thing and its checkword does not
+    // check it: the compare passes and the ECC error is what stops it.
+    let mut back = vec![0u32; 1 << 16];
+    read_block(&mut d, &mut back, 1, 1);
+    d.advance(TIMEOUT_NS * 4);
+    let s = d.status();
+    assert_eq!(s & status::HEADER_COMPARE, 0, "the header compares: {s:o}");
+    assert_ne!(s & status::HEADER_ECC, 0, "and its checkword does not: {s:o}");
+    assert_ne!(s & status::ABORTED, 0, "the transfer is aborted: {s:o}");
     assert_eq!(back[0o400..0o400 + BLOCK_WORDS], [0; BLOCK_WORDS], "nothing was moved");
 }
 

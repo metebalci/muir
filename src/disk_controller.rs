@@ -995,12 +995,23 @@ impl Controller {
             // code, has no counterpart in the register and is not compared
             // at all. Hence the mask.
             let (c, h, b) = unit.position();
+            let carried = unit.header_at(c, h, b);
             let expected = disk_unit::header_of(&unit.geometry, c, h, b);
-            if unit
-                .header_at(c, h, b)
-                .is_some_and(|carried| carried & 0x0fff_ffff != expected & 0x0fff_ffff)
-            {
+            if carried.is_some_and(|x| x.word & 0x0fff_ffff != expected & 0x0fff_ffff) {
                 self.header_compare = true;
+                return moved;
+            }
+            // "<17> Header ECC Error.  Indicates that the error-correcting
+            // code of a block header failed to check ... This error stops
+            // the transfer."  It is asked after the compare because the
+            // board asks it after the compare: `033` "Set header ECC error
+            // if so", four steps past the last `HEADER STROBE`. Which is
+            // why MIT writes "Unfortunately most header ECC errors show up
+            // as header compare errors instead" --- a header whose bytes
+            // are wrong has already stopped the transfer above, and what
+            // reaches here is a header that compares and does not check.
+            if carried.is_some_and(|x| !x.checks()) {
+                self.header_ecc = true;
                 return moved;
             }
 
@@ -1076,8 +1087,8 @@ fn track_bytes(unit: &mut Unit, cylinder: u32, head: u32, block: u32) -> Vec<u8>
         // address implies: a Write All wrote whatever the program had.
         let header = unit
             .header_at(cylinder, head, b)
-            .unwrap_or_else(|| disk_unit::header_of(&g, cylinder, head, b));
-        bytes.extend(disk_unit::sector_image_with_header(header, &data));
+            .unwrap_or_else(|| disk_unit::Header::of(&g, cylinder, head, b));
+        bytes.extend(disk_unit::sector_image_written(header.word, header.checkword, &data));
         if b + 1 == g.blocks_per_track {
             bytes.resize(bytes.len() + format::LEFTOVER, 0xff);
         }
@@ -1137,7 +1148,8 @@ fn lay_down_track(unit: &mut Unit, cylinder: u32, head: u32, from: u32, bytes: &
         // so there is nowhere to put a block whose header disagrees with
         // its place. That is issue #8's missing track format rather than a
         // missing status bit.
-        if !unit.write_sector_at(cylinder, head, block, s.header, &s.data) {
+        let laid = disk_unit::Header { word: s.header, checkword: s.header_checkword };
+        if !unit.write_sector_at(cylinder, head, block, laid, &s.data) {
             return;
         }
         at += format::SECTOR;
