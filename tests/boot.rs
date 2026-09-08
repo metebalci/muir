@@ -236,8 +236,11 @@ fn the_boot_loads_microcode_323_off_the_pack() {
         m.imem[at..at + want.imem.len()] == want.imem[..],
         "the control store is not what the file holds"
     );
-    // The dispatch memory is 17 bits wide; the file carries a parity bit
-    // above them that no RAM on the board holds.
+    // The engines keep the dispatch memory's seventeen data bits and drop
+    // the parity bit the file carries above them. The board does store that
+    // bit --- the 93425As at DRAM 1F16 and 1F17 --- but nothing can read it
+    // back as data, so dropping it is unobservable; `src/micro.rs` has the
+    // whole of it where the mask is applied.
     let at = want.dmem_start as usize;
     for (i, w) in want.dmem.iter().enumerate() {
         assert_eq!(m.dmem[at + i], w & 0o377777, "dispatch memory word {i:o}");
