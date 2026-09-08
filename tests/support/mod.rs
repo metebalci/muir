@@ -177,6 +177,20 @@ pub fn kinds(n: &Netlist) -> Kinds {
     }
 }
 
+/// The control-store board's pages, by MIT's own list of them:
+/// `cadr/framl.txt`, the frame list of `icmem.book`. `CADR.netlist` holds
+/// two boards and they share designators --- `1A01` is a 74S240 on the
+/// processor's VMEMDR and a 74S174 on the control store's OLORD1 --- so
+/// counting locations means counting them a board at a time. The list
+/// names the control-store RAM pages `RAM00`..`RAM33` where the drawings
+/// are `iram00.drw`, and the netlist took the file names.
+pub fn control_store_pages() -> BTreeSet<String> {
+    let text = std::fs::read_to_string(mit(&["cadr", "framl.txt"])).unwrap();
+    text.split_whitespace()
+        .map(|p| if p.starts_with("RAM") { format!("I{p}") } else { p.to_string() })
+        .collect()
+}
+
 /// **A body in MIT's stuffing list.** One row of a `*.stf`, which is a
 /// board as the stockroom saw it: six columns --- part number, DIP type,
 /// `CARD LOC`, body, file and position --- one row per body, and a further
