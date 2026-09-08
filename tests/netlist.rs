@@ -9,7 +9,7 @@
 //! simulating a different machine.
 
 use muir::{netlist, wirelist};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 mod support;
@@ -68,6 +68,54 @@ fn reference_designators_repeat() {
         "1B20 appears twice on BCTERM; it is the case that caught this"
     );
     eprintln!("{} designators repeat within their page", dupes.len());
+}
+
+/// **A designator names a location on each of the two boards**, so nothing
+/// here may key on one alone.
+///
+/// `data/CADR.netlist` is `cadr.book` and `icmem.book` both, and the boards
+/// share one card-location scheme. What separates them is the page, the two
+/// print sets naming disjoint ones --- which is why [`Netlist::packages`]
+/// keys on page as well as reference, and why a citation in this file has
+/// to name the page to mean anything.
+///
+/// The file's own header says so, and this reads its figures back out of
+/// it. A number in a **generated** header is worse than one in prose: it
+/// reads as authoritative and nothing regenerates it.
+#[test]
+fn a_designator_names_a_location_on_each_board() {
+    let n = netlist::parse(NETLIST).unwrap();
+    let icmem = support::control_store_pages();
+    let side = |control_store: bool| -> BTreeSet<&str> {
+        n.parts
+            .iter()
+            .filter(|p| icmem.contains(&p.page) == control_store)
+            .map(|p| p.reference.as_str())
+            .collect()
+    };
+    let (processor, control_store) = (side(false), side(true));
+    let both = processor.intersection(&control_store).count();
+    let all: BTreeSet<&str> = n.parts.iter().map(|p| p.reference.as_str()).collect();
+    assert_eq!((both, all.len()), (301, 695), "designators on both boards, and in all");
+
+    // The case the header names, and it is two different parts rather than
+    // two of a kind: one designator, one location on each board.
+    let at = |reference: &str| -> BTreeSet<(&str, &str)> {
+        n.parts
+            .iter()
+            .filter(|p| p.reference == reference)
+            .map(|p| (p.page.as_str(), p.kind.as_str()))
+            .collect()
+    };
+    assert_eq!(at("1E25"), BTreeSet::from([("VCTL1", "9S42-1"), ("IRAM00", "2147")]));
+    // And the one no naming scheme could separate: three devices, three
+    // pages, one location. `a_designator_can_name_two_bodies` has the pair
+    // on BCTERM as two packages.
+    assert_eq!(at("1B15"), BTreeSet::from([("BCTERM", "SIP220/330-8"), ("IWRPAR", "93S48")]));
+
+    for said in [format!("{both} of the"), format!("{} designators", all.len())] {
+        assert!(NETLIST.contains(&said), "the netlist header should say {said:?}");
+    }
 }
 
 /// SUDS marks open-collector variants with a trailing O.  An open-collector
