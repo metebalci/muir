@@ -236,3 +236,86 @@ fn the_unit_number_crosses_the_cable_to_the_controller() {
         assert_eq!(at_controller, unit, "the controller reads unit {unit} off the cable");
     }
 }
+
+/// **A drive on one of the multiplexor's eight ports answers the select,
+/// and its cable spans two boards to do it.**
+///
+/// This is what [`muir::disk_unit::OnCable::on`] is for. The drive's
+/// per-unit lines are its port on the multiplexor --- `TRIDENT.3.SELECT/`
+/// and the rest --- and its shared lines are still the controller's, so
+/// its `NetId`s come from two netlists and it is applied to two `Chip`s.
+/// A cable that took both halves from one board would index the wrong one
+/// without saying so.
+///
+/// The round trip, all of it the multiplexor's own gates: the board is
+/// given unit 3 and decodes it to `ADDRESS UNIT 3`, the 75452 at 0B05
+/// puts `TRIDENT.3.SELECT/` down, the drive sees the select and answers
+/// `SELECTED/`, the 25LS2521 at 0F03 compares the eight `ADDRESS UNIT n`
+/// against the eight `UNIT n SELECTED` and raises `SELECT OK`, and the
+/// S00L at 0D04 takes that with `UNIT 3 SELECTED` to pull `-UNIT 3 ENB`
+/// down, which is what enables that port's buffers on to the shared
+/// lines. Nothing here tells the drive which unit it is: it is on port 3
+/// and the board chooses port 3.
+#[test]
+fn a_drive_on_a_multiplexor_port_answers_the_select() {
+    use muir::chip::Chip;
+    use muir::disk_unit::{Geometry, OnCable, Ports, Trident, Unit};
+
+    const UNIT: u8 = 3;
+    let (dc, dmn) = boards();
+    let mut controller = Chip::new_unclocked(&dc);
+    controller.power_on();
+    let mut dm = Dm::new(&dc, &dmn, 0);
+    dm.board.drive(net(&dmn, "'POWER OK'"), Level::High);
+    let mut cable = OnCable::on(
+        Ports { per_unit: &dmn, unit: UNIT, shared: &dc },
+        Trident::new(Unit::blank(Geometry::T300), 0),
+    );
+
+    // The multiplexor is told which unit, the way the controller tells it.
+    for (b, x) in (28..31).enumerate() {
+        let level = if UNIT >> b & 1 != 0 { Level::High } else { Level::Low };
+        dm.board.drive(net(&dmn, &format!("XBI{x}")), level);
+    }
+    let mut t = 0u64;
+    for load in [Level::Low, Level::High] {
+        dm.board.drive(net(&dmn, "'-LOAD DA'"), load);
+        dm.board.settle_all();
+        t += 100;
+        dm.board.transition(t);
+    }
+    assert_eq!(
+        dm.board.net(net(&dmn, &format!("'ADDRESS UNIT {UNIT}'"))),
+        Level::High,
+        "the multiplexor decoded unit {UNIT}"
+    );
+    assert_eq!(
+        dm.board.net(net(&dmn, &format!("TRIDENT.{UNIT}.SELECT/"))),
+        Level::Low,
+        "and put the select down on that port"
+    );
+
+    // The drive answers, over a cable whose two halves are two boards.
+    for _ in 0..8 {
+        t += 100;
+        cable.apply_on(&mut dm.board, &mut controller, t);
+        dm.exchange(&mut controller);
+    }
+    assert_eq!(
+        dm.board.net(net(&dmn, &format!("TRIDENT.{UNIT}.SELECTED/"))),
+        Level::Low,
+        "the drive answered the select"
+    );
+    assert_eq!(
+        dm.board.net(net(&dmn, &format!("'-UNIT {UNIT} ENB'"))),
+        Level::Low,
+        "so the comparator agrees and that port's buffers are enabled"
+    );
+    for other in (0..8u8).filter(|&u| u != UNIT) {
+        assert_eq!(
+            dm.board.net(net(&dmn, &format!("'-UNIT {other} ENB'"))),
+            Level::High,
+            "and no other port is"
+        );
+    }
+}
