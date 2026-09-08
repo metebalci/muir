@@ -317,3 +317,58 @@ fn the_multiplexor_is_the_netlist_controllers_board() {
         "--disk-pack",
     );
 }
+
+/// **`kill -USR1` asks a running machine where it is, and it answers and
+/// goes on.**
+///
+/// A long `chip` run has no prompt --- the process has a terminal and
+/// nothing else --- so before this the only way to know where one was was
+/// to infer it from what it had touched. Issue 86 has a run whose state
+/// was read from pack mtimes, then from lit pixels, then from a
+/// block-by-block comparison of the pack, two of the three retracted, over
+/// six hours, and `pc` unanswered the whole time.
+///
+/// **The answer arrives while the machine runs**, which is the point: a
+/// reader that held the run would be no use for the timing runs this
+/// exists for. Measured over the same 20,000-microcycle window, signalled
+/// three times against not at all: both end at PC 240 having run 20,000,
+/// in 8.926 s against 8.903, which is the cost of the three lines printed.
+/// So asking neither changes the answer nor slows the run.
+///
+/// The signal is taken by every engine and acted on by `chip` alone,
+/// because the default action for `SIGUSR1` is to kill the process: one
+/// sent to the wrong run of a pair would otherwise end a run that had been
+/// going for hours.
+#[test]
+fn a_running_chip_says_where_it_is_when_asked() {
+    // Long enough to still be running when the signal lands, short enough
+    // that the test is a second or two: `chip` does about 2,200
+    // microcycles a second.
+    let child = muir()
+        .args(["--chip", "--main-memory-boards", "4", "--stop-after", "6000"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("muir did not start");
+    let pid = child.id().to_string();
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    let killed = std::process::Command::new("kill")
+        .args(["-USR1", &pid])
+        .status()
+        .expect("kill did not run");
+    assert!(killed.success(), "the signal was delivered");
+    let out = child.wait_with_output().expect("muir did not finish");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let said = text
+        .lines()
+        .find(|l| l.starts_with("PC ") && l.contains("microcycles this run"))
+        .unwrap_or_else(|| panic!("no answer to the signal in:\n{text}"));
+    // It answered from inside the run rather than at the end of it.
+    let ran: u64 = said
+        .rsplit_once("; ")
+        .and_then(|(_, tail)| tail.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no microcycle count in `{said}`"));
+    assert!(0 < ran && ran < 6_000, "answered mid-run, at {ran} of 6000: `{said}`");
+    assert!(text.contains("IR "), "and said what it was executing:\n{text}");
+    assert!(text.contains("ran out at 6000"), "and ran to its stop after answering:\n{text}");
+}
