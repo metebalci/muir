@@ -1,9 +1,11 @@
 # `tools/`
 
 Scripts that make the committed fixtures in `data/` from MIT's files in
-`mit/`, and one that fetches what is not committed. None of them runs as part
-of the build; `data/README.md` says which test holds each output to its
-source.
+`mit/`, one that fetches what is not committed, and one that checks the
+first lot still make what is committed. None of them runs as part of the
+build --- CI runs `check-netlists.sh` on every push, which is what says the
+fixtures and the drawings have not drifted apart. `data/README.md` says
+which test holds each output to its source.
 
 **The netlist scripts want a C compiler**, because each builds `soap4/` as it
 runs. Nothing else here does, and neither does muir: the fixtures these make
@@ -15,7 +17,8 @@ Ubuntu, `gcc` on Fedora --- and only when a netlist has to be made again.
 |---|---|
 | `fetch-system-100.sh` | `vendor/`: the System 100 release --- the target --- and a directory for muir to serve it from. Nothing in `vendor/` is committed |
 | `fetch-system-304.sh` | `vendor/`: the System 304 release, which also boots here; its microcode is the second copy the committed one is held to |
-| `cadr-netlist.sh`, `busint-netlist.sh`, `cadrm-netlist.sh`, `cadrio-netlist.sh`, `cadrdc-netlist.sh`, `simpletv-netlist.sh`, `lispmtv-netlist.sh` | `data/<BOARD>.netlist`, one board each: MIT's drawings read with `soap4`, then reconciled with MIT's wire list by `examples/reconcile.rs` |
+| `cadr-netlist.sh`, `busint-netlist.sh`, `cadrm-netlist.sh`, `cadrio-netlist.sh`, `cadrdc-netlist.sh`, `simpletv-netlist.sh`, `lispmtv-netlist.sh`, `dm-netlist.sh` | `data/<BOARD>.netlist`, one board each: MIT's drawings read with `soap4`, then reconciled with MIT's wire list by `examples/reconcile.rs` |
+| `check-netlists.sh` | nothing. It runs all eight of those and says whether each committed netlist is still what its script makes, putting the committed files back afterwards. CI runs it on every push |
 | `newdsk-proms.sh` | `data/newdsk-d0?.prom`, the disk controller's control store, assembled from `mit/cadrdc/newdsk.31` by `examples/dcmicro.rs` |
 | `trident-tables.sh` | `data/trident-connectors.txt` and `data/trident-bus.txt`, by `examples/trident-tables.rs` |
 

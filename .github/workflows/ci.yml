@@ -74,17 +74,15 @@ jobs:
         run: cargo test --locked
 
       # The netlists in data/ are generated from MIT's drawings in mit/ by
-      # these scripts. Regenerating two of them here says the committed files
-      # and the drawings have not drifted apart, and that the scripts run on
-      # a machine that has only this repository.
+      # the scripts in tools/, and no `cargo test` can say so:
+      # regenerating wants a C compiler for soap4 and a release build of
+      # examples/reconcile.rs. So it is checked here, all eight of them, on
+      # a machine that has only this repository --- which also says the
+      # scripts run on a fresh clone. A netlist whose script no longer
+      # reproduces it looks exactly like one that does, and that has
+      # happened once already (7c0c5b0).
       - name: Netlists regenerate byte-identical
-        run: |
-          cp data/CADRM.netlist /tmp/CADRM.expected
-          cp data/BUSINT.netlist /tmp/BUSINT.expected
-          tools/cadrm-netlist.sh
-          tools/busint-netlist.sh
-          diff /tmp/CADRM.expected data/CADRM.netlist
-          diff /tmp/BUSINT.expected data/BUSINT.netlist
+        run: tools/check-netlists.sh
 
   system-100:
     runs-on: ubuntu-latest
