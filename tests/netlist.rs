@@ -303,3 +303,64 @@ fn only_the_dot_clock_is_named_twice_by_case() {
     );
     assert_eq!(found.len(), 2, "the SIMPLE TV and the LISPM TV, one pair each: {found:?}");
 }
+
+/// **No board has two net names that differ only in spacing or case.**
+/// MIT's draughtsmen wrote a wire's name twice on a sheet and did not
+/// always write it the same way, and soap4 takes two spellings for two
+/// nets --- leaving the pins on one half with no driver, which is a broken
+/// board rather than a cosmetic difference. `-11CLRTDN` on the I/O board
+/// was one: the 74S00 at D07 pin 11 drove `-11CLRTDN` and the 74S08 at B10
+/// pin 5 waited on `- 11CLRTDN`.
+///
+/// `matches_mits_wire_lists` cannot catch these, which is why this is
+/// separate: that comparison squeezes the spaces out of a name before
+/// matching it, so the two halves look like the one wire MIT's list says
+/// they are and nothing is reported. Each pair found here wants an entry
+/// in `Netlist::EXPLICIT_ALIASES`, and the wire list consulted first to
+/// say which spelling is the wire.
+#[test]
+fn no_board_spells_one_net_two_ways() {
+    let mut clashes = Vec::new();
+    let boards: [(&str, &str); 8] = [
+        ("BUSINT", include_str!("../data/BUSINT.netlist")),
+        ("CADR", include_str!("../data/CADR.netlist")),
+        ("CADRDC", include_str!("../data/CADRDC.netlist")),
+        ("CADRIO", include_str!("../data/CADRIO.netlist")),
+        ("CADRM", include_str!("../data/CADRM.netlist")),
+        ("DM", include_str!("../data/DM.netlist")),
+        ("LISPMTV", include_str!("../data/LISPMTV.netlist")),
+        ("SIMPLETV", include_str!("../data/SIMPLETV.netlist")),
+    ];
+    for (name, text) in boards {
+        let n = netlist::parse(text).unwrap();
+        let mut used = std::collections::BTreeSet::new();
+        for part in &n.parts {
+            for &(_, net) in &part.pins {
+                used.insert(net);
+            }
+        }
+        let mut by_squashed: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for net in 0..n.nets.len() {
+            let full = n.net(net as u32);
+            // A name an alias has emptied is still in the table; only nets
+            // a pin still lands on are wires of the board.
+            if full.starts_with('@') || !used.contains(&(net as u32)) {
+                continue;
+            }
+            let squashed: String = full
+                .trim_matches('\'')
+                .chars()
+                .filter(|c| *c != ' ')
+                .collect::<String>()
+                .to_uppercase();
+            by_squashed.entry(squashed).or_default().push(full.to_string());
+        }
+        for (_, spellings) in by_squashed.iter().filter(|(_, v)| v.len() > 1) {
+            clashes.push(format!("{name}: {spellings:?}"));
+        }
+    }
+    for c in &clashes {
+        eprintln!("{c}");
+    }
+    assert!(clashes.is_empty(), "{} nets are spelled two ways", clashes.len());
+}
