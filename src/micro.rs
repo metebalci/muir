@@ -893,11 +893,23 @@ impl Micro {
         // Misc 2 writes the dispatch memory instead of dispatching.
         //
         // Seventeen bits, not thirty-two: the DRAM pages hold `DPC<13:0>`,
-        // `DN`, `DP` and `DR` and nothing else, which `tests/chip.rs` reads
-        // off the netlist and enforces against `rtl`. The boot PROM's
-        // `CLEAR-D-MEMORY` writes "0 with good parity" --- bit 17 --- into
-        // every word, so an engine that keeps the whole word holds 2048
-        // entries no board ever held.
+        // `DN`, `DP` and `DR`, which `tests/chip.rs` reads off the netlist
+        // and enforces against `rtl`.
+        //
+        // **The board does hold the eighteenth bit, and this comment used
+        // to say it did not.** The 93425As at DRAM 1F16 and 1F17 take
+        // `AA17` --- A bus bit 17 --- and give `DPAR`, which is the parity
+        // bit `CC-WRITE-D-MEM` and PRAID's `P-D-MEM-D` both compute as odd
+        // and write through A memory location 0.
+        //
+        // Dropping it is right all the same, because **nothing can read it
+        // back**. `DPAR` goes only to the parity checker, the 74S280 at
+        // 4F09; `CC-READ-D-MEM` in `cc/lcadrd.lisp` does not read the word
+        // at all but reconstructs the seventeen data bits from the machine's
+        // behaviour --- the PC-select bits and the noop and `SPUSHD` flags
+        // out of `SPY-FLAG-2`, and `DPC` from `CC-READ-PC`. The one thing
+        // that observes the stored bit is `-DPE`, and that can only differ
+        // from correct if a chip has failed.
         if self.ir(10, 2) == 2 {
             self.m.dmem[addr as usize] = self.adata & 0o377777;
             return Ok(());
