@@ -35,11 +35,13 @@ opt-level = 2
 # tests, that one the only failure. Issue 79, and the user's call, in their
 # words: "naturally it has to run correct".
 #
-# It is the compiler, and `rust-toolchain.toml` pins the one that has it.
-# Measured on this test at `codegen-units = 1`, same worktree, four
-# toolchains: 1.98.0 fails, 1.98.1 fails, 1.99.0-beta.4 passes,
-# 1.100.0-nightly passes. So the pin is what makes it bite, and a point
-# release is not the way out --- 1.99 is.
+# **It is the compiler, and `rust-toolchain.toml` pins the one that has
+# it.** Measured on this test at `codegen-units = 1`: 1.98.0 fails, 1.98.1
+# fails, 1.99.0-beta.4 passes. Two nightlies of one channel put the change
+# in a window --- `e71c0f1e3` of 18 August and `f7d782a3b` of 19 August both
+# fail, `cea272fa3` of 7 September passes --- which a release comparison
+# could not, since 1.98 against 1.99 cannot tell one LLVM patch from a
+# release of other changes.
 #
 # `rust-lang/rust#162398` reports the same shape: the loop vectorizer
 # producing `n % 4` for a negate-inside-reduction, on aarch64-apple,
@@ -47,22 +49,23 @@ opt-level = 2
 # across the caller's loop is, and it accounts for the one odd thing about
 # this fault --- it needs `tc` inlined into that loop, which one codegen
 # unit gives and sixteen do not, and which no separate crate can, so
-# extracting it to reduce it was never going to reproduce it.
+# extracting it to reduce it was never going to reproduce it. The issue is
+# closed as `not_planned` and what it turns on is in the comments rather
+# than the body: an LLVM maintainer writes "I think this was fixed by
+# llvm/llvm-project#210957 (which has since been backported)", hedged as
+# quoted, and the reporter then confirms a newer nightly is correct. The
+# nightly window above spans that backport, so the attribution fits;
+# **it is still a window and not a bisection to a commit**, and the
+# attribution upstream is its author's guess.
 #
-# The issue is closed as `not_planned`, and what it turns on is in the
-# comments rather than the body: an LLVM maintainer writes "I think this
-# was fixed by llvm/llvm-project#210957 (which has since been
-# backported)", hedged as quoted, and the reporter then confirms a newer
-# nightly is correct. The body's affected nightly is `67854e511` of
-# 15 August and the working one `5a2be9f5f` of 6 September, so the version
-# list there is filing-time and not current. **Nobody here has tied that
-# defect to this one beyond the shape**, and the attribution upstream is
-# its author's guess; the four-toolchain measurement above is what this
-# comment rests on.
-#
-# **The 3% comes back with the pin.** When `rust-toolchain.toml` moves to
-# 1.99 or later, put `codegen-units = 1` back and run `cargo test
-# --release`. If that test passes, this comment is spent.
+# **The 3% comes back with the pin, and the way back has been walked
+# once.** When `rust-toolchain.toml` moves to 1.99 or later, put
+# `codegen-units = 1` back and run `cargo test --release --no-fail-fast`
+# --- `cargo test` stops at the first failing target, so without that flag
+# the run answers a narrower question than it looks like it does. On
+# 1.99.0-beta.4 with `codegen-units = 1` restored that is 76 targets, 697
+# passed, 0 failed, 26 ignored. If it comes out that way again, this
+# comment is spent.
 [profile.release]
 lto = "fat"
 codegen-units = 16
