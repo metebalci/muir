@@ -827,7 +827,7 @@ impl Controller {
                 self.read_all(&bytes, main);
             } else {
                 let bytes = self.write_all_bytes(main);
-                lay_down_track(&mut unit, &bytes);
+                lay_down_track(&mut unit, cylinder, head, block, &bytes);
             }
             self.da = unit.da(i as u32);
         }
@@ -1013,7 +1013,12 @@ fn track_bytes(unit: &mut Unit, cylinder: u32, head: u32, block: u32) -> Vec<u8>
     for k in 0..g.blocks_per_track {
         let b = (block + k) % g.blocks_per_track;
         let data = unit.block_at(cylinder, head, b).unwrap_or([0; BLOCK_WORDS]);
-        bytes.extend(disk_unit::sector_image(&g, cylinder, head, b, &data));
+        // The header the sector carries, which is not always the one its
+        // address implies: a Write All wrote whatever the program had.
+        let header = unit
+            .header_at(cylinder, head, b)
+            .unwrap_or_else(|| disk_unit::header_of(&g, cylinder, head, b));
+        bytes.extend(disk_unit::sector_image_with_header(header, &data));
         if b + 1 == g.blocks_per_track {
             bytes.resize(bytes.len() + format::LEFTOVER, 0xff);
         }
@@ -1033,16 +1038,24 @@ fn track_bytes(unit: &mut Unit, cylinder: u32, head: u32, block: u32) -> Vec<u8>
 /// A sector whose bytes run out is not written: "it doesn't really write
 /// quite all of the last page; somewhere between zero and seventeen words
 /// will be lost", so the tail of the stream is expected to be short.
-fn lay_down_track(unit: &mut Unit, bytes: &[u8]) {
+fn lay_down_track(unit: &mut Unit, cylinder: u32, head: u32, from: u32, bytes: &[u8]) {
     let mut at = 0usize;
+    let mut k = 0u32;
     while at + format::SECTOR <= bytes.len() {
         let bits: Vec<bool> = bytes[at..at + format::SECTOR]
             .iter()
             .flat_map(|&b| (0..8).map(move |k| b >> k & 1 != 0))
             .collect();
         let Some(s) = disk_unit::parse_sector(&bits) else { break };
-        let (cylinder, head, block) =
-            ((s.header >> 16) & 0xfff, (s.header >> 8) & 0xff, s.header & 0xff);
+        // **The sector goes where the heads are, and its header goes in
+        // it.** That is what a formatter does: the drive writes the track
+        // under the heads, and the addresses in the headers are the
+        // program's to choose. Until issue 51 this placed the block at the
+        // address its *header* named, because `Unit` had nowhere to put a
+        // header --- so a formatted pack could never disagree with itself
+        // and `STATUS<18>`, Header Compare, could not fire.
+        let block = (from + k) % unit.geometry.blocks_per_track;
+        k += 1;
         // An address the geometry has no room for stops the track here.
         //
         // **The board raises nothing.** This comment used to say the board
@@ -1065,7 +1078,7 @@ fn lay_down_track(unit: &mut Unit, bytes: &[u8]) {
         // so there is nowhere to put a block whose header disagrees with
         // its place. That is issue #8's missing track format rather than a
         // missing status bit.
-        if !unit.write_block_at(cylinder, head, block, &s.data) {
+        if !unit.write_sector_at(cylinder, head, block, s.header, &s.data) {
             return;
         }
         at += format::SECTOR;
