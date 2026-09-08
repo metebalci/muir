@@ -142,6 +142,12 @@ pub struct Controller {
     /// reserved code or a wait on a drive that is not there:
     /// [`Controller::hang`].
     timeout: bool,
+    /// `STATUS<14>`, "Overrun.  Indicates that data arrived from the disk
+    /// faster than it could be stored into memory, or that memory did not
+    /// supply data fast enough for the disk.  This error stops the
+    /// transfer."  One command raises it here, `0003`; see
+    /// [`Controller::start`], where the measurement is.
+    overrun: bool,
     /// Read back as register 1.  MIT puts it on the controller --- "Address
     /// of the last memory reference made by the disk control" --- so it is
     /// one register and not one per drive.  Nothing reads it before the end
@@ -177,12 +183,15 @@ impl Controller {
     /// The status word.  Every bit here is `DCSTS`'s own name for the signal
     /// on that Xbus line, and MIT's text says the same.
     ///
-    /// What is not modelled: `<23>` internal parity, `<19:14>` the
-    /// memory-parity, header, ECC and overrun errors, `<12>` the start-block
-    /// error and `<4>` multiple units selected.  None of them can happen
-    /// here, and the boot PROM's `AWAIT-DRIVE-READY` requires bits 4, 5, 6,
-    /// 8, 9 and 10 to be clear before it will go on.  `<11>`, the timeout
-    /// error, is what a command the model does not do ends with.
+    /// What is not modelled: `<23>` internal parity, `<19:15>` the
+    /// memory-parity, header and ECC errors, `<12>` the start-block error
+    /// and `<4>` multiple units selected.  None of them can happen here,
+    /// and the boot PROM's `AWAIT-DRIVE-READY` requires bits 4, 5, 6, 8, 9
+    /// and 10 to be clear before it will go on.  `<14>`, the overrun, one
+    /// command does raise --- `0003`, the Write All sector entered with
+    /// the memory channel reversed --- measured on the netlist board by
+    /// `the_reversed_memory_channel_stores_where_it_should_fetch` in
+    /// `tests/cadrdc_netlist.rs`.
     pub fn status(&self) -> u32 {
         let mut v = self.block_counter() << 24;
         if self.read_compare_difference {
@@ -198,6 +207,9 @@ impl Controller {
         // for `TIMEOUT_NS` first.
         if self.timeout && self.not_active() {
             v |= 1 << 11;
+        }
+        if self.overrun {
+            v |= 1 << 14;
         }
         // `<13>` "Transfer Aborted": `STOPPED BY ERROR`, preset while any
         // lossage stands, `Controller::lossage`.
@@ -325,7 +337,7 @@ impl Controller {
     /// the store on --- and that store clocks the flop clear too, so the
     /// latch never outlives the level here.
     fn lossage(&self) -> bool {
-        let transfer = (self.timeout && self.not_active()) || self.nxm;
+        let transfer = (self.timeout && self.not_active()) || self.nxm || self.overrun;
         let disk = self.cmd & 0o4 == 0
             && match &self.units[self.selected()] {
                 None => true,
@@ -522,27 +534,51 @@ impl Controller {
                 }
             }
             // 01, 03 and 12: the Write, Write All and Read All sectors
-            // entered with the memory channel pointed the other way.  MIT's
-            // table leaves them out, but the command PROM "is divided into
-            // 8 sectors of 64 words each" and `<3>` reaches none of it ---
-            // `cadrdc/newdsk.31`, "Commands 4-7 do not use the memory
-            // channel" --- so the sequencer runs the sector `<2:0>` names
-            // and the command finishes like any other.  What it finishes
-            // having done is another matter: `<3>` steers the channel, so
-            // the fifo is filled from the end it is normally emptied at and
-            // emptied into the end it is normally filled from, and what
-            // reaches the disk or memory is whatever the fifo happened to
-            // hold.
+            // entered with the memory channel pointed the other way.
+            // MIT's table leaves them out, but the command PROM "is
+            // divided into 8 sectors of 64 words each" and `<3>` reaches
+            // none of it --- `cadrdc/newdsk.31`, "Commands 4-7 do not use
+            // the memory channel" --- so the sequencer runs the sector
+            // `<2:0>` names and `<3>` only turns the channel round, so
+            // that the fifo is filled from the end it is normally emptied
+            // at.
             //
-            // **Unverified**, and deliberately not guessed at: this model
-            // has no fifo, so it runs the command to done with no error and
-            // moves nothing.  The pack and memory are left as they were,
-            // which is certainly wrong for 01 and 03 --- the board writes
-            // *something* --- and probably right for 12, which stores
-            // nothing.  What would settle it is running the three through
-            // the netlist controller, which has the fifo and the channel,
-            // and reading what they leave: `tests/cadrdc_netlist.rs`.
-            0o01 | 0o03 | 0o12 => self.done_at = self.now + self.access_ns,
+            // **Measured on the netlist board**, which has the fifo:
+            // `the_reversed_memory_channel_is_measured` in
+            // `tests/cadrdc_netlist.rs` runs all three against it with a
+            // drive and a memory and reads off the channel's transfers,
+            // the pack and the status register. The three do three
+            // different things, and none of them is what this model did
+            // before:
+            //
+            // - **01** runs the whole 61-microword Write program and ends
+            //   with **no error at all**. The channel stores 256 words
+            //   into the page rather than fetching them, and a
+            //   well-formed block lands on the pack --- the drive counts
+            //   no bad write.
+            // - **03** ends with **Overrun and Transfer Aborted**,
+            //   `STATUS<14>` and `<13>`: fourteen microwords, 256 words
+            //   stored into the page, and what went to the disk did not
+            //   parse, so no block lands.
+            // - **12** does not finish. It reads eighteen words out of
+            //   memory, stores nothing, and the board's own watchdog
+            //   stops it: **Timeout and Transfer Aborted**. So it is
+            //   [`Controller::hang`], the same as a reserved code.
+            //
+            // What is modelled here is the status, which is what software
+            // reads. What is **not** modelled is the data: the words the
+            // channel stores are the shift registers' own contents
+            // cycling --- 3, c000000, 0, 300000, 0, c000 on the board ---
+            // and there is no fifo here to produce them. So 01 and 03
+            // leave the page and the pack alone where the board disturbs
+            // both. That is a measured gap and no longer a guess; it
+            // wants the fifo, and the fifo is not here.
+            0o12 => self.hang(),
+            0o03 => {
+                self.overrun = true;
+                self.done_at = self.now + self.access_ns;
+            }
+            0o01 => self.done_at = self.now + self.access_ns,
             // `& 0o17` leaves four bits, and all sixteen are above.
             0o20.. => unreachable!("a command code is four bits"),
         }
@@ -572,6 +608,7 @@ impl Controller {
         self.read_compare_difference = false;
         self.ccw_cycle = false;
         self.nxm = false;
+        self.overrun = false;
         if self.not_active() {
             self.timeout = false;
         }
@@ -608,6 +645,7 @@ impl Controller {
         self.ccw_cycle = false;
         self.nxm = false;
         self.timeout = false;
+        self.overrun = false;
 
         let i = self.selected();
         let mut unit = self.units[i].take().expect("the selected unit is online");
@@ -638,6 +676,7 @@ impl Controller {
         self.ccw_cycle = false;
         self.nxm = false;
         self.timeout = false;
+        self.overrun = false;
 
         let i = self.selected();
         let mut unit = self.units[i].take().expect("the selected unit is online");
@@ -884,6 +923,7 @@ impl Controller {
             ccw_cycle,
             nxm,
             timeout,
+            overrun,
             last_memory_address,
             units,
         } = self;
@@ -898,6 +938,7 @@ impl Controller {
         w.bool(*ccw_cycle);
         w.bool(*nxm);
         w.bool(*timeout);
+        w.bool(*overrun);
         w.u32(*last_memory_address);
         for u in units {
             w.bool(u.is_some());
@@ -922,6 +963,7 @@ impl Controller {
         self.ccw_cycle = r.bool()?;
         self.nxm = r.bool()?;
         self.timeout = r.bool()?;
+        self.overrun = r.bool()?;
         self.last_memory_address = r.u32()?;
         for (unit, slot) in self.units.iter_mut().enumerate() {
             match (r.bool()?, slot) {

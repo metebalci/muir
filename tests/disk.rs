@@ -21,6 +21,7 @@ mod support;
 mod status {
     pub const READ_COMPARE_DIFFERENCE: u32 = 1 << 22;
     pub const TIMEOUT: u32 = 1 << 11;
+    pub const OVERRUN: u32 = 1 << 14;
     pub const NXM: u32 = 1 << 20;
     pub const ABORTED: u32 = 1 << 13;
     pub const SEEK_ERROR: u32 = 1 << 10;
@@ -1274,28 +1275,72 @@ fn write_all_formats_a_track_an_ordinary_read_can_read() {
     }
 }
 
-/// **None of the seven answers with a timeout any more, and `xxx7` still
-/// does.**
+/// **Which commands end in a timeout, measured on the netlist board.**
 ///
 /// A timeout is `STATUS<11>`, "a disk operation took longer than 2.5
 /// seconds", a hardware fault the software cannot tell from a failing
-/// drive.  `cadrdc/newdsk.31` has the command PROM "divided into 8 sectors
-/// of 64 words each", so the sector is `<2:0>` alone and `<3>` only steers
-/// the memory channel: every one of these lands in a sector the listing
-/// fills, and the board runs it.  Sector 7 is the exception the listing
-/// leaves empty, 700 to 777, where `sys/doc/disk.text` says the sequencer
-/// "will currently hang the controller, causing a timeout error".
+/// drive, so a model that raises it where the board does not is lying.
+/// `cadrdc/newdsk.31` has the command PROM "divided into 8 sectors of 64
+/// words each", so the sector is `<2:0>` alone and `<3>` only steers the
+/// memory channel; every code below lands in a sector the listing fills
+/// except sector 7, which it leaves empty at 700-777.
+///
+/// Two do time out, and only one of them was expected. Sector 7 starts
+/// the sequencer in unwritten PROM, and `sys/doc/disk.text` says it "will
+/// currently hang the controller, causing a timeout error". `0012` --- a
+/// Read All entered with the channel reversed --- turns out to hang as
+/// well: it reads eighteen words out of memory, stores nothing, and the
+/// board's watchdog stops it. That is measured, not read off the
+/// listing: `the_reversed_memory_channel_is_measured` in
+/// `tests/cadrdc_netlist.rs`. An earlier version of this test asserted
+/// `0012` completed, on the reasoning that the sector is filled so the
+/// board must run it; the board runs it and it does not finish.
 #[test]
-fn only_the_unwritten_sector_times_out() {
-    for cmd in [0o00, 0o01, 0o02, 0o03, 0o10, 0o11, 0o12, 0o13, 0o04, 0o14, 0o05, 0o15, 0o06, 0o16]
-    {
+fn only_sector_seven_and_the_reversed_read_all_time_out() {
+    for cmd in [0o00, 0o01, 0o02, 0o03, 0o10, 0o11, 0o13, 0o04, 0o14, 0o05, 0o15, 0o06, 0o16] {
         let Some((mut d, mut main)) = loaded() else { return };
         run(&mut d, &mut main, cmd, 0, 8, 1);
         assert_eq!(d.status() & status::TIMEOUT, 0, "{cmd:o} timed out: {:o}", d.status());
     }
-    for cmd in [0o07, 0o17] {
+    for cmd in [0o07, 0o17, 0o12] {
         let Some((mut d, mut main)) = loaded() else { return };
         run(&mut d, &mut main, cmd, 0, 8, 1);
-        assert_ne!(d.status() & status::TIMEOUT, 0, "{cmd:o} is unwritten PROM and hangs");
+        assert_ne!(d.status() & status::TIMEOUT, 0, "{cmd:o} hangs the sequencer");
+        assert_ne!(d.status() & status::ABORTED, 0, "{cmd:o}: and the transfer is aborted");
     }
+}
+
+/// **The reversed memory channel, as the board answers it.** `0001`,
+/// `0003` and `0012` are the Write, Write All and Read All sectors with
+/// `<3>` turning the channel round. All three were measured against the
+/// netlist controller, which has the fifo this model has not
+/// (`the_reversed_memory_channel_is_measured`), and the three do three
+/// different things: `0001` ends clean, `0003` ends with Overrun and
+/// Transfer Aborted, and `0012` hangs to the watchdog.
+///
+/// What is held here is the status, which is what software reads. The
+/// data is not: the board disturbs the page and, for `0001`, the pack,
+/// with the shift registers' own contents, and there is no fifo here to
+/// produce them. Issue #34 records the measurement.
+#[test]
+fn the_reversed_channel_answers_as_the_board_does() {
+    let Some((mut d, mut main)) = loaded() else { return };
+    run(&mut d, &mut main, 0o01, 0, 8, 1);
+    assert_eq!(
+        d.status() & (status::TIMEOUT | status::OVERRUN | status::ABORTED | status::NXM),
+        0,
+        "0001 ends clean: {:o}",
+        d.status()
+    );
+
+    let Some((mut d, mut main)) = loaded() else { return };
+    run(&mut d, &mut main, 0o03, 0, 8, 1);
+    assert_ne!(d.status() & status::OVERRUN, 0, "0003 overruns: {:o}", d.status());
+    assert_ne!(d.status() & status::ABORTED, 0, "0003 aborts: {:o}", d.status());
+    assert_eq!(d.status() & status::TIMEOUT, 0, "0003 does not time out: {:o}", d.status());
+
+    // And the next command clears it, as every error is cleared by the
+    // store into the command register.
+    d.write(reg::COMMAND, 0, &mut main);
+    assert_eq!(d.status() & status::OVERRUN, 0, "the next command clears it");
 }
