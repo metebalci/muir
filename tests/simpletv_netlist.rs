@@ -742,9 +742,8 @@ fn the_sync_prom_is_fetched_out_of_reset() {
     assert_eq!(b.chip.net(id("-SYNC PROM ENB")), Level::Low, "the PROM is enabled out of reset");
 
     let word = |b: &XbusMaster, nets: &[netlist::NetId]| -> Option<u32> {
-        nets.iter().enumerate().try_fold(0, |w, (k, &net)| match b.chip.net(net).read_open(true) {
-            Some(bit) => Some(w | (bit as u32) << k),
-            None => None,
+        nets.iter().enumerate().try_fold(0, |w, (k, &net)| {
+            b.chip.net(net).read_open(true).map(|bit| w | (bit as u32) << k)
         })
     };
     // MIT's own program, to compare what comes off the PROM against.
@@ -847,4 +846,59 @@ fn the_board_answers_its_control_registers() {
     let buffer = muir::simpletv::BUFFER + 21_491;
     assert!(answer(buffer, None).is_some(), "the frame buffer answered a read");
     assert!(answer(buffer, Some(0o525252)).is_some(), "the frame buffer answered a write");
+}
+
+/// **What the board takes to answer, which is the number `rtl` has not
+/// got.** `rtl` charges every device [`muir::busint::IDEAL_DEVICE_NS`],
+/// which is zero, so a display access costs it the protocol's deskew and
+/// nothing else; the board takes what its own gates take. Issue 66 asked
+/// which of the two figures was wrong, and MIT's specification cannot
+/// answer --- `cadr1/xspec.text.3` constrains the master at every turn and
+/// gives a slave **no response time at all**, its whole entry being
+/// "`-XBUS.ACK` Asserted by the slave in response to `-XBUS.RQ`. No delay
+/// necessary following assertion of good read data". So neither figure is
+/// out of a spec that has none, and what settles a timing twin is this
+/// measurement rather than a document.
+///
+/// Measured at four phases of the board's own clock and at both kinds of
+/// address, because a twin has to know whether the answer is a constant or
+/// a function of when the request lands --- the memory board's is the
+/// latter, `the_cycle_and_the_refresh_are_timed` in `tests/cadrm_netlist.rs`.
+///
+/// **Printed rather than pinned.** Naming a figure here would be pinning
+/// what a twin is supposed to reproduce before anything reproduces it; the
+/// assertions are the shape a twin must fit --- that an answer comes at
+/// all, and within the interface's own timeout, `busint::TIMEOUT_NS`.
+#[test]
+fn what_the_board_takes_to_answer_is_measured() {
+    use muir::xbus::XbusMaster;
+
+    let n = simpletv();
+    let mut b = XbusMaster::new(&n, 0);
+    // A word in the frame buffer, and the mode register: the two kinds of
+    // address the board decodes, and the buffer's is the one a boot writes.
+    let buffer = muir::simpletv::BUFFER + 0o51763;
+    let control = muir::simpletv::CONTROL;
+    let mut seen = Vec::new();
+    for phase in [0u64, 10, 20, 30] {
+        for (what, addr) in [("buffer", buffer), ("control", control)] {
+            b.run(b.now + 500 + phase);
+            let (write_ns, _) = b.cycle(addr, Some(0o525252));
+            b.run(b.now + 500 + phase);
+            let (read_ns, word) = b.cycle(addr, None);
+            seen.push((what, phase, write_ns, read_ns, word));
+        }
+    }
+    for &(what, phase, write_ns, read_ns, word) in &seen {
+        eprintln!("{what:8} phase {phase:2}: write {write_ns:4} ns, read {read_ns:4} ns, {word:o}");
+    }
+    // The shape a twin has to fit, and nothing narrower: every access is
+    // answered, and inside what the interface would give up on.
+    let timeout = muir::busint::TIMEOUT_NS;
+    for &(what, phase, write_ns, read_ns, _) in &seen {
+        for (kind, ns) in [("write", write_ns), ("read", read_ns)] {
+            assert!(ns > 0, "{what} {kind} at phase {phase} was not answered");
+            assert!(ns < timeout, "{what} {kind} at phase {phase} took {ns} ns, past {timeout}");
+        }
+    }
 }

@@ -578,19 +578,20 @@ impl Netlist {
         ("GND", "UNIT0"),                           // EP2 : ER2
     ];
 
-    pub const HAND_JUMPERS: &'static [(&'static str, &'static [(&'static str, &'static str)])] = &[(
-        "DCEDGE",
-        &[
-            ("GND", "-TIMEOUT ENB"), // J5-16 : J5-41
-            ("HI1", "AD14"),         // J5-1 : J5-2
-            ("HI1", "AD13"),         // J5-3 : J5-4
-            ("HI1", "AD6"),          // J5-5 : J5-6
-            ("HI1", "AD5"),          // J5-7 : J5-8
-            ("HI1", "AD4"),          // J5-9 : J5-10
-            ("HI1", "AD3"),          // J5-11 : J5-12
-            ("HI1", "AD2"),          // J5-13 : J5-14
-        ],
-    )];
+    pub const HAND_JUMPERS: &'static [(&'static str, &'static [(&'static str, &'static str)])] =
+        &[(
+            "DCEDGE",
+            &[
+                ("GND", "-TIMEOUT ENB"), // J5-16 : J5-41
+                ("HI1", "AD14"),         // J5-1 : J5-2
+                ("HI1", "AD13"),         // J5-3 : J5-4
+                ("HI1", "AD6"),          // J5-5 : J5-6
+                ("HI1", "AD5"),          // J5-7 : J5-8
+                ("HI1", "AD4"),          // J5-9 : J5-10
+                ("HI1", "AD3"),          // J5-11 : J5-12
+                ("HI1", "AD2"),          // J5-13 : J5-14
+            ],
+        )];
 
     /// A net by either spelling: bare, or quoted as a name with spaces is
     /// stored.
