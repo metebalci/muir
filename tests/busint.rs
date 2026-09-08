@@ -961,3 +961,52 @@ fn the_processors_own_bus_reset_reaches_the_model_boards() {
     reset_by(&mut Rtl::new(armed()), "rtl");
     reset_by(&mut Micro::new(armed()), "micro");
 }
+
+/// **A cycle nothing answers is not a page fault, and `CHECK-PAGE-READ`
+/// cannot see one.**
+///
+/// The microcode puts a page-fault check after every memory cycle, and on a
+/// read the only thing that check looks at is the map: `-PFR` is the level-2
+/// map word's bit 23 inverted, which MIT names
+/// `MAP-HARDWARE-READ-ACCESS`, "hardware permits (at least) read access if
+/// this bit set" (`ucadr/uc-page-fault.lisp`), and `-PFW` is a NAND with
+/// `WRCYC`, so on a read it cannot assert at all.
+///
+/// **So a device that does not answer cannot make the check fault**, however
+/// long it takes: the interface times the cycle out, sets an NXM bit and
+/// carries on, and the machine reads whatever the bus left. That is the
+/// difference between the two ways a cycle can fail, and it is why a halt in
+/// a page-fault handler is never evidence of a bus timeout.
+#[test]
+fn a_bus_timeout_is_not_a_page_fault() {
+    let mut m = Machine::new();
+    // Map virtual page 0 to `0o36777`, the top page of Xbus I/O, where
+    // nothing is built --- `the_bus_is_decoded_by_page` above has the
+    // regions --- with read and write both permitted: bits 23 and 22 set.
+    let l2 = (1 << 23) | (1 << 22) | 0o36777;
+    m.write_map((1 << 26) | (1 << 25) | l2, 0);
+    let t = m.translate(0);
+    assert!(t.access_permitted && t.write_permitted, "the page is mapped read/write");
+
+    m.vm_read(0);
+    assert!(m.vmaok, "a read of a page nothing answers does not fault");
+    assert_eq!(m.bus_error, muir::machine::bus_error::XBUS_NXM, "it times out instead");
+    m.bus_error = 0;
+
+    // And with read access taken away, the same read faults before the bus
+    // is touched: no cycle, so no timeout either.
+    m.write_map((1 << 26) | (1 << 25) | (l2 & !(1 << 23)), 0);
+    m.vm_read(0);
+    assert!(!m.vmaok, "bit 23 clear is the read fault, and the only one");
+    assert_eq!(m.bus_error, 0, "and the cycle never started");
+
+    // Bit 22 is the write's alone. `WRCYC` is what gates it, so a read of a
+    // read-only page is permitted where a write of it is not.
+    m.write_map((1 << 26) | (1 << 25) | (l2 & !(1 << 22)), 0);
+    m.vm_read(0);
+    assert!(m.vmaok, "read-only permits the read");
+    m.bus_error = 0;
+    m.vm_write(0, 0);
+    assert!(!m.vmaok, "and refuses the write");
+    assert_eq!(m.bus_error, 0, "which never reached the bus");
+}
