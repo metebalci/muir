@@ -1565,3 +1565,66 @@ fn a_poll_for_completion_goes_round_more_than_once() {
     read_block(&mut d, &mut main, 3, 2);
     assert_ne!(d.status() & status::NOT_ACTIVE, 0, "off, the done comes with the words");
 }
+
+/// **Running off the end of the pack is Header ECC, not silence and not a
+/// drive fault.**
+///
+/// `sys/doc/disk.text` on `<17>`: "Header ECC Error. Indicates that the
+/// error-correcting code for a header failed ... Header ECC Error **also
+/// happens if an attempt is made to continue a read or write operation
+/// past the end of the disk**." So the second cause needs no headers on
+/// the pack, and it is the one this model can have: the first wants a pack
+/// that carries them, which is issue 51.
+///
+/// **"Continue" is the load-bearing word.** A transfer whose *first*
+/// address is off the pack never gets that far: `Unit::seek` refuses it
+/// and the board reports a seek error, `<10>` --- "the selected unit is
+/// reporting failure of a seek operation" --- which is what this model
+/// already did. `<17>` is the other case, a transfer stepping off the
+/// last block with more list to go, and that used to end **saying nothing
+/// at all**.
+#[test]
+fn running_off_the_end_of_the_pack_is_header_ecc() {
+    let Some((mut d, mut main)) = loaded() else { return };
+    let last = Geometry::T300.blocks() - 1;
+    let da = |lba: u32| {
+        let g = Geometry::T300;
+        let (c, rest) = (lba / g.blocks_per_cylinder(), lba % g.blocks_per_cylinder());
+        (c << 16) | ((rest / g.blocks_per_track) << 8) | (rest % g.blocks_per_track)
+    };
+
+    // The last block on its own is an ordinary read: the transfer ends
+    // because the list ends, not because the pack does.
+    read_block(&mut d, &mut main, da(last), 2);
+    assert_eq!(d.read(reg::STATUS) & (1 << 17), 0, "the last block reads");
+    assert_eq!(d.read(reg::STATUS) & (1 << 6), 0, "and the drive is not at fault");
+
+    // Two CCWs from the last block: the second wants the block after it,
+    // and there is none. `<17>`, and `<13>` with it because the error
+    // stops the transfer.
+    main[CLP as usize] = (2 << 8) | 1;
+    main[CLP as usize + 1] = 3 << 8;
+    d.write(reg::COMMAND, 0, &mut main);
+    d.write(reg::CLP, CLP, &mut main);
+    d.write(reg::DISK_ADDRESS, da(last), &mut main);
+    d.write(reg::START, 0, &mut main);
+    let s = d.read(reg::STATUS);
+    assert_ne!(s & (1 << 17), 0, "past the end of the disk: {s:o}");
+    assert_ne!(s & (1 << 13), 0, "and it stops the transfer: {s:o}");
+    assert_eq!(s & (1 << 6), 0, "the drive is not at fault: {s:o}");
+
+    // And a transfer that *starts* past the end is the other error: MIT
+    // says "continue", and a first address off the pack is a seek the
+    // drive refuses.
+    read_block(&mut d, &mut main, da(last) + 1, 2);
+    let s = d.read(reg::STATUS);
+    assert_ne!(s & (1 << 10), 0, "starting past the end is a seek error: {s:o}");
+    assert_eq!(s & (1 << 17), 0, "and not header ECC: {s:o}");
+    assert_eq!(s & (1 << 6), 0, "still not the drive's fault: {s:o}");
+    d.write(reg::COMMAND, 0o1005, &mut main); // recalibrate clears <10>
+
+    // The next command clears it: `-RESET ERR` on every store into the
+    // command register.
+    read_block(&mut d, &mut main, 0, 2);
+    assert_eq!(d.read(reg::STATUS) & (1 << 17), 0, "the next command clears it");
+}
