@@ -107,7 +107,13 @@ pub fn release_304(parts: &[&str]) -> Option<PathBuf> {
 /// A supply, a pull-up, an unconnected pin or a spare: a net no signal is
 /// on, which the driver checks leave out.
 pub fn is_power(name: &str) -> bool {
-    matches!(name.trim_matches('\''), "GND" | "VCC" | "NC" | "+5" | "-5")
+    // Trimmed once, and used for every test: a name MIT wrote with a space
+    // in it reaches the netlist quoted, so `'HI 1-14'` starts with an
+    // apostrophe and not with `HI`. Matching the untrimmed name let that
+    // one through as an ordinary wire --- the same shape of miss as
+    // `- 11CLRTDN`, where a character nobody looks at decided the answer.
+    let name = name.trim_matches('\'');
+    matches!(name, "GND" | "VCC" | "NC" | "+5" | "-5")
         || name.starts_with("HI")
         || name.starts_with("NC#")
         || name.starts_with("PULLUP")
