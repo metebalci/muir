@@ -147,6 +147,31 @@ struct Wire {
 /// The Unibus backplane with the I/O board on it, carried the way
 /// [`crate::xbus::Xbus`] carries the Xbus: what either board's drivers
 /// hold, the other is given, and a wire nobody holds is pulled up.
+/// The mains, as the I/O board's 60 Hz input takes it.
+///
+/// One cycle in nanoseconds, as a fraction for [`crate::chip::toggle_at`]:
+/// **60 Hz is MIT's own figure**, written on `cadrio/clk60h.drw` --- the
+/// page titled "I/O BOARD 60 CYCLE CLOCK & GPIO" --- as the comment on the
+/// network at C20, `2.5 VAC, 60 Hz`, `150 ohm series`. The same comment is
+/// in `cadrio/clk60h.wd`.
+///
+/// What it reaches: `cadrio/iob.wlr` has `POWER LINE ^` arriving at the
+/// board's edge pin `FV2` and going to C20 pins 12 and 13. C20 pins 7 and
+/// 8 are the input of the 74LS14 Schmitt trigger at 0D20, whose output is
+/// `60 Hz`, which clocks the two 74393s at CLKTOD 0D22 and 0D23 --- the
+/// free-running counter of mains cycles the `CLOCK` register reads.
+///
+/// **The model drives the trigger's side of C20 and not the edge pin**,
+/// which is worth saying plainly. `cadrio/bodies.drw` defines `20DUMMY` as
+/// a twenty-pin body of DIPTYPE `DUMMY`: no internal connections at all,
+/// the 150 ohm resistor living only in the comment above. So nothing in
+/// MIT's files says which pins of C20 the resistor joins, and a part model
+/// that paired them would be inventing a connection rather than reading
+/// one. What the drawings do settle is that the mains reaches the trigger,
+/// and that is what is modelled; the conditioning between is analogue and
+/// has no logic level to carry.
+pub const MAINS_PERIOD: (u64, u64) = (1_000_000_000, 60);
+
 pub struct Unibus {
     wires: Vec<Wire>,
     /// The I/O board.
@@ -185,6 +210,11 @@ pub struct Unibus {
     mouse: Option<crate::terminal::cable::MouseOnCable>,
     mouse_nets: Option<crate::terminal::cable::MouseNets>,
     mouse_next: Option<u64>,
+    /// The 74LS14's input on the mains network at C20, and how many
+    /// toggles of [`MAINS_PERIOD`] have been given to it. The line is high
+    /// at zero, as the oscillators are.
+    mains: Option<NetId>,
+    mains_toggles: u64,
 }
 
 impl Unibus {
@@ -259,7 +289,25 @@ impl Unibus {
             mouse: None,
             mouse_nets,
             mouse_next: None,
+            mains: find(io, "@0C20,p8").or_else(|| find(io, "@0C20,p7")),
+            mains_toggles: 0,
         }
+    }
+
+    /// The mains at `now`: every toggle due is taken and the line left
+    /// where they leave it. The board is transitioned by the caller, as it
+    /// is for the mouse and the ether.
+    fn apply_mains(&mut self, now: u64) {
+        let Some(net) = self.mains else { return };
+        while crate::chip::toggle_at(MAINS_PERIOD, self.mains_toggles) <= now {
+            self.mains_toggles += 1;
+        }
+        self.board.drive(net, Level::from(self.mains_toggles % 2 == 1));
+    }
+
+    /// When the mains next moves.
+    fn mains_next(&self) -> Option<u64> {
+        self.mains.map(|_| crate::chip::toggle_at(MAINS_PERIOD, self.mains_toggles))
     }
 
     /// Puts an ether on the board's Chaosnet transceiver at `now`, in
@@ -417,7 +465,10 @@ impl Unibus {
     /// When the board, or the ether on its cable, will next do something
     /// of its own accord.
     pub fn next_tap(&self) -> Option<u64> {
-        [self.due(), self.chaos_next, self.mouse_next].into_iter().flatten().min()
+        [self.due(), self.chaos_next, self.mouse_next, self.mains_next()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// Lets the board have every event due by `now`, each at its own time.
@@ -450,6 +501,16 @@ impl Unibus {
                     break;
                 }
             }
+            // The mains' own edges, each with a transition of its own: the
+            // counter behind `CLOCK` is clocked by them and would lose any
+            // that were folded into the next tap.
+            while let Some(e) = self.mains_next()
+                && e < t
+            {
+                self.apply_mains(e);
+                self.board.transition(e);
+                self.transitions += 1;
+            }
             self.board.transition(t);
             self.transitions += 1;
             self.apply_chaos(t);
@@ -473,6 +534,13 @@ impl Unibus {
             if self.mouse_next == Some(e) {
                 break;
             }
+        }
+        while let Some(e) = self.mains_next()
+            && e <= now
+        {
+            self.apply_mains(e);
+            self.board.transition(e);
+            self.transitions += 1;
         }
     }
 
