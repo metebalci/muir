@@ -1642,10 +1642,12 @@ fn a_read_with_a_drive_puts_the_block_in_memory() {
 /// no reason to leave the parity chain happy, but nobody has shown that is
 /// what happens.
 ///
-/// One offset is left out deliberately. A pulse in the first microseconds
-/// of block 2's own sector does not raise an error --- it hangs the
-/// controller until the watchdog, which is a different behaviour from this
-/// one and wants an issue rather than a line here.
+/// One offset is left out deliberately, and where it goes instead says
+/// why: a pulse in the first microseconds of the block's own sector falls
+/// in steps `010` and `011`, which carry no `ERR IF START BLOCK`, so it is
+/// taken as a block boundary rather than reported.
+/// [`the_start_block_check_begins_where_the_microcode_starts_it`] has the
+/// boundary and MIT's listing for it.
 #[test]
 fn a_spurious_sector_pulse_raises_start_block_error() {
     const START_BLOCK: u32 = 1 << 12;
@@ -1687,6 +1689,79 @@ fn a_spurious_sector_pulse_raises_start_block_error() {
         elsewhere, clean,
         "a pulse the read never reaches changes nothing: {elsewhere:o} against {clean:o}"
     );
+}
+
+/// **The error check starts at step 012, and MIT's listing says why.**
+///
+/// `cadrdc/newdsk.31` asserts `ERR IF START BLOCK` on every step of the
+/// read from `012` on. It does not on `010` or `011`:
+///
+/// ```text
+/// 010:  CLK/START BLOCK,HOLD PRE,        ;Initialize DBUS,
+///           LOOP/BLOCK CTR EQ BLOCK      ; find start of right block
+/// 011:  PRE GATE,CLK/2 USEC              ;Start head select, delay 20 usec
+/// 012:  PRE GATE,CLK/2 USEC,ERR IF START BLOCK
+/// ```
+///
+/// `010` is **clocked by** the start block and loops until the block
+/// counter matches, so a sector pulse there is the thing it is waiting
+/// for and cannot be an error. `011` is the one 2 us step after it.
+///
+/// So a spurious pulse ([`Trident::spurious_pulse`]) in the first
+/// microseconds of the block's own sector is taken as a block boundary
+/// rather than reported, and one after that window raises `<12>`.
+/// Measured across the boundary, at 500 ns steps into block 2's sector:
+/// through 2,500 ns the outcomes vary with where the pulse falls against
+/// the counter's clocking --- a clean read at 500, 2,000 and 2,500, a
+/// header compare error `<18>` at 1,000, a clean read a revolution late at
+/// 1,500 --- and **none of them raises `<12>`**. From 3,000 ns on, every
+/// one does. That is a race with no error detection, which is what a step
+/// carrying no `ERR IF START BLOCK` is.
+///
+/// **Nothing hangs.** Issue 81's comment said a pulse here hung the
+/// controller to the watchdog; it does not. The longest of these takes
+/// 1.17 revolutions --- the 1,500 ns case, which loses a revolution and
+/// reads correctly on the next --- against the `3 * REVOLUTION_NS / 17`
+/// that [`read_block`] allows, and it was that allowance running out
+/// rather than the drive's. Issue 83.
+#[test]
+fn the_start_block_check_begins_where_the_microcode_starts_it() {
+    const START_BLOCK: u32 = 1 << 12;
+    let n = cadrdc();
+    let data = words(23);
+
+    let read = |at: u64| -> u32 {
+        let mut b = controller(&n);
+        let mut p = Probe::new(&b);
+        let t0 = b.now;
+        let mut drive = quick_drive(t0);
+        assert!(drive.unit.write_block_at(0, 0, 2, &data));
+        drive.spurious_pulse = Some(2 * SECTOR_NS + at);
+        p.plug(&mut b, &n, drive);
+        p.with_memory(&b, 1 << 15);
+        p.run(&mut b, t0 + 10_000);
+        p.memory.as_mut().unwrap().words[CLP as usize] = PAGE;
+        b.cycle(REGS, Some(0o0));
+        b.cycle(REGS + 1, Some(CLP));
+        b.cycle(REGS + 2, Some(2));
+        p.cycle(&mut b, REGS + 3, Some(0));
+        // Two revolutions is room for the slowest of these, which loses
+        // one; a command still busy after it would be a hang, and the
+        // assertion below says none is.
+        p.run_to_done(&mut b, 2 * REVOLUTION_NS);
+        let settled = b.now + 20_000;
+        p.run(&mut b, settled);
+        b.cycle(REGS, None).1
+    };
+
+    for at in [500, 1_000, 1_500, 2_000, 2_500] {
+        let v = read(at);
+        assert_eq!(v & START_BLOCK, 0, "at +{at} the pulse is inside 010/011: {v:o}");
+    }
+    for at in [3_000, 4_000, 6_000, 8_000] {
+        let v = read(at);
+        assert_ne!(v & START_BLOCK, 0, "at +{at} the check is running: {v:o}");
+    }
 }
 
 /// **A write with a drive on the cable puts the page on the pack.**
