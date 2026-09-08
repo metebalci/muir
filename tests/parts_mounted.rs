@@ -19,17 +19,28 @@
 //!   pull-up networks, which nothing here simulates.
 //!
 //! The README, `data/README.md` and `site/index.html` quote the third, so
-//! this file holds them to it --- and to MIT's own two counts of the same
+//! this file holds them to it --- and to MIT's own three counts of the same
 //! boards, each made by its tooling from the drawings and reaching us by a
 //! different route than the sheets did: the parts list `*.prt`, which names
-//! every location that was stuffed and what went in it, and the DIP census
-//! `*.wls`, which counts the packages each part type takes. Four boards
-//! have a parts list and seven have a census. The SIMPLE TV has neither,
-//! and its count rests on the drawings alone; the disk multiplexor has
-//! neither either --- discrepancy 75 --- but has MIT's stuffing list,
-//! `cadrdc/dm.stf`, which places every body by location, and
-//! `the_multiplexors_count_agrees_with_mits_stuffing_list` holds it to
-//! that.
+//! every location that was stuffed and what went in it, the DIP census
+//! `*.wls`, which counts the packages each part type takes, and the
+//! stuffing list `*.stf`, which places every body at a location on a page.
+//! Four boards have a parts list, seven have a census, and eight have a
+//! stuffing list. The SIMPLE TV has none of the three and its count rests
+//! on the drawings alone; the disk multiplexor has only the stuffing list,
+//! there being no `dm.wlr` and no census in `dm.wls` (discrepancy 75).
+//!
+//! **A location holding two devices is the case a board total cannot see.**
+//! MIT writes the second body at a location `B05@03` where the first is
+//! `B05`, and the netlist has no such distinction --- not one designator in
+//! the eight `data/*.netlist` files carries an `@`. So two devices at one
+//! location are held apart only by the page they are drawn on, by their
+//! type, or by a pin they both claim, and where none of the three separates
+//! them [`Netlist::packages`] merges them: one device wired to both their
+//! nets, which the `chip` engine would build and run, and which is not
+//! MIT's machine. Every count above is of locations and would see nothing.
+//! [`every_board_location_holds_the_devices_mit_stuffs_there`] is the count
+//! that would: per location and per page, against the stuffing lists.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -37,7 +48,7 @@ use std::path::Path;
 use muir::netlist::{self, Netlist};
 
 mod support;
-use support::mit;
+use support::{Body, mit, stuffing_list};
 
 const CADR: &str = include_str!("../data/CADR.netlist");
 const BUSINT: &str = include_str!("../data/BUSINT.netlist");
@@ -53,6 +64,12 @@ const DM: &str = include_str!("../data/DM.netlist");
 /// parts lists put these at sub-positions of a location --- `C08@01` beside
 /// the chip at `C08` --- which is the shape of the thing: they are not
 /// parts of the machine, and nothing simulates them.
+///
+/// The names are MIT's own body names, which is what the netlist's `kind`
+/// and the stuffing lists' `BODY` column both carry, and one body has
+/// several of them across the files: a bypass capacitor is `.1UFCAP` on the
+/// memory board's sheets, `CAP1` on the multiplexor's, and `BYPASS` in
+/// every stuffing list's capacitor page.
 fn is_passive(kind: &str) -> bool {
     let k = kind.to_ascii_uppercase();
     k.contains("SIP")           // resistor packs: SIP180/390-8, DUAL-SIP
@@ -63,7 +80,7 @@ fn is_passive(kind: &str) -> bool {
         || k.starts_with("RES")
         || k.starts_with("DUAL-SI") // DUAL-SIP, cut to seven in a census
         || k.starts_with("898-") // a resistor network by its Bourns number
-        || matches!(k.as_str(), "BUSBAR" | "PULLUP" | "TRITERM")
+        || matches!(k.as_str(), "BUSBAR" | "BYPASS" | "PULLUP" | "TRITERM")
 }
 
 /// The board locations carrying a device, one part apiece. A location holds
@@ -309,51 +326,265 @@ fn switches(n: &Netlist) -> usize {
 
 /// **Against MIT's own stuffing list, for the board that has no parts list
 /// and no census.** `cadrdc/dm.stf` is the disk multiplexor as the
-/// stockroom saw it: every slot, and every body in it. It reached us the
-/// same way the sheets did, which is weaker than the `*.prt` files above,
-/// but it is made by different tooling for a different purpose and it is
-/// the only second count this board has --- there is no `dm.wlr` and
+/// stockroom saw it: every location, and every body in it. It reached us
+/// the same way the sheets did, which is weaker than the `*.prt` files
+/// above, but it is made by different tooling for a different purpose and
+/// it is the only second count this board has --- there is no `dm.wlr` and
 /// `dm.wls` carries no census (discrepancy 75).
 ///
 /// Both sides agree on 62 devices and on which 62 they are.
 #[test]
 fn the_multiplexors_count_agrees_with_mits_stuffing_list() {
-    let text = support::mit_text(&["cadrdc", "dm.stf"]);
-    // Every body MIT stuffs, by slot: a slot's second body is written
-    // `A07@02` and is the same location.
-    let mut slots: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut at: Option<String> = None;
-    for line in text.lines() {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        let loc = f.iter().position(|w| {
-            w.ends_with('(') && w.len() >= 4 && w.starts_with(|c: char| c.is_ascii_uppercase())
-        });
-        match loc {
-            Some(k) => {
-                at = Some(f[k][..f[k].len() - 1].split('@').next().unwrap().to_string());
-                let rest: Vec<&str> = f[k + 1..].iter().copied().filter(|w| *w != ")").collect();
-                if let (Some(slot), [body, ..]) = (&at, &rest[..]) {
-                    slots.entry(slot.clone()).or_default().insert(body.to_string());
-                }
-            }
-            None if f.len() == 3 && f[1].starts_with("DM") => {
-                if let Some(slot) = &at {
-                    slots.entry(slot.clone()).or_default().insert(f[0].to_string());
-                }
-            }
-            None => {}
-        }
-    }
-    assert!(slots.len() > 60, "read {} slots out of dm.stf", slots.len());
-    let theirs: BTreeSet<String> = slots
-        .into_iter()
-        .filter(|(_, bodies)| bodies.iter().any(|b| !is_passive(b)))
-        .map(|(slot, _)| slot)
-        .collect();
+    let bodies = stuffing_list(&["cadrdc", "dm.stf"]);
+    assert_eq!(bodies.len(), 102, "bodies read out of dm.stf");
+    let theirs: BTreeSet<&str> =
+        bodies.iter().filter(|b| !is_passive(b.kind())).map(|b| b.location.as_str()).collect();
     let ours: BTreeSet<String> = parts(&netlist::parse(DM).unwrap())
         .iter()
         .map(|r| r.strip_prefix('0').expect("a designator here is 0-prefixed").to_string())
         .collect();
-    assert_eq!(ours, theirs, "the multiplexor's mounted devices");
+    assert_eq!(
+        ours.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+        theirs,
+        "the multiplexor's mounted devices"
+    );
     assert_eq!(ours.len(), 62);
+}
+
+/// **What MIT stuffs at each board location, page by page.**
+fn stuffed_devices(bodies: &[Body]) -> BTreeMap<(&str, &str), Vec<&str>> {
+    let mut out: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
+    for body in bodies.iter().filter(|b| !is_passive(b.kind())) {
+        // A body's gates may be drawn several times on one page; it is one
+        // device there however often it is drawn.
+        for page in body.pages() {
+            out.entry((page, &body.location)).or_default().push(body.kind());
+        }
+    }
+    out
+}
+
+/// The devices at each board location on each page, keyed by page and
+/// location: for each, the pins it claims and the body names the drawing
+/// gives its gates.
+type Devices<'a> = BTreeMap<(&'a str, &'a str), Vec<(BTreeSet<u8>, Vec<&'a str>)>>;
+
+/// **What the netlist has at each board location, page by page:** the
+/// records at one location on one page that no pin collision separates,
+/// each such group being one body's worth of gates.
+///
+/// This is [`Netlist::packages`] with the part type left out of the
+/// grouping, and the difference is deliberate. `packages` also requires the
+/// type to match, so a chip a drawing draws under two body names comes out
+/// as two packages of one device: BUSINT DATCTL 0B20 is one 74S00 whose
+/// gate with inverted inputs is drawn `OS00L` and whose other three are
+/// drawn `74S00`. A pin is the thing a location cannot have twice, so pins
+/// are what counts devices.
+fn netlist_devices(n: &Netlist) -> Devices<'_> {
+    let mut out: Devices = BTreeMap::new();
+    for part in n.parts.iter().filter(|p| !is_passive(&p.kind)) {
+        let location = part.reference.strip_prefix('0').unwrap_or(&part.reference);
+        let here = out.entry((part.page.as_str(), location)).or_default();
+        let pins: BTreeSet<u8> = part.pins.iter().map(|&(pin, _)| pin).collect();
+        match here.iter_mut().find(|(taken, _)| taken.is_disjoint(&pins)) {
+            Some((taken, kinds)) => {
+                taken.extend(&pins);
+                kinds.push(&part.kind);
+            }
+            None => here.push((pins, vec![&part.kind])),
+        }
+    }
+    out
+}
+
+/// MIT's stuffing lists, one per board, and the netlist each is read
+/// against. The other seven in `mit/` are not second copies of these:
+/// `cadrio/dm.stf` and `cadrio/iob1.stf` are byte for byte the same files
+/// as `cadrdc/dm.stf` and `cadrdc/iob1.stf`; `iob1.stf` is the I/O board of
+/// May 1979 and `cadrio/dc.stf` the disk controller of March 1979, both
+/// earlier boards than the ones modelled here; `cadrdc/mk.stf` and
+/// `cadrio/mk.stf` are the Marksman controller, which muir does not model;
+/// and `cadrtv/lmtv.stf` is the SIMPLE TV's, at a revision the drawings
+/// have moved past. It names the pages under their pre-rename names ---
+/// `SYNRAM` where the sheet is `nsyram.drw` --- puts a 74LS244 at C05 where
+/// `data/SIMPLETV.netlist` has a 74S472 there and the 244 at D05, and
+/// carries no 74S472 anywhere. So the SIMPLE TV is not checked here, as it
+/// is not checked above.
+const STUFFING_LISTS: [(&str, &str, [&str; 2]); 8] = [
+    ("bus interface", "BUSINT", ["cadr1", "busint.stf"]),
+    ("memory", "CADRM", ["cadrm", "mem.stf"]),
+    ("I/O board", "CADRIO", ["cadrio", "iob.stf"]),
+    ("disk controller", "CADRDC", ["cadrdc", "dc.stf"]),
+    ("disk multiplexor", "DM", ["cadrdc", "dm.stf"]),
+    ("LISPM TV", "LISPMTV", ["cadrtv", "lmtv4b.stf"]),
+    ("processor", "CADR", ["cadrwd", "cadr4.stf"]),
+    ("control store", "CADR", ["cadrwd", "icmem3.stf"]),
+];
+
+/// The netlist a row of [`STUFFING_LISTS`] names.
+fn board(name: &str) -> Netlist {
+    let text = match name {
+        "BUSINT" => BUSINT,
+        "CADRM" => CADRM,
+        "CADRIO" => CADRIO,
+        "CADRDC" => CADRDC,
+        "LISPMTV" => LISPMTV,
+        "CADR" => CADR,
+        "DM" => DM,
+        other => panic!("no netlist called {other}"),
+    };
+    netlist::parse(text).unwrap()
+}
+
+/// **Two devices at one board location must be two devices here.**
+///
+/// The count above is of locations, and a location is not a device: MIT
+/// puts two 8-pin 75452 drivers in one 16-pin footprint and calls them
+/// `B05` and `B05@03`. The netlist calls both `0B05`, so
+/// [`Netlist::packages`] --- which is what the `chip` engine builds its
+/// devices from --- keeps them apart only if they differ in page or in
+/// type, or claim a pin in common, and merges them into one device wired
+/// to both their nets if none of that separates them. This is the count
+/// that would see it, per location and per page.
+///
+/// **Nothing is merged.** Across the eight boards MIT left a stuffing list
+/// for, 2183 devices at 2176 locations, the two agree everywhere but at
+/// `SPLIT` below, and that one is muir building two where MIT stuffs one.
+/// Seven locations hold two devices on one page --- the multiplexor's four
+/// 75452 pairs and the disk controller's three --- and muir builds two at
+/// every one of them.
+#[test]
+fn every_board_location_holds_the_devices_mit_stuffs_there() {
+    // One 74LS124 drawn as two bodies, not two devices: `dctmot.drw` draws
+    // the chip's two VCO sections separately at 0B04 and each body repeats
+    // the package's ground and supply pins, so the two records collide and
+    // the netlist keeps them apart. `chip::wire_oscillators` is written for
+    // exactly this and takes each section from whichever record carries its
+    // pins rather than assuming section 1.
+    const SPLIT: (&str, &str, &str) = ("disk controller", "DCTMOT", "B04");
+    let (mut read, mut devices, mut locations, mut doubled) = (0usize, 0usize, 0usize, Vec::new());
+    for (board_name, netlist_name, list) in STUFFING_LISTS {
+        let n = board(netlist_name);
+        assert!(
+            n.parts.iter().all(|p| !p.reference.contains('@')),
+            "{board_name}: a netlist designator names the device at a location, \
+             and this check is built on none of them doing so"
+        );
+        let bodies = stuffing_list(&list);
+        read += bodies.len();
+        // The one thing the `@nn` is read for: it tells two bodies at one
+        // location apart, and it is no use for that if it repeats.
+        let mut seen: BTreeSet<(&str, u16)> = BTreeSet::new();
+        for b in &bodies {
+            assert!(seen.insert((&b.location, b.at)), "{board_name}: two bodies at {}", b.location);
+        }
+        let theirs = stuffed_devices(&bodies);
+        let ours = netlist_devices(&n);
+        let pages: BTreeSet<&str> = theirs.keys().map(|&(page, _)| page).collect();
+        // `CADR.netlist` holds the processor and the control store both,
+        // and the two share designators --- `1A01` is a 74S240 on the
+        // processor's VMEMDR and a 74S174 on the control store's OLORD1 ---
+        // so a count per location that was not also per board would hold
+        // one location against two boards' devices. Which page is on which
+        // board is what `cadr/framl.txt` says and what these two lists say,
+        // and here they agree.
+        if netlist_name == "CADR" {
+            let icmem = control_store_pages();
+            let on_the_control_store = pages.iter().filter(|p| icmem.contains(**p)).count();
+            let want = if board_name == "control store" { pages.len() } else { 0 };
+            assert_eq!(
+                on_the_control_store, want,
+                "{board_name}: the pages its stuffing list names, against `cadr/framl.txt`"
+            );
+        }
+        let ours_here: BTreeMap<_, _> =
+            ours.into_iter().filter(|((page, _), _)| pages.contains(page)).collect();
+        assert_eq!(
+            theirs.keys().copied().collect::<BTreeSet<_>>(),
+            ours_here.keys().copied().collect::<BTreeSet<_>>(),
+            "{board_name}: the locations MIT stuffs and the locations the netlist has"
+        );
+        for (&(page, location), mit_bodies) in &theirs {
+            let built = &ours_here[&(page, location)];
+            devices += mit_bodies.len();
+            locations += 1;
+            if mit_bodies.len() > 1 {
+                doubled.push(format!("{board_name} {page} {location} {mit_bodies:?}"));
+            }
+            if (board_name, page, location) == SPLIT {
+                assert_eq!(built.len(), 2, "{board_name} {page} {location}: the split 74LS124");
+                continue;
+            }
+            assert_eq!(
+                built.len(),
+                mit_bodies.len(),
+                "{board_name} {page} {location}: MIT stuffs {mit_bodies:?} and the netlist \
+                 builds {:?} --- fewer here is two of MIT's devices merged into one",
+                built.iter().map(|(_, kinds)| kinds).collect::<Vec<_>>()
+            );
+        }
+    }
+    assert_eq!(read, 2381, "bodies read out of the eight stuffing lists");
+    assert_eq!((devices, locations), (2183, 2176));
+    // Not vacuous: MIT does double-stuff a location, and where it does the
+    // netlist has two devices there and not one.
+    assert_eq!(doubled.len(), 7, "locations MIT stuffs twice on one page: {doubled:?}");
+    assert!(doubled.iter().all(|d| d.contains("75452")), "{doubled:?}");
+}
+
+/// **And MIT's wire lists say the same, for the boards that have one.**
+///
+/// The stuffing list is what the stockroom filled a board from and the wire
+/// list is what the board was wrapped from --- different documents by
+/// different tooling, and the wire list is the board as built. Both write
+/// the second device at a location `A02@03`, so both can be asked which
+/// locations hold two devices, and they must answer alike.
+///
+/// They do: of the six boards here with a wire list, only the disk
+/// controller has a location with two devices on one page, and it is the
+/// same three the stuffing list gives.
+#[test]
+fn mits_wire_lists_agree_on_which_locations_hold_two_devices() {
+    for (board_name, netlist_name, stf, wlr) in [
+        ("bus interface", "BUSINT", ["cadr1", "busint.stf"], ["cadr1", "busint.wlr"]),
+        ("memory", "CADRM", ["cadrm", "mem.stf"], ["cadrm", "mem.wlr"]),
+        ("I/O board", "CADRIO", ["cadrio", "iob.stf"], ["cadrio", "iob.wlr"]),
+        ("disk controller", "CADRDC", ["cadrdc", "dc.stf"], ["cadrdc", "dc.wlr"]),
+        ("LISPM TV", "LISPMTV", ["cadrtv", "lmtv4b.stf"], ["cadrtv", "lmtv4b.wlr"]),
+        ("processor", "CADR", ["cadrwd", "cadr4.stf"], ["cadrwd", "cadr4.wlr"]),
+        ("control store", "CADR", ["cadrwd", "icmem3.stf"], ["cadrwd", "icmem3.wlr"]),
+    ] {
+        let n = board(netlist_name);
+        // How many devices the wire list wires at each location on each
+        // page: the `@nn` values it names there, and not the body names,
+        // one chip being drawn under several of those on one sheet ---
+        // BUSINT UBMAST C02 is a 74LS74 whose halves are `74LS74I` and
+        // `74LS74`, both `C02`, one device. A connector pin is not a
+        // device and a pin whose page was cut off cannot be placed at all.
+        let mut wired: BTreeMap<(&str, &str), BTreeSet<u16>> = BTreeMap::new();
+        let signals = support::wire_list(&n, &wlr);
+        for pin in signals.iter().flat_map(|s| &s.pins) {
+            if pin.page.is_empty() || pin.body == "CON" || is_passive(&pin.body) {
+                continue;
+            }
+            let at: u16 = pin.location.split_once('@').map_or(0, |(_, at)| {
+                at.parse()
+                    .unwrap_or_else(|_| panic!("{board_name}: {} is no location", pin.location))
+            });
+            wired.entry((&pin.page, pin.slot())).or_default().insert(at);
+        }
+        let theirs: BTreeSet<(&str, &str)> =
+            wired.iter().filter(|(_, at)| at.len() > 1).map(|(&k, _)| k).collect();
+        let bodies = stuffing_list(&stf);
+        let stuffed: BTreeSet<(&str, &str)> = stuffed_devices(&bodies)
+            .into_iter()
+            .filter(|(_, mit_bodies)| mit_bodies.len() > 1)
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(
+            theirs, stuffed,
+            "{board_name}: the locations the wire list wires two devices at, against the \
+             locations the stuffing list stuffs two bodies at"
+        );
+    }
 }
