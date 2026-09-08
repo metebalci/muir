@@ -456,6 +456,82 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
       <p>The three engines differ in what they actually compute on the way to the next microcycle &mdash; no timing model, the timing model, the full netlist. This is what that means in each case, and it is the part of the project most easily mistaken for something it is not. Last is the wire protocol that runs two of them against each other over a network, which is a scheduling problem before it is a networking one.</p>
     </div>
 
+    <h3>What each engine models</h3>
+    <div class="prose">
+      <p>The engine chooses how the processor is computed; it also chooses what stands in for every other board on the backplane. A netlist board is MIT&rsquo;s own wire list run package by package. A model is a behavioural one written from the drawings &mdash; on <code>rtl</code> those are timed to the nanosecond and held against the netlist board, and on <code>micro</code> they run without the clock.</p>
+      <p><b>The choice between the two exists only on <code>chip</code>.</b> <code>--main-memory</code>, <code>--io-board</code>, <code>--tv</code>, <code>--tv-board</code> and <code>--disk-controller</code> are refused to the other engines with a warning rather than obeyed quietly, so <code>micro</code> and <code>rtl</code> have one answer a row and <code>chip</code> has two. <b>The defaults do not all run the same way</b>: main memory, the I/O board and the display come up as netlists, and the disk controller comes up as the model, so a bare <code>chip</code> run is not an all-netlist machine. Each row below marks which side it starts on.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th class="name">Part</th><th>micro</th><th>rtl</th><th>chip, model board</th><th>chip, netlist board</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">Processor and control store</td>
+            <td>Model, one step a microinstruction. The architecturally visible pipeline &mdash; the two-deep fetch, the inhibited cycle after a jump, the <code>OA</code> merge, the two-cycle memory data delay &mdash; and not the clock phases.</td>
+            <td>Model, two phases a microcycle on the board&rsquo;s own clock, with the delay-line taps that end the read phase.</td>
+            <td colspan="2"><code>CADR.netlist</code>, always. There is no flag that makes the processor a model, which is why parity below is real on <code>chip</code> whatever the other boards are.</td>
+          </tr>
+          <tr>
+            <td class="name">Bus interface</td>
+            <td>None. A physical address is answered by the machine directly, and a memory cycle is charged a flat 460&nbsp;ns.</td>
+            <td>Model, timed: the arbitration, <code>MEMSTART</code> to <code>-LOADMD</code>, the Unibus and Xbus cycles, and the timeout.</td>
+            <td colspan="2"><code>BUSINT.netlist</code>, always.</td>
+          </tr>
+          <tr>
+            <td class="name">Main memory</td>
+            <td>Words, no timing.</td>
+            <td>The same words, with a twin of each board carrying its refresh and its answer time.</td>
+            <td><code>--main-memory model</code> puts <code>rtl</code>&rsquo;s model behind the same bus.</td>
+            <td><b>Default.</b> <code>CADRM.netlist</code>. <code>--main-memory-boards</code> sets how many, on every engine.</td>
+          </tr>
+          <tr>
+            <td class="name">I/O board</td>
+            <td colspan="2">Model, advanced every microcycle on both: the keyboard and its cable word, the mouse&rsquo;s quadrature, the microsecond clock, the 2651 serial port a character at a time, and the Chaosnet interface with its turn timer.</td>
+            <td><code>--io-board model</code>, for the same model.</td>
+            <td><b>Default.</b> <code>CADRIO.netlist</code>. The mains line the 60&nbsp;Hz counter runs on is undriven here, where the model counts.</td>
+          </tr>
+          <tr>
+            <td class="name">Disk controller</td>
+            <td colspan="2">Model: the command PROM&rsquo;s sectors, the CCW chain and the status word.</td>
+            <td><b>Default</b>, and the one board that starts as the model. The same model as at left.</td>
+            <td><code>--disk-controller netlist</code>, for <code>CADRDC.netlist</code>.</td>
+          </tr>
+          <tr>
+            <td class="name">Disk drive</td>
+            <td colspan="2">Model: one Trident, its pack, head position and the conditions the controller reports.</td>
+            <td>The same model.</td>
+            <td>The drive as its cables carry it &mdash; the bus and tag lines, index and sector pulses, and the read and write clocks.</td>
+          </tr>
+          <tr>
+            <td class="name">Display</td>
+            <td colspan="2">Model of the standard black-and-white board: a frame buffer and a mode register on the Xbus.</td>
+            <td><code>--tv model</code>, for the same model.</td>
+            <td><b>Default.</b> <code>SIMPLETV.netlist</code>, or <code>--tv-board lispm-tv</code> for <code>LISPMTV.netlist</code>, the colour board that replaced it in 1980, which has no model.</td>
+          </tr>
+          <tr>
+            <td class="name">Debug cable</td>
+            <td>Neither end: no timing model, so no instants to promise.</td>
+            <td>Either end.</td>
+            <td colspan="2">The debuggee, on the interface board&rsquo;s own DBGIN connector.</td>
+          </tr>
+          <tr>
+            <td class="name">Disk multiplexor</td>
+            <td colspan="4">Not on any engine. <code>DM.netlist</code> extracts from MIT&rsquo;s drawings and is held to them, but no engine runs it, and the drive cable it switches has no second source to check a model against. One pack, as unit 0.</td>
+          </tr>
+          <tr>
+            <td class="name">Parity</td>
+            <td colspan="2">Not modelled. The ten parity-error flags and the memory-parity trap never fire.</td>
+            <td colspan="2">Real either way, the processor being a netlist on this engine: the parity RAMs and the 74S280 and 93S48 checkers are packages like any other, so the board computes parity whether or not anything is wrong with it.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">Parity is left out of the two models deliberately. A parity bit detects a chip having failed, and the words these engines hold are values that cannot fail; a check written over them could not fire, and MIT&rsquo;s own writers &mdash; <code>CC-WRITE-D-MEM</code>, PRAID&rsquo;s <code>P-D-MEM-D</code> &mdash; always compute the bit correctly. What CC would do with a flag, it can still do on <code>chip</code>.</div>
+
     <h3>What register-transfer level means here</h3>
     <div class="prose">
       <p>RTL is register-transfer level: the machine described as registers and the logic that moves data between them, clocked. The <code>rtl</code> engine is that written out directly — what drives each bus, what the ALU computes, which register takes what. It has no notion of a package, a pin or a net.</p>
