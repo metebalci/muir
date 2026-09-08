@@ -473,7 +473,8 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <this>[
             [--disk-controller netlist|model]
             [--disk-pack <image>[,<unit>][,ro]] [--disk-use-multiplexor]
             [--io-board netlist|model]
-            [--keyboard <file>] [--main-memory netlist|model]
+            [--keyboard-mapping <file>] [--keyboard-mapping-dump]
+            [--main-memory netlist|model]
             [--main-memory-boards <n>] [--no-auto-boot] [--prom <file>]
             [--resume <file>]
             [--stop-after <microcycles>] [--stop-at <pc>]
@@ -621,7 +622,7 @@ A simulator of the MIT CADR Lisp Machine.
                                with one pack in unit 0, and the jumpers
                                on; the start says when it is fitted]
   --io-board netlist|model     chip: the I/O board. [default: netlist]
-  --keyboard <file>            what a viewer's keysyms mean on the Lisp
+  --keyboard-mapping <file>    what a viewer's keysyms mean on the Lisp
                                Machine keyboard: `key <keysym> <key>` a
                                line, and `prefix <keysym> <keysym> <key>`
                                for a key reached by pressing one and then
@@ -630,10 +631,21 @@ A simulator of the MIT CADR Lisp Machine.
                                naming one key leaves the rest as they were,
                                and the prompt's `keys` prints what is in
                                force. MUIR_KEYS names a file in place of
-                               the two looked for. [default: .muirkeys in
+                               the two looked for. The keyboard itself is
+                               MIT's and is not a choice: the mapping is
+                               what this names. [default: .muirkeys in
                                the directory muir was run from, else in the
                                home directory; without one the built-in
                                mapping stands]
+  --keyboard-mapping-dump      write the mapping this run would use to
+                               stdout, in the format --keyboard-mapping
+                               reads, and stop --- before a terminal is
+                               bound or a machine is built, so stdout
+                               carries the mapping and nothing else. Fed
+                               back in unedited it changes nothing, so it
+                               is a copy to edit rather than a report:
+                               `muir --keyboard-mapping-dump > my.keys`,
+                               edit it, `muir --keyboard-mapping my.keys`.
   --main-memory netlist|model  chip: main memory as MIT's board or as
                                rtl's model of it. [default: netlist]
   --main-memory-boards <n>     how many 64K-word boards, 1 to 60: main
@@ -844,7 +856,7 @@ const KEYS: &str = ".muirkeys";
 /// The keyboard mapping file this run reads, and whether it was asked for
 /// by name.
 ///
-/// `--keyboard` if it is given, else `MUIR_KEYS`, else [`KEYS`] in the
+/// `--keyboard-mapping` if it is given, else `MUIR_KEYS`, else [`KEYS`] in the
 /// directory muir was run from, else [`KEYS`] in the home directory ---
 /// the same order and the same rule as [`config_path`], the first of them
 /// there and not all of them. A file asked for by name must be there; the
@@ -872,14 +884,17 @@ fn keyboard_path(named: Option<&Path>) -> Option<(PathBuf, bool)> {
 /// wrote.
 fn keyboard_mapping(named: Option<&Path>) -> (Mapping, String) {
     let Some((path, _)) = keyboard_path(named) else {
-        return (Mapping::default(), format!("built in; no {KEYS} found (--keyboard <file>)"));
+        return (
+            Mapping::default(),
+            format!("built in; no {KEYS} found (--keyboard-mapping <file>)"),
+        );
     };
     match Mapping::from_file(&path) {
         Ok(m) => {
             let line = format!("{}, over the built-in one", shown(&path));
             (m, line)
         }
-        Err(e) => usage(&format!("--keyboard {e}")),
+        Err(e) => usage(&format!("--keyboard-mapping {e}")),
     }
 }
 
@@ -2361,6 +2376,7 @@ fn main() {
     let mut checkpoint: Option<PathBuf> = None;
     let mut prom_file: Option<PathBuf> = None;
     let mut keyboard_file: Option<PathBuf> = None;
+    let mut keyboard_dump = false;
     let mut resume: Option<PathBuf> = None;
     let mut stop_at: Option<u16> = None;
     let mut stop_at_prom: Option<u16> = None;
@@ -2567,10 +2583,11 @@ fn main() {
             (None, "-c" | "--config") => {
                 args.next();
             }
-            (None, "--keyboard") => match args.next() {
+            (None, "--keyboard-mapping") => match args.next() {
                 Some(path) => keyboard_file = Some(PathBuf::from(path)),
-                None => usage("--keyboard wants a file of key bindings"),
+                None => usage("--keyboard-mapping wants a file of key bindings"),
             },
+            (None, "--keyboard-mapping-dump") => keyboard_dump = true,
             (None, "--no-auto-boot") => auto_boot = false,
             (None, "--prom") => match args.next() {
                 Some(path) => prom_file = Some(PathBuf::from(path)),
@@ -2697,6 +2714,15 @@ fn main() {
             ));
         }
         boards = c.memory_boards;
+    }
+    // `--keyboard-mapping-dump` is the mapping and nothing else: it writes
+    // the file a run would read and stops, before a terminal is bound or a
+    // machine is built, so that stdout carries the mapping alone. The
+    // start banner is on stderr, so nothing else has to be held back.
+    if keyboard_dump {
+        let (mapping, _) = keyboard_mapping(keyboard_file.as_deref());
+        print!("{}", mapping.dump());
+        std::process::exit(0);
     }
     // The behavioural memory answers the interface's cycles and no other
     // master's; the netlist controller's DMA needs memory boards.

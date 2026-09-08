@@ -2,10 +2,11 @@
 # the Lisp Machine keyboard.  This file is compiled into muir and is the
 # whole of the default; a file of the same form replaces any line of it.
 #
-#   muir --keyboard <file>
+#   muir --keyboard-mapping <file>
 #   .muirkeys in the directory muir was run from, or in the home one
 #
-# `keys` at muir's prompt prints the mapping a run is using.
+# `keys` at muir's prompt prints the mapping a run is using, and
+# `muir --keyboard-mapping-dump` writes it in this form, to edit.
 #
 # Two kinds of line:
 #

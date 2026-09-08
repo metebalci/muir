@@ -488,6 +488,48 @@ impl Mapping {
         self.key.values().chain(self.after.values()).map(|&(p, _)| p).collect()
     }
 
+    /// The mapping as a file `--keyboard-mapping` reads: every binding a
+    /// line, in the format [`Mapping::parse`] takes.
+    ///
+    /// **The dump of a mapping parses back to that mapping**, so a run's
+    /// mapping written out, fed back in unedited, changes nothing --- the
+    /// property `tests/keyboard_mapping.rs` holds it to. That is what
+    /// makes the output a starting point to edit rather than a report
+    /// about the bindings.
+    ///
+    /// A key is written by its name where the name reads back as the same
+    /// position and plane, and as `position <octal>` --- with `shifted`
+    /// after it for the shifted plane --- where it does not.
+    /// Two bindings need that. A character names the **first** position of
+    /// MIT's table that gives it, and a character on two keys has one
+    /// that is not first: `(` is shifted at 71 and unshifted at 132, a
+    /// bare `(` reads back as 71 on the shifted plane, so the one at 132
+    /// is written out. And a position MIT's table leaves unnamed --- 0 is
+    /// the first --- has no other name at all.
+    pub fn dump(&self) -> String {
+        let key = |p: u8, shifted: bool| {
+            let name = key_name(p, shifted);
+            match key_of(&name) {
+                Ok(back) if back == (p, shifted) => name,
+                _ => position_name(p, shifted),
+            }
+        };
+        let mut s = String::new();
+        s.push_str("# muir's keyboard mapping, as --keyboard-mapping reads it:\n");
+        s.push_str("# `key <keysym> <key>`, and `prefix <keysym> <keysym> <key>` for a\n");
+        s.push_str("# key reached by pressing one and then another. A file goes over\n");
+        s.push_str("# this rather than replacing it, so an edited copy of this file\n");
+        s.push_str("# says the same thing with the edit in it.\n");
+        for (sym, &(p, shifted)) in &self.key {
+            s.push_str(&format!("key {} {}\n", keysym_name(*sym), key(p, shifted)));
+        }
+        for (&(first, second), &(p, shifted)) in &self.after {
+            let (first, second) = (keysym_name(first), keysym_name(second));
+            s.push_str(&format!("prefix {first} {second} {}\n", key(p, shifted)));
+        }
+        s
+    }
+
     /// The mapping in force, a line a binding, for a user who cannot type
     /// a key and wants to know what would.
     pub fn show(&self) -> String {
@@ -561,6 +603,9 @@ fn key_of(word: &str) -> Result<(u8, bool), String> {
     {
         return Ok((p as u8, false));
     }
+    if let Some(rest) = strip_word(word, "position") {
+        return position_of(rest);
+    }
     let (side, name) = match word.split_once(char::is_whitespace) {
         Some((first, rest)) if first.eq_ignore_ascii_case("left") => (0, rest.trim()),
         Some((first, rest)) if first.eq_ignore_ascii_case("right") => (1, rest.trim()),
@@ -579,6 +624,40 @@ fn key_of(word: &str) -> Result<(u8, bool), String> {
         }
     }
     Err(format!("{word} is no key of this keyboard"))
+}
+
+/// `word` with `first` taken off the front, if that is its first word.
+fn strip_word<'a>(word: &'a str, first: &str) -> Option<&'a str> {
+    let (a, rest) = word.split_once(char::is_whitespace)?;
+    a.eq_ignore_ascii_case(first).then(|| rest.trim())
+}
+
+/// A position written exactly: its number on MIT's table in octal, and
+/// `shifted` after it for a binding that wants the shifted plane of a
+/// character key.
+///
+/// This is what [`Mapping::dump`] falls back to, and the only spelling
+/// that names every binding: a character names the first position that
+/// gives it, which is not always the one bound, and a position MIT's
+/// table leaves unnamed has no other name at all.
+fn position_of(rest: &str) -> Result<(u8, bool), String> {
+    let (number, shifted) = match rest.split_once(char::is_whitespace) {
+        Some((n, s)) if s.trim().eq_ignore_ascii_case("shifted") => (n, true),
+        Some(_) => return Err(format!("position {rest}: `shifted` or nothing after the number")),
+        None => (rest, false),
+    };
+    let p = u8::from_str_radix(number, 8)
+        .map_err(|_| format!("position {number}: the number is in octal"))?;
+    if usize::from(p) >= TABLE.len() {
+        return Err(format!("position {number}: the table is {} positions", TABLE.len()));
+    }
+    Ok((p, shifted))
+}
+
+/// A position as [`position_of`] reads it back.
+fn position_name(position: u8, shifted: bool) -> String {
+    let plane = if shifted { " shifted" } else { "" };
+    format!("position {position:o}{plane}")
 }
 
 /// What to call a position, the way the mapping writes it.
