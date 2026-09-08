@@ -1229,7 +1229,17 @@ const fn g(out: u8, ins: &'static [u8], f: GateFn) -> Gate {
     Gate { out, ins, f, open: true }
 }
 
-/// A MECL gate: an undriven input reads low.
+/// A gate whose undriven input reads **low** rather than high.
+///
+/// Two kinds of part want this and they want it for different reasons.
+/// MECL inputs carry pull-down resistors to VEE --- the MC10136 sheet's
+/// "Flip-flops will toggle when all T inputs are low" is written for open
+/// T inputs, and the display board leaves the 10136's `S2` and `Cin` and
+/// one 10102 input open and relies on it. The MC1489 is not MECL: its
+/// schematic puts 10 kΩ from each input to ground, which comes to the same
+/// thing at this level, and that resistor is not a part in the drawing.
+/// So this is how a board's undriven input is pulled down where the puller
+/// is inside the package.
 const fn gm(out: u8, ins: &'static [u8], f: GateFn) -> Gate {
     Gate { out, ins, f, open: false }
 }
@@ -4236,6 +4246,21 @@ pub fn behaviour(kind: &str) -> Option<Behaviour> {
         // the 2651's -DSR, -CTS and -DCD off --- which is what a port with
         // no cable sees, and what keeps its transmitter and receiver from
         // running until something is plugged in.
+        //
+        // **That resistor is [`gm`] and not a part**, which is worth saying
+        // because the drawing has no body for it and a reader who checks
+        // this comment against the gates below finds four plain inverters
+        // and concludes the pull-down is missing. It is not: `gm` is the
+        // constructor whose undriven input reads low, against [`g`]'s TTL
+        // high, and that is the whole of the 10 kΩ at this level.
+        //
+        // Measured rather than assumed: with the far end brought up and
+        // nothing on J9, `EIA DATA IN`, `DSR`, `CTS` and `DCD` all stand at
+        // `Z` and all four `TTL ... IN` at `High`.
+        // `tests/serial_cable.rs` reads the status register on this board
+        // and on the behavioural port and requires the same word, unplugged
+        // and plugged, so the two cannot part here; and swapping these four
+        // to `g` fails `tests/cadrio_netlist.rs`.
         "MC1489" => comb(
             const {
                 &[
