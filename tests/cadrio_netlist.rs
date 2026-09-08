@@ -11,7 +11,7 @@
 //! `chaos/`; one of them, the transmit clock, is the I/O pages' clock, and
 //! all thirteen are taken with them.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use muir::chip::Chip;
 use muir::netlist::{self, Netlist};
@@ -732,5 +732,121 @@ fn a_reference_to_the_beep_register_toggles_the_speaker() {
     for uaddr in [ioboard::CSR, ioboard::KBD_LOW, ioboard::MOUSE_X, ioboard::GPIO] {
         b.cycle(uaddr, None);
         assert_eq!(high(b.level("AUDIO")), want, "{uaddr:o} is not the beep");
+    }
+}
+
+/// The nets the machine's environment puts a level on: the mouse's
+/// encoders and switches, the keyboard's pair, the Chaosnet transceiver's,
+/// and the mains. **These must be driven** --- that is the invariant, and
+/// the mains not being driven was issue #41: the counter behind the `CLOCK`
+/// register stood still on this board where the model's counted.
+const FROM_OUTSIDE: &[&str] = &[
+    "*HORA",
+    "*HORB",
+    "*VERA",
+    "*VERB",
+    "*HEADSW",
+    "*MIDSW",
+    "*TAILSW",
+    "KBDIN+",
+    "KBDIN-",
+    "INTERFERE+",
+    "INTERFERE-",
+    "RCVR.DATA+",
+    "RCVR.DATA-",
+    "@0C20,p8",
+];
+
+/// A cable's far end, which is absent until something is plugged in, and
+/// undriven is what "nothing plugged in" means.
+///
+/// The four `EIA` inputs are the RS-232 far end: with no cable the MC1489's
+/// open inputs give `-DSR`, `-DCD` and `-CTS` high, which is the sheet's
+/// `V_OH` row for "Input open" and is what `src/serial.rs` models. `POWER
+/// LINE ^` is the mains at the board's edge pin `FV2`; `src/dm.rs`'s
+/// neighbour `MAINS_PERIOD` says why the driver attaches at the Schmitt
+/// trigger's side of C20 instead, the 150 ohm network between them being a
+/// comment on `cadrio/clk60h.drw` rather than a modelled body.
+const UNPLUGGED: &[&str] =
+    &["'EIA CTS IN'", "'EIA DATA IN'", "'EIA DCD IN'", "'EIA DSR IN'", "'POWER LINE ^'"];
+
+/// Supply rails the board takes from the backplane, which `support::is_power`
+/// does not name because no other board has them.
+const RAILS: &[&str] = &["+12V", "-5V"];
+
+/// Nets that carry no logic level at all: the timing components of the
+/// two one-shots and the keyboard receiver, and the taps along the
+/// Chaosnet detector's delay-line chain, which `src/chaos/wire.rs` reckons
+/// as instants rather than levels.
+const ANALOGUE: &[&str] =
+    &["'KBDIN RC'", "'LOCKOUT END'", "R.C", "R.RC", "SAMPLE", "SDLYD", "SDLYD2", "T.C", "T.RC"];
+
+/// Every net on the board with no pin driving it, the supplies aside.
+fn undriven(n: &Netlist) -> BTreeSet<String> {
+    let mut driven: BTreeMap<u32, bool> = BTreeMap::new();
+    for p in &n.parts {
+        let po = muir::part::pinout(&p.kind);
+        for &(pin, net) in p.pins.iter() {
+            let d = po.as_ref().is_some_and(|po| po.drive_of(pin).is_some());
+            *driven.entry(net).or_insert(false) |= d;
+        }
+    }
+    driven
+        .iter()
+        .filter(|&(_, &d)| !d)
+        .map(|(&net, _)| n.net(net).to_string())
+        .filter(|nm| !support::is_power(nm))
+        .collect()
+}
+
+/// **Every net that arrives from outside the machine has something driving
+/// it, and every other undriven net says which kind it is.**
+///
+/// The board is held pin for pin against `cadrio/iob.wlr`, so its wiring is
+/// checked; what that cannot check is whether muir supplies what the board
+/// expects to arrive from outside it. Issue #41 was that gap: the mains
+/// input was never driven, so the counter behind the `CLOCK` register stood
+/// still on the netlist board where the behavioural model's counted, and
+/// nothing said so.
+///
+/// So every undriven net is sorted into one of five kinds and the residue
+/// must be empty. A net that belongs to none of them fails here, and
+/// whoever added it has to say which kind it is --- or notice they have
+/// added another mains.
+#[test]
+fn every_undriven_net_is_accounted_for() {
+    let n = netlist::parse(CADRIO).unwrap();
+    let mut left = undriven(&n);
+    // From another board: the Unibus, which the bus interface drives.
+    let mut named: BTreeSet<String> = muir::unibus::wire_names().into_iter().collect();
+    for group in [FROM_OUTSIDE, UNPLUGGED, RAILS, ANALOGUE] {
+        named.extend(group.iter().map(|s| s.to_string()));
+    }
+    // The general-purpose input port: MIT wired nothing to it.
+    named.extend((0..16).map(|k| format!("GPI{k}")));
+    left.retain(|nm| !named.contains(nm) && !named.contains(nm.trim_matches('\'')));
+    assert!(left.is_empty(), "undriven nets in no named kind: {left:?}");
+}
+
+/// **And the fourteen the environment supplies are driven when the board is
+/// brought up as a machine has it.** The categorisation above is about the
+/// netlist; this is about the running far end, which is where #41 actually
+/// bit. A net listed as coming from outside and left floating fails here.
+#[test]
+fn what_comes_from_outside_the_machine_is_driven() {
+    use muir::part::Level;
+    let n = netlist::parse(CADRIO).unwrap();
+    let bus_n = netlist::parse(include_str!("../data/BUSINT.netlist")).unwrap();
+    let mut u = muir::unibus::Unibus::new(&bus_n, &n, 0, 0o3050);
+    u.plug_keyboard(0);
+    u.plug_mouse(0);
+    u.transition_due(1_000);
+    for name in FROM_OUTSIDE {
+        let id = n.by_name_id(name).unwrap_or_else(|| panic!("no net {name}"));
+        let level = u.board.net(id);
+        assert!(
+            matches!(level, Level::High | Level::Low),
+            "{name} arrives from outside the machine and nothing drives it: {level:?}"
+        );
     }
 }
