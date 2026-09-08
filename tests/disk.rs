@@ -705,6 +705,49 @@ fn sector_begins(d: &Trident, from: u64, k: u32) -> u64 {
     }
 }
 
+/// **A drive can be told to put a sector pulse where none belongs**, which
+/// is the fault MIT's `STATUS<12>` is the controller noticing: "a
+/// start-of-block (sector pulse) happened at a time when it should not
+/// have ... it is generating spurious sector pulses".
+///
+/// The spindle's own pulses come from `turn` on a fixed [`REVOLUTION_NS`]
+/// and are correct by construction, so before this nothing could produce
+/// one. The injected pulse is as wide as a sector pulse, comes every
+/// revolution, and --- this is the part a caller depends on ---
+/// [`Trident::next_change`] stops at both its edges, or a caller stepping
+/// by that walks straight over it and sees nothing. Issue 81.
+#[test]
+fn a_drive_can_be_told_to_pulse_where_none_belongs() {
+    let mut d = Trident::new(Unit::blank(Geometry::T300), 0);
+    // The middle of sector 3, where the controller is reading and no
+    // pulse of the drive's own falls.
+    let at = 3 * SECTOR_NS + SECTOR_NS / 2;
+    assert!(!d.lines(at).sector_index, "no pulse there to begin with");
+
+    d.spurious_pulse = Some(at);
+    assert!(d.lines(at).sector_index, "and one there when the drive is told to");
+    assert!(d.lines(at + SECTOR_PULSE_NS - 1).sector_index, "for a sector pulse's width");
+    assert!(!d.lines(at + SECTOR_PULSE_NS).sector_index, "and no longer");
+    assert!(d.lines(at + REVOLUTION_NS).sector_index, "every revolution, not once");
+
+    // Stepped by `next_change` from before it, both edges are stopped at.
+    let (mut now, mut edges) = (at - 3 * SECTOR_PULSE_NS, Vec::new());
+    let mut last = d.lines(now).sector_index;
+    while now < at + 2 * SECTOR_PULSE_NS {
+        now = d.next_change(now);
+        let level = d.lines(now).sector_index;
+        if level != last {
+            edges.push((now, level));
+            last = level;
+        }
+    }
+    assert_eq!(
+        edges,
+        [(at, true), (at + SECTOR_PULSE_NS, false)],
+        "a caller stepping by next_change sees the pulse rise and fall"
+    );
+}
+
 /// **A checkpoint holds the drive where it stood.** A drive part way
 /// round its spindle, part way through a seek, and part way through
 /// serialising a sector, saved and read back into a drive built fresh,
@@ -1871,4 +1914,115 @@ fn running_off_the_end_of_the_pack_is_header_ecc() {
     // command register.
     read_block(&mut d, &mut main, 0, 2);
     assert_eq!(d.read(reg::STATUS) & (1 << 17), 0, "the next command clears it");
+}
+
+/// **A burst the code can carry is located, and XORing the pattern back
+/// where it says restores the block.** That round trip is the whole of
+/// what `STATUS<15>` promises a program: "ECC Soft.  Indicates that the
+/// error correcting code discovered an error, and was able to determine
+/// which data bits were in error.  The program can correct it, see the
+/// ECC Register for how" --- and register 3: "The error pattern should be
+/// XOR'ed into the contents of memory at the specified bit address."
+///
+/// Every burst of one to eleven bits is tried at a hundred positions
+/// across a block, and each one comes back located. A burst wider than
+/// the eleven stages `-ECC=ZERO` leaves out is not located, which is
+/// `STATUS<16>`, "was unable to correct it" --- and that half matters as
+/// much, since a decoder that claimed to correct everything would make
+/// the two bits one.
+#[test]
+fn an_ecc_burst_is_located_and_xors_back() {
+    use muir::disk_unit::Ecc;
+    let data: Vec<u8> =
+        (0..256u32).flat_map(|w| w.wrapping_mul(2_654_435_761).to_le_bytes()).collect();
+    let check = Ecc::over(&data);
+    let bits = data.len() * 8;
+
+    let mut located = 0;
+    for width in 1..=11usize {
+        // A burst is a run of `width` bits whose first and last are wrong;
+        // this one alternates inside so the pattern is not all ones.
+        let burst: u32 = (1 << (width - 1)) | 1 | (0x2aaa_aaaa & ((1 << width) - 1));
+        for at in (0..bits - 16).step_by((bits - 16) / 100) {
+            let mut bad = data.clone();
+            for k in 0..width {
+                if burst >> k & 1 != 0 {
+                    bad[(at + k) / 8] ^= 1 << ((at + k) % 8);
+                }
+            }
+            let mut e = Ecc::default();
+            e.feed(&bad);
+            e.feed(&check);
+            let (pattern, found) =
+                e.trap(bits).unwrap_or_else(|| panic!("burst {burst:b} at {at} not located"));
+            assert_eq!(found as usize, at, "burst {burst:b} at {at}: located at {found}");
+            // XOR it back where it says, and the block is what was written.
+            for k in 0..16 {
+                if pattern >> k & 1 != 0 {
+                    bad[(at + k) / 8] ^= 1 << ((at + k) % 8);
+                }
+            }
+            assert_eq!(bad, data, "burst {burst:b} at {at}: the pattern restores the block");
+            located += 1;
+        }
+    }
+    assert!(located > 1_000, "{located} bursts located");
+
+    // A burst wider than the eleven stages is the other bit: "ECC Hard
+    // ... was unable to correct it". Its first and last bits are set, so
+    // its span really is the width.
+    //
+    // **Mostly, and not always, which is the code's own property and not
+    // this decoder's.** A burst-trapping code can be fooled: a wide burst
+    // whose syndrome happens to fit the window is reported soft and
+    // "corrected" wrongly. That is measured below --- where one traps, the
+    // pattern does **not** restore the block --- and it is why MIT says of
+    // a hard error "The data read from disk is wrong, try reading again"
+    // rather than promising the bit is only set when correction is
+    // impossible.
+    let (mut hard, mut fooled) = (0, 0);
+    for width in 12..=24usize {
+        let burst: u128 = (1 << (width - 1)) | 1;
+        for at in (0..bits - 32).step_by((bits - 32) / 20) {
+            let mut bad = data.clone();
+            for k in 0..width {
+                if burst >> k & 1 != 0 {
+                    bad[(at + k) / 8] ^= 1 << ((at + k) % 8);
+                }
+            }
+            let mut e = Ecc::default();
+            e.feed(&bad);
+            e.feed(&check);
+            match e.trap(bits) {
+                None => hard += 1,
+                Some((pattern, found)) => {
+                    let mut fixed = bad.clone();
+                    for k in 0..16 {
+                        if pattern >> k & 1 != 0 {
+                            fixed[(found as usize + k) / 8] ^= 1 << ((found as usize + k) % 8);
+                        }
+                    }
+                    // Fooled, and wrong: a burst outside the span that
+                    // trapped anyway does not come back as what was
+                    // written. If one ever did, the code would be
+                    // correcting further than eleven bits and this
+                    // decoder's span would be wrong.
+                    assert_ne!(
+                        fixed, data,
+                        "a burst of {width} bits at {at} trapped and restored the block"
+                    );
+                    fooled += 1;
+                }
+            }
+        }
+    }
+    eprintln!("{hard} wide bursts reported hard, {fooled} trapped wrongly");
+    assert!(hard > 200, "{hard} wide bursts reported hard");
+    assert!(fooled * 4 < hard, "the code is fooled by {fooled} of {} wide bursts", hard + fooled);
+
+    // And a clean block traps nothing: there is no error to find.
+    let mut e = Ecc::default();
+    e.feed(&data);
+    e.feed(&check);
+    assert_eq!(e.trap(bits), None, "a block that checks has no burst");
 }

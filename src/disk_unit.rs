@@ -542,6 +542,11 @@ impl Ecc {
         self.0 = (self.0 >> 1) ^ taps;
     }
 
+    /// The register itself, for a decoder that walks it.
+    pub fn raw(&self) -> u32 {
+        self.0
+    }
+
     /// `ECC.OUT`.
     pub fn out(&self) -> bool {
         self.0 & 1 != 0
@@ -573,6 +578,93 @@ impl Ecc {
     pub fn checks(&self) -> bool {
         self.0 == 0
     }
+
+    /// **Where a burst of errors is and what it is, or that the code
+    /// cannot locate it**: `Some((pattern, at))` for a soft error,
+    /// `None` for a hard one.
+    ///
+    /// `bits` is the length of what was fed before the checkword. The
+    /// pattern's bit `k` is the error at block bit `at + k`, so XORing it
+    /// in there restores what was written --- which is what MIT tells a
+    /// program to do with the error correction register, `disk.text`
+    /// register 3: "The error pattern should be XOR'ed into the contents
+    /// of memory at the specified bit address, it may overlap across a
+    /// word boundary."
+    ///
+    /// **The algorithm is the board's own, and `newdsk.31` describes it in
+    /// its own words** above `070`:
+    ///
+    /// > Run the ECC register the right number of times to make the cyclic
+    /// > code repeat, then run it through the data field again, looking for
+    /// > zero.  If found, we have the error bits, if not found too many
+    /// > bits were in error, set ECC hard.
+    ///
+    /// Each step is `ECC/FEEDBACK`, which that listing defines as "Input is
+    /// zero, enable feedback" --- so the syndrome is walked with nothing
+    /// coming in. "Zero" is the board's `-ECC=ZERO`, the S133 at 0C27,
+    /// which reads `ECC11` to `ECC31` and not the ten below them: the test
+    /// is that the high twenty-one stages are clear, and what is left is
+    /// the burst.
+    ///
+    /// **So the correctable span is eleven bits**, which is what makes a
+    /// soft error soft. `STATUS<15>` is "was able to determine which data
+    /// bits were in error" and `STATUS<16>` is "was unable to correct it";
+    /// a burst that never leaves those eleven stages is the first and one
+    /// that does not is the second.
+    ///
+    /// Measured here rather than derived: the walk reaches the condition
+    /// after [`Ecc::CYCLE`] steps less the bits between the burst and the
+    /// end, and the burst sits reversed in the low eleven stages. Held by
+    /// `an_ecc_burst_is_located_and_xors_back` over every length the code
+    /// can carry and a hundred positions.
+    pub fn trap(self, bits: usize) -> Option<(u16, u32)> {
+        let mut r = self;
+        if r.0 == 0 {
+            return None;
+        }
+        // The board runs the register to the code's own cycle before it
+        // starts looking; everything before that is the first phase at
+        // `070`, "Run ECC until code cycles".
+        let from = Ecc::CYCLE.checked_sub(bits)?;
+        for _ in 0..from {
+            r.shift(false, true);
+        }
+        // Then the scan, which the board runs over the block and two bytes
+        // more --- `071` to `073` --- and gives up at `074`.
+        for step in 0..=bits {
+            if r.0 >> 11 == 0 {
+                // The burst lies in the eleven stages below the test's,
+                // its first errored bit lowest: the pattern is what is
+                // left, brought down to bit 0.
+                let pattern = (r.0 >> r.0.trailing_zeros()) as u16;
+                // The condition is reached when the burst's **last**
+                // errored bit has walked in, so the position of its first
+                // is that many steps earlier. What is held is the property
+                // MIT's register promises --- the pattern XORed in at the
+                // address restores the block --- and the address that
+                // makes that true is the first errored bit's.
+                //
+                // **Unverified**: which end the board's own POSC counts
+                // from, since `disk.text` says only "the specified bit
+                // address" and "the first bit in the block is bit 1".
+                // `newdsk.31` stops the scan at `073` without saying what
+                // POSC then holds; the DCPOSC drawing would settle it.
+                let at = (step as u32).checked_sub(pattern.ilog2())?;
+                return Some((pattern, at));
+            }
+            r.shift(false, true);
+        }
+        None
+    }
+
+    /// How many shifts with feedback and nothing coming in bring the code
+    /// back on itself: `newdsk.31`'s "ECC FIELD SIZE", which it runs the
+    /// register to before scanning and calls "about 3 milliseconds".
+    ///
+    /// Measured, not read: a single-bit error at block bit `a` of a block
+    /// of `n` bits reaches the zero condition after this many steps less
+    /// `n` plus `a`, for every `n` and `a` tried.
+    pub const CYCLE: usize = 42_945;
 
     /// The checkword of some bytes from a clear register.
     pub fn over(bytes: &[u8]) -> [u8; 4] {
@@ -987,6 +1079,24 @@ pub struct Trident {
     /// Bits the controller has written into the sector under the head,
     /// by bit from the sector's first clock, and which sector.
     written: Option<(SectorKey, Vec<Option<bool>>)>,
+    /// **A fault the drive can be told to have**: an extra composite
+    /// pulse this many nanoseconds into every revolution, as wide as a
+    /// sector pulse.
+    ///
+    /// A real drive does this when its pulse generator is wrong, and
+    /// MIT's `<12>` is the controller noticing --- "a start-of-block
+    /// (sector pulse) happened at a time when it should not have. Either
+    /// the disk is incorrectly formatted or it is generating spurious
+    /// sector pulses". The board carries the detection, the LS74
+    /// synchroniser at DCHDCM 0D15 into `BAD START BLOCK` at the LS08
+    /// 0D16, and before this nothing could give it one to catch: the
+    /// spindle's pulses come from [`turn`] on a fixed [`REVOLUTION_NS`]
+    /// and are correct by construction. Issue 81.
+    ///
+    /// Offsets that fall inside a pulse the drive would emit anyway do
+    /// nothing; a fault wants one in the middle of a sector, where the
+    /// controller is reading and no pulse belongs.
+    pub spurious_pulse: Option<u64>,
     /// The last [`TAG_CAP`] tags received, for a test to read back.
     pub tags: Vec<(u64, Tag)>,
     /// Sectors written that did not parse as the format.
@@ -1023,6 +1133,7 @@ impl Trident {
             write_gate: false,
             image: None,
             written: None,
+            spurious_pulse: None,
             tags: Vec::new(),
             bad_writes: 0,
         }
@@ -1050,6 +1161,24 @@ impl Trident {
     /// far into it, in nanoseconds. [`turn`], with this drive's phase.
     pub fn turn(&self, now: u64) -> (u32, u64) {
         turn(self.unit.geometry.blocks_per_track, self.phase, now)
+    }
+
+    /// Whether [`Trident::spurious_pulse`] is asserting at `now`: how far
+    /// into the revolution we are, against the offset it was set to.
+    fn spurious_now(&self, now: u64) -> bool {
+        self.spurious_span(now).is_some_and(|(from, to)| (from..to).contains(&now))
+    }
+
+    /// The injected pulse's span around `now`, if there is one: the pulse
+    /// of the revolution `now` falls in.
+    fn spurious_span(&self, now: u64) -> Option<(u64, u64)> {
+        let at = self.spurious_pulse?;
+        let phase = self.phase % REVOLUTION_NS;
+        // The revolution `now` is in, and where in it the pulse falls.
+        let turned = (now + REVOLUTION_NS - phase) % REVOLUTION_NS;
+        let began = now - turned;
+        let from = began + at % REVOLUTION_NS;
+        Some((from, from + SECTOR_PULSE_NS))
     }
 
     /// When the sector under the head at `now` began. Signed: the spindle
@@ -1287,7 +1416,7 @@ impl Trident {
             seek_incomplete: self.seek_incomplete,
             selected,
             attention: self.attention,
-            sector_index: into < pulse_ns(sector),
+            sector_index: into < pulse_ns(sector) || self.spurious_now(now),
             clock: Self::clock(now),
             data,
         }
@@ -1304,7 +1433,17 @@ impl Trident {
         let length = region_ns(self.sectors(), sector as u64) as i64;
         let pulse = if (now as i64) < pulse_end { pulse_end } else { began + length } as u64;
         let seek = self.seek.map_or(u64::MAX, |(_, at)| at.max(now + 1));
-        clock.min(pulse).min(seek)
+        // An injected pulse moves of its own accord too, so its edges are
+        // events: without them a caller stepping by `next_change` walks
+        // straight over one.
+        let spurious = match self.spurious_span(now) {
+            Some((from, _)) if now < from => from,
+            Some((_, to)) if now < to => to,
+            // Past this revolution's; the next one is a revolution on.
+            Some((from, _)) => from + REVOLUTION_NS,
+            None => u64::MAX,
+        };
+        clock.min(pulse).min(seek).min(spurious)
     }
 }
 
@@ -1754,6 +1893,9 @@ impl Trident {
     /// fresh under a controller that has been running is a drive whose
     /// track has jumped.
     ///
+    /// [`Trident::spurious_pulse`] comes too: it is a fault the drive has
+    /// been given, and a drive read back mid-fault has it still.
+    ///
     /// Two fields are not here. [`Trident::tags`] is the record of what
     /// the drive saw, kept for a test to read back, and nothing the drive
     /// does depends on it. The sector under the head, serialised, is a
@@ -1780,6 +1922,7 @@ impl Trident {
             write_gate,
             image: _,
             written,
+            spurious_pulse,
             tags: _,
             bad_writes,
         } = self;
@@ -1817,6 +1960,7 @@ impl Trident {
                 });
             }
         });
+        w.opt(*spurious_pulse, |w, at| w.u64(at));
         w.u64(*bad_writes as u64);
     }
 
@@ -1862,6 +2006,7 @@ impl Trident {
             Ok((key, bits))
         })?;
         self.tags.clear();
+        self.spurious_pulse = r.opt(|r| r.u64())?;
         self.bad_writes = r.u64()? as usize;
         Ok(())
     }
