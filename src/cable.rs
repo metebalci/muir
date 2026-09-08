@@ -367,6 +367,13 @@ pub struct Boards<'a> {
     pub io: Option<&'a Netlist>,
     pub tv: Option<&'a Netlist>,
     pub disk: Option<&'a Netlist>,
+    /// The DISK MULTIPLEXOR on the disk controller's cable, which is not
+    /// on a bus at all: it hangs off the controller's edge connector, and
+    /// with it the controller has eight drive ports instead of one. When
+    /// it is here, `disk` has to be the netlist
+    /// [`crate::netlist::parse_with_multiplexor`] made, and
+    /// [`crate::xbus::Xbus::plug_multiplexor`] refuses it if it is not.
+    pub multiplexor: Option<&'a Netlist>,
 }
 
 impl<'a> Boards<'a> {
@@ -404,9 +411,13 @@ impl FarEnd {
         powered_at: u64,
         machine: Machine,
     ) -> FarEnd {
-        // The pack in unit 0 goes on the netlist controller's cable as a
-        // drive, the same pack the model controller reads.
-        let pack = boards.disk.and(machine.disk.units[0].clone());
+        // The packs go on the netlist controller's cable as drives, the
+        // same packs the model controller reads. Without a multiplexor
+        // the controller has one port and only unit 0 has one to be on.
+        let packs: Vec<Option<crate::disk_unit::Unit>> = match boards.disk {
+            Some(_) => machine.disk.units.iter().map(Clone::clone).collect(),
+            None => Vec::new(),
+        };
         let chaos = machine.chaos.clone();
         let mut buses = Buses::new(busint, machine);
         buses.memory_boards = boards.memory > 0;
@@ -417,8 +428,13 @@ impl FarEnd {
         // The device boards on the backplane, the display first.
         let devices: Vec<&Netlist> = boards.tv.into_iter().chain(boards.disk).collect();
         let mut xbus = Xbus::new(busint, memory, boards.memory, &devices, powered_at);
-        if let Some(unit) = pack {
-            xbus.plug(crate::disk_unit::Trident::new(unit, powered_at), powered_at);
+        if let Some(dm) = boards.multiplexor {
+            xbus.plug_multiplexor(dm, powered_at);
+        }
+        for (u, unit) in packs.into_iter().enumerate() {
+            let Some(unit) = unit else { continue };
+            let drive = crate::disk_unit::Trident::new(unit, powered_at);
+            xbus.plug_unit(u as u8, drive, powered_at);
         }
         // The Chaosnet server goes on the I/O board's Chaosnet cable, with its
         // services: TIME and UPTIME always, FILE when given a root.

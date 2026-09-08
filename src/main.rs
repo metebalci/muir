@@ -45,7 +45,9 @@
 //! with no pack in it. The image is the pack's blocks end to end, 256 words of 32 bits
 //! each, in the geometry's order. It is opened read-write and written as a
 //! drive writes its pack. After the image, in either order, come the
-//! drive's unit --- only 0 until the disk multiplexor is modelled --- and
+//! drive's unit --- 0 unless a DISK MULTIPLEXOR is fitted with
+//! `--disk-use-multiplexor`, the netlist controller having one port of its
+//! own --- and
 //! `ro`, the drive's read-only switch, `STATUS<7>`, with the file opened
 //! read-only behind it, and a write then faults as MIT says it does. With
 //! no pack at all the engines run the same PROM waiting on a drive that
@@ -272,17 +274,12 @@ fn pack_spec(arg: &str) -> Result<Pack, String> {
     Ok(Pack { path, unit: unit.unwrap_or(0), read_only: read_only.unwrap_or(false) })
 }
 
-/// A pack flag's argument parsed, or the usage: with the disk controller
-/// alone on the bus there is one drive, unit 0.
+/// A pack flag's argument parsed, or the usage. Which units a run can
+/// fill is the controller's business and not the flag's: see
+/// `--disk-use-multiplexor`.
 fn pack_flag(flag: &str, arg: Option<String>) -> Pack {
     let arg = arg.unwrap_or_else(|| usage(&format!("{flag} wants <image>[,<unit>][,ro]")));
-    let pack = pack_spec(&arg).unwrap_or_else(|e| usage(&format!("{flag} {arg}: {e}")));
-    if pack.unit != 0 {
-        usage(&format!(
-            "{flag} {arg}: the disk multiplexor is not modelled yet; one pack, as unit 0"
-        ));
-    }
-    pack
+    pack_spec(&arg).unwrap_or_else(|e| usage(&format!("{flag} {arg}: {e}")))
 }
 
 /// An endpoint from a flag's argument, against a default: nothing is the
@@ -399,6 +396,7 @@ const CADRIO: &str = include_str!("../data/CADRIO.netlist");
 const SIMPLETV: &str = include_str!("../data/SIMPLETV.netlist");
 const LISPMTV: &str = include_str!("../data/LISPMTV.netlist");
 const CADRDC: &str = include_str!("../data/CADRDC.netlist");
+const DM: &str = include_str!("../data/DM.netlist");
 
 /// Which display board `--tv-board` puts on the backplane.
 #[derive(Clone, Copy, PartialEq)]
@@ -473,7 +471,8 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <this>[
             [--debuggee-disk-pack <image>[,<unit>][,ro]]
             [--debuggee-terminal [<endpoint>]]
             [--disk-controller netlist|model]
-            [--disk-pack <image>[,<unit>][,ro]] [--io-board netlist|model]
+            [--disk-pack <image>[,<unit>][,ro]] [--disk-use-multiplexor]
+            [--io-board netlist|model]
             [--keyboard <file>] [--main-memory netlist|model]
             [--main-memory-boards <n>] [--no-auto-boot] [--prom <file>]
             [--resume <file>]
@@ -597,13 +596,24 @@ A simulator of the MIT CADR Lisp Machine.
                                machine writes is kept in memory for the
                                run, and goes into a checkpoint, so the
                                image stays as fetched. After the image, in
-                               either order: the unit, only 0 until the
-                               disk multiplexor is modelled, and ro for the
+                               either order: the unit, and ro for the
                                drive's read-only switch --- the status word
-                               says so, and a write faults. [default: unit
-                               0; no pack unless one is named, which is a
-                               drive with no pack in it and a boot that
-                               waits on it for ever]
+                               says so, and a write faults. The flag can
+                               come more than once, a pack a unit, up to
+                               the eight the controller addresses.
+                               [default: unit 0; no pack unless one is
+                               named, which is a drive with no pack in it
+                               and a boot that waits on it for ever]
+  --disk-use-multiplexor       chip: a DISK MULTIPLEXOR on the netlist
+                               controller's cable, which is what gives it
+                               eight drive ports instead of one. Without
+                               it the board cannot drive UNIT<2:0> at all
+                               --- they are inputs and nothing on the
+                               controller answers them --- so the six
+                               one-board jumpers ground them, and the one
+                               port is unit 0. The model controller needs
+                               no such board and has always had eight.
+                               [default: off, and the jumpers on]
   --io-board netlist|model     chip: the I/O board. [default: netlist]
   --keyboard <file>            what a viewer's keysyms mean on the Lisp
                                Machine keyboard: `key <keysym> <key>` a
@@ -784,13 +794,13 @@ fn default_file_root() -> Option<PathBuf> {
     }
 }
 
-/// The pack a run gets: the one `--disk-pack` names, and nothing at all
+/// The packs a run gets: the ones `--disk-pack` names, and nothing at all
 /// otherwise. There is no default, because which pack a drive holds is not
 /// something to guess: no flag is a drive with no pack in it, which the
 /// boot waits on for ever. The path, the unit and the drive's read-only
-/// switch.
-fn pack_choice(pack: Option<&Pack>) -> Option<(PathBuf, usize, bool)> {
-    pack.map(|p| (p.path.clone(), p.unit, p.read_only))
+/// switch, in the order the flags came.
+fn pack_choice(packs: &[Pack]) -> Vec<(PathBuf, usize, bool)> {
+    packs.iter().map(|p| (p.path.clone(), p.unit, p.read_only)).collect()
 }
 
 /// What a file of flags is called where muir looks for one.
@@ -965,28 +975,33 @@ fn memory_size(boards: usize) -> String {
     if kw.is_multiple_of(1024) { format!("{} MW", kw / 1024) } else { format!("{kw} KW") }
 }
 
-/// Attaches the pack, [`pack_choice`], to its unit.
-fn attach(m: &mut Machine, pack: Option<&Pack>) {
-    let Some((p, unit, read_only)) = pack_choice(pack) else { return };
-    // A drive writes its pack, so the image is opened read-write and a
-    // written block goes into the file. `ro` is the drive's own read-only
-    // switch: the file is opened read-only behind it, a written block stays
-    // in memory for the run and goes into a checkpoint instead, and the
-    // machine sees the write fault as MIT says it does.
-    let opened =
-        if read_only { Unit::open(&p, Geometry::T300) } else { Unit::open_rw(&p, Geometry::T300) };
-    let mut u = match opened {
-        Ok(u) => u,
-        Err(e) => fail(&format!("{}: {e}", p.display())),
-    };
-    u.read_only = read_only;
-    m.disk.attach(unit, u);
+/// Attaches each pack, [`pack_choice`], to its unit.
+fn attach(m: &mut Machine, packs: &[Pack]) {
+    for (p, unit, read_only) in pack_choice(packs) {
+        // A drive writes its pack, so the image is opened read-write and a
+        // written block goes into the file. `ro` is the drive's own
+        // read-only switch: the file is opened read-only behind it, a
+        // written block stays in memory for the run and goes into a
+        // checkpoint instead, and the machine sees the write fault as MIT
+        // says it does.
+        let opened = if read_only {
+            Unit::open(&p, Geometry::T300)
+        } else {
+            Unit::open_rw(&p, Geometry::T300)
+        };
+        let mut u = match opened {
+            Ok(u) => u,
+            Err(e) => fail(&format!("{}: {e}", p.display())),
+        };
+        u.read_only = read_only;
+        m.disk.attach(unit, u);
+    }
 }
 
-fn machine(prom: &[Insn], pack: Option<&Pack>, memory_boards: usize) -> Machine {
+fn machine(prom: &[Insn], packs: &[Pack], memory_boards: usize) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
     m.load_prom(prom);
-    attach(&mut m, pack);
+    attach(&mut m, packs);
     m
 }
 
@@ -1896,7 +1911,7 @@ struct ChipMachine {
 
 fn chip_machine(
     image: &[u64],
-    pack: Option<&Pack>,
+    packs: &[Pack],
     boards: Boards,
     memory_boards: usize,
     mut chaos: muir::chaos::Config,
@@ -1909,7 +1924,7 @@ fn chip_machine(
     c.settle();
     let mut clk = Behavioural::new();
     let mut machine = Machine::with_memory_boards(memory_boards);
-    attach(&mut machine, pack);
+    attach(&mut machine, packs);
     if machine_chaos_wants_default(&chaos) {
         chaos.file_root = default_file_root();
     }
@@ -2035,7 +2050,7 @@ fn attend_chip(
 fn time_chip(
     image: &[u64],
     stop: Stop,
-    pack: Option<&Pack>,
+    packs: &[Pack],
     boards: Boards,
     memory_boards: usize,
     chaos: muir::chaos::Config,
@@ -2056,7 +2071,7 @@ fn time_chip(
         stathalt,
         boot,
         ..
-    } = chip_machine(image, pack, boards, memory_boards, chaos, !hold);
+    } = chip_machine(image, packs, boards, memory_boards, chaos, !hold);
     // One microcycle is however many clock transitions it takes for the phase
     // to wrap, not a fixed number of them.
     let t = Instant::now();
@@ -2333,7 +2348,7 @@ fn time_chip_debuggee(
 
 fn main() {
     let mut which: Option<Which> = None;
-    let mut pack: Option<Pack> = None;
+    let mut packs: Vec<Pack> = Vec::new();
     let mut chaos = muir::chaos::Config::default();
     let mut cycles: Option<u64> = None;
     let mut auto_boot = true;
@@ -2350,6 +2365,9 @@ fn main() {
     let mut tv = true;
     let mut tv_board = TvBoard::SimpleTv;
     let mut disk_controller = false;
+    // The DISK MULTIPLEXOR on the netlist controller's cable, which is
+    // what gives it eight drive ports instead of one.
+    let mut use_multiplexor = false;
     // A terminal is served whether or not it is asked for: the display,
     // the keyboard and the mouse are the machine's only way in and out.
     let mut listen = TerminalAt::default_display();
@@ -2398,13 +2416,13 @@ fn main() {
                 _ => which = Some(e),
             },
             (None, "--disk-pack") => {
-                if pack.is_some() {
-                    usage(
-                        "--disk-pack twice: the disk multiplexor is not modelled yet; one pack, as unit 0",
-                    );
+                let p = pack_flag("--disk-pack", args.next());
+                if packs.iter().any(|q: &Pack| q.unit == p.unit) {
+                    usage(&format!("--disk-pack: unit {} twice; one pack a drive", p.unit));
                 }
-                pack = Some(pack_flag("--disk-pack", args.next()));
+                packs.push(p);
             }
+            (None, "--disk-use-multiplexor") => use_multiplexor = true,
             (None, "--chaos-address") => {
                 // "<this>" or "<this>,<server>": this machine's
                 // address, always, and the Chaosnet server's after a
@@ -2681,10 +2699,38 @@ fn main() {
             "--disk-controller netlist needs --main-memory netlist: the model memory does not answer a second master",
         );
     }
+    // The DISK MULTIPLEXOR hangs off the netlist controller's edge
+    // connector, so there has to be one for it to hang off. The model
+    // controller wants no such board: it is behavioural and has had eight
+    // units all along, `disk_controller::UNITS`.
+    if use_multiplexor && !disk_controller {
+        usage(
+            "--disk-use-multiplexor is a board on the netlist controller's cable: it needs --disk-controller netlist",
+        );
+    }
+    // Without it the netlist controller has one drive port --- and not
+    // because the unit number is forced to 0. `UNIT<2:0>` reach one
+    // 74LS244's inputs at DCDA B17 and nothing else: `cadrdc/dc.wlr` gives
+    // a direction per pin and there is no `TO` on any of the three, so the
+    // board cannot drive them. The one-board jumpers `EP2:ER2`, `ER2:ES2`
+    // and `ES2:ET1` ground them to stop them floating, and unit 0 is the
+    // consequence. The multiplexor is what supplies the driver: its
+    // 74LS175 at 0F05 latches `XBI<30:28>` and reports the unit back on
+    // those three posts.
+    if disk_controller
+        && !use_multiplexor
+        && let Some(p) = packs.iter().find(|p| p.unit != 0)
+    {
+        usage(&format!(
+            "--disk-pack in unit {}: the netlist controller has one drive port, and \
+             --disk-use-multiplexor fits the board that gives it eight",
+            p.unit
+        ));
+    }
     // The run goes on until a stop, a halt or ^C unless a window was asked for.
     let window = cycles.unwrap_or(u64::MAX);
     let stop = Stop { after: window, at: stop_at, at_prom: stop_at_prom };
-    let pack = pack.as_ref();
+    let packs: &[Pack] = &packs;
     // The backplane's netlist boards; the model memory, `main`, is `boards`
     // long on every engine.
     let netlist_boards = if main_memory_model { 0 } else { boards };
@@ -2787,15 +2833,20 @@ fn main() {
                 if matches!(tv_board, TvBoard::SimpleTv) { "simple-tv" } else { "lispm-tv" };
             writeln!(
                 s,
-                "boards: I/O board {}, TV {} {tv_kind}, disk controller {}",
+                "boards: I/O board {}, TV {} {tv_kind}, disk controller {}{}",
                 kind(io),
                 kind(tv),
-                kind(disk_controller)
+                kind(disk_controller),
+                if use_multiplexor { " with a multiplexor, eight drive ports" } else { "" }
             )
             .unwrap();
         }
-        match pack_choice(pack) {
-            Some((p, unit, ro)) => writeln!(
+        let chosen = pack_choice(packs);
+        if chosen.is_empty() {
+            writeln!(s, "pack: none; the boot waits on a drive that never answers").unwrap();
+        }
+        for (p, unit, ro) in chosen {
+            writeln!(
                 s,
                 "pack: {} in unit {unit}{}",
                 shown(&p),
@@ -2805,10 +2856,7 @@ fn main() {
                     ", written as the machine writes it"
                 }
             )
-            .unwrap(),
-            None => {
-                writeln!(s, "pack: none; the boot waits on a drive that never answers").unwrap()
-            }
+            .unwrap();
         }
         let root = match &chaos.file_root {
             Some(r) => format!("file root {}", shown(r)),
@@ -2908,7 +2956,7 @@ fn main() {
             // from an engine is a clock, and this one has the machine's
             // periods; `tests/micro_chaos.rs` holds the two engines to
             // the same conversation with the server.
-            let mut m = machine(&prom, pack, boards);
+            let mut m = machine(&prom, packs, boards);
             m.chaos = chaos.clone();
             m.plug_chaos(0);
             let mut e = Micro::new(m);
@@ -2929,7 +2977,7 @@ fn main() {
             time_engine("micro", e, terminal.as_mut(), run);
         }
         Which::Rtl => {
-            let mut m = machine(&prom, pack, boards);
+            let mut m = machine(&prom, packs, boards);
             // The Chaosnet, as under chip: the interface on the I/O board
             // and the Chaosnet server on its cable.
             if machine_chaos_wants_default(&chaos) {
@@ -2947,7 +2995,7 @@ fn main() {
                 let mut mb = Machine::with_memory_boards(boards);
                 mb.load_prom(&prom);
                 if let Some(p) = debuggee_pack.as_ref() {
-                    attach(&mut mb, Some(p));
+                    attach(&mut mb, std::slice::from_ref(p));
                 }
                 // Its own Chaosnet, on a cable of its own: the two
                 // machines cannot hear each other over it, and the only
@@ -3021,12 +3069,23 @@ fn main() {
                 })
                 .unwrap()
             });
-            let disk_n = disk_controller.then(|| netlist::parse(CADRDC).unwrap());
+            // With a multiplexor on the controller's cable the six
+            // one-board jumpers come off, those nets being the
+            // multiplexor's to drive.
+            let disk_n = disk_controller.then(|| {
+                if use_multiplexor {
+                    netlist::parse_with_multiplexor(CADRDC).unwrap()
+                } else {
+                    netlist::parse(CADRDC).unwrap()
+                }
+            });
+            let dm_n = use_multiplexor.then(|| netlist::parse(DM).unwrap());
             let on_the_buses = Boards {
                 memory: netlist_boards,
                 io: io_n.as_ref(),
                 tv: tv_n.as_ref(),
                 disk: disk_n.as_ref(),
+                multiplexor: dm_n.as_ref(),
             };
             if let Some(addr) = cable_listen {
                 // The port first, so that the debugger's connect finds it
@@ -3038,7 +3097,7 @@ fn main() {
                 let ChipMachine { cpu, clk, far, bus, pc_nets, promdisable, .. } =
                     // The debuggee's button is the debugger's to press over
                     // the cable, so this end always boots itself.
-                    chip_machine(&image, pack, on_the_buses, boards, chaos, true);
+                    chip_machine(&image, packs, on_the_buses, boards, chaos, true);
                 let (reader, stream) = accept_debugger(&listener, addr);
                 let end = DebugIn::new(&bus, cpu, clk, far);
                 let remote = Remote::debuggee(end, reader, stream);
@@ -3047,7 +3106,7 @@ fn main() {
                 time_chip(
                     &image,
                     stop,
-                    pack,
+                    packs,
                     on_the_buses,
                     boards,
                     chaos,

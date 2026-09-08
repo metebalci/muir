@@ -61,7 +61,7 @@ fn far_end(n: &netlist::Netlist, machine: muir::machine::Machine) -> FarEnd {
     let io = if model("MUIR_IO_BOARD") { None } else { Some(&io_n) };
     let tv = if netlist_asked("MUIR_TV") { Some(&tv_n) } else { None };
     let disk = if netlist_asked("MUIR_DISK_CONTROLLER") { Some(&disk_n) } else { None };
-    let boards = Boards { memory: boards, io, tv, disk };
+    let boards = Boards { memory: boards, io, tv, disk, ..Default::default() };
     let mut far = FarEnd::new(n, &bus_n, &mem_n, boards, 0, machine);
     if std::env::var("MUIR_NO_SLEEP").is_ok() {
         far.unoptimised();
