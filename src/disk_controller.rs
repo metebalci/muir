@@ -644,6 +644,30 @@ impl Controller {
             // leave the page and the pack alone where the board disturbs
             // both. That is a measured gap and no longer a guess; it
             // wants the fifo, and the fifo is not here.
+            //
+            // **And it is left there deliberately, because no software
+            // this machine runs can reach it.** `<3>` is the channel's
+            // direction, and every command the release issues picks the
+            // direction its own sector wants. The whole vocabulary is nine
+            // codes: `cold/qcom.lisp` gives READ 0, READ-COMPARE 10, WRITE
+            // 11, READ-ALL 2, WRITE-ALL 13, SEEK on 4, RECALIBRATE and
+            // FAULT-CLEAR on 5; `ucadr/uc-cadr.lisp` gives the microcode's
+            // own three of those; and the disk diagnostic `cc/dcheck.lisp`
+            // names the same set with AT-EASE 5, OFFSET-CLEAR 6 and STOP
+            // 16, passing a named constant at all twelve of its `DC-EXEC`
+            // calls rather than sweeping. **01, 03 and 12 are among the
+            // codes nothing writes**, so the status being right for them
+            // is already more than anything asks for.
+            //
+            // Modelling the data would mean writing `3, c000000, 0,
+            // 300000, 0, c000` in here as a constant, and that is one
+            // board's fifo holding what one prior state left in it ---
+            // not a value this model could derive from anything it has.
+            // Which is why the netlist test that measured it asserts the
+            // count, the status and the pack and **not** the words. Our
+            // own measurement is not a reason to invent a mechanism
+            // (CLAUDE.md 2), and the invented mechanism would be a
+            // constant standing where a fifo belongs.
             0o12 => self.hang(),
             0o03 => {
                 self.overrun = true;
