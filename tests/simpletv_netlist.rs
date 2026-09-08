@@ -848,51 +848,88 @@ fn the_board_answers_its_control_registers() {
     assert!(answer(buffer, Some(0o525252)).is_some(), "the frame buffer answered a write");
 }
 
-/// **What the board takes to answer, and it is not one number.** `rtl`
+/// **What the board takes to answer in the picture**, where
+/// [`the_board_answers_on_its_own_slots`] stops. `rtl`
 /// charges every device [`muir::busint::IDEAL_DEVICE_NS`], which is zero,
 /// so a display access costs it the protocol's deskew and nothing else.
 /// Issue 66 asked which of two figures was wrong; `cadr1/xspec.text.3`
 /// cannot say, constraining the master at every turn and giving a slave
 /// **no response time at all**. So the board's own answer has to be
-/// measured --- and measuring it is harder than it looks.
+/// measured.
 ///
-/// **The buffer's answer is a sawtooth**, not a constant and not a step
-/// function: `base + (next fetch boundary - t)`. The video fetch has the
-/// buffer for one period in 500 ns --- 32 dots of the 64 MHz dot clock ---
-/// and an access waits for it, so the wait shrinks as the request lands
-/// later and jumps a whole period when it crosses a boundary. Walking the
-/// phase 100 ns a step gives `760, 660, 560, 960, 860`: **-100 each step,
-/// +400 across the boundary, and nothing else.**
+/// **The grid is not this test's finding.**
+/// [`the_board_answers_on_its_own_slots`] established it first: the RAM is
+/// handed out in 500 ns slots, every acknowledgement lands 257 ns into one,
+/// and a request is served at the second slot strictly after it. That test
+/// measures **through the blanking**, and says where it stops --- from the
+/// first line of the picture the shifter takes slots of its own and the
+/// grid and the refresh alone stop predicting.
 ///
-/// The control registers do not wait for a fetch --- they address no RAM
-/// --- but they are not flat either: 150 to 180 over the phase of the
-/// board's own clock, the shape the memory board's 470--500 has.
+/// **This one measures the picture**, the other 912 lines of the 966, and
+/// finds two things.
 ///
-/// **Four ways this measurement lies, all of them met here.**
+/// **The grid survives it.** Every acknowledgement is still 257 ns into a
+/// slot on a picture line, so a twin can keep the grid whatever else it
+/// has to do.
+///
+/// **The second-slot rule does not.** Sampled across picture lines at every
+/// phase, requests are still served at the second slot most of the time and
+/// wait a third or a fourth often enough to matter --- the shifter's own
+/// fetches taking the slot the processor wanted. **How often is not the
+/// board's number**: the same twenty lines gave 41 late of 282 and 81 of
+/// 167 depending only on when the master chose to ask. So a twin charging
+/// two slots is right most of the time and **cannot be made right by a
+/// constant**, which is the answer issue 66 was looking for; what it needs
+/// is the shifter.
+///
+/// **Inside one line the answer is a sawtooth**, `base + (next slot - t)`
+/// with the base one slot: walking the phase 100 ns a step gives
+/// `757, 657, 557, 957, 857`, -100 each step and +400 across the boundary.
+/// **A read and a write share that base.** Each sample carries the time
+/// its request went out, and for a sawtooth `answer + request` is the
+/// grid's own offset modulo the period --- so the directions can be
+/// compared without knowing where the grid sits, and both give 257, as do
+/// two read sweeps on two different lines.
+///
+/// The control registers do not wait for a slot --- they address no RAM
+/// --- but they are not flat either: about 130 to 185 over the phase of
+/// the board's own clock, the shape the memory board's 470--500 has.
+///
+/// **Five ways this measurement lies, all of them met here.**
 ///
 /// - **Back-to-back accesses look constant.** `XbusMaster::cycle` advances
 ///   the clock by the cycle's own duration, so a request issued at
 ///   `b.now`, or on a stride shorter than a cycle, always lands at the same
 ///   phase relative to the last one. That reads as a constant and is an
 ///   artefact of the stride. **The stride must exceed the longest cycle**,
-///   which is why it is 2005 ns here and not the 5 ns of the phase step.
+///   which is why it is 2,100 ns here. What walks the phase is its
+///   remainder over the slot, 100 ns a step, not the stride itself.
 /// - **A blanked line fetches nothing.** The board runs MIT's sync program
 ///   out of reset (`the_sync_prom_is_fetched_out_of_reset`) and blanks 54
 ///   lines end to end before the first unblanked one
 ///   (`the_sync_program_makes_a_frame`), so a sweep in the first
 ///   microseconds is of a board that is scanning and fetching nothing.
 ///   Contention cannot appear there whatever the stride.
-/// - **A read is not a write.** They differ at the base, and sweeping one
-///   says nothing about the other.
+/// - **A read is not a write --- until both are swept.** Sweeping one says
+///   nothing about the other, and a three-cycle sweep said they differed by
+///   hundreds of nanoseconds. Swept properly they do not differ at all:
+///   same base, same period. The trap is real; the answer it seemed to
+///   give was not.
 /// - **A stride longer than one cycle is not a stride longer than three.**
 ///   Issuing a read, a control access and a write at each step puts the
 ///   second and third back to back behind the first, so only the first is
 ///   ever on the grid --- the artefact above, surviving inside the fix for
 ///   it. That is what made the control registers look constant. **One
-///   cycle per step**, and one sweep per kind.
+///   access per step**, and one sweep per kind.
+/// - **`XbusMaster::cycle` watches every 5 ns**, so what it returns is the
+///   true figure rounded up to the next 5. Against a grid whose offset is
+///   257 that reads as 260 and puts the base at 560 rather than 557: a
+///   shape it can measure, a grid it cannot. Every access here waits on the
+///   netlist's own taps instead, as [`the_board_answers_on_its_own_slots`]
+///   does.
 ///
 /// And one more, which is not a lie but a limit: an access takes up to
-/// 1.7 us where a line's unblanked stretch is 12, so a request that starts
+/// 2 us where a line's unblanked stretch is 12, so a request that starts
 /// while the board is fetching can finish after it has stopped. Blanking
 /// is checked **after** each access as well as before, and a sample that
 /// spans the end of a line is dropped rather than explained.
@@ -901,31 +938,75 @@ fn the_board_answers_its_control_registers() {
 /// each was flat or varying for a reason that had nothing to do with the
 /// board.
 #[test]
-fn what_the_board_takes_to_answer_is_measured() {
+fn what_the_board_takes_to_answer_in_the_picture() {
     use muir::part::Level;
     use muir::xbus::XbusMaster;
+
+    /// The slot the RAM is handed out in and the offset into it at which
+    /// the board acknowledges, both measured by
+    /// [`the_board_answers_on_its_own_slots`] through the blanking. What
+    /// is checked here is that they still hold in the picture.
+    const SLOT_NS: u64 = 500;
+    const ACK_INTO_SLOT_NS: u64 = 257;
+    /// The first line of the picture: 966 lines less the 912 that carry
+    /// dots, as `the_sync_program_makes_a_frame` counts them.
+    const PICTURE_LINE: u64 = 54;
+    /// Between one request of a sweep and the next. Long enough that no
+    /// access overlaps the following one --- the longest measured here is
+    /// 1,981 ns --- and its remainder over [`SLOT_NS`] is the phase the
+    /// request gains each step, 100 ns. A line carries 768 dots, 12 us,
+    /// and holds five or six accesses at this stride, so five samples walk
+    /// 400 ns of the 500 and a sweep may or may not cross a boundary; the
+    /// three sweeps together must. A finer walk needs more lines than one,
+    /// and the grid's phase is a property of the board rather than of the
+    /// line, so that would be a different measurement, not a better one.
+    const STRIDE_NS: u64 = 2_100;
+
+    /// One whole access on the netlist's own taps: when the request went
+    /// out, and the instant of the acknowledgement. The request is lifted
+    /// [`XbusMaster::RELEASE_NS`] after the acknowledgement and the bus
+    /// left alone from there, as [`the_board_answers_on_its_own_slots`]
+    /// does --- not `XbusMaster::cycle`'s further 600 ns, which at the
+    /// longest answers would carry `b.now` past the next stride point and
+    /// quietly cost the sweep its uniform step.
+    fn access(b: &mut XbusMaster, addr: u32, write: Option<u32>) -> (u64, u64) {
+        let t = b.now;
+        b.request(addr, write);
+        let mut guard = 0;
+        while !b.acked() {
+            let next = b.chip.next_tap().filter(|&x| x > b.now).unwrap_or(b.now + 1);
+            b.run(next);
+            guard += 1;
+            assert!(guard < 100_000, "the board never acknowledged a cycle from {t}");
+        }
+        let ack = b.now;
+        b.run(b.now + XbusMaster::RELEASE_NS);
+        b.release();
+        (t, ack)
+    }
 
     let n = simpletv();
     let mut b = XbusMaster::new(&n, 0);
     let buffer = muir::simpletv::BUFFER + 0o51763;
     let control = muir::simpletv::CONTROL;
-
     let blanking = b.net("BLANKING");
-    let deadline = b.now + 2 * LINE_NS * LINES_A_FRAME;
-    while b.chip.net(blanking) != Level::Low && b.now < deadline {
-        b.run(b.now + 500);
-    }
-    assert!(b.now < deadline, "no unblanked line in two frames");
 
-    // **One cycle per step.** Three cycles a step puts the second and
-    // third back to back after the first, so only the first is ever on the
-    // stride --- the artefact this stride exists to avoid, surviving inside
-    // the fix for it. Each kind gets its own sweep.
-    //
-    // **And the sweep stops when the line does.** The fetch's phase is
-    // continuous while the board is fetching; a blanked stretch fetches
-    // nothing, so a sample the far side of one is not on the same ramp.
-    let sweep = |b: &mut XbusMaster, write: Option<u32>| -> Vec<u64> {
+    // **A line of its own for each sweep.** A sweep stops when the line
+    // does, so `b.now` is then inside the blanked stretch that stopped it
+    // and the next sweep would take no samples at all.
+    let unblanked = |b: &mut XbusMaster| {
+        let deadline = b.now + 2 * LINE_NS * LINES_A_FRAME;
+        while b.chip.net(blanking) != Level::Low && b.now < deadline {
+            b.run(b.now + 500);
+        }
+        assert!(b.now < deadline, "no unblanked line in two frames");
+    };
+
+    // **One access per step**, on a stride longer than the longest of them,
+    // stopping when the line does: the fetch's phase is continuous while
+    // the board is fetching, and a blanked stretch fetches nothing, so a
+    // sample the far side of one is not on the same ramp.
+    let sweep = |b: &mut XbusMaster, write: Option<u32>| -> Vec<(u64, u64)> {
         let origin = b.now + 500;
         let mut out = Vec::new();
         for step in 0..8u64 {
@@ -936,72 +1017,148 @@ fn what_the_board_takes_to_answer_is_measured() {
             if b.chip.net(blanking) != Level::Low {
                 break;
             }
-            let ns = b.cycle(buffer, write).0;
+            let (t, ack) = access(b, buffer, write);
             // **Blanking is checked after as well as before.** An access
-            // takes up to 1.7 us and a line's unblanked stretch is 12, so a
+            // takes up to 2 us and a line's unblanked stretch is 12, so a
             // request issued while the board is fetching can finish after
             // it has stopped --- and that sample is not on the ramp.
             if b.chip.net(blanking) != Level::Low {
                 break;
             }
-            out.push(ns);
+            out.push((t, ack));
         }
         out
     };
+    unblanked(&mut b);
     let read = sweep(&mut b, None);
-    eprintln!("read {} samples: {read:?}", read.len());
+    unblanked(&mut b);
+    let write = sweep(&mut b, Some(0o525252));
+    unblanked(&mut b);
+    let read_again = sweep(&mut b, None);
 
-    // **A sawtooth, and this is what says the mechanism is the fetch.** The
-    // stride is 2005 ns and the fetch period 500, so each request lands
-    // 5 ns later in the period than the last and waits 5 ns less --- until
-    // it crosses a boundary and waits a whole period more. So consecutive
-    // samples differ by -5, or by +495, and by nothing else.
-    assert!(read.len() >= 5, "too few samples inside one unblanked line: {read:?}");
-    let steps: Vec<i64> = read.windows(2).map(|w| w[1] as i64 - w[0] as i64).collect();
-    let walk = -(STRIDE_NS as i64 % FETCH_NS as i64);
-    for (k, &d) in steps.iter().enumerate() {
+    // **A sawtooth, and this is what says the mechanism is the slot.** The
+    // stride is 2,100 ns and the slot 500, so each request lands 100 ns
+    // later in the slot than the last and waits 100 ns less --- until it
+    // crosses a boundary and waits a whole slot more. So consecutive
+    // samples differ by -100, or by +400, and by nothing else.
+    let walk = -(STRIDE_NS as i64 % SLOT_NS as i64);
+    let mut crossings = 0;
+    for (what, samples) in [("read", &read), ("write", &write), ("read again", &read_again)] {
+        let ns: Vec<u64> = samples.iter().map(|&(t, ack)| ack - t).collect();
+        let line = samples[0].0 / LINE_NS;
+        assert!(line >= PICTURE_LINE, "{what} swept line {line}, which carries no dots");
+        assert!(ns.len() >= 5, "too few {what} samples inside one line: {ns:?}");
+        let steps: Vec<i64> = ns.windows(2).map(|w| w[1] as i64 - w[0] as i64).collect();
+        for (k, &d) in steps.iter().enumerate() {
+            assert!(
+                d == walk || d == walk + SLOT_NS as i64,
+                "{what} sample {k} moved {d} ns; a slot sawtooth moves {walk} or {}: {ns:?}",
+                walk + SLOT_NS as i64
+            );
+        }
+        // Whether *this* sweep crossed a slot boundary is where in the
+        // slot its line happened to start: five samples walk 400 ns of a
+        // 500 ns slot, so a sweep can sit inside one. The crossing is
+        // required of the three together, below.
+        let jumps = steps.iter().filter(|&&d| d != walk).count();
+        crossings += jumps;
+
+        // **The sawtooth as an equation, and this is the whole claim.**
+        // `answer = base + ((B - t) mod P)` for a grid at offset `B`, so
+        // `answer + t` --- the acknowledgement itself --- is congruent to
+        // `B` modulo `P` for every sample, whatever the stride and whatever
+        // boundaries it crosses. The step check above assumes a uniform
+        // stride and can only be read off a picture; this holds pointwise,
+        // and it is the grid the blanking test measured.
+        let residues: Vec<u64> = samples.iter().map(|&(_, ack)| ack % SLOT_NS).collect();
         assert!(
-            d == walk || d == walk + FETCH_NS as i64,
-            "sample {k} moved {d} ns; a fetch sawtooth moves {walk} or {}: {read:?}",
-            walk + FETCH_NS as i64
+            residues.iter().all(|&r| r == ACK_INTO_SLOT_NS),
+            "{what} is off the grid on line {line}: {residues:?}"
         );
+        eprintln!("{what} on line {line}: {ns:?}, {jumps} crossings, {walk} ns a step");
     }
-    for &ns in &read {
-        assert!(ns > 0 && ns < muir::busint::TIMEOUT_NS, "{ns} ns is not an answer");
-    }
-    let jumps = steps.iter().filter(|&&d| d != walk).count();
-    eprintln!("{} samples, {jumps} boundary crossings, walking {walk} ns a step", read.len());
-    assert!(jumps > 0, "no boundary crossed, so the period is not shown: {read:?}");
 
-    // The control registers address no RAM and wait for no fetch.
-    let control_ns: Vec<u64> = (0..8)
-        .map(|k| {
-            b.run(b.now + 500 + k * 5);
-            b.cycle(control, None).0
-        })
-        .collect();
+    // That check, made of all three sweeps, is also what says **the grid
+    // keeps its offset from one line to the next**: the sweeps are on three
+    // different lines and every acknowledgement in them is at the same 257.
+    // A line is 16,000 ns and a slot 500, so a line is exactly 32 slots, and
+    // the grid crosses the blanked stretch between sweeps without moving.
+    assert!(crossings > 0, "no sweep crossed a slot boundary, so the slot is not shown");
+
+    // **A read and a write share one base, and that was worth sweeping both
+    // to find out.** With the grid common the answers differ by exactly
+    // what the bases do; congruent is not equal, so the pooled span settles
+    // the rest --- every sample of every sweep inside one slot means the
+    // bases coincide rather than sitting a slot apart.
+    let all: Vec<u64> =
+        [&read, &write, &read_again].iter().flat_map(|s| s.iter().map(|&(t, a)| a - t)).collect();
+    let (lo, hi) = (*all.iter().min().expect("samples"), *all.iter().max().expect("samples"));
+    assert!(
+        hi - lo < SLOT_NS,
+        "the sweeps span {} ns, so a base is a whole slot out: {lo} to {hi}",
+        hi - lo
+    );
+    // And the phase really was walked: a sweep that never moved would pass
+    // every check above and show nothing.
+    assert!(hi - lo > 3 * walk.unsigned_abs(), "the phase barely moved: {lo} to {hi}");
+    assert!(hi < muir::busint::TIMEOUT_NS, "{hi} ns is longer than the bus waits");
+    eprintln!("read and write share one base; all {} samples in {lo}-{hi} ns", all.len());
+
+    // **And now the picture at every phase**, twenty lines of it, stepping
+    // by `1 + (now * 53) mod 499` as the blanking test does so that no
+    // phase of the grid is favoured. Two questions: does the grid hold, and
+    // does the second-slot rule hold with it.
+    let until = b.now + 20 * LINE_NS;
+    let (mut served, mut beyond, mut worst) = (0u64, 0u64, 0u64);
+    while b.now < until {
+        b.run(b.now + 1 + (b.now * 53) % (SLOT_NS - 1));
+        let (t, ack) = access(&mut b, buffer, None);
+        assert_eq!(
+            ack % SLOT_NS,
+            ACK_INTO_SLOT_NS,
+            "off the grid in the picture: acknowledged at {ack} for a request at {t}"
+        );
+        let took = ack - t;
+        served += 1;
+        worst = worst.max(took);
+        beyond += u64::from(took > 2 * SLOT_NS);
+    }
+    eprintln!(
+        "{served} requests over 20 picture lines, {beyond} past the second slot, worst {worst} ns"
+    );
+    assert!(served > 100, "the picture was sampled: {served} requests");
+    // **The shifter takes slots, and this is what says a constant will not
+    // do.** `the_board_answers_on_its_own_slots` predicts the second slot
+    // from the grid and the refresh alone and is exact through the
+    // blanking; here that rule fails, so the twin issue 66 wants needs the
+    // shifter's own fetches and cannot be a number.
+    //
+    // **How often it fails is not asserted, because it is not the board's
+    // number alone.** The same twenty lines gave 41 of 282 when the master
+    // let go at the acknowledgement and 81 of 167 when it idled a further
+    // 600 ns first: the same board, a different set of instants asked. What
+    // the board owns is that the rule fails at all and by how much at
+    // worst; the rate belongs to whoever is driving the bus.
+    assert!(beyond > 0, "nothing waited past the second slot in the picture");
+    assert!(worst <= 4 * SLOT_NS, "an answer took {worst} ns, more than four slots");
+
+    // The control registers address no RAM and wait for no slot.
+    let mut control_ns = Vec::new();
+    for k in 0..8 {
+        b.run(b.now + 500 + k * 5);
+        let (t, ack) = access(&mut b, control, None);
+        control_ns.push(ack - t);
+    }
     // **Not flat --- but not the buffer's shape either.** It tracks the
     // phase of the board's own clock over tens of nanoseconds, the way the
-    // memory board's 470--500 does, and never by a fetch period. Saying
+    // memory board's 470--500 does, and never by a whole slot. Saying
     // "flat" here was an artefact of measuring it back to back behind
     // another access.
     let (lo, hi) =
         (*control_ns.iter().min().expect("samples"), *control_ns.iter().max().expect("samples"));
     assert!(
-        hi - lo < FETCH_NS,
-        "the control registers wait for a fetch, which they should not: {control_ns:?}"
+        hi - lo < SLOT_NS,
+        "the control registers wait for a slot, which they should not: {control_ns:?}"
     );
     eprintln!("control {lo}-{hi} ns over {} offsets", control_ns.len());
 }
-
-/// One video fetch: 32 dots of the 64 MHz dot clock.
-const FETCH_NS: u64 = 500;
-
-/// Long enough that no access overlaps the next --- the longest is under
-/// 2 us --- and its remainder over [`FETCH_NS`] is the phase the request
-/// gains each step. 100 ns, so a boundary is crossed every few steps and
-/// the sawtooth shows inside one unblanked line: **a line is 768 dots,
-/// 12 us, and holds six accesses at this stride.** A finer walk needs more
-/// lines than one, and the fetch's phase does not survive the blanked
-/// stretch between them.
-const STRIDE_NS: u64 = 2100;
