@@ -241,6 +241,14 @@ impl Netlist {
         // at 1CJ2-21: `cadrwd/cadr4.wlr` and `cadrwd/icmem3.wlr`.
         ("-HALT", "-FUNCT1"),
         ("'-64 MHZ CLK'", "'-64 MHz CLK'"),
+        // `-11CLRTDN` with a space after the minus and without: two
+        // spellings of one wire, which soap4 makes two nets of. MIT's
+        // `cadrio/iob.wlr` has it as one, `-11CLRTDN`, with the 74S00 at
+        // D07 pin 11 driving it and the 74S08 at B10 pin 5 taking it, so
+        // apart the 74S08's input has no source at all. The wire-list
+        // comparison cannot see this one: it matches names with the spaces
+        // squeezed out, which is exactly the difference.
+        ("'- 11CLRTDN'", "-11CLRTDN"),
     ];
 
     /// The joins a board's sheets draw as bare wire rather than through a
