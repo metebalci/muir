@@ -851,54 +851,86 @@ fn the_board_answers_its_control_registers() {
 /// **What the board takes to answer, which is the number `rtl` has not
 /// got.** `rtl` charges every device [`muir::busint::IDEAL_DEVICE_NS`],
 /// which is zero, so a display access costs it the protocol's deskew and
-/// nothing else; the board takes what its own gates take. Issue 66 asked
-/// which of the two figures was wrong, and MIT's specification cannot
-/// answer --- `cadr1/xspec.text.3` constrains the master at every turn and
-/// gives a slave **no response time at all**, its whole entry being
-/// "`-XBUS.ACK` Asserted by the slave in response to `-XBUS.RQ`. No delay
-/// necessary following assertion of good read data". So neither figure is
-/// out of a spec that has none, and what settles a timing twin is this
-/// measurement rather than a document.
+/// nothing else. Issue 66 asked which of two figures was wrong;
+/// `cadr1/xspec.text.3` cannot say, because it constrains the master at
+/// every turn and gives a slave **no response time at all** --- its whole
+/// entry is "`-XBUS.ACK` Asserted by the slave in response to
+/// `-XBUS.RQ`. No delay necessary following assertion of good read data".
+/// So the board's own answer has to be measured, and this measures it.
 ///
-/// Measured at four phases of the board's own clock and at both kinds of
-/// address, because a twin has to know whether the answer is a constant or
-/// a function of when the request lands --- the memory board's is the
-/// latter, `the_cycle_and_the_refresh_are_timed` in `tests/cadrm_netlist.rs`.
+/// **The board answers in a constant time**, which was not the expected
+/// result and took three attempts to establish:
 ///
-/// **Printed rather than pinned.** Naming a figure here would be pinning
-/// what a twin is supposed to reproduce before anything reproduces it; the
-/// assertions are the shape a twin must fit --- that an answer comes at
-/// all, and within the interface's own timeout, `busint::TIMEOUT_NS`.
+/// - Cycles issued back to back gave 715 to 1195 ns and looked like a
+///   distribution. They are not: `XbusMaster::cycle` advances the clock by
+///   the cycle's own duration, so each request went out wherever the last
+///   one left off. That measures a sequence, not a phase.
+/// - Swept properly but in the first microseconds after settling, the
+///   answer was flat --- but the board blanks 54 lines end to end before
+///   the first unblanked one (`the_sync_program_makes_a_frame`), so it was
+///   scanning and fetching nothing. A flat answer there says nothing about
+///   contention.
+/// - Swept on an **unblanked line**, where the video fetch is running and
+///   could contend for the buffer, the answer is flat as well. That is the
+///   measurement, and it says the fetch does not delay a processor access.
+///
+/// So a twin for this board is a constant rather than a function of the
+/// fetch phase, which is what makes one affordable.
 #[test]
 fn what_the_board_takes_to_answer_is_measured() {
+    use muir::part::Level;
     use muir::xbus::XbusMaster;
 
     let n = simpletv();
     let mut b = XbusMaster::new(&n, 0);
-    // A word in the frame buffer, and the mode register: the two kinds of
-    // address the board decodes, and the buffer's is the one a boot writes.
     let buffer = muir::simpletv::BUFFER + 0o51763;
     let control = muir::simpletv::CONTROL;
-    let mut seen = Vec::new();
-    for phase in [0u64, 10, 20, 30] {
-        for (what, addr) in [("buffer", buffer), ("control", control)] {
-            b.run(b.now + 500 + phase);
-            let (write_ns, _) = b.cycle(addr, Some(0o525252));
-            b.run(b.now + 500 + phase);
-            let (read_ns, word) = b.cycle(addr, None);
-            seen.push((what, phase, write_ns, read_ns, word));
+
+    // On an unblanked line: out of reset the board runs MIT's sync program
+    // from the 74S472 (`the_sync_prom_is_fetched_out_of_reset`), and only
+    // an unblanked line fetches anything to contend with.
+    let blanking = b.net("BLANKING");
+    let deadline = b.now + 2 * LINE_NS * LINES_A_FRAME;
+    while b.chip.net(blanking) != Level::Low && b.now < deadline {
+        b.run(b.now + 500);
+    }
+    assert!(b.now < deadline, "no unblanked line in two frames");
+    eprintln!("first unblanked line at {} ns", b.now);
+
+    // 5 ns steps, fine enough to catch a phase dependence on the 64 MHz
+    // dot clock's 15.625 ns period, which 25 ns steps could alias past.
+    let origin = b.now + 500;
+    let mut buffer_ns = Vec::new();
+    let mut control_ns = Vec::new();
+    for step in 0..40u64 {
+        for (at, addr, into) in [
+            (origin + step * 5, buffer, &mut buffer_ns),
+            (origin + step * 5, control, &mut control_ns),
+        ] {
+            if b.now < at {
+                b.run(at);
+            }
+            into.push(b.cycle(addr, None).0);
         }
     }
-    for &(what, phase, write_ns, read_ns, word) in &seen {
-        eprintln!("{what:8} phase {phase:2}: write {write_ns:4} ns, read {read_ns:4} ns, {word:o}");
-    }
-    // The shape a twin has to fit, and nothing narrower: every access is
-    // answered, and inside what the interface would give up on.
-    let timeout = muir::busint::TIMEOUT_NS;
-    for &(what, phase, write_ns, read_ns, _) in &seen {
-        for (kind, ns) in [("write", write_ns), ("read", read_ns)] {
-            assert!(ns > 0, "{what} {kind} at phase {phase} was not answered");
-            assert!(ns < timeout, "{what} {kind} at phase {phase} took {ns} ns, past {timeout}");
-        }
+    // The first access after the run-up is the odd one out and is dropped:
+    // it answers slower than every one after it.
+    let first = (buffer_ns.remove(0), control_ns.remove(0));
+    eprintln!("first access after the run-up: buffer {} ns, control {} ns", first.0, first.1);
+    let flat =
+        |v: &[u64]| -> Option<u64> { v.first().copied().filter(|f| v.iter().all(|x| x == f)) };
+    let buffer_at = flat(&buffer_ns).unwrap_or_else(|| panic!("buffer varies: {buffer_ns:?}"));
+    let control_at = flat(&control_ns).unwrap_or_else(|| panic!("control varies: {control_ns:?}"));
+    eprintln!(
+        "buffer {buffer_at} ns, control {control_at} ns, flat over {} offsets",
+        buffer_ns.len()
+    );
+
+    // The shape, which is the finding: constant, and inside what the
+    // interface would give up on. The values are printed rather than
+    // pinned --- a twin is what should pin them, by reproducing them.
+    assert!(buffer_at > control_at, "the buffer is the slower of the two");
+    for ns in [buffer_at, control_at] {
+        assert!(ns > 0 && ns < muir::busint::TIMEOUT_NS, "{ns} ns is not an answer");
     }
 }
