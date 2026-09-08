@@ -774,6 +774,106 @@ impl FarEnd {
     }
 }
 
+// --- A netlist machine's checkpoint ------------------------------------------
+
+/// **A netlist machine's whole state, in the one format both roads
+/// write.** `muir --chip --checkpoint` writes it and `--resume` reads it;
+/// `tests/chip.rs` writes it at the microcycles `MUIR_CHECKPOINT_AT`
+/// names and reads it back at `MUIR_RESUME`; `tests/cables.rs` reads the
+/// front of one. Before this there were two shapes --- the harness's
+/// carried a bare microcycle count and the two boards, with no magic and
+/// no version, and was handed `rtl`'s machine on resume --- so a file
+/// either road made was no use to the other, and
+/// `vendor/run/chk/at-535000.chk` had to be made by driving the harness by
+/// hand.
+///
+/// The body is the microcycles run, the display board the backplane
+/// carries, and then the processor, its clock and the far end, each
+/// saving itself. It is a stream and a reader takes as much of it as it
+/// wants: `muir` and the harness take all of it, `tests/cables.rs` takes
+/// the processor and the clock and stops, because the far end it builds
+/// is not the one the checkpoint holds.
+///
+/// The display board goes in by name because it is the one thing about
+/// the backplane the far end does not carry: which netlist a board was
+/// built from shows only as [`Chip::fingerprint`], so a resume onto the
+/// other one would be refused as "a different board or a different build"
+/// rather than as the flag it is. How many memory boards, and whether
+/// each of main memory, the I/O board, the display and the disk
+/// controller is a netlist, is [`Buses`]'s own and is refused there.
+pub fn write_checkpoint(
+    path: &std::path::Path,
+    ran: u64,
+    tv_board: &str,
+    cpu: &Chip,
+    clk: &Behavioural,
+    far: &FarEnd,
+) -> std::io::Result<u64> {
+    let mut w = crate::checkpoint::Writer::new();
+    w.u64(ran);
+    w.bytes(tv_board.as_bytes());
+    cpu.save(&mut w)?;
+    clk.save(&mut w)?;
+    far.checkpoint(&mut w)?;
+    let boards = far.buses.machine.memory_boards();
+    crate::checkpoint::write(path, ENGINE, boards, &w.finish())
+}
+
+/// The name a netlist machine's checkpoint carries in its header, which is
+/// the engine that made it.
+const ENGINE: &str = "chip";
+
+/// A netlist machine's checkpoint opened: what its header and its first
+/// fields say, and the rest of the body ready to read in the order
+/// [`write_checkpoint`] wrote it.
+pub struct Resuming<'a> {
+    /// The microcycles the run had made when it was taken.
+    pub ran: u64,
+    /// The display board the backplane carried, `simple-tv` or `lispm-tv`.
+    pub tv_board: String,
+    /// How many 64K-word memory boards the machine had, off the header.
+    pub memory_boards: usize,
+    body: crate::checkpoint::Reader<'a>,
+}
+
+impl<'a> Resuming<'a> {
+    /// The processor, which comes first.
+    pub fn processor(&mut self, cpu: &mut Chip) -> std::io::Result<()> {
+        cpu.load(&mut self.body)
+    }
+
+    /// Its clock, which comes after the processor.
+    pub fn clock(&mut self) -> std::io::Result<Behavioural> {
+        Behavioural::load(&mut self.body)
+    }
+
+    /// The far end, which comes last and is the rest of the body: the
+    /// boards, what each end of each bus was given, and the machine
+    /// behind them. A reader that wants only the processor and the clock
+    /// simply does not call this.
+    pub fn far_end(&mut self, far: &mut FarEnd) -> std::io::Result<()> {
+        far.resume(&mut self.body)?;
+        self.body.done()
+    }
+}
+
+/// A netlist machine's checkpoint read back from the file `c` came from,
+/// or why it is not one: a checkpoint of another engine is refused by
+/// name here, before a board is asked to load anything.
+pub fn read_checkpoint(c: &crate::checkpoint::Checkpoint) -> std::io::Result<Resuming<'_>> {
+    if c.engine != ENGINE {
+        return Err(crate::checkpoint::bad(format!(
+            "a {} checkpoint, and this is {ENGINE}",
+            c.engine
+        )));
+    }
+    let mut body = crate::checkpoint::Reader::new(&c.body);
+    let ran = body.u64()?;
+    let tv_board = String::from_utf8(body.bytes()?)
+        .map_err(|_| crate::checkpoint::bad("the display board's name"))?;
+    Ok(Resuming { ran, tv_board, memory_boards: c.memory_boards, body })
+}
+
 // --- The debuggee's DBGIN with the debugger elsewhere ------------------------
 
 /// The debuggee's end of a debug cable whose debugger is elsewhere: the

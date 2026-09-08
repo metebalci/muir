@@ -419,6 +419,17 @@ enum TvBoard {
     LispmTv,
 }
 
+impl TvBoard {
+    /// What `--tv-board` calls it, which is also what a checkpoint carries
+    /// so that a resume onto the other one is refused by the flag's name.
+    fn name(self) -> &'static str {
+        match self {
+            TvBoard::SimpleTv => "simple-tv",
+            TvBoard::LispmTv => "lispm-tv",
+        }
+    }
+}
+
 /// Where the Chaosnet server's FILE service serves from when no root is
 /// named, beside the vendored pack and used the same way: taken when it
 /// is there, and without it there is no FILE service.
@@ -1897,20 +1908,10 @@ fn write_screenshot(path: &Path, tv: &muir::simpletv::SimpleTv) {
     }
 }
 
-/// **A netlist machine's whole state**: the microcycles run, the display
-/// board on the backplane, the processor, its clock, and the far end with
-/// the boards and the machine behind them.  Written where
-/// [`FarEnd::quiet`] says it may be, which is what [`chip_to_quiet`] runs
-/// on to.
-///
-/// The display board is here because it is the one thing about the
-/// backplane the far end does not hold: which netlist a board was built
-/// from shows only as [`Chip`]'s fingerprint, and a resume with the wrong
-/// `--tv-board` would be refused as "a different board or a different
-/// build" rather than as the flag it is.  The rest --- how many memory
-/// boards, and whether each of main memory, the I/O board, the display
-/// and the disk controller is a netlist --- is [`muir::buses::Buses`]'s
-/// own and is refused there.
+/// Writes a netlist machine to `path` and says how big it came, or why
+/// it did not: [`muir::cable::write_checkpoint`], which is the one format
+/// the cosim harness writes too.  Taken where [`FarEnd::quiet`] says it
+/// may be, which is what [`chip_to_quiet`] runs on to.
 fn write_chip_checkpoint(
     path: &Path,
     cpu: &Chip,
@@ -1919,17 +1920,7 @@ fn write_chip_checkpoint(
     tv_board: TvBoard,
     ran: u64,
 ) {
-    let mut w = muir::checkpoint::Writer::new();
-    w.u64(ran);
-    w.u8(tv_board as u8);
-    let written =
-        cpu.save(&mut w).and_then(|()| clk.save(&mut w)).and_then(|()| far.checkpoint(&mut w));
-    if let Err(err) = written {
-        eprintln!("checkpoint: {} not written: {err}", path.display());
-        return;
-    }
-    let boards = far.buses.machine.memory_boards();
-    match muir::checkpoint::write(path, "chip", boards, &w.finish()) {
+    match muir::cable::write_checkpoint(path, ran, tv_board.name(), cpu, clk, far) {
         Ok(n) => eprintln!("checkpoint: {} at {ran} microcycles, {n} bytes", path.display()),
         Err(err) => eprintln!("checkpoint: could not write {}: {err}", path.display()),
     }
@@ -1946,29 +1937,23 @@ fn resume_chip(
     tv_board: TvBoard,
     (path, c): &(PathBuf, Checkpoint),
 ) -> u64 {
-    if c.engine != "chip" {
-        usage(&format!("--resume {}: a {} checkpoint, and this is chip", path.display(), c.engine));
-    }
     let refuse =
         |err: std::io::Error| -> ! { usage(&format!("--resume {}: {err}", path.display())) };
-    let mut r = muir::checkpoint::Reader::new(&c.body);
-    let ran = r.u64().unwrap_or_else(|e| refuse(e));
-    let board = r.u8().unwrap_or_else(|e| refuse(e));
-    let name = |b: u8| if b == TvBoard::LispmTv as u8 { "lispm-tv" } else { "simple-tv" };
-    if board != tv_board as u8 {
+    let mut it = muir::cable::read_checkpoint(c).unwrap_or_else(|e| refuse(e));
+    if it.tv_board != tv_board.name() {
         usage(&format!(
             "--resume {}: a {} checkpoint, and --tv-board is {}",
             path.display(),
-            name(board),
-            name(tv_board as u8)
+            it.tv_board,
+            tv_board.name()
         ));
     }
-    cpu.load(&mut r)
+    let ran = it.ran;
+    it.processor(cpu)
         .and_then(|()| {
-            *clk = Behavioural::load(&mut r)?;
-            far.resume(&mut r)
+            *clk = it.clock()?;
+            it.far_end(far)
         })
-        .and_then(|()| r.done())
         .unwrap_or_else(|e| refuse(e));
     far.join(cpu, clk.time_ns());
     eprintln!(
@@ -3083,8 +3068,7 @@ fn main() {
         writeln!(s, "memory: {boards} boards, {}{memory_kind}", memory_size(boards)).unwrap();
         if which == Which::Chip {
             let kind = |netlist: bool| if netlist { "netlist" } else { "model" };
-            let tv_kind =
-                if matches!(tv_board, TvBoard::SimpleTv) { "simple-tv" } else { "lispm-tv" };
+            let tv_kind = tv_board.name();
             writeln!(
                 s,
                 "boards: I/O board {}, TV {} {tv_kind}, disk controller {}{}",
