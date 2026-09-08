@@ -301,7 +301,27 @@ impl Controller {
     /// `tests/cadrdc_netlist.rs`.  It cannot here because this controller
     /// has no start-block detector rather than because nothing could
     /// produce the condition, which is why the drive's fault has no
-    /// counterpart on this side.  `<14>`, the overrun, one
+    /// counterpart on this side.  `<23>` is the same shape: the netlist
+    /// board raises it on a read torn part way through, and it is the LS86
+    /// at DCSTS 0A16 comparing two running parity accumulators.  Each is
+    /// `PAR IN = PAR XOR <incoming>` latched back into itself, cleared
+    /// together by `-RESET ERR` and clocked apart.  **The disk's** takes
+    /// `DISK DATA` gated by `DATA FIELD` at the LS08 0E05, so it counts
+    /// data bits off the cable and not the header or the preamble, latched
+    /// at 0C12 on `BIT.CLK^`.  **The memory's** takes `XB ODD PAR` gated
+    /// by `-NEW CCW` at the LS08 0D14, so it counts the parity of each
+    /// data word over the Xbus and not the CCW fetch, latched at 0D24 on
+    /// `CHAN.ACK.T1`.  The parity of every word's parity is the parity of
+    /// every bit in those words, so the two compute the same quantity by
+    /// different routes and agree when the same data has been through
+    /// both sides.
+    ///
+    /// A transfer stopped in the middle leaves them wherever it stopped,
+    /// so the bit follows what had gone by rather than the abort:
+    /// `internal_parity_is_a_comparison_and_not_an_abort_flag` measures it
+    /// coming up on some tears and not others where `<12>` comes up on all
+    /// of them.  This controller has neither accumulator.  `<14>`, the
+    /// overrun, one
     /// command does raise --- `0003`, the Write All sector entered with
     /// the memory channel reversed --- measured on the netlist board by
     /// `the_reversed_memory_channel_stores_where_it_should_fetch` in
