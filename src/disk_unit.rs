@@ -1137,6 +1137,18 @@ impl Trident {
 /// nets and the drive's put on them. `Xbus::plug` puts one on the
 /// backplane's controller; `tests/cadrdc_netlist.rs` puts one on a
 /// controller alone.
+/// Which board each half of a Trident's cable is on, and which unit the
+/// per-unit half is. See [`OnCable::on`].
+pub struct Ports<'a> {
+    /// The board carrying `TRIDENT.<unit>.*`: the multiplexor where one is
+    /// fitted, else the controller.
+    pub per_unit: &'a Netlist,
+    pub unit: u8,
+    /// The board carrying the tags, the bus and the status lines, which is
+    /// always the controller's.
+    pub shared: &'a Netlist,
+}
+
 pub struct OnCable {
     pub drive: Trident,
     select: NetId,
@@ -1161,28 +1173,55 @@ pub struct OnCable {
 
 impl OnCable {
     /// Wires `drive` to the connector nets of `n`, which must be the disk
-    /// controller's netlist.
+    /// controller's netlist: the one-board machine, where both halves of
+    /// the cable are that board's and the drive is unit 0.
     pub fn new(n: &Netlist, drive: Trident) -> OnCable {
-        let net = |name: &str| n.by_name_id(name).unwrap_or_else(|| panic!("no net {name}"));
+        OnCable::on(Ports { per_unit: n, unit: 0, shared: n }, drive)
+    }
+
+    /// Wires `drive` to the two halves of its cable, which are not always
+    /// one board's.
+    ///
+    /// A Trident's lines divide in two. **Eight are per-unit** --- the
+    /// select and the drive's answer to it, its attention, its sector and
+    /// index pulse, and its data and clock pairs --- and with a DISK
+    /// MULTIPLEXOR fitted those are the multiplexor's, one set per unit.
+    /// **Eighteen are shared** --- the three tags, the ten bus lines and
+    /// the five status lines --- and those stay the controller's however
+    /// many drives there are, the B-cable reaching every drive without
+    /// passing through the multiplexor
+    /// (`the_drive_ports_carry_the_controllers_own_per_unit_signals`).
+    ///
+    /// So a cable's nets can belong to two netlists, and a `NetId` means
+    /// nothing without the board it indexes. With no multiplexor both
+    /// halves name the same board, which is [`OnCable::new`]: **the one
+    /// path, not a second one**, so the configuration almost every run
+    /// uses exercises the code the rare one depends on.
+    pub fn on(p: Ports, drive: Trident) -> OnCable {
+        let net =
+            |n: &Netlist, name: &str| n.by_name_id(name).unwrap_or_else(|| panic!("no net {name}"));
+        let per = |name: &str| net(p.per_unit, &format!("TRIDENT.{}.{name}", p.unit));
+        let n = p.shared;
+        let net = |name: &str| net(n, name);
         OnCable {
             drive,
-            select: net("TRIDENT.0.SELECT/"),
+            select: per("SELECT/"),
             cyl_tag: net("TRIDENT.CYL.TAG/"),
             head_tag: net("TRIDENT.HEAD.TAG/"),
             control_tag: net("TRIDENT.CONTROL.TAG/"),
             bus: (0..10).map(|k| net(&format!("TRIDENT.BUS{k}/"))).collect(),
-            data_p: net("TRIDENT.0.DATA.P"),
-            data_m: net("TRIDENT.0.DATA.M"),
+            data_p: per("DATA.P"),
+            data_m: per("DATA.M"),
             ready: net("TRIDENT.READY/"),
             on_line: net("TRIDENT.ON.LINE/"),
             read_only: net("TRIDENT.READ.ONLY/"),
             device_check: net("TRIDENT.DEVICE.CHECK/"),
             seek_inc: net("TRIDENT.SEEK.INC/"),
-            selected: net("TRIDENT.0.SELECTED/"),
-            attention: net("TRIDENT.0.ATTENTION/"),
-            compsecidx: net("TRIDENT.0.COMPSECIDX/"),
-            clock_p: net("TRIDENT.0.CLOCK.P"),
-            clock_m: net("TRIDENT.0.CLOCK.M"),
+            selected: per("SELECTED/"),
+            attention: per("ATTENTION/"),
+            compsecidx: per("COMPSECIDX/"),
+            clock_p: per("CLOCK.P"),
+            clock_m: per("CLOCK.M"),
             last: None,
         }
     }
@@ -1202,43 +1241,57 @@ impl OnCable {
     /// for a one and `DATA.P` for a zero, and leaves the other to the
     /// terminator.
     pub fn controller(&self, c: &Chip) -> ControllerLines {
-        let low = |net: NetId| c.net(net) == Level::Low;
+        self.controller_on(c, c)
+    }
+
+    /// The same, with the two halves of the cable on their own boards.
+    /// Reading takes `&Chip`, so the one-board case is this with the same
+    /// board twice and there is one body either way.
+    pub fn controller_on(&self, per_unit: &Chip, shared: &Chip) -> ControllerLines {
+        let lo = |c: &Chip, net: NetId| c.net(net) == Level::Low;
         let write_data = if self.last.is_some_and(|l| l.data.is_some()) {
             None
-        } else if low(self.data_m) {
+        } else if lo(per_unit, self.data_m) {
             Some(true)
-        } else if low(self.data_p) {
+        } else if lo(per_unit, self.data_p) {
             Some(false)
         } else {
             None
         };
         ControllerLines {
-            select: low(self.select),
-            cylinder_tag: low(self.cyl_tag),
-            head_tag: low(self.head_tag),
-            control_tag: low(self.control_tag),
-            bus: self.bus.iter().enumerate().fold(0, |w, (k, &n)| w | (low(n) as u16) << k),
+            select: lo(per_unit, self.select),
+            cylinder_tag: lo(shared, self.cyl_tag),
+            head_tag: lo(shared, self.head_tag),
+            control_tag: lo(shared, self.control_tag),
+            bus: self.bus.iter().enumerate().fold(0, |w, (k, &n)| w | (lo(shared, n) as u16) << k),
             write_data,
         }
     }
 
-    /// Gives the drive what the controller has on the cable at `now`, and
-    /// puts what the drive answers on the nets, settled at `now`. Returns
-    /// whether anything on the nets moved.
-    pub fn apply(&mut self, c: &mut Chip, now: u64) -> bool {
-        let seen = self.controller(c);
-        self.drive.observe(now, seen);
-        let l = self.drive.lines(now);
-        if self.last == Some(l) {
-            return false;
-        }
-        let lv = |on: bool| if on { Level::High } else { Level::Low };
+    /// The five status lines the drive answers on, which are the
+    /// controller's however many drives there are.
+    fn drive_shared(&self, c: &mut Chip, l: DriveLines) {
         for (net, asserted) in [
             (self.ready, l.on_cylinder),
             (self.on_line, l.on_line),
             (self.read_only, l.read_only),
             (self.device_check, l.fault),
             (self.seek_inc, l.seek_incomplete),
+        ] {
+            if asserted {
+                c.drive(net, Level::Low);
+            } else {
+                c.pull_up(net);
+            }
+        }
+    }
+
+    /// The drive's own lines: its answer to the select, its attention, its
+    /// sector and index pulse, and its clock and data pairs. With a
+    /// multiplexor these are its port on that board.
+    fn drive_per_unit(&self, c: &mut Chip, l: DriveLines) {
+        let lv = |on: bool| if on { Level::High } else { Level::Low };
+        for (net, asserted) in [
             (self.selected, l.selected),
             (self.attention, l.attention),
             (self.compsecidx, l.sector_index),
@@ -1261,9 +1314,47 @@ impl OnCable {
                 c.release(self.data_m);
             }
         }
+    }
+
+    /// Gives the drive what the controller has on the cable at `now`, and
+    /// puts what the drive answers on the nets, settled at `now`. Returns
+    /// whether anything on the nets moved.
+    pub fn apply(&mut self, c: &mut Chip, now: u64) -> bool {
+        let seen = self.controller_on(c, c);
+        let Some(l) = self.step(now, seen) else { return false };
+        self.drive_shared(c, l);
+        self.drive_per_unit(c, l);
         c.transition(now);
-        self.last = Some(l);
         true
+    }
+
+    /// The same, with the two halves of the cable on their own boards: the
+    /// per-unit lines go to the multiplexor and the shared ones to the
+    /// controller, and both boards are transitioned.
+    ///
+    /// Writing cannot take the same board twice --- two `&mut` to one
+    /// `Chip` --- so this is where the entry points part. What they do is
+    /// the same three steps in the same order; only the boards differ.
+    pub fn apply_on(&mut self, per_unit: &mut Chip, shared: &mut Chip, now: u64) -> bool {
+        let seen = self.controller_on(per_unit, shared);
+        let Some(l) = self.step(now, seen) else { return false };
+        self.drive_shared(shared, l);
+        self.drive_per_unit(per_unit, l);
+        shared.transition(now);
+        per_unit.transition(now);
+        true
+    }
+
+    /// Gives the drive what the controller has and takes what it answers,
+    /// or `None` if the lines have not moved since the last time.
+    fn step(&mut self, now: u64, seen: ControllerLines) -> Option<DriveLines> {
+        self.drive.observe(now, seen);
+        let l = self.drive.lines(now);
+        if self.last == Some(l) {
+            return None;
+        }
+        self.last = Some(l);
+        Some(l)
     }
 
     /// When the drive next moves of its own accord after `now`.
