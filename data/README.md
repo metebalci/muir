@@ -4,8 +4,12 @@ Small, committed fixtures, every one of them **derived** from MIT's own
 files in `mit/`. Nothing here is MIT's own; `mit/README.md` is the inventory
 of those. How far each file here is checked differs:
 
-- **the seven netlists** are extracted by a script in `tools/` and held pin
-  for pin to MIT's own wire list for the same board by `tests/*_netlist.rs`;
+- **the eight netlists** are extracted by a script in `tools/`, and
+  `tools/check-netlists.sh` says each is still what its script makes.  Six
+  are then held pin for pin to MIT's own wire list for the same board by
+  `tests/*_netlist.rs`; the SIMPLE TV and the disk multiplexor have no wire
+  list on the tapes, so for those two MIT's specification stands in for
+  MIT's wiring --- `cadrtv/lmtv.order` and `dm.stf`;
 - **the three disk controller images** are assembled from MIT's source by
   `tools/newdsk-proms.sh`, by an assembler first held to MIT's surviving
   round trip on its sister program, and a test re-assembles them every run so
@@ -17,7 +21,7 @@ of those. How far each file here is checked differs:
 - **`cables.txt` and `busint-connectors.txt`** were read off MIT's wire lists
   by hand, once. They are the two things here that nothing checks.
 
-Most are compiled in: `src/` reads the seven netlists, the three disk
+Most are compiled in: `src/` reads the eight netlists, the three disk
 controller images, `cables.txt` and `busint-connectors.txt` with
 `include_str!`. The two Trident tables are the exception --- nothing reads
 them, they are reference for whoever works on the cable seam, and `src/`

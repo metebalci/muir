@@ -1020,3 +1020,50 @@ pub fn dip_census(text: &str) -> BTreeMap<String, usize> {
     }
     out
 }
+
+// --- what is mounted on a board ---------------------------------------------
+//
+// Here rather than in `tests/parts_mounted.rs`, which is the account of the
+// three numbers a netlist can be counted by, because `tests/documents.rs`
+// holds the documents that quote this one to it. Two copies of a definition
+// that nothing reconciles is the thing that file exists to stop.
+
+/// Bypass capacitors, resistor and terminator packs, busbars, pull-up
+/// networks, and the bodies a sheet carries with no device in them. MIT's
+/// parts lists put these at sub-positions of a location --- `C08@01` beside
+/// the chip at `C08` --- which is the shape of the thing: they are not
+/// parts of the machine, and nothing simulates them.
+///
+/// The names are MIT's own body names, which is what the netlist's `kind`
+/// and the stuffing lists' `BODY` column both carry, and one body has
+/// several of them across the files: a bypass capacitor is `.1UFCAP` on the
+/// memory board's sheets, `CAP1` on the multiplexor's, and `BYPASS` in
+/// every stuffing list's capacitor page.
+pub fn is_passive(kind: &str) -> bool {
+    let k = kind.to_ascii_uppercase();
+    k.contains("SIP")           // resistor packs: SIP180/390-8, DUAL-SIP
+        || k.contains("DUMMY")  // a body on the sheet, no device in it
+        || k.contains("SERRES")
+        || k.starts_with("CAP")
+        || k.ends_with("UFCAP")
+        || k.starts_with("RES")
+        || k.starts_with("DUAL-SI") // DUAL-SIP, cut to seven in a census
+        || k.starts_with("898-") // a resistor network by its Bourns number
+        || matches!(k.as_str(), "BUSBAR" | "BYPASS" | "PULLUP" | "TRITERM")
+}
+
+/// The board locations carrying a device, one part apiece. A location holds
+/// one: where a designator appears twice it is a chip and the pack or
+/// capacitor beside it, never two chips, which is what MIT's parts lists
+/// say too and what [`mits_parts_lists_agree`] checks.
+pub fn parts_on(n: &Netlist, on_board: impl Fn(&str) -> bool) -> BTreeSet<String> {
+    let mut mounted: BTreeMap<&str, bool> = BTreeMap::new();
+    for p in n.parts.iter().filter(|p| on_board(&p.page)) {
+        *mounted.entry(p.reference.as_str()).or_insert(false) |= !is_passive(&p.kind);
+    }
+    mounted.into_iter().filter(|&(_, live)| live).map(|(r, _)| r.to_string()).collect()
+}
+
+pub fn parts(n: &Netlist) -> BTreeSet<String> {
+    parts_on(n, |_| true)
+}
