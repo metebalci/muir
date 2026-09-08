@@ -135,6 +135,12 @@ pub struct Controller {
     /// and says so --- "Phys Addr 777 = Virt Addr 1777".
     clp: u32,
     da: u32,
+    /// `STATUS<17>`, "Header ECC Error", for the one of its two causes
+    /// this model has: `sys/doc/disk.text` says it "also happens if an
+    /// attempt is made to continue a read or write operation past the end
+    /// of the disk". The other cause is a header whose checkword fails,
+    /// which wants a pack that carries headers --- issue 51.
+    header_ecc: bool,
     /// `STATUS<22>`, "Read Compare Difference".
     read_compare_difference: bool,
     /// The first word of every page the last transfer put into memory,
@@ -234,8 +240,10 @@ impl Controller {
     /// The status word.  Every bit here is `DCSTS`'s own name for the signal
     /// on that Xbus line, and MIT's text says the same.
     ///
-    /// What is not modelled: `<23>` internal parity, `<19:15>` the
-    /// memory-parity, header and ECC errors, `<12>` the start-block error
+    /// What is not modelled: `<23>` internal parity, `<19:18>` the
+    /// memory-parity and header-compare errors, `<16:15>` the data ECC
+    /// ones, and of `<17>` only the failing checkword --- its other cause,
+    /// running off the end of the pack, is here; `<12>` the start-block error
     /// and `<4>` multiple units selected.  None of them can happen here,
     /// and the boot PROM's `AWAIT-DRIVE-READY` requires bits 4, 5, 6, 8, 9
     /// and 10 to be clear before it will go on.  `<14>`, the overrun, one
@@ -261,6 +269,9 @@ impl Controller {
         }
         if self.overrun {
             v |= 1 << 14;
+        }
+        if self.header_ecc {
+            v |= 1 << 17;
         }
         // `<13>` "Transfer Aborted": `STOPPED BY ERROR`, preset while any
         // lossage stands, `Controller::lossage`.
@@ -388,7 +399,8 @@ impl Controller {
     /// the store on --- and that store clocks the flop clear too, so the
     /// latch never outlives the level here.
     fn lossage(&self) -> bool {
-        let transfer = (self.timeout && self.not_active()) || self.nxm || self.overrun;
+        let transfer =
+            (self.timeout && self.not_active()) || self.nxm || self.overrun || self.header_ecc;
         let disk = self.cmd & 0o4 == 0
             && match &self.units[self.selected()] {
                 None => true,
@@ -700,6 +712,7 @@ impl Controller {
     /// `BUSY` is not among them: a hung sequencer stays hung and its timer
     /// keeps counting, so a timeout still to come is kept.
     fn reset_errors(&mut self) {
+        self.header_ecc = false;
         self.read_compare_difference = false;
         self.ccw_cycle = false;
         self.nxm = false;
@@ -741,6 +754,7 @@ impl Controller {
         self.nxm = false;
         self.timeout = false;
         self.overrun = false;
+        self.header_ecc = false;
 
         let i = self.selected();
         let mut unit = self.units[i].take().expect("the selected unit is online");
@@ -774,6 +788,7 @@ impl Controller {
         self.nxm = false;
         self.timeout = false;
         self.overrun = false;
+        self.header_ecc = false;
 
         let i = self.selected();
         let mut unit = self.units[i].take().expect("the selected unit is online");
@@ -942,7 +957,13 @@ impl Controller {
             if !more {
                 return moved;
             }
+            // "Header ECC Error also happens if an attempt is made to
+            // continue a read or write operation past the end of the
+            // disk" --- `sys/doc/disk.text`. `next_block` stepping off
+            // the pack is that attempt, and it used to end the transfer
+            // saying nothing at all.
             if !unit.next_block() {
+                self.header_ecc = true;
                 return moved;
             }
             n += 1;
@@ -1042,6 +1063,7 @@ impl Controller {
             cmd,
             clp,
             da,
+            header_ecc,
             read_compare_difference,
             dma_written,
             ccw_cycle,
@@ -1060,6 +1082,7 @@ impl Controller {
         w.u32(*cmd);
         w.u32(*clp);
         w.u32(*da);
+        w.bool(*header_ecc);
         w.bool(*read_compare_difference);
         w.u64s(&dma_written.iter().map(|&a| a as u64).collect::<Vec<_>>());
         w.bool(*ccw_cycle);
@@ -1085,6 +1108,7 @@ impl Controller {
         self.cmd = r.u32()?;
         self.clp = r.u32()?;
         self.da = r.u32()?;
+        self.header_ecc = r.bool()?;
         self.read_compare_difference = r.bool()?;
         self.dma_written = r.u64s()?.into_iter().map(|a| a as usize).collect();
         self.ccw_cycle = r.bool()?;

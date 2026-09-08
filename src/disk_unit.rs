@@ -174,8 +174,12 @@ impl Unit {
 
     /// One block by address, without moving the heads: what a drive reads
     /// off the pack at a sector. `None` off the pack, or for a block the
-    /// image could not deliver --- the file gone, truncated or unreadable
-    /// --- which the controller reports as a drive fault either way.
+    /// image could not deliver --- the file gone, truncated or unreadable.
+    /// **Those are two different errors on the board** --- an address off
+    /// the pack is a seek error before a transfer and `STATUS<17>` during
+    /// one, where an image that will not deliver is the drive's own fault
+    /// --- and this answers neither: it is the data accessor, and its
+    /// callers reach it only with an address `seek` has already passed.
     pub fn block_at(&mut self, cylinder: u32, head: u32, block: u32) -> Option<[u32; BLOCK_WORDS]> {
         let lba = self.lba_of(cylinder, head, block)?;
         if let Some(b) = self.written.get(&lba) {
@@ -306,8 +310,14 @@ impl Unit {
         self.seek(cylinder, head, block)
     }
 
-    /// Reads the block under the heads.  False means past the end of the
-    /// pack, which the controller reports as a drive fault.
+    /// Reads the block under the heads.  False means the image could not
+    /// deliver the block --- gone, truncated, unreadable --- which is a
+    /// lossage of the drive, `STATUS<6>`.
+    ///
+    /// **Not an address off the pack**, which cannot reach here: a
+    /// transfer's first address is checked by [`Unit::seek`], which makes
+    /// it a seek error, and every address after it by
+    /// [`Unit::next_block`], where running out of pack is `STATUS<17>`.
     pub fn read_block(&mut self, buf: &mut [u32; BLOCK_WORDS]) -> bool {
         let (c, h, b) = self.position();
         match self.block_at(c, h, b) {
@@ -319,6 +329,8 @@ impl Unit {
         }
     }
 
+    /// Writes the block under the heads, likewise: false is the image
+    /// refusing it, not an address off the pack.
     pub fn write_block(&mut self, buf: &[u32; BLOCK_WORDS]) -> bool {
         let (c, h, b) = self.position();
         self.write_block_at(c, h, b, buf)
