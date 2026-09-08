@@ -158,6 +158,28 @@ impl Dm {
         moved
     }
 
+    /// Carries the cable across and lets both ends respond, and again,
+    /// until a pass moves nothing --- what [`crate::cable::FarEnd::join`]
+    /// does for the backplane, on two boards that are one settle rather
+    /// than two ends of a bus.
+    ///
+    /// The multiplexor's own transitions are counted here; the number
+    /// returned is the controller's, which belong to whoever owns that
+    /// board.
+    pub fn settle(&mut self, controller: &mut Chip, now: u64) -> u64 {
+        let mut n = 0;
+        for _ in 0..12 {
+            if !self.exchange(controller) {
+                break;
+            }
+            self.board.transition(now);
+            self.transitions += 1;
+            controller.transition(now);
+            n += 1;
+        }
+        n
+    }
+
     /// When the multiplexor next has an event of its own.
     pub fn next_tap(&self) -> Option<u64> {
         self.board.next_tap()

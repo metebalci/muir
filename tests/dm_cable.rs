@@ -17,9 +17,11 @@
 //! Attention is "some unit has an attention, you have to select them one
 //! after another to find out which".
 
+use muir::disk_unit::{Geometry, Trident, Unit};
 use muir::dm::Dm;
 use muir::netlist::{self, Netlist};
 use muir::part::Level;
+use muir::xbus::Xbus;
 
 mod support;
 
@@ -271,7 +273,7 @@ fn the_unit_number_crosses_the_cable_to_the_controller() {
 #[test]
 fn a_drive_on_a_multiplexor_port_answers_the_select() {
     use muir::chip::Chip;
-    use muir::disk_unit::{Geometry, OnCable, Ports, Trident, Unit};
+    use muir::disk_unit::{OnCable, Ports};
 
     const UNIT: u8 = 3;
     let (dc, dmn) = boards();
@@ -330,4 +332,181 @@ fn a_drive_on_a_multiplexor_port_answers_the_select() {
             "and no other port is"
         );
     }
+}
+
+// --- the multiplexor on the backplane ---------------------------------------
+
+const BUSINT: &str = include_str!("../data/BUSINT.netlist");
+const CADRM: &str = include_str!("../data/CADRM.netlist");
+
+/// A backplane whose only board is the disk controller, with a DISK
+/// MULTIPLEXOR on the controller's cable if `multiplexor` and a drive on
+/// each of `units`. No memory boards: nothing here reads or writes one.
+///
+/// A drive's spindle is started at a point of the revolution that its unit
+/// number picks --- 137 us per unit, which is no multiple of the 980 us
+/// between sector pulses --- so that eight of them sound different from
+/// one, and so that a unit sounds the same whichever others are fitted
+/// beside it.
+fn backplane(multiplexor: bool, units: &[u8]) -> (Netlist, Xbus) {
+    let busint = netlist::parse(BUSINT).unwrap();
+    let memory = netlist::parse(CADRM).unwrap();
+    // With a multiplexor the controller's six one-board jumpers come off,
+    // which is the whole difference between the two netlists.
+    let dc = if multiplexor {
+        netlist::parse_with_multiplexor(CADRDC).unwrap()
+    } else {
+        netlist::parse(CADRDC).unwrap()
+    };
+    let mut xbus = Xbus::new(&busint, &memory, 0, &[&dc], 0);
+    if multiplexor {
+        xbus.plug_multiplexor(&netlist::parse(DM).unwrap(), 0);
+    }
+    for &u in units {
+        let spun = u64::from(u) * 137_000;
+        xbus.plug_unit(u, Trident::new(Unit::blank(Geometry::T300), spun), 0);
+    }
+    (dc, xbus)
+}
+
+/// Runs such a backplane for `span` nanoseconds and counts how often
+/// `BLOCK.CLK^` and `-UNIT.0.SECTOR^` move at the controller.
+///
+/// The step is the next event on any board, capped at a microsecond: the
+/// nets are read at the step, so a pulse shorter than one could otherwise
+/// pass between two reads. A sector pulse is
+/// [`muir::disk_unit::SECTOR_PULSE_NS`], 1,240 ns, and the index pulse is
+/// longer, so neither can.
+fn spindles(multiplexor: bool, units: &[u8], span: u64) -> (usize, usize) {
+    let (dc, mut xbus) = backplane(multiplexor, units);
+    let block = net(&dc, "BLOCK.CLK^");
+    let sector = net(&dc, "-UNIT.0.SECTOR^");
+    let mut moves = [0, 0];
+    let mut was = [xbus.devices[0].net(block), xbus.devices[0].net(sector)];
+    let mut t = 0;
+    while t < span {
+        t = match xbus.next_tap() {
+            Some(d) if d > t => d.min(t + 1_000),
+            _ => t + 1_000,
+        };
+        xbus.transition_due(t);
+        for (k, n) in [block, sector].into_iter().enumerate() {
+            let now = xbus.devices[0].net(n);
+            if now != was[k] {
+                moves[k] += 1;
+                was[k] = now;
+            }
+        }
+    }
+    (moves[0], moves[1])
+}
+
+/// **A drive heard through the multiplexor sounds exactly as it does on
+/// the controller's own port, and a drive on any other port is silent.**
+///
+/// The sector pulse is the thing to listen to, because nothing has to ask
+/// for it: a T-300's spindle turns from power-on and the drive puts a
+/// pulse on `COMPSECIDX/` seventeen times a revolution whether or not
+/// anything has selected it. It reaches the controller as `BLOCK.CLK^` ---
+/// over the cable from the multiplexor when one is fitted, and off the
+/// controller's own `-UNIT.0.SECTOR^` when not.
+///
+/// Which unit the board addresses out of reset is not this test's choice.
+/// The 74LS175 at 0F05 is cleared by `POWER OK` and nothing has loaded a
+/// disk address, so it holds zero and unit 0 is addressed; a drive in unit
+/// 3 is inaudible, and that is the multiplexor's doing and not the
+/// cable's.
+#[test]
+fn the_multiplexor_carries_the_addressed_units_spindle() {
+    const MS: u64 = 1_000_000;
+    let (alone, port) = spindles(false, &[0], MS);
+    assert!(alone > 0, "the drive's spindle turns and the controller hears it");
+    assert_eq!(alone, port, "on its own port, which is where a lone drive sits");
+
+    let (through, port) = spindles(true, &[0], MS);
+    assert_eq!(through, alone, "the multiplexor carries unit 0's spindle unchanged");
+    assert_eq!(port, 0, "and the controller's own port is not the drive's any more");
+
+    assert_eq!(spindles(true, &[3], MS), (0, 0), "a drive in unit 3 is not addressed");
+}
+
+/// **The multiplexor selects a port; it does not merge the eight.**
+///
+/// Eight drives started at different points of a revolution would, wired
+/// together, give the controller eight times the pulses. They give it what
+/// unit 0 alone gives, because unit 0 is what the board addresses; take
+/// unit 0 away and leave the other seven turning, and the controller hears
+/// nothing at all.
+///
+/// This is the check that the fan-in is the multiplexor's own gates, the
+/// same argument `selected_unit_attention_follows_the_unit_number` makes
+/// for the attention lines --- made here on the backplane and through
+/// [`muir::xbus::Xbus`], which is what a machine has.
+#[test]
+fn the_multiplexor_selects_a_port_rather_than_merging_them() {
+    const MS: u64 = 1_000_000;
+    const ALL: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+    let one = spindles(true, &[0], MS);
+    assert!(one.0 > 0, "unit 0 is heard");
+    assert_eq!(spindles(true, &ALL, MS), one, "eight drives sound like the one addressed");
+    assert_eq!(spindles(true, &ALL[1..], MS), (0, 0), "and seven with no unit 0 sound like none");
+}
+
+/// **The shared half of the cable is every drive's, addressed or not.**
+///
+/// Eighteen of a Trident's lines never pass through the multiplexor: the
+/// three tags, the ten bus lines and the five status lines reach every
+/// drive on the B-cable and are wired together there. So a drive in unit
+/// 3, which the board is not addressing, still holds `TRIDENT.READY/` and
+/// `TRIDENT.ON.LINE/` down at the controller. That is the cable and not a
+/// selection, and it is why the controller has to select a unit before it
+/// can believe what the status lines tell it.
+#[test]
+fn the_status_lines_are_shared_by_every_drive_on_the_cable() {
+    let ready = |units: &[u8]| {
+        let (dc, mut xbus) = backplane(true, units);
+        xbus.transition_due(10_000);
+        let low = |name: &str| xbus.devices[0].net(net(&dc, name)) == Level::Low;
+        (low("TRIDENT.READY/"), low("TRIDENT.ON.LINE/"))
+    };
+    assert_eq!(ready(&[]), (false, false), "no drive holds the status lines down");
+    assert_eq!(ready(&[0]), (true, true), "a drive in unit 0 does");
+    assert_eq!(ready(&[3]), (true, true), "and so does one in unit 3, which is not addressed");
+}
+
+/// **Every drive on the multiplexor turns, not only the addressed one.**
+///
+/// A Trident's spindle does not wait to be selected, so all eight ports
+/// carry sector pulses and choosing between them is the board's business.
+/// The pulses are counted on the port itself --- the multiplexor's
+/// `TRIDENT.<n>.COMPSECIDX/`, where the controller cannot hear them ---
+/// because that is the only place the difference shows.
+///
+/// Without this the two spindle tests above pass on a machine that steps
+/// unit 0 and no other: unit 0 is what the board addresses out of reset,
+/// so a drive nobody stepped looks exactly like a drive nobody asked for.
+#[test]
+fn every_drive_on_the_multiplexor_turns() {
+    let dmn = netlist::parse(DM).unwrap();
+    let pulses = |units: &[u8], port: u8| {
+        let (_, mut xbus) = backplane(true, units);
+        let sector = net(&dmn, &format!("TRIDENT.{port}.COMPSECIDX/"));
+        let board = |x: &Xbus| x.multiplexor().expect("a multiplexor is fitted").board.net(sector);
+        let (mut moves, mut was) = (0, board(&xbus));
+        let mut t = 0;
+        while t < 1_000_000 {
+            t += 1_000;
+            xbus.transition_due(t);
+            let now = board(&xbus);
+            if now != was {
+                moves += 1;
+                was = now;
+            }
+        }
+        moves
+    };
+    let alone = pulses(&[7], 7);
+    assert!(alone > 0, "the drive in unit 7 turns, addressed or not");
+    assert_eq!(pulses(&[0, 7], 7), alone, "and goes on turning beside unit 0");
+    assert_eq!(pulses(&[0], 7), 0, "an empty port has nothing on it");
 }
