@@ -65,15 +65,31 @@ const HARNESS: Chosen =
 /// 25333. The same run with the model display agrees over all 2000000
 /// microcycles and 16384 distinct PCs.
 ///
-/// The stretched cycle is not the display's. 25332 is
-/// `DISK-RECALIBRATE-WAIT` in the band's symbol table, and the microcode
-/// there is `((VMA-START-READ) A-DISK-REGS-BASE)` followed by
-/// `(CHECK-PAGE-READ-NO-INTERRUPT)`, so 25333 is the wait on a read of the
-/// **disk** registers --- and the disk controller is the model on both
-/// sides of the comparison. A netlist display sitting on the backplane
-/// changes how long another device takes to answer. That is issue 60's,
-/// not this file's; what this file needs from it is only that the two
-/// machines cannot be compared with the display netlist in place.
+/// **The stretched cycle is the display's**, and the PC does not say so:
+/// a failure here names the microcycle the wait was **charged to**, not
+/// the bus cycle that caused it. `MUIR_TRACE_FROM=1422290` has the write
+/// going out three microcycles earlier --- `-XBUS WR` low at PC 30027 and
+/// `-XBUS RQ` low 80 ns after it, the deskew `cadr1/xspec.text.3` asks of
+/// a master, with address `017051763`, word 21491 of the frame buffer
+/// ([`muir::simpletv::BUFFER`] and `BUFFER_WORDS`). `-XBUS ACK` comes back
+/// 857 ns later and the request is released at 887, by which time the
+/// microinstruction in progress is 25333. So **a frame-buffer write takes
+/// 887 ns on `chip` where `rtl` charges 145**, and 25333 --- which is
+/// `DISK-RECALIBRATE-WAIT`'s wait on a read of the disk registers, the
+/// controller being the model on both sides --- is a bystander that
+/// happened to be running when the wait ended.
+///
+/// That inference was drawn the other way round first, from the PC alone,
+/// and stood in this comment until the trace was read. The address on
+/// `busint -XBUS RQ` going low is what says which device the machine is
+/// waiting for; the PC is not evidence of it.
+///
+/// Why 887 ns is not itself the defect is issue 60's: MIT's Xbus
+/// specification gives a slave no response time at all --- every figure in
+/// it constrains the master --- and the only bound is the interface's own
+/// `busint::TIMEOUT_NS`, 4.7 to 5.5 microseconds, of which this is a
+/// fifth. What this file needs is only that the two machines cannot be
+/// compared with the display netlist in place.
 /// `MUIR_TV_BOARD=lispm-tv` puts the LISPM TV there in place of the SIMPLE
 /// TV.
 ///
@@ -893,6 +909,13 @@ fn resume_from_checkpoint(
         }
         Err(e) => panic!("{}: the device boards: {e}", p.display()),
     };
+    let disks = match far.load_disks(&mut f) {
+        Ok(()) => "the drives as they were",
+        // A file from before the drives were written, or one written with
+        // the model controller, where there are none on a cable.
+        Err(e) if eof(&e) => "no drives on a cable",
+        Err(e) => panic!("{}: the drives: {e}", p.display()),
+    };
     for _ in 0..at + RTL_START_STEPS {
         r.step().expect("rtl halted while catching up");
     }
@@ -904,7 +927,7 @@ fn resume_from_checkpoint(
     }
     far.join(c, clk.time_ns());
     eprintln!(
-        "resumed from {} at microcycle {at}, {board}, {memory}, {io}, {devices}",
+        "resumed from {} at microcycle {at}, {board}, {memory}, {io}, {devices}, {disks}",
         p.display()
     );
     Some(at)
@@ -1416,6 +1439,18 @@ fn chip_agrees_with_rtl() {
         if cycle > 0 {
             let (dc, dr) = (ns_now.0 - ns_was.0, ns_now.1 - ns_was.1);
             if dc != dr {
+                // **The PC here is where the time was charged, not what
+                // spent it.** A microcycle is long because the machine is
+                // waiting, and a bus cycle it waits on may have been
+                // started several microinstructions earlier by an
+                // unrelated one; the wait lands on whichever is in
+                // progress when the answer comes. So this message names a
+                // microcycle and not a cause. `MUIR_TRACE_FROM` and the
+                // address printed on `busint -XBUS RQ` going low are what
+                // say which device is being waited for --- see the display
+                // timing above, which was read the wrong way round from
+                // this PC before the trace settled it.
+                //
                 // What sets a microcycle's length, so the message says which
                 // of them the two engines read differently.
                 let levels: Vec<String> =
