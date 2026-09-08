@@ -63,6 +63,15 @@ pub enum Halt {
     UnknownDest { pc: u16, dest: u16 },
 }
 
+/// The location counter itself, `LC<25:0>`: the 74S169 counters on page LC
+/// and nothing else.
+///
+/// Both engines keep other things in the same word or beside it ---
+/// `Machine::lc` carries NEED-FETCH in bit 31 and the interrupt-control
+/// flags in 29:26, and `rtl` holds the byte-mode flags on page FLAG --- so
+/// this is the mask that leaves the register the engines can be held to.
+pub const LC_COUNTER: u32 = 0o377777777;
+
 #[derive(Clone)]
 pub struct Machine {
     pub prom: Vec<Insn>,
@@ -105,8 +114,9 @@ pub struct Machine {
     pub q: u32,
     /// The PC of the instruction that just executed.
     pub opc: u16,
-    /// Location counter.  26 bits of address, plus NEED-FETCH in bit 31 and
-    /// the interrupt-control flags mirrored in bits 29:26.
+    /// Location counter.  The 26 bits of address [`LC_COUNTER`] leaves, plus
+    /// NEED-FETCH in bit 31 and the interrupt-control flags mirrored in bits
+    /// 29:26.
     pub lc: u32,
     pub vma: u32,
     pub md: u32,

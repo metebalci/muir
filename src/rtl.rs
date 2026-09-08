@@ -2653,6 +2653,12 @@ impl Engine for Rtl {
         self.pc
     }
 
+    /// The 74S169 counters at LC 1A26-2C05, which is where this engine
+    /// keeps the location counter: `Machine::lc` is never written here.
+    fn lc(&self) -> u32 {
+        self.lc & crate::machine::LC_COUNTER
+    }
+
     /// The sixteen registers off this engine's state between two
     /// microcycles.  `OB`, `A`, `M` and the four combinational flags are the
     /// read phase of the instruction standing in `IR`, computed afresh: the
