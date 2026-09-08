@@ -611,9 +611,15 @@ A simulator of the MIT CADR Lisp Machine.
                                --- they are inputs and nothing on the
                                controller answers them --- so the six
                                one-board jumpers ground them, and the one
-                               port is unit 0. The model controller needs
-                               no such board and has always had eight.
-                               [default: off, and the jumpers on]
+                               port is unit 0. A second --disk-pack, or
+                               one past unit 0, is a multiplexor by
+                               necessity and fits the board without this;
+                               the flag is for a single drive behind one,
+                               which is a machine somebody might want. The
+                               model controller needs no board at all and
+                               has always had eight units. [default: off
+                               with one pack in unit 0, and the jumpers
+                               on; the start says when it is fitted]
   --io-board netlist|model     chip: the I/O board. [default: netlist]
   --keyboard <file>            what a viewer's keysyms mean on the Lisp
                                Machine keyboard: `key <keysym> <key>` a
@@ -2717,15 +2723,14 @@ fn main() {
     // consequence. The multiplexor is what supplies the driver: its
     // 74LS175 at 0F05 latches `XBI<30:28>` and reports the unit back on
     // those three posts.
-    if disk_controller
-        && !use_multiplexor
-        && let Some(p) = packs.iter().find(|p| p.unit != 0)
-    {
-        usage(&format!(
-            "--disk-pack in unit {}: the netlist controller has one drive port, and \
-             --disk-use-multiplexor fits the board that gives it eight",
-            p.unit
-        ));
+    //
+    // So a second drive, or a drive past unit 0, **is** a multiplexor,
+    // and the flag is not something to make the user say twice. The
+    // model controller implies nothing: it wants no board for its eight
+    // units. What keeps an implied board from being a silent one is that
+    // the start says it is fitted.
+    if disk_controller && (packs.len() > 1 || packs.iter().any(|p| p.unit != 0)) {
+        use_multiplexor = true;
     }
     // The run goes on until a stop, a halt or ^C unless a window was asked for.
     let window = cycles.unwrap_or(u64::MAX);

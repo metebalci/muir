@@ -254,21 +254,27 @@ fn version_says_what_this_build_is() {
     }
 }
 
-/// **A drive on a unit other than 0 wants the multiplexor's board.**
+/// **A drive the netlist controller has no port for fits the multiplexor
+/// itself.**
 ///
 /// Not because the unit number is forced to 0. `UNIT<2:0>` reach one
 /// 74LS244's inputs on the controller and nothing else --- `cadrdc/dc.wlr`
 /// gives a direction per pin and none of the three has a `TO` --- so the
 /// board has no driver for them at all, and the six one-board jumpers
 /// ground them to stop three inputs floating. Unit 0 is the consequence.
-/// The DISK MULTIPLEXOR is what supplies the driver, and
-/// `--disk-use-multiplexor` fits it.
+/// The DISK MULTIPLEXOR is what supplies the driver, so a second drive or
+/// a drive past unit 0 **is** a multiplexor and the machine fits one
+/// rather than asking to be told twice. What keeps that from being silent
+/// is the start saying the board is there.
 ///
-/// The model controller is behavioural and wants no board: it has
-/// addressed eight units all along, `disk_controller::UNITS`, so a pack in
-/// unit 3 is its business and it takes one.
+/// The model controller implies nothing, because it wants no board: it is
+/// behavioural and has addressed eight units all along,
+/// `disk_controller::UNITS`.
 #[test]
-fn a_drive_past_unit_0_wants_the_multiplexor() {
+fn a_drive_past_unit_0_fits_the_multiplexor_itself() {
+    const FITTED: &str = "with a multiplexor";
+    let start =
+        |args: &[&str]| String::from_utf8_lossy(&muir().args(args).run().stderr).into_owned();
     let netlist =
         ["--chip", "--main-memory", "netlist", "--disk-controller", "netlist", "--stop-after", "1"];
     let with = |extra: &[&'static str]| -> Vec<&'static str> {
@@ -276,17 +282,28 @@ fn a_drive_past_unit_0_wants_the_multiplexor() {
         args.extend_from_slice(extra);
         args
     };
-    refused(&with(&["--disk-pack", "nothing.img,3"]), "--disk-pack");
-    // With the board fitted the flag is taken, and the run then stops on
-    // the image, which is the next thing wrong with it.
-    let out = muir().args(with(&["--disk-use-multiplexor", "--disk-pack", "nothing.img,3"])).run();
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert_ne!(out.status.code(), Some(2), "the flag is taken:\n{err}");
-
-    // The model controller needs no board and takes the unit.
-    let out = muir().args(["--micro", "--disk-pack", "nothing.img,3", "--stop-after", "1"]).run();
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert_ne!(out.status.code(), Some(2), "the model controller takes unit 3:\n{err}");
+    // The image is never opened: the start says what the machine is
+    // before it is built, and a missing pack stops the run after that.
+    let one = start(&with(&["--disk-pack", "nothing.img"]));
+    assert!(!one.contains(FITTED), "one drive in unit 0 wants no board:\n{one}");
+    for extra in [
+        &["--disk-pack", "nothing.img,3"][..],
+        &["--disk-pack", "a.img", "--disk-pack", "b.img,1"][..],
+        &["--disk-use-multiplexor", "--disk-pack", "nothing.img"][..],
+    ] {
+        let said = start(&with(extra));
+        assert!(said.contains(FITTED), "{extra:?} fits the board, and says so:\n{said}");
+    }
+    // The model controller takes the units and fits nothing --- asked on
+    // `chip`, where the start says which boards are on the buses and so
+    // can be caught saying it fitted one.
+    for engine in [&["--micro"][..], &["--chip"][..]] {
+        let mut args = engine.to_vec();
+        args.extend(["--disk-pack", "a.img", "--disk-pack", "b.img,1", "--stop-after", "1"]);
+        let said = start(&args);
+        assert!(!said.contains(FITTED), "{engine:?}: the model controller wants no board:\n{said}");
+        assert!(!said.contains("usage:"), "{engine:?}: and is not refused:\n{said}");
+    }
 }
 
 /// **The multiplexor is a board, so it needs a board to hang off**, and
