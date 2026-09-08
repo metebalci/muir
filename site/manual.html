@@ -27,7 +27,7 @@
   <div class="band">
     <h1>Manual</h1>
     <p class="lede">What muir does when you run it, every flag it takes, and what it is doing underneath.</p>
-    <p class="sub">This is the whole of the program: <a href="#running">running it</a>, <a href="#flags">the command line</a>, <a href="#rc">flags in a file</a>, <a href="#prompt">the prompt</a>, <a href="#terminal">the terminal</a>, <a href="#files">what a run can write</a>, <a href="#chaosnet">the Chaosnet server</a>, <a href="#lashup">the two-machine lashup</a>, and <a href="#internals">how the engines work</a>. <a href="index.html#install">Installing</a> is on the front page.</p>
+    <p class="sub">This is the whole of the program: <a href="#running">running it</a>, <a href="#flags">the command line</a>, <a href="#rc">flags in a file</a>, <a href="#prompt">the prompt</a>, <a href="#terminal">the terminal</a>, <a href="#files">what a run can write</a>, <a href="#chaosnet">the Chaosnet server</a>, <a href="#lashup">the two-machine lashup</a>, <a href="#internals">how the engines work</a>, and <a href="#netlists">where the netlists come from</a>. <a href="index.html#install">Installing</a> is on the front page.</p>
   </div>
 </section>
 
@@ -585,6 +585,88 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
     </div>
 
     <div class="note">There is no authentication and no encryption on this connection, and a peer that speaks it can halt the machine at the other end, read its memory and reset it &mdash; that is what a debug cable is for. Hence the loopback default; an address other than the loopback is worth meaning. The protocol is held to the in-process cable rather than to itself: the same two machines are run both ways, and the debuggee has to halt at the same PC and the debugger read back the same words.</div>
+  </div>
+</section>
+
+<section id="netlists">
+  <div class="band">
+    <h2>Where the netlists come from</h2>
+    <div class="prose">
+      <p>The boards this program runs are not written here. They are MIT&rsquo;s own engineering files, recovered from the ITS backup tapes, extracted by a script and then held to a second file MIT made of the same board. That chain is the whole reason a netlist here can be called checkable rather than plausible, and it is worth setting out, because the interesting part is not the extraction &mdash; it is what the extraction is answerable to.</p>
+      <p>The files are in <code>mit/</code> in the repository, committed unmodified and byte for byte as they arrived: 682 of them, 20&nbsp;MB, under the ten directory names they were dumped from, which are MIT&rsquo;s own. About 380 are read by nothing here &mdash; two thirds of the bytes &mdash; and are carried because they are the machine&rsquo;s own record.</p>
+    </div>
+
+    <h3>What MIT left</h3>
+    <div class="prose">
+      <p>MIT drew the CADR in SUDS, and their tooling made several other files from the same drawings. Those are the second copies, and the reason they are worth having is that each was made by a different program for a different purpose, so a mistake in reading a drawing does not reproduce itself in them.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th class="name">Extension</th><th class="num">Files</th><th>What it is, and what it settles</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="name">.drw</td><td class="num">351</td><td>One page of one board, as a SUDS binary rather than a picture. Every netlist here begins as these. <b>A drawing is the board as designed.</b></td></tr>
+          <tr><td class="name">.wlr</td><td class="num">9</td><td>The wire list the board was wrapped from, wire by wire, with a direction on every pin. <b>This is the board as built</b>, and where it and the drawing disagree it is the wire list that is right and the difference that has to be named.</td></tr>
+          <tr><td class="name">.wls</td><td class="num">11</td><td>The section census: for each part type, the gates used, the packages they take, the spares left over and the current they draw. It says nothing about where any of them is, which is what makes it a cheap and independent check that a page list is complete rather than nearly so.</td></tr>
+          <tr><td class="name">.stf</td><td class="num">15</td><td>The stuffing list: every body, the card location it sits at, and the page it is drawn on.</td></tr>
+          <tr><td class="name">.prt</td><td class="num">4</td><td>The parts list: each part type, how many of it, and every location that took one.</td></tr>
+          <tr><td class="name">.book</td><td class="num">6</td><td>The print set &mdash; the board&rsquo;s pages in MIT&rsquo;s own order, and where an extraction script takes its page list from for the boards that have one.</td></tr>
+          <tr><td class="name">.eco</td><td class="num">13</td><td>The engineering change orders in order, which is how to tell which revision a drawing is and whether a wire list is before or after a change.</td></tr>
+          <tr><td class="name">.ray</td><td class="num">7</td><td>Wire-wrap production data, and usually a <em>different dated revision</em> of the same board from the <code>.wlr</code> beside it &mdash; so the two together date a change rather than merely confirming each other.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">The rest &mdash; <code>.wd</code>, <code>.bin</code>, <code>.uml</code>, <code>.wss</code>, <code>.augat</code> and the board notes &mdash; are per-page wire-wrap data, a packed archive of drawings already held as <code>.drw</code>, and production listings. Nothing here reads them. Beside the boards sit MIT&rsquo;s own PROM images and microcode sources, and AI Memo 528, the CADR manual, in the 15 May 1980 printing.</div>
+
+    <h3>How a board becomes a netlist</h3>
+    <div class="prose">
+      <p>Four steps, and the last is the one that matters.</p>
+      <p><b>The drawings are read a page at a time.</b> <code>tools/soap4</code> &mdash; the SUDS reader from <code>ams/cadr4</code>, with fixes made here &mdash; turns one <code>.drw</code> into parts and nets. The pages a board gets are the ones MIT&rsquo;s own list for it names, one by one, never a directory glob: its print set where there is one, else the page list or stuffing list beside it. <code>cadrtv/</code> holds two displays and <code>chaos/</code> five machines, several under the same page names, so a glob mixes boards silently.</p>
+      <p><b>The pages are joined.</b> A net the drawing left unnamed comes out of <code>soap4</code> as <code>net_7</code>, numbered from zero on every page, so the same name means different wires on different sheets; each is suffixed with its page before the pages are put together.</p>
+      <p><b>The wires MIT labelled twice are put back together.</b> A signal drawn on two sheets under two labels arrives as two nets. <code>examples/reconcile.rs</code> reads the board&rsquo;s wire list, finds the pins MIT wired to one wire, and puts them on one net under MIT&rsquo;s own name for it. The wire list is the authority for that, not the drawing.</p>
+      <p><b>Then the result is held to the wire list, pin for pin.</b> That is <code>tests/*_netlist.rs</code>, and it runs on every <code>cargo test</code>: each signal in MIT&rsquo;s list has to reach exactly the pins the netlist gives it and no others. Where a board has a census, the part types are counted against that too.</p>
+    </div>
+
+<pre class="cmd">the pages dc.book names  --soap4-->  parts and nets a page
+                                            |
+                                          joined
+                                            |
+                     mit/cadrdc/dc.wlr --reconcile--> data/CADRDC.netlist
+                                                            |
+                     mit/cadrdc/dc.wlr, dc.wls ----test----> pass or fail</pre>
+
+    <div class="prose">
+      <p>The netlists are committed, so nothing has to be extracted to run the program or the tests; the scripts are there for when a board needs changing or re-checking. Nothing fetches anything.</p>
+      <p><b>What this catches, and what it does not.</b> It catches a drawing misread, and it catches the drawing and the wire list disagreeing &mdash; different files, made by different people at MIT, for different jobs. It does not witness the recovery of the tape: a drawing and the wire list it is checked against reached this project together, through the same tree, so the check is of the two against each other and not of either against the machine that is gone.</p>
+    </div>
+
+    <h3>What each board is checked against</h3>
+    <div class="prose">
+      <p><b>Not every board has the full set, and that is the honest half.</b> Six of the eight are held to MIT&rsquo;s own wiring. Two are not, because no wire list for them is on the tapes &mdash; for those, MIT&rsquo;s <em>specification</em> stands in for MIT&rsquo;s <em>wiring</em>, which is a weaker thing and is worth saying rather than glossing.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th class="name">Netlist</th><th>Drawings</th><th>Wire list</th><th>And also</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="name">CADR.netlist</td><td><code>cadr/</code></td><td><code>cadr4.wlr</code>, <code>icmem3.wlr</code> &mdash; two, the processor and the control store being two boards in one file</td><td>reconciled against each in turn</td></tr>
+          <tr><td class="name">BUSINT.netlist</td><td><code>cadr1/</code></td><td><code>busint.wlr</code></td><td><code>busint.wls</code>, the census</td></tr>
+          <tr><td class="name">CADRM.netlist</td><td><code>cadrm/</code></td><td><code>mem.wlr</code>, with ECO 2 applied to the list, the drawings being after it</td><td>&mdash;</td></tr>
+          <tr><td class="name">CADRIO.netlist</td><td><code>cadrio/</code>, <code>chaos/lispm/</code></td><td><code>iob.wlr</code> &mdash; one list for both halves, the Chaosnet sharing the board</td><td><code>iob.stf</code> for the page list</td></tr>
+          <tr><td class="name">CADRDC.netlist</td><td><code>cadrdc/</code></td><td><code>dc.wlr</code></td><td><code>dc.wls</code>, the census</td></tr>
+          <tr><td class="name">LISPMTV.netlist</td><td><code>cadrtv/lispm-tv/</code></td><td><code>lmtv4b.wlr</code></td><td><code>lmtv4b.wls</code>, the census</td></tr>
+          <tr><td class="name">SIMPLETV.netlist</td><td><code>cadrtv/simple-tv/</code></td><td><b>none on the tapes</b></td><td><code>lmtv.stf</code>, MIT&rsquo;s page list, and <code>lmtv.order</code>, MIT&rsquo;s register map, which the drawings have to decode the way it says</td></tr>
+          <tr><td class="name">DM.netlist</td><td><code>cadrdc/</code></td><td><b>none on the tapes</b></td><td><code>dm.stf</code>, the stuffing list</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">The multiplexor&rsquo;s missing wire list is an absence that was looked for rather than assumed: <code>cadrdc/</code> holds <code>dc.wlr</code> and <code>mk.wlr</code> for the two boards drawn beside it and no <code>dm.wlr</code>, and the tapes were searched for one. Its <code>dm.wls</code> stops before the census, so the check that would have counted its parts is not available either, and its netlist rests on <code>dm.stf</code> and the drawings. The SIMPLE TV is the same shape for a different reason: <code>cadrtv/</code> holds two displays under six shared page names, and only the later one&rsquo;s wire list survived.</div>
   </div>
 </section>
 
