@@ -133,6 +133,7 @@ fn the_pages_are_the_eleven_mit_names() {
 /// no signal, so nothing this netlist is for depends on which file is
 /// right --- but the two MIT files do disagree, and the disagreement is
 /// named here rather than left as a count that does not add up.
+/// Discrepancy 76.
 #[test]
 fn every_body_mit_stuffs_is_in_the_netlist() {
     let stf = stuffing();
