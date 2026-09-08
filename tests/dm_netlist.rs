@@ -370,12 +370,15 @@ fn the_drive_ports_are_two_banks_of_four() {
 }
 
 /// **What `src/part.rs` makes of the multiplexor's bodies**, as the other
-/// boards' netlist tests ask of theirs. Two kinds have no pinout at all,
-/// and one of them is why the board cannot yet be run: the **25LS2538** at
-/// DMSECT 0E05 is the decoder that turns `UNIT<2:0>` into `ADDRESS UNIT
-/// <n>`, so without it nothing on the board can choose a unit. `SIP1000-10`
-/// is a resistor pack. The `26S02` has a pinout and no behaviour, which is
-/// the one-shot handled by `src/chip.rs`.
+/// boards' netlist tests ask of theirs. One kind has no pinout, and it is
+/// why the board cannot yet be run: the **25LS2538** at DMSECT 0E05 is the
+/// decoder that turns `UNIT<2:0>` into `ADDRESS UNIT <n>`, so without it
+/// nothing on the board can choose a unit. Its datasheet is not in the
+/// collection beside this project; AMD's own related-products table on the
+/// Am25LS2539 sheet calls it a "1-of-8 Decoder" and no more, and the
+/// pinout is not something to take off the wiring, since the wiring is
+/// checked against the part. The `26S02` has a pinout and no behaviour,
+/// which is the one-shot `src/chip.rs` times.
 ///
 /// Written as an equality rather than an emptiness so that a body arriving
 /// unmodelled is caught, and so that modelling either of these fails here
@@ -383,6 +386,6 @@ fn the_drive_ports_are_two_banks_of_four() {
 #[test]
 fn the_bodies_without_a_model_are_the_two_known_ones() {
     let k = support::kinds(&dm());
-    assert_eq!(k.unknown, ["25LS2538", "SIP1000-10"], "bodies with no pinout");
+    assert_eq!(k.unknown, ["25LS2538"], "bodies with no pinout");
     assert_eq!(k.silent, ["26S02"], "bodies with a pinout and no behaviour");
 }

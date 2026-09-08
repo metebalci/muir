@@ -180,6 +180,12 @@ fn canonical(kind: &str) -> &str {
         "279B" => "74279",
         "S112" => "74S112",
         "CAP" => "CAP1",
+        // The disk multiplexor writes the I/O board's pull-up pack without
+        // MIT's parts-list prefix: `SIP1000-10` at DM 0D11 against
+        // `P SIP1000-10` on `cadrio`. One body, two spellings, and without
+        // this the pack has no pinout and the rails it holds up are not
+        // held up.
+        "SIP1000-10" => "P SIP1000-10",
         "20DUMMY" => "16DUMMY",
         // The Chaosnet transceiver module at LMDETC A03: sixteen pins the
         // drawing wires and no logic of its own, as the other dummy bodies.
