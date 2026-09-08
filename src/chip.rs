@@ -3069,3 +3069,314 @@ fn tarjan(feeds: &[Vec<usize>]) -> Vec<Vec<usize>> {
     }
     out
 }
+
+// ---------------------------------------------------------------------------
+// The board's memories, read back out of the RAM chips' own cells
+// ---------------------------------------------------------------------------
+
+/// **Reading a memory off `chip` is walking the RAM chips**, because that is
+/// where a word is: sixteen or nineteen one-bit parts, each holding one bit
+/// of every word, addressed by the nets the drawing wires to their address
+/// pins.  There is no array to index.
+///
+/// This is here rather than in a test because two callers need it and a
+/// second reader of the same cells would be a second chance to get the bank
+/// bit backwards: `tests/chip.rs::chip_and_rtl_hold_the_same_memories` holds
+/// every one of these to `rtl`'s own arrays, and the prompt's `amem`,
+/// `mmem`, `pdl`, `dmem` and `spc` read them on a halted machine.  The
+/// prompt therefore inherits the comparison rather than needing one.
+///
+/// One of the board's memories: which chip holds which bit, and how a
+/// logical address reaches a cell.
+///
+/// All of it is read off the netlist, because **every one of these memories
+/// is wired differently** and a table written by hand would be a table of
+/// guesses:
+///
+/// | memory | address pins | outputs |
+/// |---|---|---|
+/// | A, M, PDL | `-AADR0B` up, inverted | active high |
+/// | microcode stack | `SPCPTR0` up, *not* inverted | active high |
+/// | dispatch | `-DADR0A` up, inverted, `DADR10` selects the bank | active high |
+/// | level-1 map | `MAPI22` down to `MAPI13`, **reversed**, `MAPI23` the bank | **active low** |
+/// | level-2 map | `VMAP4A` down then `-MAPI12A` down, **reversed and half inverted** | **active low** |
+///
+/// So a pin's net name is parsed into a signal, a bit number and whether it
+/// is inverted, and [`Mem::addr`] says what that signal's bit number means in
+/// the logical address the other engine uses. Chip select is an address bit
+/// too where it is not tied to a supply: the part is selected when its `CS`
+/// net is low, so a chip whose `CS` is `-DADR10A` holds the half of the
+/// dispatch memory with that bit set, and one whose `CS` is `DADR10A` holds
+/// the other.
+pub struct Mem {
+    pub name: &'static str,
+    pub pages: &'static [&'static str],
+    /// Output net prefix and the data bit its number counts from. An exact
+    /// match with no number is allowed, which is how the dispatch memory's
+    /// `DN`, `DP` and `DR` sit above `DPC13`.
+    pub data: &'static [(&'static str, u32)],
+    /// The outputs are active low, so a stored bit is the complement of the
+    /// value. Both map levels are.
+    pub active_low: bool,
+    pub words: usize,
+    pub width: u32,
+    /// Address signal prefix, and what to add to its bit number to get the
+    /// bit of the logical address it carries.
+    pub addr: &'static [(&'static str, i32)],
+    /// The output net of the chip holding the word's parity bit, where the
+    /// memory has one.  The scratchpads keep **odd parity over the word and
+    /// its bit**: the 93S48s that check them --- APAR 3A28 and 4B15 for A
+    /// and M, SPCPAR 4F26 for the stack --- say OK on their odd output, and
+    /// the bit is written from `LPARITY`, the L register's parity off the
+    /// 93S48 at L 4C09.  [`Ram::store`] writes it so; [`Ram::word`] does
+    /// not read it.
+    pub parity: Option<&'static str>,
+}
+
+pub const MEMS: &[Mem] = &[
+    Mem {
+        name: "A",
+        pages: &["AMEM0", "AMEM1"],
+        data: &[("AMEM", 0)],
+        active_low: false,
+        words: 1024,
+        width: 32,
+        addr: &[("AADR", 0)],
+        parity: Some("AMEMPARITY"),
+    },
+    Mem {
+        name: "M",
+        pages: &["MMEM"],
+        data: &[("MMEM", 0)],
+        active_low: false,
+        words: 32,
+        width: 32,
+        addr: &[("MADR", 0)],
+        parity: Some("MMEMPARITY"),
+    },
+    Mem {
+        name: "PDL",
+        pages: &["PDL0", "PDL1"],
+        data: &[("PDL", 0)],
+        active_low: false,
+        words: 1024,
+        width: 32,
+        addr: &[("PDLA", 0)],
+        parity: Some("PDLPARITY"),
+    },
+    Mem {
+        name: "SPC",
+        pages: &["SPC"],
+        data: &[("SPCO", 0)],
+        active_low: false,
+        words: 32,
+        width: 19,
+        addr: &[("SPCPTR", 0)],
+        parity: Some("SPCOPAR"),
+    },
+    Mem {
+        name: "DISPATCH",
+        pages: &["DRAM0", "DRAM1", "DRAM2"],
+        data: &[("DPC", 0), ("DN", 14), ("DP", 15), ("DR", 16)],
+        active_low: false,
+        words: 2048,
+        width: 17,
+        addr: &[("DADR", 0)],
+        parity: None,
+    },
+    Mem {
+        name: "L1MAP",
+        pages: &["VMEM0"],
+        data: &[("-VMAP", 0)],
+        active_low: true,
+        words: 2048,
+        width: 5,
+        addr: &[("MAPI", -13)],
+        parity: None,
+    },
+    Mem {
+        name: "L2MAP",
+        pages: &["VMEM1", "VMEM2"],
+        data: &[("-VMO", 0)],
+        active_low: true,
+        words: 1024,
+        width: 24,
+        addr: &[("MAPI", -8), ("VMAP", 5)],
+        parity: None,
+    },
+];
+
+/// One RAM chip's contribution: a data bit, and how to address it.
+pub struct Slice {
+    inst: usize,
+    /// Which bit of the word this chip holds.
+    bit: u32,
+    /// Which bit of the cell byte that is --- the 82S21 holds two per cell.
+    cell_bit: u32,
+    /// (bit of the logical address, bit of the cell index, inverted).
+    pub addr: Vec<(u32, u32, bool)>,
+    /// The chip only answers when this bit of the logical address has this
+    /// value. `None` where chip select is tied to a supply.
+    bank: Option<(u32, bool)>,
+}
+
+pub struct Ram {
+    /// One entry per RAM chip holding a data bit of this memory.
+    pub slices: Vec<Slice>,
+    /// The parity bit's chip, where [`Mem::parity`] names one.
+    pub parity: Vec<Slice>,
+    pub active_low: bool,
+    pub words: usize,
+}
+
+/// Splits a net name into its sign, signal and bit number: `-MAPI12A` is
+/// `MAPI` bit 12, inverted. The trailing letter is the drawing's way of
+/// numbering buffered copies of one signal, as in `-AADR0B`.
+fn split_net(name: &str) -> Option<(bool, &str, u32)> {
+    let (inverted, rest) = match name.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, name),
+    };
+    let rest = match rest.as_bytes().last() {
+        Some(b) if b.is_ascii_alphabetic() => &rest[..rest.len() - 1],
+        _ => rest,
+    };
+    let at = rest.len() - rest.bytes().rev().take_while(u8::is_ascii_digit).count();
+    if at == rest.len() {
+        return None;
+    }
+    Some((inverted, &rest[..at], rest[at..].parse().ok()?))
+}
+
+impl Ram {
+    pub fn new(c: &Chip, n: &crate::netlist::Netlist, m: &Mem) -> Ram {
+        // The 93425 is one bit per cell, out on pin 7, with chip select on
+        // pin 1; the 82S21 is two, on pins 7 and 9, and its pin 1 is the
+        // write enable rather than a select.
+        let mut slices = Vec::new();
+        let mut parity = Vec::new();
+        for (i, inst) in c.instances.iter().enumerate() {
+            if !m.pages.contains(&inst.page.as_str()) {
+                continue;
+            }
+            let kind = crate::part::strip(&inst.kind).0;
+            let (outs, addr_pins, cs): (&[(u8, u32)], &[u8], Option<u8>) = match kind {
+                "93425" => (&[(7, 0)], &[2, 3, 4, 5, 6, 9, 10, 11, 12, 13], Some(1)),
+                "82S21" => (&[(7, 0), (9, 1)], &[13, 12, 11, 10, 4], None),
+                _ => continue,
+            };
+            let net = |pin: u8| inst.net_on(pin).map(|x| n.net(x));
+            // Where this chip's address pins take each bit of the logical
+            // address, and where chip select puts it in the memory.
+            let bit_of = |name: &str| -> Option<(u32, bool)> {
+                let (inv, sig, k) = split_net(name)?;
+                let (_, off) = m.addr.iter().find(|(p, _)| *p == sig)?;
+                Some(((k as i32 + off) as u32, inv))
+            };
+            let mut addr = Vec::new();
+            for (cell_bit, &pin) in addr_pins.iter().enumerate() {
+                let name = net(pin).unwrap_or_else(|| panic!("{} pin {pin}", inst.name()));
+                let (logical, inv) = bit_of(name)
+                    .unwrap_or_else(|| panic!("{}: address pin {pin} is {name}", inst.name()));
+                addr.push((logical, cell_bit as u32, inv));
+            }
+            let bank = cs.and_then(&net).and_then(|name| {
+                if supply(name).is_some() {
+                    return None;
+                }
+                let (held, _) = bit_of(name)
+                    .unwrap_or_else(|| panic!("chip select {name} is not an address bit"));
+                // Selected when the net is low: `-DADR10A` low means the
+                // signal is high, a plain `DADR10A` low means it is low.
+                Some((held, name.starts_with('-')))
+            });
+            for &(pin, cell_bit) in outs {
+                let Some(name) = net(pin) else { continue };
+                if m.parity == Some(name) {
+                    parity.push(Slice { inst: i, bit: 0, cell_bit, addr: addr.clone(), bank });
+                    continue;
+                }
+                let bit = m.data.iter().find_map(|&(prefix, base)| {
+                    if name == prefix {
+                        return Some(base);
+                    }
+                    name.strip_prefix(prefix)?.parse::<u32>().ok().map(|k| base + k)
+                });
+                if let Some(bit) = bit {
+                    slices.push(Slice { inst: i, bit, cell_bit, addr: addr.clone(), bank });
+                }
+            }
+        }
+        let banks = if slices.iter().any(|s| s.bank.is_some()) { 2 } else { 1 };
+        assert_eq!(
+            slices.len() as u32,
+            m.width * banks,
+            "{}: found {} chip slices for {} bits in {banks} bank(s)",
+            m.name,
+            slices.len(),
+            m.width
+        );
+        if m.parity.is_some() {
+            assert_eq!(parity.len() as u32, banks, "{}: parity chip", m.name);
+        }
+        Ram { slices, parity, active_low: m.active_low, words: m.words }
+    }
+
+    pub fn word(&self, c: &Chip, a: usize) -> u32 {
+        let mut w = 0;
+        for s in &self.slices {
+            // This chip answers only for its own half of the memory: skip
+            // it when the address bit its chip select decodes is the other
+            // value. Inverting this reads the wrong bank, which looks like a
+            // write landing 1024 words away.
+            if let Some((bit, held)) = s.bank
+                && (a >> bit) & 1 != held as usize
+            {
+                continue;
+            }
+            let cell = s.addr.iter().fold(0usize, |k, &(logical, cell_bit, inv)| {
+                let b = (a >> logical) & 1 == 1;
+                k | ((b != inv) as usize) << cell_bit
+            });
+            let stored = (c.instances[s.inst].state.cells[cell] >> s.cell_bit) & 1 == 1;
+            w |= ((stored != self.active_low) as u32) << s.bit;
+        }
+        w
+    }
+
+    /// How many words the memory holds.
+    // No `is_empty` beside it: every entry in `MEMS` is a memory the board
+    // carries, 32 words at the smallest, so the method would be a constant
+    // `false` that nothing calls.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.words
+    }
+
+    /// Puts a word into the board's memory from outside, cell by cell: the
+    /// inverse of [`Ram::word`], for giving a program of one's own the
+    /// constants and the map the boot PROM would otherwise have to build.
+    pub fn store(&self, c: &mut Chip, a: usize, w: u32) {
+        // Odd parity over the word and its bit; see [`Mem::parity`].
+        let odd = w.count_ones().is_multiple_of(2);
+        let slices = self.slices.iter().map(|s| (s, (w >> s.bit) & 1 == 1));
+        let parity = self.parity.iter().map(|s| (s, odd));
+        for (s, value) in slices.chain(parity) {
+            if let Some((bit, held)) = s.bank
+                && (a >> bit) & 1 != held as usize
+            {
+                continue;
+            }
+            let cell = s.addr.iter().fold(0usize, |k, &(logical, cell_bit, inv)| {
+                let b = (a >> logical) & 1 == 1;
+                k | ((b != inv) as usize) << cell_bit
+            });
+            let stored = value != self.active_low;
+            // Through `state_mut`, which marks the part: its output gate
+            // keeps a cached level while nothing it reads has moved.
+            let byte = &mut c.state_mut(s.inst).cells[cell];
+            let m = 1u8 << s.cell_bit;
+            *byte = if stored { *byte | m } else { *byte & !m };
+        }
+    }
+}

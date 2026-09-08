@@ -1658,9 +1658,22 @@ fn say_halted() {
 /// `Chip` is not an [`Engine`] and keeps no microcycle count of its own ---
 /// `time_chip` counts them by the clock phase wrapping --- so this says the
 /// PC and the run's count and leaves the rest out.
-fn say_pc_chip(c: &Chip, pc_nets: &[netlist::NetId], ran: u64, prom_enabled: bool) {
+fn say_pc_chip(
+    c: &Chip,
+    pc_nets: &[netlist::NetId],
+    ir_nets: &[netlist::NetId],
+    ran: u64,
+    prom_enabled: bool,
+) {
     let prom = if prom_enabled { " in the PROM" } else { "" };
     println!("PC {:o}{prom}; {ran} microcycles this run", c.read(pc_nets) as u16);
+    // **The instruction, which on a halt is the one that halted.** `IR` is
+    // held while the machine is stopped, and `HALT-CONS` is `IR<11:10>`,
+    // so a machine that stopped itself says here what stopped it --- which
+    // the PC does not, `ILLOP` being a `POPJ` whose PC is the address it
+    // popped rather than the trap.
+    let ir = c.read(ir_nets);
+    println!("IR {ir:#014x}; misc function {}", (ir >> 10) & 3);
 }
 
 /// **The machine has stopped itself with `RUN` still set**, and why, or
@@ -1729,6 +1742,32 @@ fn say_registers<E: Engine>(e: &E) -> String {
 /// The prompt's answer to `amem`, `mmem`, `dmem`, `pdl` and `spc`: so many
 /// words from an address, or the rest of the memory, or why there are
 /// none there.
+/// [`say_memory`] for `chip`, where a memory is the RAM chips' cells
+/// rather than an array: `rams` is in [`Memory`]'s own order, built once
+/// when the machine was.
+fn say_chip_memory(
+    c: &Chip,
+    rams: &[muir::chip::Ram],
+    memory: Memory,
+    from: usize,
+    words: Option<usize>,
+) -> Result<String, String> {
+    let ram = &rams[memory as usize];
+    if from >= ram.len() {
+        return Err(format!(
+            "{} is {:o} words, and {from:o} is past its end",
+            memory.name(),
+            ram.len()
+        ));
+    }
+    let to = match words {
+        Some(n) => from.saturating_add(n).min(ram.len()),
+        None => ram.len(),
+    };
+    let all: Vec<u32> = (from..to).map(|a| ram.word(c, a)).collect();
+    Ok(muir::prompt::dump(&all, from))
+}
+
 fn say_memory(
     m: &Machine,
     memory: Memory,
@@ -2077,6 +2116,17 @@ struct ChipMachine {
     far: FarEnd,
     bus: netlist::Netlist,
     pc_nets: Vec<netlist::NetId>,
+    /// `IR<47:0>`, the instruction register.  It holds the instruction the
+    /// machine last executed, and on a halt that is the one that halted it
+    /// --- `HALT-CONS` is `IR<11:10>` --- which is why the prompt prints it
+    /// beside the PC here and does not on the other engines, where it is
+    /// not what a halt leaves behind.
+    ir_nets: Vec<netlist::NetId>,
+    /// The board's five readable memories, in [`Memory`]'s order, each a
+    /// map from the RAM chips' cells to a word.  Built once: `Ram::new`
+    /// walks every instance, and the prompt would otherwise do it per
+    /// command.
+    rams: Vec<muir::chip::Ram>,
     promdisable: netlist::NetId,
     /// `SRUN`, `-ERRHALT` and `-STATHALT`: three of the six inputs of the
     /// 9S42 at OLORD1 1A15 that makes `MACHRUN`, which the drawing has as
@@ -2125,6 +2175,15 @@ fn chip_machine(
         press_boot(&mut c, &mut clk, boot);
     }
     let pc_nets = c.bus_nets(&n, "PC", 14);
+    let ir_nets = c.bus_nets(&n, "IR", 48);
+    // In `Memory`'s order, so the prompt indexes by the command's own enum.
+    let rams: Vec<muir::chip::Ram> = ["A", "M", "DISPATCH", "PDL", "SPC"]
+        .iter()
+        .map(|name| {
+            let m = muir::chip::MEMS.iter().find(|m| m.name == *name).expect("a memory by name");
+            muir::chip::Ram::new(&c, &n, m)
+        })
+        .collect();
     // The mode register's bit, as `Machine::mode` has it on the other
     // engines.
     let promdisable = n.by_name_id("PROMDISABLE").unwrap();
@@ -2142,6 +2201,8 @@ fn chip_machine(
         far,
         bus: bus_n,
         pc_nets,
+        ir_nets,
+        rams,
         promdisable,
         srun,
         errhalt,
@@ -2248,6 +2309,8 @@ fn time_chip(
         mut far,
         bus: _,
         pc_nets,
+        ir_nets,
+        rams,
         promdisable,
         srun,
         errhalt,
@@ -2319,7 +2382,7 @@ fn time_chip(
                     if *left == 0 {
                         stepping = None;
                         held = true;
-                        say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+                        say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
                     }
                 }
             }
@@ -2357,7 +2420,7 @@ fn time_chip(
             held = true;
             stepping = None;
             say_machrun_low(why);
-            say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+            say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
         }
         // ^C: the first holds the machine at the prompt, one more while
         // held quits; with no prompt to go on from, one quits.
@@ -2374,7 +2437,7 @@ fn time_chip(
                     prompt.past_interrupt();
                 }
                 println!("held at ^C; continue runs on, ^C again quits");
-                say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+                say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
             }
         }
         if stepping.is_none()
@@ -2386,12 +2449,12 @@ fn time_chip(
                     Ok(None) => {}
                     Ok(Some(Command::Boot)) => {
                         press_boot(&mut cpu, &mut clk, boot);
-                        say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+                        say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
                         held = false;
                     }
                     Ok(Some(Command::Hold)) => {
                         held = true;
-                        say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu));
+                        say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
                     }
                     Ok(Some(Command::Continue)) => match stopped_itself(&cpu) {
                         Some(why) => say_machrun_low(why),
@@ -2405,7 +2468,9 @@ fn time_chip(
                             break;
                         }
                     },
-                    Ok(Some(Command::Pc)) => say_pc_chip(&cpu, &pc_nets, ran, prom_enabled(&cpu)),
+                    Ok(Some(Command::Pc)) => {
+                        say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu))
+                    }
                     Ok(Some(Command::Info)) => print!("{setup}"),
                     Ok(Some(Command::Keys)) => print!("{}", keys_in_force()),
                     Ok(Some(Command::Screenshot(path))) => {
@@ -2434,15 +2499,28 @@ fn time_chip(
                         }
                         None => println!("capture: none is going; startcapture begins one"),
                     },
-                    // The scratchpads live in the RAM chips' own cells
-                    // here, not in arrays, and reading one back means
-                    // walking those cells and putting the board's word
-                    // order right. Until that is written these say so
-                    // rather than printing something that is not the
-                    // machine's.
-                    Ok(Some(Command::Registers | Command::Dump { .. })) => {
-                        println!("prompt: not on chip yet --- the registers and the scratchpads");
-                        println!("        are the parts' own cells here, not arrays to read off");
+                    // The scratchpads live in the RAM chips' own cells here
+                    // rather than in arrays, so a dump walks those cells:
+                    // `muir::chip::Ram`, which is also what
+                    // `chip_and_rtl_hold_the_same_memories` holds to `rtl`,
+                    // so this prints the same words that comparison checks.
+                    Ok(Some(Command::Dump { memory, from, words })) => {
+                        match say_chip_memory(&cpu, &rams, memory, from, words) {
+                            Ok(dump) => print!("{dump}"),
+                            Err(what) => println!("prompt: {what}"),
+                        }
+                    }
+                    // A register is a net bundle rather than a memory and
+                    // wants naming one at a time; the memories and `IR`,
+                    // which is what a halt leaves behind, are here.
+                    Ok(Some(Command::Registers)) => {
+                        println!("prompt: not on chip yet --- a register here is the nets of the");
+                        println!(
+                            "        parts driving it, not a word to read off; `pc` gives the"
+                        );
+                        println!(
+                            "        PC and IR, and amem, mmem, dmem, pdl and spc the memories"
+                        );
                     }
                     Ok(Some(Command::Checkpoint(path))) => {
                         let path = path.unwrap_or_else(|| timestamped("chk"));
