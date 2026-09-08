@@ -2737,6 +2737,14 @@ fn one_shot_width(page: &str, reference: &str, section: u8) -> u64 {
         ("MEMCTL", "0F02", 1) => MEMCTL_REFRESH_NS,
         ("DCTMOT", "0B09", 2) => DCTMOT_NXM_ACK_NS,
         ("DCTRID", "0B09", 1) => DCTRID_BLOCK_CLEAR_NS,
+        // The DISK MULTIPLEXOR's eight, one a unit: `UNIT.<n>.SECTOR^` in
+        // and `-UNIT.<n>.BC.CLR` out, which is the controller's `DCTRID`
+        // 0B09 section 1 job done eight times over. `dmsect.drw` carries
+        // `20K` and `330 pF` against every one of them, under the same two
+        // notes as `dctrid.drw` --- `CLEARS BLOCK CTR` and `;2.0-2.5 USEC`
+        // --- so they are the same components, the same formula and the
+        // same width. Four Am26S02 packages, two sections each.
+        ("DMSECT", "0C05" | "0C07" | "0B10" | "0B20", 1 | 2) => DCTRID_BLOCK_CLEAR_NS,
         // The Chaosnet half's two. `chaos/lispm/lmlndr.drw` carries their
         // components too, as discrete bodies in the sixteen-pin `DUMMY`
         // socket at A03@02: `cadrio/iob.wlr` wires that socket across the
