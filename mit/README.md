@@ -102,7 +102,7 @@ file is load-bearing or reference.
 | Extension | What it is | Read here? |
 |---|---|---|
 | `.drw` | a page of a board, SUDS binary. `tools/soap4` reads one; `data/README.md` is the guide to going from a name in the netlist back to the wire on the sheet | **yes**, the pages each board's print set names |
-| `.wlr` | the wire list the board was wrapped from, wire by wire | **yes** --- the second copy every netlist is held to, by `tests/*_netlist.rs` |
+| `.wlr` | the wire list the board was wrapped from, wire by wire | **yes** --- the second copy a netlist is held to, by `tests/*_netlist.rs`, for the six boards that have one. The disk multiplexor and the SIMPLE TV have none on the tapes and are held to MIT's specifications instead, which those tests say |
 | `.wls` | the section census: how many bodies of each type the board carries. A cheap check that a page list is complete | **yes**, for the boards that have one |
 | `.book` | the print set: the board's pages in MIT's own order. The netlist scripts take their page lists from these rather than globbing, because a directory holds more than one board | **yes** |
 | `.stf` | the stuffing list, which slot holds which part | some |
@@ -111,7 +111,7 @@ file is load-bearing or reference.
 | `.wd` | per-page wire-wrap data, carrying the same parts and nets as the `.drw` beside it | no |
 | `.bin` | a packed SUDS archive of a whole board's drawings --- the same pages as the `.drw` files, in a format `soap4` cannot read | no |
 | `.ray`, `.uml`, `.augat`, `.aug`, `.wss` | wire-wrap production data: wire runs by pin, panel data, listings | no |
-| `.txt`, `.fil`, `.prt`, `.memo`, `.hand` | board notes, page lists, parts lists | some, as reading rather than as input |
+| `.txt`, `.fil`, `.prt`, `.memo`, `.hand` | board notes, page lists, parts lists | some. `cadr/framl.txt` and `cadrdc/dm.txt` are page lists a test reads, and four `.prt` are the stuffed locations `tests/parts_mounted.rs` holds the netlists to; the rest is read by people rather than by code |
 | `.164` | the CADR manual, an XGP typesetter source: markup lines beginning `.`, and text with control characters for the font changes. `LC_ALL=C grep` reads it | as reading, and `tests/chip.rs` carries one of its tables |
 
 Two things in the "no" column are worth knowing about rather than forgetting.
@@ -136,11 +136,17 @@ merely confirming one of them, and `busint.eco` is the diff between the two
 dates. `cadrio/iob.ray` and `cadrio/dc.ray` are damaged, lines concatenated
 and truncated; prefer `cadrdc/dc.ray`.
 
-The unread `.drw` are the other boards sharing an ITS directory with one we
-model: `cadr1`'s CDC adaptor, `cadrdc`'s DISK MULTIPLEXOR and MARKSMAN,
-`cadrm`'s `pm*` and `mcp*` sheets, and `cadr`'s pages outside the two print
-sets. The disk multiplexor is real hardware on the Trident string, so those
-are not idle curiosities.
+The unread `.drw` are 77 of the 351, and they are the other boards sharing an
+ITS directory with one we model, the earlier revisions of sheets we do read,
+and the parts of a board modelled from something better than its drawings:
+`cadr1`'s CDC adaptor, `cadrdc`'s MARKSMAN and its earlier `dcud`, `cadrm`'s
+`pm*` and `mcp*` sheets, `cadrio`'s `newkb*` and `nmous*` --- the keyboard
+and the mouse, which muir takes from MIT's own software rather than from
+these --- two of `chaos/lispm`'s, and `cadr`'s pages outside the two print
+sets. `tests/mit_readme.rs` counts them, so this paragraph cannot go stale
+again without a test saying so: **the disk multiplexor used to be on this
+list and is not**, its eleven `dm*` sheets being where `data/DM.netlist`
+comes from.
 
 ## Licence
 
