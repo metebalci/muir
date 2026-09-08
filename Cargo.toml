@@ -35,8 +35,26 @@ opt-level = 2
 # tests, that one the only failure. Issue 79, and the user's call, in their
 # words: "naturally it has to run correct".
 #
-# The 3% comes back when the compiler does. Put `codegen-units = 1` back and
-# run `cargo test --release` --- if that test passes, this comment is spent.
+# It is the compiler, and `rust-toolchain.toml` pins the one that has it.
+# Measured on this test at `codegen-units = 1`, same worktree, four
+# toolchains: 1.98.0 fails, 1.98.1 fails, 1.99.0-beta.4 passes,
+# 1.100.0-nightly passes. So the pin is what makes it bite, and a point
+# release is not the way out --- 1.99 is.
+#
+# `rust-lang/rust#162398` is a report of the same shape, labelled
+# `I-miscompile`, `A-LLVM`, `O-AArch64`, `O-apple`: the loop vectorizer
+# producing `n % 4` for a negate-inside-reduction, which is what
+# `wrapping_sub(1)` accumulated across the caller's loop is. That fits, and
+# it explains why the fault needs `tc` inlined into that loop --- one
+# codegen unit gives it, sixteen do not, and a separate crate does not, so
+# extraction was never going to reproduce it. **It is not established as
+# the same defect.** That issue is closed as not planned, and it lists a
+# 1.100.0-nightly as affected where this test passes on one; nobody here
+# has tied the two together beyond the shape.
+#
+# **The 3% comes back with the pin.** When `rust-toolchain.toml` moves to
+# 1.99 or later, put `codegen-units = 1` back and run `cargo test
+# --release`. If that test passes, this comment is spent.
 [profile.release]
 lto = "fat"
 codegen-units = 16
