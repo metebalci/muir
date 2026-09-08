@@ -887,11 +887,27 @@ fn lay_down_track(unit: &mut Unit, bytes: &[u8]) {
         let (cylinder, head, block) =
             ((s.header >> 16) & 0xfff, (s.header >> 8) & 0xff, s.header & 0xff);
         // An address the geometry has no room for stops the track here.
-        // On the board a header that does not agree with where the heads
-        // are is `STATUS<18>`, Header Compare Error, "this error stops the
-        // transfer" --- which this model does not carry, so it stops
-        // without saying why rather than reporting an error it has not
-        // worked out.
+        //
+        // **The board raises nothing.** This comment used to say the board
+        // would give `STATUS<18>`, Header Compare Error, and that is wrong:
+        // Write All never compares a header. `cadrdc/newdsk.31` strobes
+        // one only in the Read sector, `024` to `027`, and the Write
+        // sector, `124` to `127`, each "Compare first header byte" and so
+        // on against the disk address register; the Write All sector from
+        // `300` seeks, selects the head, finds the index pulse at `313`
+        // and writes the track out, and no word of it carries `HEADER
+        // STROBE`. Which is what formatting means: the header a Write All
+        // lays down is whatever the program put in memory, and the drive
+        // writes it where the heads are. A header naming an address that
+        // fits nowhere is simply written, and becomes a pack that a later
+        // Read or Write fails to compare against.
+        //
+        // So stopping the track is this model's own, and the board would
+        // have written it. What the board cannot do is what `Unit` cannot
+        // represent: it stores blocks by the address they are asked for,
+        // so there is nowhere to put a block whose header disagrees with
+        // its place. That is issue #8's missing track format rather than a
+        // missing status bit.
         if !unit.write_block_at(cylinder, head, block, &s.data) {
             return;
         }
