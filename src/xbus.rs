@@ -33,7 +33,8 @@
 
 use crate::buses::Buses;
 use crate::chip::Chip;
-use crate::disk_unit::{OnCable, Trident};
+use crate::disk_unit::{OnCable, Ports, Trident};
+use crate::dm::Dm;
 use crate::netlist::{NetId, Netlist};
 use crate::part::Level;
 
@@ -500,12 +501,127 @@ pub struct Xbus {
     /// asked about every wire at every exchange, the slow way:
     /// [`crate::cable::FarEnd::unoptimised`].
     pub skip_unchanged: bool,
-    /// A drive on the disk controller's cables, and which device board
-    /// the controller is. Its state is not in a checkpoint: a resume
-    /// brings it up fresh at the resume's time, spindle at the index.
-    trident: Option<(usize, OnCable)>,
-    /// When the drive next moves of its own accord.
-    trident_next: Option<u64>,
+    /// The drives on the disk controller's cables, and the multiplexor
+    /// between them if one is fitted. `None` until something is plugged
+    /// in, which is also when the controller is looked for.
+    disks: Option<Disks>,
+}
+
+/// The drives on the disk controller's cables, and the DISK MULTIPLEXOR
+/// between them and the controller when one is fitted.
+///
+/// **The multiplexor is not an Xbus device.** It hangs off the
+/// controller's edge connector, which is what [`crate::dm`] carries, and
+/// not the backplane: it has no address, takes no `-XBUS` wire and answers
+/// no cycle. So it sits beside [`Xbus::devices`] rather than among them,
+/// and every per-end vector on the backplane is the length it was.
+///
+/// No drive's state and no multiplexor's is in a checkpoint. A resume
+/// brings them up fresh at the resume's time, spindles at the index, which
+/// is what one drive on the controller's own port already did.
+struct Disks {
+    /// Which device board the disk controller is.
+    controller: usize,
+    /// The multiplexor, and the netlist it was built from so that
+    /// [`Xbus::repower_devices`] can bring the board up again.
+    dm: Option<(Netlist, Dm)>,
+    /// The drives by unit number. With no multiplexor the controller has
+    /// one port of its own and only unit 0 can be on it.
+    units: [Option<OnCable>; 8],
+    /// When each drive next moves of its own accord.
+    next: [Option<u64>; 8],
+}
+
+impl Disks {
+    /// Lets drive `unit` see what the controller has on the cable at `now`
+    /// and answer, and settles the multiplexor against the controller
+    /// after it. Returns the controller transitions that took, for
+    /// [`Xbus::transitions`]; the multiplexor's are [`Dm::transitions`].
+    fn apply(&mut self, unit: usize, controller: &mut Chip, now: u64) -> u64 {
+        self.put(unit, controller, now);
+        self.settle(controller, now)
+    }
+
+    /// The same for every drive. The drives write their own nets, so one
+    /// settle carries all eight rather than one settle each.
+    fn apply_all(&mut self, controller: &mut Chip, now: u64) -> u64 {
+        for k in 0..8 {
+            self.put(k, controller, now);
+        }
+        self.settle(controller, now)
+    }
+
+    /// One drive's answer on to the nets, with nothing settled after it.
+    fn put(&mut self, unit: usize, controller: &mut Chip, now: u64) {
+        let Disks { dm, units, next, .. } = self;
+        let Some(cable) = units[unit].as_mut() else { return };
+        // The per-unit half of the cable is on the multiplexor and the
+        // shared half on the controller, so the two boards are given
+        // separately; with no multiplexor both halves are the
+        // controller's and this is [`OnCable::apply`].
+        match dm {
+            Some((_, dm)) => cable.apply_on(&mut dm.board, controller, now),
+            None => cable.apply(controller, now),
+        };
+        next[unit] = Some(cable.next_change(now));
+    }
+
+    /// Carries the multiplexor against the controller, if there is one.
+    fn settle(&mut self, controller: &mut Chip, now: u64) -> u64 {
+        match self.dm.as_mut() {
+            Some((_, dm)) => dm.settle(controller, now),
+            None => 0,
+        }
+    }
+
+    /// The drive with the earliest event of its own, and when.
+    fn earliest(&self) -> Option<(usize, u64)> {
+        self.next.iter().enumerate().filter_map(|(k, d)| Some((k, (*d)?))).min_by_key(|&(_, d)| d)
+    }
+
+    /// When any drive, or the multiplexor, next moves of its own accord.
+    fn next_tap(&self) -> Option<u64> {
+        self.earliest()
+            .map(|(_, d)| d)
+            .into_iter()
+            .chain(self.dm.as_ref().and_then(|(_, dm)| dm.next_tap()))
+            .min()
+    }
+}
+
+/// Every event the drives and the multiplexor have of their own before
+/// `limit`, each at its own time; `inclusive` takes those at `limit` too.
+/// Returns the controller transitions they made.
+///
+/// A free function because the controller's board is borrowed out of
+/// [`Xbus::devices`] while the drives are borrowed out of `Xbus::disks`,
+/// and those are only disjoint fields at the call site.
+fn run_disks(disks: &mut Option<Disks>, controller: &mut Chip, limit: u64, inclusive: bool) -> u64 {
+    let Some(d) = disks.as_mut() else { return 0 };
+    let due = |t: u64| if inclusive { t <= limit } else { t < limit };
+    let mut n = 0;
+    let mut steps = 0;
+    loop {
+        let drive = d.earliest().filter(|&(_, t)| due(t));
+        let board = d.dm.as_ref().and_then(|(_, dm)| dm.next_tap()).filter(|&t| due(t));
+        match (drive, board) {
+            // Whichever is earlier goes first, and a drive first where
+            // they fall together: the multiplexor's answer to an edge is
+            // the same microcycle's, and its tap at that instant is not.
+            (Some((k, t)), b) if b.is_none_or(|d| t <= d) => n += d.apply(k, controller, t),
+            (_, Some(t)) => {
+                if let Some((_, dm)) = d.dm.as_mut() {
+                    dm.transition_due(t);
+                }
+                n += d.settle(controller, t);
+            }
+            // Nothing of either's is due by `limit`.
+            _ => break,
+        }
+        steps += 1;
+        assert!(steps < 1_000_000, "the drives' events never run out at {limit}");
+    }
+    n
 }
 
 impl Xbus {
@@ -591,38 +707,105 @@ impl Xbus {
             seen: vec![u64::MAX; ends],
             bus_low,
             skip_unchanged: true,
-            trident: None,
-            trident_next: None,
+            disks: None,
         }
     }
 
-    /// Puts a drive on the cables of the disk controller on the backplane,
-    /// at `now`. Panics if no device board has the cables.
+    /// The disk controller's drives, made when the first thing is plugged
+    /// in. Panics if no device board has the drive cables.
+    fn disks(&mut self) -> &mut Disks {
+        if self.disks.is_none() {
+            let controller = self
+                .device_sources
+                .iter()
+                .position(OnCable::fits)
+                .expect("a disk controller on the backplane to plug a drive into");
+            self.disks = Some(Disks {
+                controller,
+                dm: None,
+                units: std::array::from_fn(|_| None),
+                next: [None; 8],
+            });
+        }
+        self.disks.as_mut().expect("just made")
+    }
+
+    /// Puts a drive on the disk controller's cables at `now`, in unit 0's
+    /// place: the one port the controller has of its own.
     pub fn plug(&mut self, drive: Trident, now: u64) {
-        let j = self
-            .device_sources
-            .iter()
-            .position(OnCable::fits)
-            .expect("a disk controller on the backplane to plug a drive into");
-        let mut cable = OnCable::new(&self.device_sources[j], drive);
-        cable.apply(&mut self.devices[j], now);
-        self.trident_next = Some(cable.next_change(now));
-        self.trident = Some((j, cable));
+        self.plug_unit(0, drive, now);
     }
 
-    /// The drive on the controller's cables, if one is plugged in.
+    /// Puts a DISK MULTIPLEXOR on the controller's edge connector, so that
+    /// the eight ports [`Xbus::plug_unit`] fills are that board's.
+    ///
+    /// The controller's netlist has to be the one
+    /// [`crate::netlist::parse_with_multiplexor`] made --- the one whose
+    /// six one-board jumpers are left off, so that the nets the
+    /// multiplexor drives are its to drive rather than tied to ground and
+    /// to each other. The drives go on after this, their ports being the
+    /// multiplexor's.
+    pub fn plug_multiplexor(&mut self, dm: &Netlist, powered_at: u64) {
+        let j = self.disks().controller;
+        let d = self.disks.as_ref().expect("just made");
+        assert!(d.dm.is_none(), "one multiplexor on the controller's cable");
+        assert!(
+            d.units.iter().all(Option::is_none),
+            "the multiplexor goes on before the drives: their ports are its"
+        );
+        // A controller parsed the ordinary way has `UNIT0` joined to
+        // `GND` by the one-board jumper at `EP2 : ER2`, and five more like
+        // it. The multiplexor would then be driving nets tied to ground
+        // and to each other, and would go on running as if it were not:
+        // the same shape of silence as indexing the wrong board.
+        let dc = &self.device_sources[j];
+        assert!(
+            find(dc, "UNIT0") != find(dc, "GND"),
+            "the controller's netlist is not the one `parse_with_multiplexor` makes: \
+             its one-board jumpers are still on and the multiplexor has nothing to drive"
+        );
+        let cable = Dm::new(dc, dm, powered_at);
+        self.disks().dm = Some((dm.clone(), cable));
+        let n = self.disks.as_mut().expect("just made").settle(&mut self.devices[j], powered_at);
+        self.transitions += n;
+    }
+
+    /// Puts a drive on `unit`'s port at `now`. Without a multiplexor the
+    /// controller has one port and only unit 0 has one to be on.
+    pub fn plug_unit(&mut self, unit: u8, drive: Trident, now: u64) {
+        let unit = usize::from(unit);
+        let j = self.disks().controller;
+        let d = self.disks.as_ref().expect("just made");
+        assert!(unit < 8, "the multiplexor's ports are units 0 to 7");
+        assert!(d.units[unit].is_none(), "unit {unit} is taken");
+        assert!(
+            unit == 0 || d.dm.is_some(),
+            "unit {unit} wants a multiplexor: the controller has one port"
+        );
+        let per_unit = d.dm.as_ref().map_or(&self.device_sources[j], |(n, _)| n);
+        let ports = Ports { per_unit, unit: unit as u8, shared: &self.device_sources[j] };
+        let cable = OnCable::on(ports, drive);
+        self.disks().units[unit] = Some(cable);
+        let n = self.disks.as_mut().expect("just made").apply(unit, &mut self.devices[j], now);
+        self.transitions += n;
+    }
+
+    /// The drive in unit 0's place, if one is plugged in.
     pub fn trident(&self) -> Option<&Trident> {
-        self.trident.as_ref().map(|(_, c)| &c.drive)
+        self.unit(0)
     }
 
-    /// Lets the drive see what the controller has on the cable at `now`
-    /// and answer; the controller's board transitions if that moved a
-    /// net.
-    fn apply_drive(&mut self, now: u64) {
-        if let Some((j, cable)) = self.trident.as_mut() {
-            cable.apply(&mut self.devices[*j], now);
-            self.trident_next = Some(cable.next_change(now));
-        }
+    /// The drive on `unit`'s port, if one is plugged in.
+    pub fn unit(&self, unit: u8) -> Option<&Trident> {
+        self.disks.as_ref()?.units[usize::from(unit)].as_ref().map(|c| &c.drive)
+    }
+
+    /// Lets every drive see what the controller has on the cables at `now`
+    /// and answer; the boards transition if that moved a net.
+    fn apply_drives(&mut self, now: u64) {
+        let Some(d) = self.disks.as_mut() else { return };
+        let n = d.apply_all(&mut self.devices[d.controller], now);
+        self.transitions += n;
     }
 
     /// Carries every wire across once: the wired-AND of what the interface,
@@ -739,13 +922,13 @@ impl Xbus {
             if self.changed[first_device + j] {
                 d.transition(now);
                 self.transitions += 1;
-                if self.trident.as_ref().is_some_and(|(k, _)| *k == j) {
+                if self.disks.as_ref().is_some_and(|d| d.controller == j) {
                     controller_moved = true;
                 }
             }
         }
         if controller_moved {
-            self.apply_drive(now);
+            self.apply_drives(now);
         }
     }
 
@@ -762,7 +945,7 @@ impl Xbus {
             .iter()
             .chain(&self.devices)
             .filter_map(|b| self.due(b))
-            .chain(self.trident_next)
+            .chain(self.disks.as_ref().and_then(Disks::next_tap))
             .min()
     }
 
@@ -773,30 +956,24 @@ impl Xbus {
         let sleep = self.sleep;
         let due = |b: &Chip| if sleep && b.asleep() { b.next_wake() } else { b.next_tap() };
         let boards = self.boards.len();
-        let controller = self.trident.as_ref().map(|(j, _)| boards + *j);
+        let controller = self.disks.as_ref().map(|d| boards + d.controller);
         for (i, b) in self.boards.iter_mut().chain(&mut self.devices).enumerate() {
             let mut n = 0;
             while let Some(t) = due(b)
                 && t <= now
             {
-                // The drive's edges that come before this tap reach the
-                // controller first, each at its own time.
+                // The drives' edges, and the multiplexor's, that come
+                // before this tap reach the controller first, each at its
+                // own time.
                 if Some(i) == controller {
-                    while let Some((_, cable)) = self.trident.as_mut()
-                        && self.trident_next.is_some_and(|d| d < t)
-                    {
-                        let d = self.trident_next.unwrap();
-                        cable.apply(b, d);
-                        self.trident_next = Some(cable.next_change(d));
-                    }
+                    self.transitions += run_disks(&mut self.disks, b, t, false);
                 }
                 b.transition(t);
                 self.transitions += 1;
                 if Some(i) == controller
-                    && let Some((_, cable)) = self.trident.as_mut()
+                    && let Some(d) = self.disks.as_mut()
                 {
-                    cable.apply(b, t);
-                    self.trident_next = Some(cable.next_change(t));
+                    self.transitions += d.apply_all(b, t);
                 }
                 n += 1;
                 assert!(
@@ -814,20 +991,24 @@ impl Xbus {
                 );
             }
         }
-        // The drive's edges up to `now` that no tap of the controller's
-        // came after.
-        while let Some((j, cable)) = self.trident.as_mut()
-            && self.trident_next.is_some_and(|d| d <= now)
-        {
-            let d = self.trident_next.unwrap();
-            cable.apply(&mut self.devices[*j], d);
-            self.trident_next = Some(cable.next_change(d));
+        // The drives' edges and the multiplexor's up to `now` that no tap
+        // of the controller's came after.
+        if let Some(j) = self.disks.as_ref().map(|d| d.controller) {
+            self.transitions += run_disks(&mut self.disks, &mut self.devices[j], now, true);
         }
     }
 
     /// Whether any board has a delay-line tap in flight.
     pub fn taps_pending(&self) -> bool {
         self.boards.iter().chain(&self.devices).any(|b| b.taps_pending())
+            || self.multiplexor().is_some_and(|dm| dm.board.taps_pending())
+    }
+
+    /// The multiplexor on the controller's cable, if one is fitted. Read
+    /// only: what is on its ports is the board's own doing and a caller
+    /// that drove them would be deciding what the drives decide.
+    pub fn multiplexor(&self) -> Option<&Dm> {
+        self.disks.as_ref()?.dm.as_ref().map(|(_, dm)| dm)
     }
 
     /// Writes the device boards, for the end of a checkpoint: after the
@@ -867,10 +1048,16 @@ impl Xbus {
                 self.contrib[e][k] = None;
             }
         }
-        if let Some((_, cable)) = self.trident.as_mut() {
-            cable.reattach();
+        if let Some(d) = self.disks.as_mut() {
+            let controller = &self.device_sources[d.controller];
+            if let Some((src, dm)) = d.dm.as_mut() {
+                *dm = Dm::new(controller, src, powered_at);
+            }
+            for cable in d.units.iter_mut().flatten() {
+                cable.reattach();
+            }
         }
-        self.apply_drive(powered_at);
+        self.apply_drives(powered_at);
     }
 
     /// The board, bank and cell a physical address names, if a board is
