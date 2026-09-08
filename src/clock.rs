@@ -34,6 +34,15 @@ pub struct Inputs {
 }
 
 /// The mode register's two speed bits, `ir.bits` naming.
+///
+/// A microcycle at each, with no `ILONG`: **Fast 135, Normal 145, Slow 160,
+/// ExtraSlow 220** nanoseconds.  The names are MIT's and the spacing is not
+/// even --- `Slow` is fifteen nanoseconds off `Normal` and `ExtraSlow` is a
+/// long way below all three --- because they name delay-line taps and not
+/// intervals: the 74S151 at CLOCK1 1D08 selects `-TPR75`, `-TPR85`,
+/// `-TPR100` and `-TPR160`, and each cycle is its tap plus the sixty
+/// nanoseconds of restart after it.  [`Speed::read_phase_ns`] has the tap
+/// table in full, `ILONG` included.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Speed {
     ExtraSlow = 0,
