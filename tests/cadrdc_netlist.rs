@@ -1804,3 +1804,132 @@ fn a_read_across_a_track_steps_the_head() {
     assert_eq!(back, 1 << 8, "head 1, block 0: the last block transferred");
     assert_eq!(p.drive().position(), (0, 1), "the drive's head selected");
 }
+
+/// One of 01, 03 and 12 run on the board with a drive and a memory: the
+/// channel's transfers, the pack, and the status word.
+///
+/// `within` bounds the run; a command that is still busy at the end of it
+/// comes back as `busy`.
+struct Reversed {
+    /// Still busy when the run ran out.
+    busy: bool,
+    status: u32,
+    /// The addresses the channel stored into, and the ones it fetched.
+    stored: Vec<u32>,
+    fetched: Vec<u32>,
+    block2: Option<[u32; muir::disk_unit::BLOCK_WORDS]>,
+    /// Sectors the drive took that did not parse as the format.
+    bad: usize,
+}
+
+fn reversed_channel(n: &Netlist, cmd: u32, within: u64) -> Reversed {
+    let mut b = controller(n);
+    let mut p = Probe::new(&b);
+    let t0 = b.now;
+    p.plug(&mut b, n, quick_drive(t0));
+    p.with_memory(&b, 1 << 15);
+    let data = words(31);
+    let m = p.memory.as_mut().unwrap();
+    m.words[PAGE as usize..PAGE as usize + 256].copy_from_slice(&data);
+    m.words[CLP as usize] = PAGE;
+    p.run(&mut b, t0 + 10_000);
+
+    b.cycle(REGS, Some(cmd));
+    b.cycle(REGS + 1, Some(CLP));
+    b.cycle(REGS + 2, Some(2));
+    p.cycle(&mut b, REGS + 3, Some(0));
+    // Not `run_to_done`: one of the three does not finish, and that is
+    // one of the things being measured.
+    let deadline = b.now + within;
+    while p.busy(&b) && b.now < deadline {
+        let to = b.now + 5;
+        p.run(&mut b, to);
+    }
+    let busy = p.busy(&b);
+    let settled = b.now + 20_000;
+    p.run(&mut b, settled);
+    let (_, status) = b.cycle(REGS, None);
+    let transfers = p.memory().transfers.clone();
+    let stored: Vec<u32> = transfers.iter().filter(|t| t.wrote.is_some()).map(|t| t.addr).collect();
+    let fetched: Vec<u32> =
+        transfers.iter().filter(|t| t.wrote.is_none()).map(|t| t.addr).collect();
+    let drive = &mut p.cable.as_mut().unwrap().drive;
+    Reversed {
+        busy,
+        status,
+        stored,
+        fetched,
+        block2: drive.unit.block_at(0, 0, 2),
+        bad: drive.bad_writes,
+    }
+}
+
+/// **The reversed memory channel stores where it should fetch.**
+///
+/// `<3>` of the command steers the channel and reaches no part of the
+/// command PROM --- `cadrdc/newdsk.31`, "Commands 4-7 do not use the
+/// memory channel", and the PROM "is divided into 8 sectors of 64 words
+/// each", so `<2:0>` alone picks the sector. MIT's table leaves 01 and 03
+/// out: they are the Write and Write All sectors with the channel pointed
+/// the other way, so the fifo is filled from the end it is normally
+/// emptied at.
+///
+/// Both run their sector and both store 256 words into the page rather
+/// than fetching them --- one CCW word is the only thing read. They part
+/// on the outcome: **01 ends with no error at all** and puts a well-formed
+/// block on the pack, where **03 ends with Overrun and Transfer Aborted**
+/// and puts something on the disk that does not parse, so no block lands.
+///
+/// This is the measurement issue #34 asked for, and
+/// `src/disk_controller.rs` follows it.
+#[test]
+fn the_reversed_memory_channel_stores_where_it_should_fetch() {
+    let n = cadrdc();
+    let two_turns = 2 * REVOLUTION_NS;
+
+    let Reversed { busy, status, stored, fetched, block2, bad } =
+        reversed_channel(&n, 0o01, two_turns);
+    assert!(!busy, "0001 finishes");
+    assert_eq!(status & ERRORS, 0, "0001 ends with no error: {status:o}");
+    assert_eq!(fetched, [CLP], "0001 reads the CCW and nothing else");
+    assert_eq!(stored.len(), 256, "0001 stores a page: {}", stored.len());
+    assert_eq!(bad, 0, "0001 puts a well-formed block on the pack");
+    assert_ne!(block2, Some([0; muir::disk_unit::BLOCK_WORDS]), "0001 writes block 2");
+
+    let Reversed { busy, status, stored, fetched, block2, bad } =
+        reversed_channel(&n, 0o03, two_turns);
+    assert!(!busy, "0003 finishes");
+    assert_ne!(status & (1 << 14), 0, "0003 overruns: {status:o}");
+    assert_ne!(status & (1 << 13), 0, "0003 aborts: {status:o}");
+    assert_eq!(status & (1 << 11), 0, "0003 does not time out: {status:o}");
+    assert_eq!(fetched, [CLP], "0003 reads the CCW and nothing else");
+    assert_eq!(stored.len(), 256, "0003 stores a page: {}", stored.len());
+    assert_eq!(bad, 1, "0003 puts something on the disk that does not parse");
+    assert_eq!(block2, Some([0; muir::disk_unit::BLOCK_WORDS]), "0003 lands no block");
+}
+
+/// **And the reversed Read All hangs to the watchdog.**
+///
+/// `0012` is the Read All sector with the channel pointed at memory
+/// instead of away from it. It reads eighteen words out of memory, stores
+/// nothing, and never finishes: the board's own timer stops it with
+/// **Timeout and Transfer Aborted**, `STATUS<11>` and `<13>`.
+///
+/// So of the three codes MIT's table leaves out of the transfer sectors,
+/// this is the one that behaves like a reserved code, and
+/// `src/disk_controller.rs` gives it [`muir::disk_controller`]'s `hang`.
+/// It was expected to be the harmless one of the three; it is not.
+#[test]
+#[ignore = "2.56 seconds of board, minutes of wall clock; run with --ignored"]
+fn the_reversed_read_all_hangs_to_the_watchdog() {
+    let n = cadrdc();
+    let Reversed { busy, status, stored, fetched, block2, bad } =
+        reversed_channel(&n, 0o12, muir::disk_controller::TIMEOUT_NS + REVOLUTION_NS);
+    assert!(!busy, "the watchdog stopped it");
+    assert_ne!(status & (1 << 11), 0, "0012 times out: {status:o}");
+    assert_ne!(status & (1 << 13), 0, "0012 aborts: {status:o}");
+    assert!(stored.is_empty(), "0012 stores nothing: {stored:?}");
+    assert_eq!(fetched.len(), 18, "0012 reads eighteen words: {}", fetched.len());
+    assert_eq!(bad, 0, "and puts nothing on the disk");
+    assert_eq!(block2, Some([0; muir::disk_unit::BLOCK_WORDS]), "block 2 untouched");
+}

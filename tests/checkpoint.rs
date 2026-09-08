@@ -95,7 +95,7 @@ fn the_file_names_its_engine_and_refuses_other_files() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// **The format is version 9, and a file of another version is refused by
+/// **The format is version 10, and a file of another version is refused by
 /// number.** The version is bumped whenever a type changes what it writes,
 /// so a file from another build is read wrong or not at all; this pins
 /// which it is, and that the refusal names both versions. Version 3 added
@@ -105,10 +105,11 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// latches and clock with the encoders on its lines, version 8 the bit
 /// count of what the Chaosnet interface received or has landing, and
 /// version 9 `micro`'s `NEXT INSTR` and `NEXT INSTRD`, the two stages
-/// of the fetch a `POPJ` asks for.
+/// of the fetch a `POPJ` asks for, and version 10 the disk controller's
+/// overrun.
 #[test]
-fn the_format_is_version_9_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 9, "a new version needs its own tests");
+fn the_format_is_version_10_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 10, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -116,14 +117,14 @@ fn the_format_is_version_9_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 9u32.to_le_bytes());
-    for other in [1u32, 2, 3, 4, 5, 6, 7, 8, u32::MAX] {
+    assert_eq!(&good[at..at + 4], 10u32.to_le_bytes());
+    for other in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, u32::MAX] {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 9"), "{err}");
+        assert!(err.contains("reads 10"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }
