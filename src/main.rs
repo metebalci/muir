@@ -825,6 +825,28 @@ fn usage(msg: &str) -> ! {
     std::process::exit(2);
 }
 
+/// **A checkpoint this build cannot read is a file to make again, not a
+/// mistyped flag**, so it does not get [`usage`]'s sixty lines.
+///
+/// Two things go stale and both land here. The format is versioned and the
+/// version moves --- 10 to 15 on 8 September 2026, three of them in one
+/// afternoon --- and a board's [`Chip::fingerprint`] moves under a resume
+/// whenever `data/CADR.netlist` is regenerated, which is
+/// "saved from a different board or a different build". Neither is the
+/// reader's mistake and neither is fixed by reading the flag list; what
+/// fixes both is running the machine again to the same place with
+/// `--checkpoint`, which is what wrote the file in the first place.
+fn stale_checkpoint(path: &Path, err: &dyn std::fmt::Display, ran: Option<u64>) -> ! {
+    eprintln!("muir: --resume {}: {err}", path.display());
+    eprintln!("  the file is from another build, not a broken one, and making it again is");
+    eprintln!("  the fix: run the machine to the same place with --checkpoint, as this was");
+    match ran {
+        Some(n) => eprintln!("  written --- `--stop-after {n} --checkpoint {}`", path.display()),
+        None => eprintln!("  written --- `--stop-after <microcycles> --checkpoint <file>`"),
+    }
+    std::process::exit(2);
+}
+
 fn help() -> ! {
     println!("{USAGE}\n\n{HELP}");
     std::process::exit(0);
@@ -1976,8 +1998,7 @@ fn resume_chip(
     tv_board: TvBoard,
     (path, c): &(PathBuf, Checkpoint),
 ) -> u64 {
-    let refuse =
-        |err: std::io::Error| -> ! { usage(&format!("--resume {}: {err}", path.display())) };
+    let refuse = |err: std::io::Error| -> ! { stale_checkpoint(path, &err, None) };
     let mut it = muir::cable::read_checkpoint(c).unwrap_or_else(|e| refuse(e));
     if it.tv_board != tv_board.name() {
         usage(&format!(
@@ -2056,9 +2077,7 @@ fn resume_engine<E: Engine>(name: &str, e: &mut E, (path, c): &(PathBuf, Checkpo
         ));
     }
     let mut r = muir::checkpoint::Reader::new(&c.body);
-    e.load(&mut r)
-        .and_then(|()| r.done())
-        .unwrap_or_else(|err| usage(&format!("--resume {}: {err}", path.display())));
+    e.load(&mut r).and_then(|()| r.done()).unwrap_or_else(|err| stale_checkpoint(path, &err, None));
     let m = e.machine();
     eprintln!(
         "resumed: {} at {} microcycles, {} ns, {} memory boards",
@@ -2986,8 +3005,8 @@ fn main() {
     // A checkpoint is read before the machine is built, so that the machine
     // can be built with as much memory as the checkpoint's had.
     let resume = resume.map(|path| {
-        let c = muir::checkpoint::read(&path)
-            .unwrap_or_else(|err| usage(&format!("--resume {}: {err}", path.display())));
+        let c =
+            muir::checkpoint::read(&path).unwrap_or_else(|err| stale_checkpoint(&path, &err, None));
         (path, c)
     });
     if let Some((path, c)) = &resume {
