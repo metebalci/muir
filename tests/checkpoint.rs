@@ -111,11 +111,12 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// of the fetch a `POPJ` asks for, version 10 the disk controller's
 /// overrun, version 11 the drives on a netlist disk controller's
 /// cable and the multiplexor between them, version 12 one format for the
-/// harness and the binary (`af676fa`), and version 13 the disk
-/// controller's header ECC error.
+/// harness and the binary (`af676fa`), version 13 the disk
+/// controller's header ECC error, and version 14 `LC` among the signals
+/// `rtl` records for the cosimulation to compare.
 #[test]
-fn the_format_is_version_13_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 13, "a new version needs its own tests");
+fn the_format_is_version_14_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 14, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -123,14 +124,14 @@ fn the_format_is_version_13_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 13u32.to_le_bytes());
-    for other in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, u32::MAX] {
+    assert_eq!(&good[at..at + 4], 14u32.to_le_bytes());
+    for other in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, u32::MAX] {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 13"), "{err}");
+        assert!(err.contains("reads 14"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

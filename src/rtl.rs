@@ -115,7 +115,7 @@ pub struct Rtl {
 
     /// The datapath during the read phase of the last microcycle; see
     /// [`Rtl::signals`].
-    trace: [u64; 11],
+    trace: [u64; 12],
     /// The diagnostic flags over the same microcycle; see [`Rtl::spy`].
     flags: [u64; 12],
 
@@ -479,7 +479,7 @@ impl Rtl {
         let memory_boards = m.memory_boards();
         Rtl {
             m,
-            trace: [0; 11],
+            trace: [0; 12],
             flags: [0; 12],
             ir: 0,
             iwr: 0,
@@ -651,12 +651,16 @@ impl Rtl {
     /// The datapath of the microcycle just executed, under the names the
     /// drawings give the nets, for comparing against the `chip` engine.
     ///
+    /// `PC` and `IR` are first, and callers index them; anything new goes
+    /// on the end.
+    ///
     /// Recorded in the read phase, where the sources drive and the ALU result
     /// is up but nothing has been written back. `chip` has no notion of an
     /// instruction, only of nets, so this is the only vocabulary the two
     /// engines share.
     pub fn signals(&self) -> Vec<(&'static str, u64)> {
-        const NAMES: [&str; 11] = ["PC", "IR", "Q", "A", "M", "ALU", "R", "OB", "DC", "OPC", "ST"];
+        const NAMES: [&str; 12] =
+            ["PC", "IR", "Q", "A", "M", "ALU", "R", "OB", "DC", "OPC", "ST", "LC"];
         NAMES.iter().copied().zip(self.trace).collect()
     }
 
@@ -2263,6 +2267,11 @@ impl Rtl {
                 self.m.dispatch_constant as u64,
                 self.opc[7] as u64,
                 self.stat as u64,
+                // `LC<25:0>`, the 74S169s on page LC, masked as
+                // [`Engine::lc`] masks them: this engine keeps the
+                // byte-mode flags beside the counter and the netlist's
+                // `LC0..LC25` are the counter alone. Issue 71.
+                (self.lc & crate::machine::LC_COUNTER) as u64,
             ];
             self.flags = [
                 self.wmapd as u64,
