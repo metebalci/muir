@@ -513,13 +513,31 @@ impl Netlist {
     /// parts, so the page list is what says the board is here.
     /// The six of `cadrdc/disk.hand`'s first paragraph, which is headed
     /// "not to be installed if this DC is associated with a DM board".
-    /// They stand in for the DISK MULTIPLEXOR: with one drive and no
-    /// multiplexor board, "any attention" and "selected unit attention"
-    /// are both just unit 0's attention, `MULTIPLE SELECT` is grounded and
-    /// the unit number is forced to 0. [`parse`] applies them, which is
-    /// the one-board machine and the default; [`parse_with_multiplexor`]
-    /// leaves them off, and then these six nets are the multiplexor's to
-    /// drive.
+    /// **They supply a driver the controller has not got.** That is the
+    /// cause; "the unit number is forced to 0" is the effect, and saying
+    /// only that gets the direction of the seam backwards.
+    /// `cadrdc/dc.wlr` records a direction for every pin, and each of
+    /// `UNIT0`, `UNIT1` and `UNIT2` is one edge post and one 74LS244
+    /// **input** at B17 --- `TI`, and no `TO` anywhere on the three. So the
+    /// controller can only ever *receive* the unit number, and with no
+    /// multiplexor fitted nothing drives those nets at all. `ES2:ET1` ties
+    /// them to ground because `ET1` is ground and three 74LS244 inputs
+    /// must not float; selecting unit 0 is what follows. `MULTIPLE SELECT`
+    /// is the same shape --- a 74S260 input and a 74LS244 input, no driver
+    /// --- and `DN1:DM2` grounds it.
+    ///
+    /// What does the driving instead is on the multiplexor: the 74LS175 at
+    /// DMSECT 0F05 latches the disk address's `XBI<30:28>` on the rising
+    /// edge of `-LOAD DA` and puts `UNIT<2:0>` back on the cable, so the
+    /// board reports the unit it selected rather than being told one.
+    ///
+    /// The attentions go the same way: with one drive and no multiplexor,
+    /// "any attention" and "selected unit attention" have nothing to come
+    /// from, so the jumpers make them unit 0's own.
+    ///
+    /// [`parse`] applies all six, which is the one-board machine and the
+    /// default; [`parse_with_multiplexor`] leaves them off, and then these
+    /// nets are the multiplexor's to drive.
     ///
     /// The posts are the controller's edge connector and `cadrdc/dc.wlr`
     /// says what each carries, on its `DCEDGE` page: `DE2` `SEL UNIT

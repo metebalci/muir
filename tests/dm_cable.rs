@@ -182,3 +182,57 @@ fn selected_unit_attention_follows_the_unit_number() {
         }
     }
 }
+
+/// **The unit number crosses the cable to the controller.** This is what
+/// [`Dm`] is for and the rest of this file does not exercise it: the tests
+/// above drive the multiplexor's own nets, where this one reads the answer
+/// off the *controller* after the cable has carried it.
+///
+/// That direction is the one the cable uniquely provides. `EP2`, `ER2` and
+/// `ES2` are inputs on the controller, and on a one-board machine
+/// `disk.hand` ties them to ground because there is no multiplexor to
+/// report which unit it chose; with one there, they are how it reports.
+///
+/// **The other direction is driven on the multiplexor's side here, and
+/// deliberately.** `XBI28`, `XBI29`, `XBI30` and `-LOAD DA` are the
+/// controller's own outputs --- the 74LS374 at 0F06 drives the three
+/// address bits and seven 74LS193s carry the load --- so a test that put
+/// levels on them at the controller would be fighting its registers rather
+/// than using them. Making the controller produce them means running the
+/// controller, which is what putting the multiplexor on the backplane is
+/// for and belongs to the issues after this one.
+///
+/// Held for all eight, so a cable carrying one bit or none fails as loudly
+/// as one carrying nothing.
+#[test]
+fn the_unit_number_crosses_the_cable_to_the_controller() {
+    use muir::chip::Chip;
+    let (dc, dmn) = boards();
+    let mut controller = Chip::new_unclocked(&dc);
+    controller.power_on();
+    let mut dm = Dm::new(&dc, &dmn, 0);
+    dm.board.drive(net(&dmn, "'POWER OK'"), Level::High);
+
+    let mut t = 0u64;
+    for unit in 0..8u8 {
+        for u in 0..8u8 {
+            let level = if u == unit { Level::Low } else { Level::High };
+            dm.board.drive(net(&dmn, &format!("TRIDENT.{u}.SELECTED/")), level);
+        }
+        for (b, x) in (28..31).enumerate() {
+            let level = if unit >> b & 1 != 0 { Level::High } else { Level::Low };
+            dm.board.drive(net(&dmn, &format!("XBI{x}")), level);
+        }
+        for load in [Level::Low, Level::High] {
+            dm.board.drive(net(&dmn, "'-LOAD DA'"), load);
+            dm.board.settle_all();
+            t += 100;
+            dm.board.transition(t);
+        }
+        dm.exchange(&mut controller);
+        let at_controller: u8 = (0..3)
+            .map(|b| ((controller.net(net(&dc, &format!("UNIT{b}"))) == Level::High) as u8) << b)
+            .sum();
+        assert_eq!(at_controller, unit, "the controller reads unit {unit} off the cable");
+    }
+}
