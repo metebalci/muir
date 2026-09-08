@@ -1477,3 +1477,220 @@ impl Unit {
         Ok(())
     }
 }
+
+impl ControllerLines {
+    /// What the controller last had on the cable, so that a resumed drive
+    /// does not read a level as newly arrived and act on its edge.
+    fn save(&self, w: &mut crate::checkpoint::Writer) {
+        let ControllerLines { select, cylinder_tag, head_tag, control_tag, bus, write_data } = self;
+        w.bool(*select);
+        w.bool(*cylinder_tag);
+        w.bool(*head_tag);
+        w.bool(*control_tag);
+        w.u16(*bus);
+        w.opt(*write_data, |w, b| w.bool(b));
+    }
+
+    fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<ControllerLines> {
+        Ok(ControllerLines {
+            select: r.bool()?,
+            cylinder_tag: r.bool()?,
+            head_tag: r.bool()?,
+            control_tag: r.bool()?,
+            bus: r.u16()?,
+            write_data: r.opt(|r| r.bool())?,
+        })
+    }
+}
+
+impl DriveLines {
+    /// What the drive last put on the cable, so that a resumed drive does
+    /// not re-drive every line as though it had just changed.
+    fn save(&self, w: &mut crate::checkpoint::Writer) {
+        let DriveLines {
+            on_cylinder,
+            on_line,
+            read_only,
+            fault,
+            seek_incomplete,
+            selected,
+            attention,
+            sector_index,
+            clock,
+            data,
+        } = self;
+        for b in [
+            on_cylinder,
+            on_line,
+            read_only,
+            fault,
+            seek_incomplete,
+            selected,
+            attention,
+            sector_index,
+            clock,
+        ] {
+            w.bool(*b);
+        }
+        w.opt(*data, |w, b| w.bool(b));
+    }
+
+    fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<DriveLines> {
+        Ok(DriveLines {
+            on_cylinder: r.bool()?,
+            on_line: r.bool()?,
+            read_only: r.bool()?,
+            fault: r.bool()?,
+            seek_incomplete: r.bool()?,
+            selected: r.bool()?,
+            attention: r.bool()?,
+            sector_index: r.bool()?,
+            clock: r.bool()?,
+            data: r.opt(|r| r.bool())?,
+        })
+    }
+}
+
+impl OnCable {
+    /// **A drive on the controller's cable into a checkpoint**: the drive
+    /// and the levels it last drove. The nets it is wired to are not
+    /// saved; they are the netlist's, and a resume wires the drive to the
+    /// same netlist again before reading this.
+    pub fn save(&self, w: &mut crate::checkpoint::Writer) {
+        self.drive.save(w);
+        w.opt(self.last.as_ref(), |w, l| l.save(w));
+    }
+
+    /// Back from a checkpoint; see [`OnCable::save`].
+    pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        self.drive.load(r)?;
+        self.last = r.opt(DriveLines::load)?;
+        Ok(())
+    }
+}
+
+impl Trident {
+    /// **The drive into a checkpoint**: the pack, the spindle's phase, the
+    /// arm, a seek in flight, the gates, the conditions, the lines the
+    /// controller last held, and the sector under the head with whatever
+    /// the controller has written into it.
+    ///
+    /// The spindle's phase is why a drive cannot simply be built again on a
+    /// resume. [`Trident::new`] starts a drive with an index pulse
+    /// beginning at that instant, and the controller counts sector pulses
+    /// from the index to know where on the track it is; a drive brought up
+    /// fresh under a controller that has been running is a drive whose
+    /// track has jumped.
+    ///
+    /// Two fields are not here. [`Trident::tags`] is the record of what
+    /// the drive saw, kept for a test to read back, and nothing the drive
+    /// does depends on it. The sector under the head, serialised, is a
+    /// cache: it is cut from the pack again whenever the arm is not where
+    /// it was cut for, and thrown away when a write lands, so a drive read
+    /// back rebuilds it from the pack that came with it. Bits the
+    /// controller has written into that sector are another matter and are
+    /// saved --- until the gate drops they are nowhere but here.
+    pub fn save(&self, w: &mut crate::checkpoint::Writer) {
+        let Trident {
+            unit,
+            seek_settle_ns,
+            seek_ns_per_cylinder,
+            phase,
+            cylinder,
+            head,
+            offset,
+            seek,
+            attention,
+            fault,
+            seek_incomplete,
+            prev,
+            read_gate,
+            write_gate,
+            image: _,
+            written,
+            tags: _,
+            bad_writes,
+        } = self;
+        unit.save(w);
+        w.u64(*seek_settle_ns);
+        w.u64(*seek_ns_per_cylinder);
+        w.u64(*phase);
+        w.u32(*cylinder);
+        w.u32(*head);
+        w.bool(offset.0);
+        w.bool(offset.1);
+        w.opt(*seek, |w, (to, at)| {
+            w.u32(to);
+            w.u64(at);
+        });
+        w.bool(*attention);
+        w.bool(*fault);
+        w.bool(*seek_incomplete);
+        prev.save(w);
+        w.bool(*read_gate);
+        w.bool(*write_gate);
+        // A bit the controller has written is a one, a zero, or a bit it
+        // has not written: three values, so a byte each rather than a flag
+        // and a bit.
+        w.opt(written.as_ref(), |w, ((c, h, s), bits)| {
+            w.u32(*c);
+            w.u32(*h);
+            w.u32(*s);
+            w.u64(bits.len() as u64);
+            for b in bits {
+                w.u8(match b {
+                    None => 0,
+                    Some(false) => 1,
+                    Some(true) => 2,
+                });
+            }
+        });
+        w.u64(*bad_writes as u64);
+    }
+
+    /// Back from a checkpoint, into a drive holding a pack of the same
+    /// geometry; see [`Trident::save`]. The tags start empty, being no part
+    /// of the drive.
+    pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        self.unit.load(r)?;
+        self.seek_settle_ns = r.u64()?;
+        self.seek_ns_per_cylinder = r.u64()?;
+        self.phase = r.u64()?;
+        self.cylinder = r.u32()?;
+        self.head = r.u32()?;
+        self.offset = (r.bool()?, r.bool()?);
+        self.seek = r.opt(|r| Ok((r.u32()?, r.u64()?)))?;
+        self.attention = r.bool()?;
+        self.fault = r.bool()?;
+        self.seek_incomplete = r.bool()?;
+        self.prev = ControllerLines::load(r)?;
+        self.read_gate = r.bool()?;
+        self.write_gate = r.bool()?;
+        // The sector under the head is served from the pack whenever the
+        // arm is not where the cache was cut for, so a drive read back
+        // takes it from the pack it also read back rather than from
+        // whatever the drive it is being read into had.
+        self.image = None;
+        self.written = r.opt(|r| {
+            let key = (r.u32()?, r.u32()?, r.u32()?);
+            let n = r.u64()?;
+            let mut bits = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                bits.push(match r.u8()? {
+                    0 => None,
+                    1 => Some(false),
+                    2 => Some(true),
+                    other => {
+                        return Err(crate::checkpoint::bad(format!(
+                            "a written bit of {other}, which is not none, zero or one"
+                        )));
+                    }
+                });
+            }
+            Ok((key, bits))
+        })?;
+        self.tags.clear();
+        self.bad_writes = r.u64()? as usize;
+        Ok(())
+    }
+}

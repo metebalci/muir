@@ -59,13 +59,11 @@ fn a_resume_has_the_checkpoint_s_memory() {
     assert!(text(&out).contains("4 memory boards"), "{}", text(&out));
 }
 
-/// **A checkpoint is one machine**: the lashup has two and writes none,
-/// and on `chip` the netlist disk controller's drives are on its own
-/// cable and are not in a checkpoint, so that pairing is refused too.
-/// Both refusals are run from a scratch directory, where the file named
-/// would land were either run to go ahead.
+/// **A checkpoint is one machine**: the lashup has two and writes none.
+/// Run from a scratch directory, where the file named would land were the
+/// run to go ahead.
 #[test]
-fn checkpoints_are_one_machine_with_its_drives_in_it() {
+fn a_checkpoint_is_one_machine() {
     let dir = scratch("checkpoint-refused");
     let out = muir()
         .args(["--rtl", "--debug-in-process", "--stop-after", "1", "--resume", "x.chk"])
@@ -73,23 +71,60 @@ fn checkpoints_are_one_machine_with_its_drives_in_it() {
         .run();
     assert!(!out.status.success());
     assert!(text(&out).contains("not the lashup"), "{}", text(&out));
-    let out = muir()
-        .args([
-            "--chip",
-            "--disk-controller",
-            "netlist",
-            "--main-memory",
-            "netlist",
-            "--stop-after",
-            "1",
-            "--checkpoint",
-            "x.chk",
-        ])
-        .current_dir(&dir)
+    assert!(!dir.join("x.chk").exists(), "the run wrote no file");
+}
+
+/// **A `chip` checkpoint carries the netlist controller's drives.** They
+/// are on the controller's own cable rather than in the machine's model,
+/// so before this the pairing was refused outright; now the two runs
+/// together are the run that was never stopped, as they are with the model
+/// controller.
+///
+/// The pack is made here by `diskpack`, so nothing in this test needs
+/// `vendor/`: a fresh T-300 label on a sparse file, which the boot PROM
+/// finds no microload on and does not need to. What matters is that there
+/// is a drive on the cable at all --- a spindle turning, an arm, and a
+/// controller talking to it --- for the checkpoint to have something to
+/// carry.
+#[test]
+fn chip_checkpoints_the_netlist_controllers_drives() {
+    let dir = scratch("checkpoint-drives");
+    let pack = dir.join("t300.img");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_diskpack"))
+        .arg(&pack)
+        .arg("initialize")
         .run();
-    assert!(!out.status.success());
-    assert!(text(&out).contains("--disk-controller model"), "{}", text(&out));
-    assert!(!dir.join("x.chk").exists(), "neither run wrote the file");
+    assert!(out.status.success(), "the pack was not made:\n{}", text(&out));
+    let chk = dir.join("drives.chk");
+    let chip = [
+        "--chip",
+        "--main-memory-boards",
+        "4",
+        "--disk-controller",
+        "netlist",
+        "--disk-pack",
+        pack.to_str().unwrap(),
+    ];
+    let out = muir().args(chip).args(["--stop-after", "300", "--checkpoint"]).arg(&chk).run();
+    let t = text(&out);
+    assert!(out.status.success(), "the first run failed:\n{t}");
+    assert!(chk.exists(), "the checkpoint was written:\n{t}");
+    let out = muir().args(chip).args(["--stop-after", "200", "--resume"]).arg(&chk).run();
+    let resumed = text(&out);
+    assert!(out.status.success(), "the resumed run failed:\n{resumed}");
+    let out = muir().args(chip).args(["--stop-after", "500"]).run();
+    let straight = text(&out);
+    assert!(out.status.success(), "the straight run failed:\n{straight}");
+    let stop = |t: &str| {
+        t.lines()
+            .find_map(|l| l.trim().strip_prefix("ran out at ").map(|r| r.to_string()))
+            .unwrap_or_else(|| panic!("no stop line in:\n{t}"))
+    };
+    assert_eq!(
+        stop(&resumed).split_once("; ").map(|(_, at)| at),
+        stop(&straight).split_once("; ").map(|(_, at)| at),
+        "the resumed run is where the straight one is"
+    );
 }
 
 /// **`chip` checkpoints and resumes like the others**, and the two runs

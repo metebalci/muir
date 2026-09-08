@@ -516,9 +516,8 @@ pub struct Xbus {
 /// no cycle. So it sits beside [`Xbus::devices`] rather than among them,
 /// and every per-end vector on the backplane is the length it was.
 ///
-/// No drive's state and no multiplexor's is in a checkpoint. A resume
-/// brings them up fresh at the resume's time, spindles at the index, which
-/// is what one drive on the controller's own port already did.
+/// Both are in a checkpoint, written after the device boards and read back
+/// with them: [`Xbus::save_disks`].
 struct Disks {
     /// Which device board the disk controller is.
     controller: usize,
@@ -1092,6 +1091,92 @@ impl Xbus {
     pub fn load_devices(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
         for d in &mut self.devices {
             d.load(r)?;
+        }
+        Ok(())
+    }
+
+    /// **The drives on the disk controller's cable, and the multiplexor
+    /// between them, into a checkpoint.** They are not Xbus devices ---
+    /// the drives are on the controller's own connector and the
+    /// multiplexor hangs off it --- so they are written after the device
+    /// boards and separately.
+    ///
+    /// A drive built again rather than read back is a drive whose spindle
+    /// is at the index at the instant of the resume and whose arm is at
+    /// cylinder 0, in the middle of whatever transfer the controller
+    /// believed it had. That is why this exists; see [`Trident::save`].
+    pub fn save_disks(&self, w: &mut crate::checkpoint::Writer) -> std::io::Result<()> {
+        let Some(d) = &self.disks else {
+            w.bool(false);
+            return Ok(());
+        };
+        w.bool(true);
+        w.opt(d.dm.as_ref(), |w, (_, dm)| {
+            dm.save(w).expect("a multiplexor writes into memory");
+        });
+        for unit in &d.units {
+            w.opt(unit.as_ref(), |w, u| u.save(w));
+        }
+        for n in &d.next {
+            w.opt(*n, |w, t| w.u64(t));
+        }
+        Ok(())
+    }
+
+    /// Reads them back; see [`Xbus::save_disks`]. A checkpoint's drives
+    /// have to be the drives this machine was built with: the same units
+    /// filled and a multiplexor or not, since a resume is the same run
+    /// carrying on and not a machine rebuilt to another specification.
+    pub fn load_disks(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        let had = r.bool()?;
+        let Some(d) = &mut self.disks else {
+            return match had {
+                false => Ok(()),
+                true => Err(crate::checkpoint::bad(
+                    "the checkpoint has drives on a disk controller's cable and this machine has \
+                     no netlist controller",
+                )),
+            };
+        };
+        if !had {
+            return Err(crate::checkpoint::bad(
+                "this machine has a netlist disk controller and the checkpoint has none",
+            ));
+        }
+        let dm_saved = r.bool()?;
+        match (&mut d.dm, dm_saved) {
+            (Some((_, dm)), true) => dm.load(r)?,
+            (None, false) => {}
+            (Some(_), false) => {
+                return Err(crate::checkpoint::bad(
+                    "this machine has a DISK MULTIPLEXOR and the checkpoint has none",
+                ));
+            }
+            (None, true) => {
+                return Err(crate::checkpoint::bad(
+                    "the checkpoint has a DISK MULTIPLEXOR and this machine has none",
+                ));
+            }
+        }
+        for (u, unit) in d.units.iter_mut().enumerate() {
+            let there = r.bool()?;
+            match (unit, there) {
+                (Some(cable), true) => cable.load(r)?,
+                (None, false) => {}
+                (Some(_), false) => {
+                    return Err(crate::checkpoint::bad(format!(
+                        "unit {u} has a drive here and none in the checkpoint"
+                    )));
+                }
+                (None, true) => {
+                    return Err(crate::checkpoint::bad(format!(
+                        "the checkpoint has a drive on unit {u} and this machine has none"
+                    )));
+                }
+            }
+        }
+        for n in &mut d.next {
+            *n = r.opt(|r| r.u64())?;
         }
         Ok(())
     }

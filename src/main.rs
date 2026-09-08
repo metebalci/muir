@@ -136,9 +136,10 @@
 //! each bus is driving onto the others. It is taken at the first
 //! microcycle from the stop with no bus cycle in flight and no transition
 //! on its way down a delay line, which is the only kind of instant it
-//! describes, and those microcycles are counted and said. `chip` wants
-//! `--disk-controller model` for it: the netlist controller's drives are
-//! on its own cable and are not in a checkpoint.
+//! describes, and those microcycles are counted and said. A netlist disk
+//! controller's drives are on its own cable rather than in the machine,
+//! and the multiplexor between them on its connector rather than the
+//! backplane; both are in a checkpoint too, each where it stood.
 
 use std::io::IsTerminal;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -539,8 +540,9 @@ A simulator of the MIT CADR Lisp Machine.
                                interface, the memory, the I/O board and the
                                display --- taken at the first microcycle
                                from the stop with no bus cycle in flight,
-                               and it wants --disk-controller model, whose
-                               drives are in the machine. The prompt's
+                               with the drives on a netlist controller's
+                               cable and the multiplexor between them where
+                               each stood. The prompt's
                                checkpoint writes one as the run goes, and
                                the run goes on.
   -c, --config <file>          the file of flags to read before the command
@@ -2915,22 +2917,8 @@ fn main() {
     if prom_file.is_some() && resume.is_some() {
         usage("--prom and --resume: the checkpoint carries the PROM it ran");
     }
-    if checkpoint.is_some() || resume.is_some() {
-        if cabled == 1 {
-            usage("--checkpoint and --resume are one machine on its own, not the lashup");
-        }
-        // On `chip` the drives are on the controller's own cable when the
-        // controller is a netlist, and no drive's state and no
-        // multiplexor's is in a checkpoint: a resume would bring them up
-        // fresh, spindles at the index and heads at cylinder 0, in the
-        // middle of whatever transfer the controller believed it had.
-        // The model controller keeps its drives in the machine, which is
-        // saved.
-        if which == Which::Chip && disk_controller {
-            usage(
-                "--checkpoint and --resume on chip want --disk-controller model: the drives on a netlist controller's cable are not in a checkpoint",
-            );
-        }
+    if (checkpoint.is_some() || resume.is_some()) && cabled == 1 {
+        usage("--checkpoint and --resume are one machine on its own, not the lashup");
     }
     // A checkpoint is read before the machine is built, so that the machine
     // can be built with as much memory as the checkpoint's had.
