@@ -480,6 +480,11 @@ impl FarEnd {
             let mut u = Unibus::new(busint, io, powered_at, chaos.address);
             let mut ether = crate::chaos::ether::Ether::new();
             ether.attach(Box::new(chaos.server(powered_at)));
+            // And the Chaosnet hosts that are not in this process, if a
+            // CHUDP link was bound: one more node, taking its turn.
+            if let Some(node) = chaos.udp_node() {
+                ether.attach(node);
+            }
             u.plug(ether, powered_at);
             // And a keyboard with nothing typed on the keyboard cable,
             // which the terminal types at.

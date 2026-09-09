@@ -23,6 +23,8 @@
 //! - [`time`]: the TIME and UPTIME services, §5.8.
 //! - [`mod@file`]: the FILE service, the band's file server: it reads, writes,
 //!   renames and deletes under the root `--chaos-file-root` names.
+//! - [`udp`]: Chaosnet over UDP, the stations on the cable that are not
+//!   in this process --- a node like any other, taking its turn.
 //!
 //! The authority is MIT A.I. Memo 628, *Chaosnet*, David A. Moon, 1981,
 //! the scan the tree carries, read
@@ -38,6 +40,7 @@ pub mod packet;
 pub mod server;
 pub mod status;
 pub mod time;
+pub mod udp;
 pub mod wire;
 
 /// What a run puts on the Chaosnet: this machine's address, and the
@@ -93,6 +96,22 @@ pub struct Config {
     /// machine's clock.  The tests fix it ([`time::TEST_UNIVERSAL`])
     /// so a boot over the model network does the same work every run.
     pub time: Option<u32>,
+    /// The CHUDP link, bound: the socket this machine's cable reaches
+    /// other Chaosnet hosts over, and the peers on it. None, and the
+    /// cable carries this machine and the Chaosnet server and nothing
+    /// else. `--chaos-udp`, `--chaos-udp-peer`, `--chaos-udp-dynamic`.
+    pub udp: Option<udp::Link>,
+    /// The Chaosnet addresses besides this machine's that FILE serves,
+    /// `--chaos-file-peers`.
+    ///
+    /// **Reachability and authorisation are separate.** A peer that a
+    /// packet reached this machine from can be answered; being answerable
+    /// is not being allowed to read and write the file root, which is a
+    /// real directory served under containment rules written for a cable
+    /// with one trusted machine on it. So a peer is named here or it is
+    /// refused at the RFC. TIME, UPTIME and STATUS answer anyone: they
+    /// give nothing away.
+    pub file_peers: Vec<u16>,
 }
 
 impl Default for Config {
@@ -104,6 +123,8 @@ impl Default for Config {
             file_root: None,
             trace: false,
             time: None,
+            udp: None,
+            file_peers: Vec::new(),
         }
     }
 }
@@ -141,8 +162,21 @@ impl Config {
             status::Status::new(&self.server_name).on_subnet((self.server_address >> 8) as u8),
         ));
         if let Some(root) = &self.file_root {
-            h.serve(Box::new(file::File::new(root.clone()).with_time(self.time)));
+            // Who may have files: this machine, always, and whoever
+            // `--chaos-file-peers` names. A CHUDP peer that was only
+            // learned is reachable and not authorised.
+            let mut hosts = vec![self.address];
+            hosts.extend(&self.file_peers);
+            h.serve(Box::new(file::File::new(root.clone()).with_time(self.time).serving(hosts)));
         }
         h
+    }
+
+    /// The CHUDP node for this machine's cable, if a link was bound. The
+    /// addresses already on that cable are this machine's and the
+    /// Chaosnet server's, which the node neither learns nor speaks for.
+    pub fn udp_node(&self) -> Option<Box<dyn ether::Node>> {
+        let link = self.udp.as_ref()?;
+        Some(Box::new(link.node(&[self.address, self.server_address], self.trace)))
     }
 }

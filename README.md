@@ -455,6 +455,15 @@ them.
 `sys/cc/*.qfasl` has to come over the network, the way it would have on a real
 machine.
 
+The cable carries this machine and that server alone until `--chaos-udp` puts
+**Chaosnet over UDP** on it --- the encapsulation `cbridge`, `usim`, `klh10`
+and the live Chaosnet hosts speak. Every host `--chaos-udp-peer 3040@host:port`
+names is then a station on the same modelled cable, taking its turn on it like
+any other. muir stays a leaf: a packet for somewhere else is dropped rather
+than forwarded, and a `cbridge` beside it is what routes. Who may reach the
+machine and who may have its files are separate --- `--chaos-udp-dynamic`
+decides the first, `--chaos-file-peers` the second.
+
 ## Layout
 
     mit/       MIT's own files, unmodified: the drawings and wire lists of
