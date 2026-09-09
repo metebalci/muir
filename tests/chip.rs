@@ -1390,14 +1390,13 @@ fn chip_agrees_with_rtl() {
                 .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '_' })
                 .collect();
             let p = d.join(format!("{pc:o}-{safe}.chk"));
-            if !p.exists() && far.quiet() && c.next_tap().is_none() && c.net(memrq) != Level::High {
+            if !p.exists() && far.quiet() && c.net(memrq) != Level::High {
                 checkpoint(&p, cycle, &c, &clk, &far);
                 eprintln!("microcycle {cycle}: reached {label} ({pc:o}), checkpointed");
             }
         }
         if checkpoint_at.front().is_some_and(|&at| cycle >= at)
             && far.quiet()
-            && c.next_tap().is_none()
             && c.net(memrq) != Level::High
         {
             checkpoint_at.pop_front();

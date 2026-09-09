@@ -660,15 +660,25 @@ impl FarEnd {
         }
     }
 
-    /// Whether the interface is between cycles with nothing in flight on
-    /// it or in a delay line on any board: where a checkpoint can be taken.
-    /// The memory boards' oscillators and refresh timers never stop, and
-    /// are saved.
+    /// Whether the interface is between cycles: where a checkpoint can be
+    /// taken.
+    ///
+    /// **A delay-line tap in flight is not asked about, because it is
+    /// saved.** It was until format 20, when the format had no field for
+    /// one; `CADRCHK7` carries them, [`Chip::save`], and a board's
+    /// oscillators and one-shots were already carried before that. So
+    /// what is left here is the interface's own cycle, whose answer would
+    /// be owed by boards a checkpoint does not describe.
+    ///
+    /// **Unverified**: that the cycle is what is left is read from the
+    /// refusal as it was written, not measured --- every microcycle
+    /// boundary `tests/checkpoint.rs` samples in the boot PROM has `INT
+    /// BUSY` low, so a checkpoint across a cycle in flight has never been
+    /// tried. What would settle it is that test reaching a boundary with
+    /// `INT BUSY` high and the machine loaded from it still being the
+    /// machine that was never stopped.
     pub fn quiet(&self) -> bool {
         self.board.net(self.int_busy) == Level::Low
-            && self.board.next_tap().is_none()
-            && !self.xbus.taps_pending()
-            && !self.unibus.as_ref().is_some_and(|u| u.taps_pending())
     }
 
     /// Writes the interface board and then the memory boards after the
