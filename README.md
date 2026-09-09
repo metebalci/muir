@@ -211,7 +211,8 @@ copies of the boot PROM are not all the same program, and nothing about a
 copy announces which it is.
 
 Every run serves a terminal: the display, keyboard and mouse over RFB, so
-that any VNC viewer can work the machine, which has no other way in or out.
+that any VNC viewer can work the machine, which has no other way to be
+worked.
 It is at `vnc://127.0.0.1:5900`, VNC's display :0, and the start says where
 it is; a display already taken --- a second muir on the host --- moves it
 up to the first free one. `--terminal` says where instead: a port, an
@@ -219,6 +220,18 @@ address or address:port. An address other than the loopback is worth
 meaning: RFB's `None` security is the only type offered, so a viewer needs
 no password. A port that is named there is bound as it stands, and the run
 stops rather than serving a viewer somewhere it was not told to look.
+
+The machine's other way out is its serial port, the Signetics 2651 at J9,
+and `--serial <endpoint>` is where it is reached: a TCP port, or
+address:port, attached to with `nc` or `telnet`. Connecting is the device
+on the null-modem cable plugging in --- `DSR`, `DCD` and `CTS` asserted,
+which is what the chip wants before it will transmit or receive at all ---
+and hanging up drops them; one device at a time. The rate and the frame are
+the machine's, whatever it programmed into the chip, so nothing at this end
+sets them and a far end that assumes another reads garbage, as it would on
+a real line. That is why the endpoint is TCP rather than a pseudo-terminal:
+a pty would look like a serial device and invite a rate the port never
+sees. The port is off unless the flag is given.
 
 The Lisp Machine keyboard is not a keyboard anyone has: 31 named keys and 11
 shifting keys, against a viewer sending X11 keysyms from a PC or a Mac. What

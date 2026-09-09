@@ -1473,6 +1473,16 @@ fn pci_cell(s: &State, k: usize) -> u8 {
     s.cells.get(k).copied().unwrap_or(0)
 }
 
+/// Mode registers 1 and 2 of a 2651 as the part holds them: the frame and
+/// the rate the machine programmed into it. `None` for a part that has
+/// never been updated and so has no cells yet.
+///
+/// [`crate::serial::OnCable::follow`] reads them: the far end of a
+/// null-modem cable runs at the port's rate and has none of its own.
+pub fn pci_modes(s: &State) -> Option<(u8, u8)> {
+    (s.cells.len() >= PCI_CELLS).then(|| (s.cells[PCI_MR1], s.cells[PCI_MR2]))
+}
+
 fn pci_cr(s: &State) -> u8 {
     pci_cell(s, PCI_CR)
 }

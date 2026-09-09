@@ -53,6 +53,18 @@ fn a_debuggee_pack_needs_the_lashup() {
     );
 }
 
+/// **The serial port is one machine's, and the lashup runs two.** The
+/// endpoint would be the debugger's alone, and nothing in the run loops
+/// that step two machines through the debug cable reaches the other
+/// machine's port, so the flag is refused there rather than opened for one
+/// of them without saying which.
+#[test]
+fn the_serial_port_is_not_the_lashups() {
+    for lashup in ["--debug-in-process", "--debug-cable-listen"] {
+        refused(&["--rtl", lashup, "--serial", "0", "--stop-after", "1"], "--serial");
+    }
+}
+
 /// A `.muirrc` of its own for one test, in a directory of its own: the
 /// directory, and the file's path under it.
 fn muirrc(name: &str, text: &str) -> (Scratch, PathBuf) {
