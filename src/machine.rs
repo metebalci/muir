@@ -462,6 +462,11 @@ impl Machine {
     pub fn plug_chaos(&mut self, powered_at: u64) {
         let mut ether = crate::chaos::ether::Ether::new();
         ether.attach(Box::new(self.chaos.server(powered_at)));
+        // And the Chaosnet hosts that are not in this process, if a
+        // CHUDP link was bound: one more node, taking its turn.
+        if let Some(node) = self.chaos.udp_node() {
+            ether.attach(node);
+        }
         self.ioboard.plug_chaos(self.chaos.address, Some(ether), powered_at, self.chaos.trace);
     }
 

@@ -76,17 +76,50 @@ stop: after 2000000 microcycles
       <div>
         <dt>--chaos-address &lt;this&gt;[,&lt;server&gt;]</dt>
         <dd>
-        <p><b>rtl, chip:</b> this machine&rsquo;s Chaosnet address, always, and after a comma the Chaosnet server&rsquo;s &mdash; the address muir&rsquo;s server on the other end of the cable answers at.</p>
+        <p>This machine&rsquo;s Chaosnet address, always, and after a comma the Chaosnet server&rsquo;s &mdash; the address muir&rsquo;s server on the other end of the cable answers at.</p>
         <p>Each address is the sixteen bits in octal, <code>3050</code>, or subnet:host with each in octal, <code>6:50</code> &mdash; the same number, subnet in the high byte.</p>
         <p>Which pair a run wants is the band&rsquo;s own, out of its host table: System 100&rsquo;s puts this machine at <code>3050</code> and its file and time host at <code>3060</code>, System 304&rsquo;s at <code>4401</code> and <code>4403</code>. A server answering anywhere else is one the band never calls, and the machine then boots but stops to ask for the date and reaches no files.</p>
         <p>Default: <code>3050,3060</code>, which is System 100&rsquo;s pair. The System 304 pack wants <code>4401,4403</code>.</p>
         </dd>
       </div>
       <div>
+        <dt>--chaos-file-peers &lt;addresses&gt;</dt>
+        <dd>
+        <p>The Chaosnet addresses, comma separated, that <code>FILE</code> serves besides this machine&rsquo;s own: <code>3040</code> or <code>3040,3041</code>, each in octal or subnet:host.</p>
+        <p><code>FILE</code> reads, writes, renames and deletes a real directory under containment rules written for a cable with one trusted machine on it, so who may use it is typed rather than followed from who could send a packet. A peer reached over <code>--chaos-udp</code> is refused unless it is named here, whether it was named as a peer or learned. <code>TIME</code>, <code>UPTIME</code> and <code>STATUS</code> answer anyone; they give nothing away.</p>
+        <p>It needs <code>--chaos-udp</code>, there being no one else to serve without it.</p>
+        <p>Default: this machine alone.</p>
+        </dd>
+      </div>
+      <div>
         <dt>--chaos-file-root &lt;dir&gt;</dt>
         <dd>
-        <p><b>rtl, chip:</b> the directory the Chaosnet server serves as its <code>/</code>; the band asks it for <code>/tree/sys/...</code>. It may not be <code>/</code>: the service writes, renames and deletes under it.</p>
+        <p>The directory the Chaosnet server serves as its <code>/</code>; the band asks it for <code>/tree/sys/...</code>. It may not be <code>/</code>: the service writes, renames and deletes under it.</p>
         <p>Default: <code>vendor/run/file-root</code> when present; with no root the server answers no <code>FILE</code> at all.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--chaos-udp [&lt;endpoint&gt;]</dt>
+        <dd>
+        <p>Put the Chaosnet cable on the network: <b>Chaosnet over UDP</b>, the encapsulation <code>cbridge</code>, <code>usim</code>, <code>klh10</code> and the live Chaosnet hosts speak. Ordinary UDP, so it needs no privileges and it crosses a NAT.</p>
+        <p>Nothing, a port, an address or address:port. A bare port is on the loopback, which is where a server nobody authenticates belongs, so reaching another host means naming an address to listen on. Two muirs on one host are two peers on the loopback and want no other transport between them.</p>
+        <p>muir is a leaf and not a router: a packet addressed to neither this machine nor its Chaosnet server is dropped, never forwarded. A <code>cbridge</code> beside muir is what routes.</p>
+        <p>Default: off; <code>42042</code>, the protocol&rsquo;s own port, when the flag is given with no port.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--chaos-udp-dynamic</dt>
+        <dd>
+        <p>Learn where a peer is from the packets it sends, so that a host <code>--chaos-udp-peer</code> never named can still be answered.</p>
+        <p>Off by default: with it on, whatever can reach the port puts itself in the address table under whatever Chaosnet address it claims. An endpoint <code>--chaos-udp-peer</code> named is not moved by a packet. Learning is reachability and not authorisation &mdash; a learned peer is served files only if <code>--chaos-file-peers</code> names it.</p>
+        <p>It needs <code>--chaos-udp</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--chaos-udp-peer &lt;address&gt;@&lt;host&gt;:&lt;port&gt;</dt>
+        <dd>
+        <p>A Chaosnet host reached over UDP and where it lives: <code>3040@127.0.0.1:42043</code>, the address in octal or subnet:host and the host a name or an address, resolved once at the start. The port may be left off for <code>42042</code>.</p>
+        <p>Once per peer, and the address may not be one this machine&rsquo;s own cable already carries. It needs <code>--chaos-udp</code>.</p>
         </dd>
       </div>
       <div>
@@ -443,6 +476,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
 
     <div class="prose">
       <p><code>FILE</code> is what makes the acceptance test possible: CC is not in the band, so <code>sys/cc/*.qfasl</code> has to come over the network, the way it would have on a real machine.</p>
+      <p>The cable carries this machine and that server alone until <code>--chaos-udp</code> puts <b>Chaosnet over UDP</b> on it. Then every host <code>--chaos-udp-peer</code> names is a station on the same modelled cable, taking its turn on it like any other, and a packet from one goes on with that host&rsquo;s own address in the hardware source. muir stays a leaf: a packet for somewhere else is dropped rather than forwarded, and a <code>cbridge</code> beside it is what routes. Who may reach the machine and who may have its files are separate &mdash; <code>--chaos-udp-dynamic</code> decides the first, <code>--chaos-file-peers</code> the second.</p>
     </div>
   </div>
 </section>

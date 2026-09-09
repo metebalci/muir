@@ -9,7 +9,9 @@
 //! taps: 145 ns at normal speed, so 6.9 M microcycles/s.
 //!
 //!     muir [--micro|--rtl|--chip] [--chaos-address <this>[,<server>]]
-//!          [--chaos-file-root <dir>] [--checkpoint <file>]
+//!          [--chaos-file-peers <addresses>] [--chaos-file-root <dir>]
+//!          [--chaos-udp [<endpoint>]] [--chaos-udp-dynamic]
+//!          [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
 //!          [--debug-cable-connect [<endpoint>]]
 //!          [--debug-cable-listen [<endpoint>]] [--debug-in-process]
 //!          [--debuggee-disk-pack <image>[,<unit>][,ro]]
@@ -76,6 +78,13 @@
 //! pair its band does not call, say --- stops in the debugger at the
 //! initialization that wants a host: `Super-B` there, then the date and
 //! time it asks for and `y`, finish it. Every engine has a Chaosnet.
+//! `--chaos-udp` puts that cable on the network as Chaosnet over UDP, and
+//! every host `--chaos-udp-peer` names is then a station on the same
+//! modelled cable, taking its turn on it. muir stays a leaf: a packet for
+//! somewhere else is dropped rather than forwarded, and a `cbridge`
+//! beside it is what routes. Who may reach the machine and who may have
+//! its files are separate --- `--chaos-udp-dynamic` decides the first,
+//! `--chaos-file-peers` the second.
 //!
 //! The machine's other way out is the serial port at J9, the 2651 at
 //! IOBSER 0A12, and `--serial <endpoint>` is where it is reached: a TCP
@@ -157,7 +166,7 @@
 //! backplane; both are in a checkpoint too, each where it stood.
 
 use std::io::IsTerminal;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -312,6 +321,27 @@ fn pack_spec(arg: &str) -> Result<Pack, String> {
         }
     }
     Ok(Pack { path, unit: unit.unwrap_or(0), read_only: read_only.unwrap_or(false) })
+}
+
+/// `--chaos-udp-peer`'s argument, `<address>@<host>[:<port>]`: a
+/// Chaosnet host and where it lives. The address is octal or
+/// `subnet:host`, as `--chaos-address` takes it; the host is a name or an
+/// address, and the port may be left off for the protocol's own.
+///
+/// **The name is resolved here**, once, before a machine is built, so
+/// that a name with no address is a refusal at the start rather than a
+/// peer that is never reached. A name that moves afterwards is not
+/// followed; naming the address instead, or `--chaos-udp-dynamic`, is
+/// what covers that.
+fn peer_spec(arg: &str) -> Result<(u16, SocketAddr), String> {
+    let (address, lives) = arg.split_once('@').ok_or("wants <address>@<host>:<port>")?;
+    let a = muir::chaos::parse_address(address)
+        .ok_or_else(|| format!("{address} is not an address in octal or subnet:host"))?;
+    let first = |s: String| s.to_socket_addrs().ok().and_then(|mut a| a.next());
+    let at = first(lives.to_string())
+        .or_else(|| first(format!("{lives}:{}", muir::chaos::udp::PORT)))
+        .ok_or_else(|| format!("{lives} has no address this host can reach"))?;
+    Ok((a, at))
 }
 
 /// A pack flag's argument parsed, or the usage. Which units a run can
@@ -530,7 +560,9 @@ fn report(name: &str, cycles: u64, secs: f64) {
 }
 
 const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <this>[,<server>]]
-            [--chaos-file-root <dir>] [--chaos-trace] [--checkpoint <file>]
+            [--chaos-file-peers <addresses>] [--chaos-file-root <dir>]
+            [--chaos-trace] [--chaos-udp [<endpoint>]] [--chaos-udp-dynamic]
+            [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
             [-c|--config <file>] [--debug-cable-connect [<endpoint>]]
             [--debug-cable-listen [<endpoint>]] [--debug-in-process]
             [--debuggee-chaos-address <this>[,<server>]]
@@ -574,6 +606,21 @@ A simulator of the MIT CADR Lisp Machine.
                                never calls. [default: 3050,3060, which is
                                System 100's pair; the System 304 pack wants
                                4401,4403]
+  --chaos-file-peers <addresses>
+                               the Chaosnet addresses, comma separated,
+                               that FILE serves besides this machine's
+                               own: 3040 or 3040,3041, each in octal or
+                               subnet:host. FILE reads, writes, renames
+                               and deletes a real directory, so who may
+                               use it is typed rather than followed from
+                               who could send a packet: a peer reached
+                               over --chaos-udp is refused unless it is
+                               named here, whether it was named as a peer
+                               or learned. TIME, UPTIME and STATUS answer
+                               anyone; they give nothing away. It needs
+                               --chaos-udp, there being no one else to
+                               serve without it. [default: this machine
+                               alone]
   --chaos-file-root <dir>
                                the directory the Chaosnet server serves as
                                its /; the band asks it for /tree/sys/... on
@@ -582,6 +629,42 @@ A simulator of the MIT CADR Lisp Machine.
                                and deletes under it. [default:
                                vendor/run/file-root when present; with no
                                root the server answers no FILE at all]
+  --chaos-udp [<endpoint>]     put the Chaosnet cable on the network:
+                               Chaosnet over UDP, which cbridge, usim,
+                               klh10 and the live Chaosnet hosts speak.
+                               Nothing, a port, an address or
+                               address:port; a bare port is on the
+                               loopback, which is where a server nobody
+                               authenticates belongs, so reaching another
+                               host means naming an address to listen on.
+                               Two muirs on one host are two peers on the
+                               loopback and want no other transport
+                               between them. muir is a leaf and not a
+                               router: a packet for neither this machine
+                               nor its server is dropped, never forwarded,
+                               and a cbridge beside muir is what routes.
+                               [default: off; 42042, the protocol's own
+                               port, when the flag is given with no port]
+  --chaos-udp-dynamic          learn where a peer is from the packets it
+                               sends, so that a host --chaos-udp-peer
+                               never named can still be answered. Off by
+                               default: with it on, whatever can reach the
+                               port puts itself in the address table under
+                               whatever Chaosnet address it claims. An
+                               endpoint --chaos-udp-peer named is not
+                               moved by a packet. Learning is reachability
+                               and not authorisation --- a learned peer is
+                               served files only if --chaos-file-peers
+                               names it. It needs --chaos-udp.
+  --chaos-udp-peer <address>@<host>:<port>
+                               a Chaosnet host reached over UDP and where
+                               it lives: 3040@127.0.0.1:42043, the address
+                               in octal or subnet:host and the host a name
+                               or an address, resolved once here. The port
+                               may be left off for 42042. Once per peer,
+                               and the address may not be one this
+                               machine's own cable already carries. It
+                               needs --chaos-udp.
   --checkpoint <file>          write the machine's whole state to <file>
                                when the run stops, for --resume to start
                                from: the engine, the processor's memories
@@ -2978,6 +3061,13 @@ fn main() {
     let mut which: Option<Which> = None;
     let mut packs: Vec<Pack> = Vec::new();
     let mut chaos = muir::chaos::Config::default();
+    // The CHUDP link: where it listens, the peers named for it, and
+    // whether it learns where an unnamed one lives. The socket is bound
+    // after the flags are read, so that what is refused is refused before
+    // anything is bound.
+    let mut udp_at: Option<SocketAddr> = None;
+    let mut udp_peers: Vec<(u16, SocketAddr)> = Vec::new();
+    let mut udp_dynamic = false;
     let mut cycles: Option<u64> = None;
     let mut auto_boot = true;
     let mut checkpoint: Option<PathBuf> = None;
@@ -3080,6 +3170,36 @@ fn main() {
                 Some(d) => chaos.file_root = Some(file_root("--chaos-file-root", &d)),
                 None => usage("--chaos-file-root wants a directory"),
             },
+            // The plural name takes one comma-separated list of bare
+            // addresses, as the singular `--chaos-udp-peer` below takes
+            // one compound value and is given again for the next.
+            (None, "--chaos-file-peers") => {
+                let want = "--chaos-file-peers wants <address>[,<address>]..., each in octal or subnet:host";
+                let arg = args.next().unwrap_or_else(|| usage(want));
+                for a in arg.split(',') {
+                    match muir::chaos::parse_address(a) {
+                        Some(a) => chaos.file_peers.push(a),
+                        None => usage(want),
+                    }
+                }
+            }
+            (None, "--chaos-udp") => {
+                // The endpoint is optional: the next word is it unless it is a flag.
+                let spec = args.next_if(|v| !v.starts_with('-'));
+                match endpoint(spec.as_deref(), muir::chaos::udp::PORT) {
+                    Some(a) => udp_at = Some(a),
+                    None => usage("--chaos-udp wants nothing, a port, an address or address:port"),
+                }
+            }
+            (None, "--chaos-udp-dynamic") => udp_dynamic = true,
+            (None, "--chaos-udp-peer") => {
+                let want = "--chaos-udp-peer wants <address>@<host>:<port>, the address in octal or subnet:host";
+                let arg = args.next().unwrap_or_else(|| usage(want));
+                match peer_spec(&arg) {
+                    Ok(p) => udp_peers.push(p),
+                    Err(e) => usage(&format!("--chaos-udp-peer {arg}: {e}")),
+                }
+            }
             (None, "--main-memory") => match args.next().as_deref() {
                 Some("netlist") => main_memory_model = false,
                 Some("model") => main_memory_model = true,
@@ -3274,6 +3394,31 @@ fn main() {
     if serial_at.is_some() && cabled == 1 {
         usage("--serial is one machine's serial port, and the lashup runs two");
     }
+    // The three flags that describe a CHUDP link describe one that has to
+    // be there: without `--chaos-udp` nothing is listening and the cable
+    // carries this machine and its server alone.
+    for (flag, given_it) in [
+        ("--chaos-udp-peer", !udp_peers.is_empty()),
+        ("--chaos-udp-dynamic", udp_dynamic),
+        ("--chaos-file-peers", !chaos.file_peers.is_empty()),
+    ] {
+        if given_it && udp_at.is_none() {
+            usage(&format!("{flag} is part of the CHUDP link: it needs --chaos-udp"));
+        }
+    }
+    // A peer is a station this cable does not already carry, and one
+    // endpoint an address: an address given twice is two answers to
+    // where one host lives.
+    for (k, &(a, _)) in udp_peers.iter().enumerate() {
+        if a == chaos.address || a == chaos.server_address {
+            usage(&format!(
+                "--chaos-udp-peer {a:o}: this machine's own cable carries that address"
+            ));
+        }
+        if udp_peers[..k].iter().any(|&(b, _)| b == a) {
+            usage(&format!("--chaos-udp-peer: {a:o} twice; one endpoint an address"));
+        }
+    }
     // The other machine's display: it takes another machine, and it is not
     // this machine's endpoint. Both are settled here, before anything is
     // bound, so that what is refused is refused whatever the host has
@@ -3429,6 +3574,12 @@ fn main() {
         }
         Err(e) => usage(&format!("--serial {addr}: {e}")),
     });
+    // The CHUDP link, bound here so that a port that cannot be had stops
+    // the run rather than leaving a machine that quietly reaches nobody.
+    chaos.udp = udp_at.map(|at| {
+        muir::chaos::udp::Link::bind(at, udp_peers, udp_dynamic)
+            .unwrap_or_else(|e| usage(&format!("--chaos-udp {at}: {e}")))
+    });
     // The Chaosnet server's file root.
     if machine_chaos_wants_default(&chaos) {
         chaos.file_root = default_file_root();
@@ -3440,10 +3591,14 @@ fn main() {
     // root is only what is named for it: two servers rooted at one
     // directory are two hosts sharing a filesystem, with nothing between
     // them to keep one from writing what the other is reading.
+    // The other machine has no CHUDP link: one socket belongs to one
+    // cable, and there is no flag that gives the other machine one.
     let debuggee_chaos = muir::chaos::Config {
         address: debuggee_address.unwrap_or(chaos.address),
         server_address: debuggee_server_address.unwrap_or(chaos.server_address),
         file_root: debuggee_file_root,
+        udp: None,
+        file_peers: Vec::new(),
         ..chaos.clone()
     };
 
@@ -3535,6 +3690,20 @@ fn main() {
             chaos.address, chaos.server_address
         )
         .unwrap();
+        if let Some(link) = &chaos.udp {
+            let octal = |a: &u16| format!("{a:o}");
+            let peers = match link.peers.as_slice() {
+                [] => "no peer named".to_string(),
+                p => p.iter().map(|(a, e)| format!("{a:o} at {e}")).collect::<Vec<_>>().join(", "),
+            };
+            let learning = if link.dynamic { ", learning where others are" } else { "" };
+            let files = match chaos.file_peers.as_slice() {
+                [] => "FILE to this machine alone".to_string(),
+                f => format!("FILE to {}", f.iter().map(octal).collect::<Vec<_>>().join(", ")),
+            };
+            writeln!(s, "chaosnet udp: listening at {}, {peers}{learning}, {files}", link.at)
+                .unwrap();
+        }
         writeln!(s, "terminal: {}", terminal_line(&terminal, &no_terminal, listen.addr)).unwrap();
         writeln!(s, "keyboard: {keyboard_said}").unwrap();
         if let Some(end) = &serial {

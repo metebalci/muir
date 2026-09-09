@@ -384,3 +384,97 @@ fn a_running_chip_says_where_it_is_when_asked() {
     assert!(text.contains("IR "), "and said what it was executing:\n{text}");
     assert!(text.contains("ran out at 6000"), "and ran to its stop after answering:\n{text}");
 }
+
+/// **The CHUDP flags describe a link that has to be there.** Without
+/// `--chaos-udp` nothing is listening, so a peer, a request to learn
+/// where one is, and a list of who may have files are each a statement
+/// about a link that does not exist.
+#[test]
+fn the_chudp_flags_need_the_link() {
+    refused(&["--chaos-udp-peer", "3040@127.0.0.1:42043", "--stop-after", "1"], "--chaos-udp-peer");
+    refused(&["--chaos-udp-dynamic", "--stop-after", "1"], "--chaos-udp-dynamic");
+    refused(&["--chaos-file-peers", "3040", "--stop-after", "1"], "--chaos-file-peers");
+}
+
+/// **A peer is one endpoint, and not an address the cable already
+/// carries.** Two endpoints for one address are two answers to where one
+/// host lives; an address this machine or its Chaosnet server answers at
+/// is a host that is here, not one over the network.
+#[test]
+fn a_peer_is_one_endpoint_and_not_one_of_this_cables_own() {
+    let link = ["--chaos-udp", "127.0.0.1:0"];
+    let twice = [
+        link.as_slice(),
+        &["--chaos-udp-peer", "3040@127.0.0.1:42043"],
+        &["--chaos-udp-peer", "3040@127.0.0.1:42044"],
+        &["--stop-after", "1"],
+    ]
+    .concat();
+    refused(&twice, "--chaos-udp-peer");
+    for a in ["3050", "3060"] {
+        let peer = format!("{a}@127.0.0.1:42043");
+        let own = [link.as_slice(), &["--chaos-udp-peer", &peer], &["--stop-after", "1"]].concat();
+        refused(&own, "--chaos-udp-peer");
+    }
+    // But the same address is a peer when this machine is somewhere else.
+    let out = muir()
+        .args(link)
+        .args(["--chaos-address", "4401,4403"])
+        .args(["--chaos-udp-peer", "3050@127.0.0.1:42043", "--micro", "--stop-after", "1"])
+        .run();
+    assert!(out.status.success(), "{}", text(&out));
+}
+
+/// **A peer's spelling is `<address>@<host>[:<port>]`**, the address in
+/// octal or `subnet:host`, and the port may be left off for the
+/// protocol's own. A name with no address is refused at the start rather
+/// than becoming a peer that is never reached.
+#[test]
+fn a_peer_is_an_address_and_where_it_lives() {
+    let link = ["--chaos-udp", "127.0.0.1:0"];
+    for bad in [
+        // no address
+        "127.0.0.1:42043",
+        // nowhere to live
+        "3040",
+        // 9 is not an octal digit
+        "99@127.0.0.1:42043",
+        // a name with no address
+        "3040@no-such-host.invalid",
+        // nor is that a port
+        "3040@127.0.0.1:not-a-port",
+    ] {
+        let args = [link.as_slice(), &["--chaos-udp-peer", bad], &["--stop-after", "1"]].concat();
+        refused(&args, "--chaos-udp-peer");
+    }
+    // The port may be left off, and the address may be subnet:host.
+    let out = muir()
+        .args(link)
+        .args(["--chaos-udp-peer", "6:40@127.0.0.1"])
+        .args(["--micro", "--stop-after", "1"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("3040 at 127.0.0.1:42042"), "the protocol's own port: {t}");
+}
+
+/// **The start says the link is there and who is on it**, so that a run
+/// that reaches nobody says so rather than looking as though it had.
+#[test]
+fn the_start_says_what_the_link_is() {
+    let out = muir()
+        .args(["--micro", "--stop-after", "1", "--chaos-udp", "127.0.0.1:0"])
+        .args(["--chaos-udp-peer", "3040@127.0.0.1:42043", "--chaos-udp-dynamic"])
+        .args(["--chaos-file-peers", "3040"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    let line = t.lines().find(|l| l.starts_with("chaosnet udp:")).unwrap_or_else(|| panic!("{t}"));
+    assert!(line.contains("listening at 127.0.0.1:"), "where it listens: {line}");
+    assert!(line.contains("3040 at 127.0.0.1:42043"), "and who is on it: {line}");
+    assert!(line.contains("learning where others are"), "and that it learns: {line}");
+    assert!(line.contains("FILE to 3040"), "and who may have files: {line}");
+    // And with no link there is no line at all.
+    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    assert!(!text(&out).contains("chaosnet udp:"), "{}", text(&out));
+}

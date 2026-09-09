@@ -99,16 +99,34 @@ pub struct File {
     root: PathBuf,
     /// A fixed universal time to date things by, or the machine's clock.
     time: Option<u32>,
+    /// The Chaosnet addresses this answers, or none for everyone.
+    hosts: Option<Vec<u16>>,
 }
 
 impl File {
+    /// A service answering **every** host that can reach it, which is
+    /// what a cable in one process carries: this machine. A CHUDP link
+    /// is what puts anyone else on that cable, and
+    /// [`super::Config::server`] narrows the service to
+    /// `--chaos-file-peers` before there is one.
     pub fn new(root: impl Into<PathBuf>) -> File {
-        File { root: root.into(), time: None }
+        File { root: root.into(), time: None, hosts: None }
     }
 
     /// Dates by `universal` instead of the machine's clock, if given.
     pub fn with_time(mut self, universal: Option<u32>) -> File {
         self.time = universal;
+        self
+    }
+
+    /// Answers these Chaosnet addresses and refuses the rest.
+    ///
+    /// The service reads, writes, renames and deletes a real directory
+    /// under containment rules written for a cable with one trusted
+    /// machine on it, so who may use it is said in as many words rather
+    /// than following from who could send a packet.
+    pub fn serving(mut self, hosts: Vec<u16>) -> File {
+        self.hosts = Some(hosts);
         self
     }
 }
@@ -132,6 +150,11 @@ impl Service for File {
         CONTACT
     }
     fn request(&mut self, _now: u64, args: &str, from: (u16, u16)) -> Response {
+        // Who may have files is not who could reach the cable: a peer
+        // over CHUDP is answerable without being authorised.
+        if self.hosts.as_ref().is_some_and(|h| !h.contains(&from.0)) {
+            return Response::Refuse(format!("{:o} is not served files by this host", from.0));
+        }
         let version = args.split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(1);
         Response::Accept(Box::new(Control::new(self.root.clone(), self.time, from.0, version)))
     }
