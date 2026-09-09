@@ -82,6 +82,11 @@ fn main() {
         Unit::open(vendor(&["run", "disk-sys-100-0.img"]), Geometry::T300)
             .expect("the System 100 pack"),
     );
+    // The band is System 100's: `MIT-LISPM-1` at 3050 calling `MIT-OZ` at
+    // 3060, out of the release's own `sys/site/hosts.text`. muir's
+    // defaults are subnet 376's and no band's, so the pair is named here
+    // or the band reaches neither its time nor its files.
+    (a.chaos.address, a.chaos.server_address) = (0o3050, 0o3060);
     a.chaos.file_root = Some(vendor(&["run", "file-root"]));
     a.chaos.trace = std::env::var_os("MUIR_CHAOS_TRACE").is_some();
     a.plug_chaos(0);

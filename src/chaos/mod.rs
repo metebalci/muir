@@ -59,13 +59,14 @@ pub mod wire;
 /// it never calls, and the machine then boots but stops to ask for the
 /// date and reaches no files.
 ///
-/// The defaults here are System 100's, from `vendor/system-100-0/sys/site/
-/// hosts.text`: this machine is `MIT-LISPM-1` at 3050, and its associated
-/// machine is `MIT-OZ` at 3060, the `SYS` host of `site.lisp`. The
-/// release's builders trimmed that table to exactly those two and gave OZ
-/// that address (its `README`; discrepancy 60), and the release's own
-/// configuration runs the band as them, so they are what that band
-/// expects rather than MIT's historical numbers.
+/// System 100's band is `MIT-LISPM-1` at 3050 and calls its file and time
+/// host `MIT-OZ` at 3060, the `SYS` host of `site.lisp`, from
+/// `vendor/system-100-0/sys/site/hosts.text`; the release's builders
+/// trimmed that table to exactly those two and gave OZ that address (its
+/// `README`; discrepancy 60), and the release's own configuration runs the
+/// band as them, so they are what that band expects rather than MIT's
+/// historical numbers. A run with that pack is given
+/// `--chaos-address 3050,3060`.
 ///
 /// System 304's band answers differently, and was asked at its listener:
 /// `si:local-host` is `AMS-LISPM-1` at 4401, and `OZ` --- `AMS-BRIDGE-1`
@@ -73,9 +74,28 @@ pub mod wire;
 /// its files and its time. A run with that pack is given
 /// `--chaos-address 4401,4403`.
 ///
-/// The defaults do not follow the target release. They are one working
-/// pair, and the pack a run boots says which pair it wants. On `muir`:
-/// `--chaos-address <this>[,<server>]`, `--chaos-file-root`;
+/// **The defaults are neither band's, and are deliberately no real
+/// host's**: this machine 177001 and the server 177002, subnet 376. muir
+/// models the CADR and not one distribution of it, so a default taken from
+/// one band's host table would be the wrong default for every other; and
+/// whatever is defaulted to can end up on a cable, since `--chaos-udp`
+/// puts this machine on the network. Subnet 376 is the Chaosnet's private,
+/// non-routable range --- its 192.168 --- so a machine started with no
+/// `--chaos-address` cannot collide with an address allocated on a real
+/// Chaosnet. That the range is set aside for this is the Global Chaosnet's
+/// own convention and not MIT's, and it is **unverified** against any MIT
+/// file: no MIT document here reserves a subnet. What does not depend on
+/// the convention is the part that matters --- no host table in this tree
+/// names a host on subnet 376, System 100's holding exactly `MIT-LISPM-1`
+/// and `MIT-OZ` and nothing else, so no band here calls it. Whether MIT
+/// ever assigned 376 is likewise **unverified**: what is here is the
+/// release's trimmed table and not MIT's network-wide one, and a copy of
+/// that table would settle it. So the pair is a working one,
+/// this machine and its server hearing each other on the modelled cable as
+/// they always did, and it is a pair no band goes looking for: a run that
+/// wants its band to reach the server names the band's own.
+///
+/// On `muir`: `--chaos-address <this>[,<server>]`, `--chaos-file-root`;
 /// `--chaos-trace` prints every packet.
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -83,8 +103,13 @@ pub struct Config {
     pub address: u16,
     /// The associated machine's address: where the server answers.
     pub server_address: u16,
-    /// The name the server answers STATUS with. `MIT-OZ` by default, the
-    /// band's own name for 3060 in `sys/site/hosts.text`.
+    /// The name the server answers STATUS with. `MIT-OZ` by default,
+    /// which is System 100's own name in `sys/site/hosts.text` for the
+    /// file and time host it calls at 3060. The default address is not
+    /// that band's, so the name is no longer that band's name for that
+    /// address; it is what STATUS prints, and `(hostat)` is what prints
+    /// it. There is no flag for it: a run that wants another sets the
+    /// field, as `tests/cc_harness` sets `OZ` for System 304.
     pub server_name: String,
     /// The directory the server's FILE service serves as its `/`; none,
     /// and there is no FILE service.
@@ -117,8 +142,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            address: 0o3050,
-            server_address: 0o3060,
+            address: 0o177001,
+            server_address: 0o177002,
             server_name: "MIT-OZ".to_string(),
             file_root: None,
             trace: false,

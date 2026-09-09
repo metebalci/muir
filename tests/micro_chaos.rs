@@ -32,7 +32,9 @@ use muir::rtl::Rtl;
 use muir::terminal::keyboard::Keyboard;
 
 mod support;
-use support::{lit_rows, machine_with_pack, pack_100, type_at, vendor, wait_for_the_prompt};
+use support::{
+    CHAOS_100, lit_rows, machine_with_pack, pack_100, type_at, vendor, wait_for_the_prompt,
+};
 
 /// The two machines here serve one directory, so they take turns: two
 /// Chaosnet servers rooted at one tree are two hosts sharing a
@@ -85,6 +87,12 @@ fn boots_and_reads_a_file<E: Engine>(mut e: E, root: std::path::PathBuf, name: &
     let _held = SHARED_ROOT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     e.boot();
     let m = e.machine_mut();
+    // The band is System 100's, and it calls its file and time host at its
+    // own host table's numbers. muir's defaults are on the private subnet
+    // 376 and are no band's, so the pair is named here; without it the
+    // band calls an address nothing answers at, and nothing this test
+    // looks for goes on the cable at all.
+    (m.chaos.address, m.chaos.server_address) = CHAOS_100;
     m.chaos.file_root = Some(root);
     m.chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
     m.plug_chaos(0);
@@ -105,18 +113,17 @@ fn boots_and_reads_a_file<E: Engine>(mut e: E, root: std::path::PathBuf, name: &
         ps.len()
     );
 
-    let cfg = muir::chaos::Config::default();
     let time = ps
         .iter()
         .find(|p| p.opcode == op::RFC && p.data.starts_with(b"TIME"))
         .expect("the band asked its time host for the time");
     assert_eq!(
         (time.source, time.dest),
-        (cfg.address, cfg.server_address),
+        CHAOS_100,
         "{name}: from this machine to its file and time host"
     );
     assert!(
-        ps.iter().any(|p| p.opcode == op::ANS && p.source == cfg.server_address),
+        ps.iter().any(|p| p.opcode == op::ANS && p.source == CHAOS_100.1),
         "{name}: and the server answered it"
     );
     assert_eq!(e.machine().bus_error, 0, "{name}: every cycle of the machine's was answered");
@@ -162,12 +169,12 @@ fn boots_and_reads_a_file<E: Engine>(mut e: E, root: std::path::PathBuf, name: &
     // handle, the operation and its options.
     assert!(
         after.iter().any(|p| {
-            op::is_data(p.opcode) && p.source == cfg.address && text(p).contains("OPEN PROBE")
+            op::is_data(p.opcode) && p.source == CHAOS_100.0 && text(p).contains("OPEN PROBE")
         }),
         "{name}: the band sent an OPEN PROBE over the file service"
     );
     assert!(
-        after.iter().any(|p| op::is_data(p.opcode) && p.source == cfg.server_address),
+        after.iter().any(|p| op::is_data(p.opcode) && p.source == CHAOS_100.1),
         "{name}: and the service answered it"
     );
     assert_ne!(

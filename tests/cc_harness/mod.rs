@@ -114,7 +114,7 @@ impl Release {
     /// (`network/host.lisp`) asked at the band's listener would settle it.
     pub fn server_name(self) -> String {
         match self {
-            Release::System100 => muir::chaos::Config::default().server_name,
+            Release::System100 => "MIT-OZ".to_string(),
             Release::System304 => "OZ".to_string(),
         }
     }
@@ -122,13 +122,12 @@ impl Release {
     /// This machine's Chaosnet address and its file and time host's, as
     /// this release's band holds them: `MIT-LISPM-1` at 3050 with `MIT-OZ`
     /// at 3060, `AMS-LISPM-1` at 4401 with `OZ` at 4403.  A server
-    /// answering anywhere else is a server the band never calls.
+    /// answering anywhere else is a server the band never calls, and
+    /// `chaos::Config`'s defaults are such a server on purpose --- subnet
+    /// 376's, no band's --- so the pair comes from here.
     pub fn chaos(self) -> (u16, u16) {
         match self {
-            Release::System100 => (
-                muir::chaos::Config::default().address,
-                muir::chaos::Config::default().server_address,
-            ),
+            Release::System100 => crate::support::CHAOS_100,
             Release::System304 => crate::support::CHAOS_304,
         }
     }

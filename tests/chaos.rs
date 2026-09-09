@@ -61,16 +61,35 @@ fn an_address_is_read_either_way_it_is_written() {
     assert_eq!(parse_address(""), None);
 }
 
-/// **The defaults are the band's own hosts.** `Config::default()` puts
-/// this machine at 3050 and the Chaosnet server on the other end of the cable at
-/// 3060, and those are what System 100's own host table gives
-/// `MIT-LISPM-1` and `MIT-OZ` --- `MIT-OZ` being the `SYS` host of
-/// `site.lisp`, where the boot goes for its time and its files. The
+/// **The band's own hosts are named by the run, and are not the
+/// defaults.** Two facts, and they are asserted together so that they
+/// stay apart on purpose rather than by accident.
+///
+/// The first: System 100's band is `MIT-LISPM-1` at 3050 and calls its
+/// file and time host `MIT-OZ` at 3060 --- `MIT-OZ` being the `SYS` host
+/// of `site.lisp`, where the boot goes for its time and its files. The
 /// release's builders trimmed that table to exactly those two hosts
-/// (discrepancy 60), so the band expects them. Read off
-/// `sys/site/hosts.text` so that a change on either side shows here.
+/// (discrepancy 60), so the band expects them. [`support::CHAOS_100`] is
+/// the pair every test that boots this band hands it, and it is read off
+/// `sys/site/hosts.text` here so that a change on either side shows.
+///
+/// The second: `Config::default()` is not that pair and is no band's. It
+/// is this machine at 177001 with its server at 177002, subnet 376, the
+/// Chaosnet's private and non-routable range, so that a run started with
+/// no `--chaos-address` cannot answer at an address a real Chaosnet
+/// allocated to someone else. muir models the CADR and not one
+/// distribution of it, and a default out of one band's host table would
+/// be the wrong default for every other band.
 #[test]
-fn the_defaults_are_the_bands_own_hosts() {
+fn the_bands_own_hosts_are_named_and_are_not_the_defaults() {
+    let d = Config::default();
+    assert_eq!(
+        (d.address, d.server_address),
+        (0o177001, 0o177002),
+        "the defaults are the private subnet's, not a band's"
+    );
+    assert_eq!((d.address >> 8, d.server_address >> 8), (0o376, 0o376), "both on subnet 376");
+
     let Some(text) = release("site/hosts.text") else { return };
     // `HOST MIT-OZ,<tabs>CHAOS 3060,SERVER,UNIX,VAX,[OZ]`
     let address = |host: &str| -> u16 {
@@ -82,9 +101,26 @@ fn the_defaults_are_the_bands_own_hosts() {
         let octal: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
         u16::from_str_radix(&octal, 8).unwrap()
     };
-    let d = Config::default();
-    assert_eq!(d.address, address("MIT-LISPM-1"), "this machine is MIT-LISPM-1");
-    assert_eq!(d.server_address, address("MIT-OZ"), "and its server is MIT-OZ");
+    let named: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("HOST "))
+        .filter_map(|l| l.split(',').next())
+        .collect();
+    assert_eq!(
+        named,
+        ["MIT-LISPM-1", "MIT-OZ"],
+        "the builders trimmed the table to two, so nothing here is on subnet 376"
+    );
+    assert_eq!(
+        support::CHAOS_100,
+        (address("MIT-LISPM-1"), address("MIT-OZ")),
+        "what a run hands this band is what the band's own host table gives it"
+    );
+    assert_ne!(
+        support::CHAOS_100,
+        (d.address, d.server_address),
+        "and it is handed to the band, never defaulted to"
+    );
 }
 
 /// Reads a `.promt` table: rows of 0/1 columns, `inputs` of them then
@@ -272,14 +308,19 @@ fn next_from(h: &mut Server, now: u64) -> Option<Packet> {
 /// believes is down.
 #[test]
 fn the_chaosnet_server_serves_status_as_mit_oz() {
-    let mut h = Config::default().server(0);
-    h.receive(100, &arriving(&rfc((0o3050, 3), 0o3060, 1, "STATUS")));
+    let d = Config::default();
+    let mut h = d.server(0);
+    h.receive(100, &arriving(&rfc((d.address, 3), d.server_address, 1, "STATUS")));
     let ans = next_from(&mut h, 100).expect("MIT-OZ answers STATUS");
     assert_eq!(ans.opcode, op::ANS);
     let end = ans.data[..32].iter().position(|&b| b == 0).expect("a name");
-    assert_eq!(&ans.data[..end], b"MIT-OZ", "the band's name for 3060");
+    assert_eq!(&ans.data[..end], b"MIT-OZ", "the name the server was given");
     let id = u16::from_le_bytes([ans.data[32], ans.data[33]]);
-    assert_eq!(id, 0o400 + 6, "the subnet is the address's high byte");
+    assert_eq!(
+        id,
+        0o400 + (d.server_address >> 8),
+        "the subnet is the address's high byte, 376 for the defaults"
+    );
 }
 
 /// **STATUS is a simple transaction, and HOSTAT is what reads it.**
@@ -1882,8 +1923,9 @@ fn the_lockout_ends_between_the_mid_cell_transition_and_the_next_cell() {
 /// on it, addressed from 4401 to 4403, and the server answers. At any
 /// other pair nothing is sent at all --- 4403 is on another subnet from
 /// 3050, and the band, hearing no route to it, never transmits --- and the
-/// machine comes up asking for the date instead. So this is also the test
-/// that the defaults, which are System 100's, are not this band's.
+/// machine comes up asking for the date instead. Neither release's pair is
+/// what `chaos::Config` defaults to --- that is subnet 376's and no
+/// band's --- so each release's tests hand their band the pair it holds.
 #[test]
 fn the_304_band_reaches_the_server_at_its_own_numbers() {
     let (Some(pack), Some(root)) = (support::pack_304(), support::vendor(&["run", "file-root"]))

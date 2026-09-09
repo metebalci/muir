@@ -186,7 +186,7 @@ fn the_debuggee_has_a_chaosnet_of_its_own() {
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(
-        t.contains("debuggee chaosnet: 3050, its own server at 3060, no file root"),
+        t.contains("debuggee chaosnet: 177001, its own server at 177002, no file root"),
         "the debugger's addresses, and no FILE:\n{t}"
     );
 
@@ -197,7 +197,10 @@ fn the_debuggee_has_a_chaosnet_of_its_own() {
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("debuggee chaosnet: 3051, its own server at 3061"), "{t}");
-    assert!(t.contains("chaosnet: 3050, the server at 3060"), "this machine's are its own:\n{t}");
+    assert!(
+        t.contains("chaosnet: 177001, the server at 177002"),
+        "this machine's are its own, and here its defaults:\n{t}"
+    );
 
     for (flag, value) in [("--debuggee-chaos-address", "3051"), ("--debuggee-chaos-file-root", ".")]
     {
