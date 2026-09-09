@@ -12,11 +12,15 @@
 //! what keeps these tests short: the crystal at 0A15 keeps the board awake
 //! while the port is on.
 
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::time::{Duration, Instant};
+
 use muir::busint::{UNIBUS_ADDRESS_NS, UNIBUS_STROBE_NS};
 use muir::ioboard::{self, IoBoard, csr};
 use muir::part::Level;
 use muir::serial::{
-    self, COMMAND, DATA, Framing, MODE, OnCable, STATUS, command, mode1, mode2, status,
+    self, COMMAND, DATA, Endpoint, Framing, MODE, OnCable, STATUS, command, mode1, mode2, status,
 };
 use muir::unibus::UnibusMaster;
 
@@ -395,4 +399,129 @@ fn seven_bits_even_parity_both_ways() {
         0o63,
         "the eighth bit is not received"
     );
+}
+
+/// A register read on the board alone. The tests above hold the board and
+/// the model to each other; the one below is about the endpoint, and runs
+/// the board on its own.
+fn board_read(b: &mut UnibusMaster, uaddr: u32) -> u8 {
+    b.cycle(uaddr, None).1 as u8
+}
+
+fn board_write(b: &mut UnibusMaster, uaddr: u32, v: u16) {
+    b.cycle(uaddr, Some(v));
+}
+
+/// The port at `rate`, eight-N-one, both halves on with `-DTR` and `-RTS`
+/// asserted.
+fn board_set_up(b: &mut UnibusMaster, rate: u8) {
+    board_read(b, COMMAND);
+    board_write(b, MODE, eight_n_one() as u16);
+    board_write(b, MODE, (mode2::RX_INTERNAL | mode2::TX_INTERNAL | rate) as u16);
+    let cr = command::TX_ENABLE | command::RX_ENABLE | command::DTR | command::RTS;
+    board_write(b, COMMAND, cr as u16);
+}
+
+/// [`run`] with the far end reading the port's rate off the board and the
+/// endpoint polled at every step, which is what `src/unibus.rs` and
+/// `src/main.rs` do on a run with `--serial`.
+fn run_plugged(
+    b: &mut UnibusMaster,
+    far: &mut OnCable,
+    end: &mut Endpoint,
+    until: u64,
+    done: impl Fn(&UnibusMaster, &OnCable) -> bool,
+) {
+    while b.now < until && !done(b, far) {
+        let tap = [b.chip.next_tap(), far.next_change(b.now)]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or(until)
+            .clamp(b.now + 1, until);
+        b.run(tap);
+        far.follow(&b.chip);
+        far.apply(&mut b.chip, b.now);
+        end.poll_on_cable(far);
+    }
+}
+
+/// Polls the endpoint until `done`, giving the host time to carry a byte
+/// across the loopback. Nothing on the board moves: what is being waited
+/// for is the socket.
+fn socket_until(end: &mut Endpoint, far: &mut OnCable, why: &str, done: impl Fn(&OnCable) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        end.poll_on_cable(far);
+        if done(far) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{why}");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// **The endpoint's far end runs at whatever rate the port was
+/// programmed with**, and follows it when the machine changes it.
+///
+/// The far end of a null-modem cable has no rate of its own --- both ends
+/// of a serial line run at one --- so this one is built at the rate and
+/// frame `RESET` leaves the mode registers holding, which is nothing
+/// anything could talk at, and takes the port's from the 2651 itself. Two
+/// rates in one run, a character each way at each, with no framing error
+/// on either side: at the wrong rate the stop bit is sampled in the wrong
+/// place and both ends say so.
+#[test]
+fn the_endpoint_runs_at_whatever_rate_the_port_was_given() {
+    let n = cadrio();
+    let mut b = UnibusMaster::new(&n, 10_000, &quiet());
+    // Mode registers as `RESET` leaves them: 50 baud, five data bits.
+    let mut far = OnCable::of(&n, 0, Framing::of(0)).expect("the board has J9");
+    // A far end with nothing connected to it reads as an empty J9 does:
+    // the MC1489's open inputs hold the three controls off and `RxD`
+    // marking, and a far end that is down holds them at the same levels.
+    // `muir --serial` puts one there before anything has connected.
+    far.apply(&mut b.chip, b.now);
+    for net in ["'TTL CTS IN'", "'TTL DSR IN'", "'TTL DCD IN'", "'TTL DATA IN'"] {
+        assert_eq!(b.level(net), Level::High, "{net} with nothing connected");
+    }
+    let mut end = Endpoint::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).expect("a free port");
+    let at = end.addr().expect("where it is");
+    let mut socket = TcpStream::connect(at).expect("the endpoint answers");
+    socket.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    socket_until(&mut end, &mut far, "the connection is accepted", |f| f.plugged());
+    far.apply(&mut b.chip, b.now);
+    for net in ["'TTL CTS IN'", "'TTL DSR IN'", "'TTL DCD IN'"] {
+        assert_eq!(b.level(net), Level::Low, "{net}: the device asserts it");
+    }
+
+    for (rate, what) in [(14u8, "9600 baud"), (15u8, "19,200 baud")] {
+        board_set_up(&mut b, rate);
+        let frame = Framing::of(eight_n_one()).frame_ns(rate);
+        // In: typed at the socket, framed by the far end at the port's
+        // rate, and in the receive holding register a frame later. The
+        // far end's own count says when the frame is out; `-SER RRDY` is
+        // `-TxRDY` as well by ECO 10 and an enabled transmitter holds it
+        // down, so it says nothing about the receiver here.
+        let before = far.sent;
+        socket.write_all(&[b'k' + rate]).expect("a character to the port");
+        socket_until(&mut end, &mut far, "the character reaches the far end", OnCable::busy);
+        let until = b.now + 3 * frame;
+        run_plugged(&mut b, &mut far, &mut end, until, |_, f| f.sent > before);
+        assert_eq!(far.sent, before + 1, "{what}: a whole frame within three");
+        let s = board_read(&mut b, STATUS);
+        assert_eq!(s & status::RX_READY, status::RX_READY, "{what}: {s:o}");
+        assert_eq!(s & (status::FRAMING_ERROR | status::PARITY_ERROR), 0, "{what}: {s:o}");
+        assert_eq!(board_read(&mut b, DATA), b'k' + rate, "{what}: the character");
+
+        // Out: written to the port, read off the wire by the far end at
+        // the same rate, and handed to the socket.
+        board_write(&mut b, DATA, (b'K' + rate) as u16);
+        let until = b.now + 3 * frame;
+        run_plugged(&mut b, &mut far, &mut end, until, |_, _| false);
+        let mut got = [0u8; 1];
+        socket.read_exact(&mut got).unwrap_or_else(|e| panic!("{what}: the character back: {e}"));
+        assert_eq!(got[0], b'K' + rate, "{what}");
+        assert_eq!(far.framing_errors, 0, "{what}: the far end read whole frames");
+    }
 }

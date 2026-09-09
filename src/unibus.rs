@@ -210,6 +210,14 @@ pub struct Unibus {
     mouse: Option<crate::terminal::cable::MouseOnCable>,
     mouse_nets: Option<crate::terminal::cable::MouseNets>,
     mouse_next: Option<u64>,
+    /// The far end of the serial port's null-modem cable on J9, if one is
+    /// on it: [`Unibus::plug_serial`], which only `muir --serial` asks
+    /// for. Its frames are timed, like the ether's edges, so it has a next
+    /// time of its own. Without it J9 is empty, which is what a CADR with
+    /// nothing plugged into its serial port is.
+    serial: Option<crate::serial::OnCable>,
+    serial_nets: Option<crate::serial::Nets>,
+    serial_next: Option<u64>,
     /// The 74LS14's input on the mains network at C20, and how many
     /// toggles of [`MAINS_PERIOD`] have been given to it. The line is high
     /// at zero, as the oscillators are.
@@ -264,6 +272,7 @@ impl Unibus {
         let chaos_nets = crate::chaos::cable::Nets::of(io);
         let keyboard_nets = crate::terminal::cable::Nets::of(io);
         let mouse_nets = crate::terminal::cable::MouseNets::of(io);
+        let serial_nets = crate::serial::Nets::of(io);
         let init = find(io, "-INIT*").expect("the I/O board has no -INIT*");
         board.drive(init, Level::Low);
         board.settle_all();
@@ -289,6 +298,9 @@ impl Unibus {
             mouse: None,
             mouse_nets,
             mouse_next: None,
+            serial: None,
+            serial_nets,
+            serial_next: None,
             mains: find(io, "@0C20,p8").or_else(|| find(io, "@0C20,p7")),
             mains_toggles: 0,
         }
@@ -368,6 +380,44 @@ impl Unibus {
         if let Some(m) = self.mouse.as_mut() {
             m.apply(&mut self.board, now);
             self.mouse_next = m.next_change(now);
+        }
+    }
+
+    /// Puts the far end of a null-modem cable on the board's J9 at `now`,
+    /// with nothing connected to the other side of it: it holds the port's
+    /// three control inputs off, which is where the MC1489's open inputs
+    /// sit with J9 empty, until [`crate::serial::Endpoint`] plugs a device
+    /// in.
+    ///
+    /// Only `muir --serial` asks for one. A run without it has no far end
+    /// here and pays nothing for the port at all: no rate to read off the
+    /// 2651 and no wires to look at on every transition of the board.
+    pub fn plug_serial(&mut self, now: u64) {
+        let Some(nets) = self.serial_nets else { return };
+        // The rate and the frame are the port's own, read off the 2651
+        // here and at every step after; these are what the mode registers
+        // hold from `RESET` and last until the machine writes them.
+        let mut far = crate::serial::OnCable::new(nets, 0, crate::serial::Framing::of(0));
+        far.follow(&self.board);
+        far.apply(&mut self.board, now);
+        self.serial_next = far.next_change(now);
+        self.serial = Some(far);
+    }
+
+    /// The far end of the serial cable, to give characters to and take
+    /// them from.
+    pub fn serial(&mut self) -> Option<&mut crate::serial::OnCable> {
+        self.serial.as_mut()
+    }
+
+    /// Lets the far end of the serial cable take the port's rate, move its
+    /// line if a bit is due at `now` and sample the board's; the board
+    /// transitions if that moved a net.
+    fn apply_serial(&mut self, now: u64) {
+        if let Some(s) = self.serial.as_mut() {
+            s.follow(&self.board);
+            s.apply(&mut self.board, now);
+            self.serial_next = s.next_change(now);
         }
     }
 
@@ -451,6 +501,7 @@ impl Unibus {
             self.apply_chaos(now);
             self.apply_keyboard(now);
             self.apply_mouse(now);
+            self.apply_serial(now);
         }
     }
 
@@ -465,7 +516,7 @@ impl Unibus {
     /// When the board, or the ether on its cable, will next do something
     /// of its own accord.
     pub fn next_tap(&self) -> Option<u64> {
-        [self.due(), self.chaos_next, self.mouse_next, self.mains_next()]
+        [self.due(), self.chaos_next, self.mouse_next, self.serial_next, self.mains_next()]
             .into_iter()
             .flatten()
             .min()
@@ -501,6 +552,15 @@ impl Unibus {
                     break;
                 }
             }
+            // And the serial cable's bits.
+            while let Some(e) = self.serial_next
+                && e < t
+            {
+                self.apply_serial(e);
+                if self.serial_next == Some(e) {
+                    break;
+                }
+            }
             // The mains' own edges, each with a transition of its own: the
             // counter behind `CLOCK` is clocked by them and would lose any
             // that were folded into the next tap.
@@ -516,6 +576,7 @@ impl Unibus {
             self.apply_chaos(t);
             self.apply_keyboard(t);
             self.apply_mouse(t);
+            self.apply_serial(t);
             n += 1;
             assert!(n < 1_000_000, "the I/O board's events never run out at {now}");
         }
@@ -532,6 +593,14 @@ impl Unibus {
         {
             self.apply_mouse(e);
             if self.mouse_next == Some(e) {
+                break;
+            }
+        }
+        while let Some(e) = self.serial_next
+            && e <= now
+        {
+            self.apply_serial(e);
+            if self.serial_next == Some(e) {
                 break;
             }
         }

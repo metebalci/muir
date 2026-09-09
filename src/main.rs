@@ -17,7 +17,8 @@
 //!          [--disk-controller netlist|model]
 //!          [--disk-pack <image>[,<unit>][,ro]] [--io-board netlist|model]
 //!          [--main-memory netlist|model] [--main-memory-boards <n>]
-//!          [--prom <file>] [--resume <file>] [--stop-after <microcycles>]
+//!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
+//!          [--stop-after <microcycles>]
 //!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
 //!          [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
 //!          [--tv-capture <gif>] [--tv-capture-no-time]
@@ -55,7 +56,7 @@
 //!
 //! Every run serves a terminal: the display, the keyboard and the mouse
 //! over RFB, RFC 6143, so that any VNC viewer can work the machine, which
-//! has no other way in or out. It is at VNC's display :0 on the loopback,
+//! has no other way to be worked. It is at VNC's display :0 on the loopback,
 //! `vnc://127.0.0.1:5900`, and the start says where it is; a display
 //! already taken --- a second muir on the host, which is what the lashup
 //! over TCP is --- moves it up to the first free one. `--terminal` says
@@ -75,6 +76,20 @@
 //! pair its band does not call, say --- stops in the debugger at the
 //! initialization that wants a host: `Super-B` there, then the date and
 //! time it asks for and `y`, finish it. Every engine has a Chaosnet.
+//!
+//! The machine's other way out is the serial port at J9, the 2651 at
+//! IOBSER 0A12, and `--serial <endpoint>` is where it is reached: a TCP
+//! port, or address:port, attached to with `nc` or `telnet`. A connection
+//! is the device on the null-modem cable plugging in --- `DSR`, `DCD` and
+//! `CTS` asserted, which is what the chip needs before it will transmit or
+//! receive at all --- and hanging up drops them; one device at a time. The
+//! rate and the frame are the machine's, whatever it programmed into the
+//! chip, and nothing at this end sets or checks them, so a far end that
+//! assumes another rate reads garbage as it would on a real line. The port
+//! is off unless the flag is given: nothing needs it to work the machine,
+//! and on `chip` a port the machine has opened counts the baud-rate
+//! crystal and the I/O board stops idling. It is one machine's, so it is
+//! refused with the lashup.
 //!
 //! Separately, and on every engine: the band's cold boot leaves the
 //! display's vertical interrupt off, so the mouse is not tracked until
@@ -162,6 +177,7 @@ use muir::netlist;
 use muir::part::Level;
 use muir::prompt::{Command, Memory};
 use muir::rtl::Rtl;
+use muir::serial::Endpoint;
 use muir::terminal::keyboard::{Keyboard, Mapping};
 use muir::terminal::mouse::Mouse;
 use muir::terminal::{Frame, Terminal};
@@ -179,6 +195,16 @@ const TERMINAL_INTERVAL: Duration = Duration::from_millis(33);
 /// [`TERMINAL_INTERVAL`] has gone by. `Instant::now` is not free and
 /// `micro` runs 66 M microcycles a second.
 const TERMINAL_CHECK: u64 = 4_096;
+
+/// How often the serial endpoint is given a turn, when `--serial` has
+/// opened one: as often as the terminal.
+///
+/// A poll is a system call or two and a run reaches a check far more often
+/// than a serial line has anything to say --- `micro` sixteen thousand
+/// times a second. A character typed at the endpoint waits at most this
+/// long to reach the port, which is about one character's own time at 300
+/// baud, the rate MIT's `sys/io1/serial.lisp` defaults to.
+const SERIAL_INTERVAL: Duration = TERMINAL_INTERVAL;
 
 /// The port a terminal is served at unless `--terminal` says another:
 /// VNC's display :0, RFB's convention.
@@ -337,6 +363,22 @@ fn names_a_port(spec: Option<&str>) -> bool {
 /// [`endpoint_at`] the loopback at `port`.
 fn endpoint(spec: Option<&str>, port: u16) -> Option<SocketAddr> {
     endpoint_at(spec, SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+}
+
+/// `--serial`'s endpoint: a port, on the loopback, or an address and a
+/// port.
+///
+/// **The port has to be named.** The other endpoints have a default to
+/// fall back on --- VNC's display :0, the debug cable's 7661 for DBGOUT's
+/// Unibus address --- and this one has none: the serial port is off unless
+/// the flag is given, so a number here would be muir's own invention and
+/// not something a viewer or a convention already knows. A bare address is
+/// refused rather than bound where nobody was told to attach.
+fn serial_endpoint(spec: &str) -> Option<SocketAddr> {
+    if let Ok(a) = spec.parse::<SocketAddr>() {
+        return Some(a);
+    }
+    spec.parse::<u16>().ok().map(|p| SocketAddr::from((Ipv4Addr::LOCALHOST, p)))
 }
 
 /// What the start says a terminal is: where a viewer connects to it, or
@@ -502,7 +544,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <this>[
             [--keyboard-mapping-trace]
             [--main-memory netlist|model]
             [--main-memory-boards <n>] [--no-auto-boot] [--prom <file>]
-            [--resume <file>]
+            [--resume <file>] [--serial <endpoint>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
             [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
@@ -736,6 +778,27 @@ A simulator of the MIT CADR Lisp Machine.
                                pressed: what it would set is what the
                                checkpoint replaces. The stops count from
                                here.
+  --serial <endpoint>          where the serial port at J9 is reached: a
+                               TCP port, or address:port. Attach with nc
+                               or telnet; a connection is the device on
+                               the null-modem cable plugging in, which
+                               asserts DSR, DCD and CTS, and hanging up
+                               drops them. One device at a time, and a
+                               second connection is closed as it arrives.
+                               The rate and the frame are whatever the
+                               machine has programmed into the 2651 ---
+                               MIT's driver defaults to 300 baud, seven
+                               data bits and even parity --- so nothing
+                               here sets one, and a far end that assumes
+                               another gets garbage rather than an error.
+                               The port is off unless this is given: it
+                               costs something to have one, since on chip
+                               a port the machine has opened counts the
+                               baud-rate crystal and the I/O board stops
+                               idling. Not the lashup's: one machine has
+                               the endpoint, so it is refused with
+                               --debug-in-process and the cable flags.
+                               [default: off, and J9 empty]
   --stop-after <microcycles>   how many to run, then stop. [default:
                                none; the run goes on until a --stop-at, a
                                halt or ^C]
@@ -751,8 +814,8 @@ A simulator of the MIT CADR Lisp Machine.
                                viewer to connect to: a port, an address or
                                address:port. Every run serves a terminal,
                                asked for or not --- the machine has no
-                               other way in or out --- and this says where
-                               instead. A named port is bound as it
+                               other way to be worked --- and this says
+                               where instead. A named port is bound as it
                                stands, and the run stops if it cannot be;
                                an unnamed one is where the first free
                                display is looked for. An address other
@@ -1446,15 +1509,23 @@ struct Run<'a> {
     clocks: bool,
 }
 
-fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>, run: Run) {
+fn time_engine<E: Engine>(
+    name: &str,
+    mut e: E,
+    terminal: Option<&mut Terminal>,
+    serial: Option<&mut Endpoint>,
+    run: Run,
+) {
     let Run { stop, capture, checkpoint, setup, hold, clocks } = run;
     let t = Instant::now();
     let mut ran = 0;
     let mut halt = None;
     let mut terminal = terminal;
+    let mut serial = serial;
     let mut keyboard = a_keyboard();
     let mut mouse = Mouse::new();
     let mut last_poll = Instant::now();
+    let mut last_serial = Instant::now();
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
     let prompt = Prompt::open();
     // The prompt's hold: no microcycle runs while it is on. `step` takes it
@@ -1521,6 +1592,19 @@ fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>,
             if mouse.pending(board.mouse_buttons_held()) {
                 mouse.deliver(board);
             }
+        }
+        // The serial port's endpoint, when `--serial` opened one: what the
+        // port has finished sending goes to the socket, and what was typed
+        // at it goes on the cable. The port takes its own frame time over
+        // each character either way, so a burst read in one turn still
+        // arrives one frame at a time.
+        if check
+            && let Some(end) = serial.as_deref_mut()
+            && last_serial.elapsed() >= SERIAL_INTERVAL
+        {
+            let now = e.machine().ns;
+            end.poll_cable(&mut e.machine_mut().ioboard.serial.cable, now);
+            last_serial = Instant::now();
         }
         // The machine stopping itself --- `(si:%halt)`, or the statistics
         // counter --- looks like nothing at all from `step`, which goes on
@@ -1674,6 +1758,12 @@ fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>,
     }
     if let Some(prompt) = prompt.as_ref() {
         prompt.done();
+    }
+    // One last turn, so that what the port sent between the final poll and
+    // the stop reaches whoever is attached before the socket closes.
+    if let Some(end) = serial {
+        let now = e.machine().ns;
+        end.poll_cable(&mut e.machine_mut().ioboard.serial.cable, now);
     }
     report(name, ran, t.elapsed().as_secs_f64());
     if quit {
@@ -2437,6 +2527,24 @@ fn attend_chip(
     }
 }
 
+/// One turn of the serial endpoint for a netlist machine.
+///
+/// Two far ends, and which one is on J9 is `--io-board`'s: the netlist
+/// board's, a bit at a time on the EIA wires, or the behavioural port's
+/// cable under `--io-board model`. The model board is advanced by its own
+/// register accesses here and by nothing else, so its time is the
+/// machine's last access rather than the clock's; MIT's driver polls the
+/// status register, so a character leaves within a poll of being written.
+fn attend_serial_chip(far: &mut FarEnd, end: &mut Endpoint) {
+    match far.unibus.as_mut().and_then(|u| u.serial()) {
+        Some(cable) => end.poll_on_cable(cable),
+        None => {
+            let now = far.buses.machine.ns;
+            end.poll_cable(&mut far.buses.machine.ioboard.serial.cable, now);
+        }
+    }
+}
+
 /// Runs a netlist machine: what the command line has to say about one,
 /// the memory board count among them, and [`Run`] for the rest.
 #[allow(clippy::too_many_arguments)]
@@ -2447,6 +2555,7 @@ fn time_chip(
     memory_boards: usize,
     chaos: muir::chaos::Config,
     terminal: Option<&mut Terminal>,
+    serial: Option<&mut Endpoint>,
     run: Run,
     resume: Option<(PathBuf, Checkpoint)>,
     tv_board: TvBoard,
@@ -2479,6 +2588,16 @@ fn time_chip(
         Some(p) => resume_chip(&mut cpu, &mut clk, &mut far, tv_board, p),
         None => 0,
     };
+    let mut serial = serial;
+    // The far end of the null-modem cable goes on the netlist board's J9
+    // only when `--serial` opened an endpoint: without one the board pays
+    // nothing for a port nobody is at. After the resume, which brings the
+    // board back as the checkpoint left it and carries no far end.
+    if serial.is_some()
+        && let Some(u) = far.unibus.as_mut()
+    {
+        u.plug_serial(clk.time_ns());
+    }
     let mut ran = 0;
     // `MEMRQ`, for the quiet point a checkpoint is taken at.
     let memrq = netlist::parse(NETLIST).unwrap().by_name_id("MEMRQ").unwrap();
@@ -2576,6 +2695,12 @@ fn time_chip(
             if poll {
                 last_poll = Instant::now();
             }
+        }
+        // The serial port's endpoint, when `--serial` opened one: a check
+        // is already the terminal's cadence here, which is as often as a
+        // serial line needs.
+        if let Some(end) = serial.as_deref_mut() {
+            attend_serial_chip(&mut far, end);
         }
         // The machine stopping itself, held on once rather than spun on,
         // exactly as `time_engine` does it off `FLAG-1`.
@@ -2874,7 +2999,9 @@ fn main() {
     // what gives it eight drive ports instead of one.
     let mut use_multiplexor = false;
     // A terminal is served whether or not it is asked for: the display,
-    // the keyboard and the mouse are the machine's only way in and out.
+    // the keyboard and the mouse are the only way the machine is worked.
+    // `--serial` opens the other way out, and nothing on that port works
+    // the machine.
     let mut listen = TerminalAt::default_display();
     let mut debuggee = false;
     let mut debuggee_pack: Option<Pack> = None;
@@ -2888,6 +3015,8 @@ fn main() {
     let mut debuggee_terminal: Option<Option<String>> = None;
     let mut cable_listen: Option<SocketAddr> = None;
     let mut cable_connect: Option<SocketAddr> = None;
+    // The serial port's endpoint: nothing unless `--serial` names one.
+    let mut serial_at: Option<SocketAddr> = None;
     let mut capture_tv: Option<PathBuf> = None;
     let mut capture_tv_time = true;
 
@@ -3081,6 +3210,14 @@ fn main() {
                 Some(path) => resume = Some(PathBuf::from(path)),
                 None => usage("--resume wants a checkpoint to start from"),
             },
+            (None, "--serial") => {
+                const WANT: &str = "--serial wants a port or address:port: the endpoint the serial port at J9 is reached at, which has no default";
+                let arg = args.next().unwrap_or_else(|| usage(WANT));
+                match serial_endpoint(&arg) {
+                    Some(a) => serial_at = Some(a),
+                    None => usage(&format!("--serial {arg}: {WANT}")),
+                }
+            }
             (None, "--stop-after") => match args.next().and_then(|v| v.parse().ok()) {
                 Some(n) => cycles = Some(n),
                 None => usage("--stop-after wants a count of microcycles"),
@@ -3129,6 +3266,13 @@ fn main() {
     }
     if debuggee_pack.is_some() && !debuggee {
         usage("--debuggee-disk-pack is the other machine's pack: it needs --debug-in-process");
+    }
+    // The serial port is one machine's. In the lashup there are two, and
+    // the run loops that step them through the debug cable reach neither
+    // machine's J9, so an endpoint here would be opened for one of them
+    // without saying which. Refused rather than quietly the debugger's.
+    if serial_at.is_some() && cabled == 1 {
+        usage("--serial is one machine's serial port, and the lashup runs two");
     }
     // The other machine's display: it takes another machine, and it is not
     // this machine's endpoint. Both are settled here, before anything is
@@ -3274,6 +3418,17 @@ fn main() {
             Err(e) => (None, Some(e)),
         },
     };
+    // The serial port's endpoint, if one was asked for. Its port is always
+    // named, so it is bound as it stands and the run stops if it cannot
+    // be: it is where someone is being told to attach, and serving that
+    // somewhere else would be worse than not serving it.
+    let mut serial = serial_at.map(|addr| match Endpoint::bind(addr) {
+        Ok(mut end) => {
+            end.trace = true;
+            end
+        }
+        Err(e) => usage(&format!("--serial {addr}: {e}")),
+    });
     // The Chaosnet server's file root.
     if machine_chaos_wants_default(&chaos) {
         chaos.file_root = default_file_root();
@@ -3382,6 +3537,10 @@ fn main() {
         .unwrap();
         writeln!(s, "terminal: {}", terminal_line(&terminal, &no_terminal, listen.addr)).unwrap();
         writeln!(s, "keyboard: {keyboard_said}").unwrap();
+        if let Some(end) = &serial {
+            let at = end.addr().unwrap_or_else(|_| serial_at.expect("the endpoint was asked for"));
+            writeln!(s, "serial: tcp://{at} --- the device on the null-modem cable at J9").unwrap();
+        }
         if debuggee {
             let pack = match debuggee_pack.as_ref() {
                 Some(p) => format!("pack {}", shown(&p.path)),
@@ -3491,7 +3650,7 @@ fn main() {
                 hold: !auto_boot,
                 clocks: capture_tv_time,
             };
-            time_engine("micro", e, terminal.as_mut(), run);
+            time_engine("micro", e, terminal.as_mut(), serial.as_mut(), run);
         }
         Which::Rtl => {
             let mut m = machine(&prom, packs, boards);
@@ -3573,7 +3732,7 @@ fn main() {
                     hold: !auto_boot,
                     clocks: capture_tv_time,
                 };
-                time_engine("rtl", e, terminal.as_mut(), run);
+                time_engine("rtl", e, terminal.as_mut(), serial.as_mut(), run);
             }
         }
         Which::Chip => {
@@ -3635,6 +3794,7 @@ fn main() {
                     boards,
                     chaos,
                     terminal.as_mut(),
+                    serial.as_mut(),
                     run,
                     resume,
                     tv_board,
@@ -3786,6 +3946,25 @@ mod tests {
         assert_eq!(endpoint(Some("70000"), TERMINAL_PORT), None);
         assert_eq!(endpoint(Some("nowhere"), TERMINAL_PORT), None);
         assert_eq!(endpoint(Some("nowhere:5900"), TERMINAL_PORT), None);
+    }
+
+    /// **`--serial`'s endpoint names its port or is refused.** The other
+    /// endpoint flags have a default port to fall back on and this one has
+    /// none, so a bare address --- which for them means "there, on the
+    /// usual port" --- is not an endpoint here at all.
+    #[test]
+    fn the_serial_endpoint_is_a_port_or_an_address_and_a_port() {
+        let lo = |p| SocketAddr::from((Ipv4Addr::LOCALHOST, p));
+        assert_eq!(serial_endpoint("5962"), Some(lo(5962)));
+        assert_eq!(serial_endpoint("0"), Some(lo(0)));
+        assert_eq!(serial_endpoint("0.0.0.0:5962"), "0.0.0.0:5962".parse().ok());
+        assert_eq!(serial_endpoint("[::1]:5962"), "[::1]:5962".parse().ok());
+        assert_eq!(serial_endpoint("127.0.0.1"), None, "no port");
+        assert_eq!(serial_endpoint("::1"), None, "no port");
+        assert_eq!(serial_endpoint(""), None);
+        assert_eq!(serial_endpoint("70000"), None);
+        assert_eq!(serial_endpoint("nowhere"), None);
+        assert_eq!(serial_endpoint("nowhere:5962"), None);
     }
 
     #[test]

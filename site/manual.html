@@ -202,6 +202,15 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
+        <dt>--serial &lt;endpoint&gt;</dt>
+        <dd>
+        <p>Where the serial port at J9 &mdash; the Signetics 2651 at IOBSER 0A12 &mdash; is reached: a TCP port, or address:port. Attach with <code>nc</code> or <code>telnet</code>. A connection is the device on the null-modem cable plugging in, which asserts DSR, DCD and CTS &mdash; the sheet has the chip &ldquo;conditioned to transmit data when the -CTS input is low&rdquo; and &ldquo;to receive data when the -DCD input is low&rdquo; &mdash; and hanging up drops them. One device at a time, and a second connection is closed as it arrives.</p>
+        <p>The rate and the frame are whatever the machine has programmed into the chip, and nothing at this end sets or checks them; MIT&rsquo;s own driver defaults to 300 baud, seven data bits and even parity. This is a TCP endpoint rather than a pseudo-terminal for that reason: a pty would look like a serial device, so a rate would be set on it that the port never sees.</p>
+        <p>It is one machine&rsquo;s port, so it is refused with the lashup flags.</p>
+        <p>Default: off, and J9 empty. Having one costs something: on <code>chip</code>, a port the machine has opened counts the baud-rate crystal and the I/O board stops idling.</p>
+        </dd>
+      </div>
+      <div>
         <dt>--stop-after &lt;microcycles&gt;</dt>
         <dd>
         <p>How many to run, then stop.</p>
@@ -224,7 +233,7 @@ stop: after 2000000 microcycles
       <div>
         <dt>--terminal [&lt;endpoint&gt;]</dt>
         <dd>
-        <p>Where the display, keyboard and mouse are served over RFB, RFC 6143, for any VNC viewer to connect to: a port, an address or address:port. Every run serves a terminal, asked for or not &mdash; the machine has no other way in or out &mdash; and this says where instead. A port named here is bound as it stands and the run stops if it cannot be; an unnamed one is where the first free display is looked for. An address other than the loopback lets another machine in &mdash; RFB&rsquo;s None security is the only type offered, so a viewer needs no password. <a href="#terminal">The terminal</a> has the rest.</p>
+        <p>Where the display, keyboard and mouse are served over RFB, RFC 6143, for any VNC viewer to connect to: a port, an address or address:port. Every run serves a terminal, asked for or not &mdash; the machine has no other way to be worked &mdash; and this says where instead. A port named here is bound as it stands and the run stops if it cannot be; an unnamed one is where the first free display is looked for. An address other than the loopback lets another machine in &mdash; RFB&rsquo;s None security is the only type offered, so a viewer needs no password. <a href="#terminal">The terminal</a> has the rest.</p>
         <p>Default: <code>127.0.0.1:5900</code>, VNC&rsquo;s display :0, or the first free display above it.</p>
         </dd>
       </div>
@@ -390,7 +399,7 @@ PC 0 in the PROM; 0 microcycles, 0 ns; 0 this run</pre>
   <div class="band">
     <h2>The terminal</h2>
     <div class="prose">
-      <p>The <b>terminal</b> is the far end of the machine: pixels out, keys and the mouse in. Every run serves one over RFB &mdash; the VNC protocol, RFC 6143 &mdash; so any VNC viewer is a CADR terminal, and the machine has no other way in or out. Only None security is offered, so a viewer needs no password; keep it on the loopback unless you mean to let another machine in.</p>
+      <p>The <b>terminal</b> is the far end of the machine: pixels out, keys and the mouse in. Every run serves one over RFB &mdash; the VNC protocol, RFC 6143 &mdash; so any VNC viewer is a CADR terminal, and the machine has no other way to be worked; <code>--serial</code> opens the serial port at J9, and nothing on that port works the machine. Only None security is offered, so a viewer needs no password; keep it on the loopback unless you mean to let another machine in.</p>
 <pre class="cmd">muir                       <b># then point a viewer at 127.0.0.1:5900</b>
 muir --terminal 5901       <b># or wherever you say</b></pre>
       <p>The display is VNC&rsquo;s :0 unless <code>--terminal</code> says another, and the start says where it is. A display already taken &mdash; a second muir on the host, which is what the lashup over TCP is &mdash; moves it up to the first free one; a port you named yourself is bound as it stands, and the run stops rather than putting a viewer somewhere it was not told to look.</p>

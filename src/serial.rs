@@ -5,14 +5,16 @@
 //! crystal at 0A15, and the RS-232 cable on J9 through the MC1488 at 0B17
 //! and the MC1489 at 0B16.
 //!
-//! Three things are here. The facts read off the Signetics sheet
+//! Four things are here. The facts read off the Signetics sheet
 //! (`2651.pdf`, the 1978 preliminary specification) that every engine
 //! shares: the register bits, the baud-rate table and the character frame.
 //! [`Pci`], the chip as the behavioural engines have it, a character at a
 //! time on the machine's clock, which `src/ioboard.rs` answers the bus
-//! with. And [`OnCable`], the far end of the cable for the netlist board,
+//! with. [`OnCable`], the far end of the cable for the netlist board,
 //! a bit at a time on the EIA wires, which `tests/serial_cable.rs` holds
-//! the chip's own model in `src/part.rs` to.
+//! the chip's own model in `src/part.rs` to. And [`Endpoint`], the route
+//! out of the process: the TCP endpoint `muir --serial` opens, which plugs
+//! whatever connects to it into either far end.
 //!
 //! **What the board wires.** Page IOBSER of `data/CADRIO.netlist`: the
 //! data bus `D0`..`D7` on `UBO0`..`UBO7`, which the 74LS244 at 0E29 copies
@@ -39,6 +41,8 @@
 //! same four again.
 
 use std::collections::VecDeque;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use crate::chip::Chip;
 use crate::netlist::{NetId, Netlist};
@@ -980,6 +984,9 @@ pub struct OnCable {
     /// Frames with a bad stop bit.
     pub framing_errors: usize,
     pub sent: usize,
+    /// Which instance on the board is the 2651, for [`OnCable::follow`],
+    /// once it has been looked for: `Some(None)` is a board with none.
+    pci: Option<Option<usize>>,
 }
 
 impl OnCable {
@@ -1003,6 +1010,7 @@ impl OnCable {
             received: Vec::new(),
             framing_errors: 0,
             sent: 0,
+            pci: None,
         }
     }
 
@@ -1016,6 +1024,12 @@ impl OnCable {
         self.sending.is_some() || !self.queue.is_empty()
     }
 
+    /// How many characters are waiting to go, the one on the line
+    /// included.
+    pub fn queued(&self) -> usize {
+        self.queue.len() + self.sending.is_some() as usize
+    }
+
     /// The far end comes up: `DSR`, `DCD` and `CTS` asserted from the
     /// next [`OnCable::apply`].
     pub fn plug(&mut self) {
@@ -1024,6 +1038,38 @@ impl OnCable {
 
     pub fn unplug(&mut self) {
         self.up = false;
+    }
+
+    /// Whether the far end is up.
+    pub fn plugged(&self) -> bool {
+        self.up
+    }
+
+    /// Takes the port's own rate and frame off the 2651 on `board`: mode
+    /// register 2's rate and mode register 1's frame, whatever the machine
+    /// programmed into them.
+    ///
+    /// The two ends of a serial line run at one rate, and on this cable it
+    /// is the port's: nothing on the far end has a say in it. A far end
+    /// that picked its own would sample every stop bit in the wrong place,
+    /// which is garbage rather than an error, so a run that reaches this
+    /// port from outside the process calls this at every step ---
+    /// `src/unibus.rs` does --- and `tests/serial_cable.rs` holds a
+    /// character through two rates in one run.
+    ///
+    /// Between frames only: the bit time belongs to the frame in flight,
+    /// and moving it under one would stretch the bits still to come.
+    pub fn follow(&mut self, board: &Chip) {
+        if self.sending.is_some() || self.receiving.is_some() {
+            return;
+        }
+        let found = self.pci.get_or_insert_with(|| {
+            board.instances.iter().position(|p| crate::part::strip(&p.kind).0 == "2651")
+        });
+        let Some(i) = *found else { return };
+        let Some((mr1, mr2)) = crate::part::pci_modes(&board.instances[i].state) else { return };
+        self.bit_ns = bit_ns(mr2 & mode2::RATE_MASK);
+        self.framing = Framing::of(mr1);
     }
 
     /// `-RTS` as the board drives it through the MC1488, asserted or not.
@@ -1132,5 +1178,223 @@ impl OnCable {
             board.transition(now);
         }
         moved
+    }
+}
+
+// --- The route out of the process -------------------------------------------
+
+/// How many characters the far end will hold for the port before the
+/// endpoint stops reading the socket.
+///
+/// A serial line has no buffer at all and the port has one character of
+/// one, but muir reads the socket in bursts tens of milliseconds apart, so
+/// the far end holds what arrived between two of them and the receiver
+/// takes them a frame at a time, each from when it was sent. Past this the
+/// socket is left unread and TCP's own window holds the rest back at
+/// whoever is typing --- which is what a far end that cannot keep up does.
+const BACKLOG: usize = 256;
+
+/// Where the serial port is reached from outside the process: a TCP
+/// endpoint, and the one device connected to it.
+///
+/// **A TCP endpoint and not a pseudo-terminal.** A pty would look like a
+/// serial device, so someone would attach `screen /dev/ttys004 9600` and
+/// that 9600 would mean nothing: the rate is whatever the machine has
+/// programmed into the 2651, and the far end of a null-modem cable has no
+/// say in it. Nothing here picks a rate or a frame, and nothing here can
+/// report a mismatch either --- a far end at the wrong rate produces
+/// garbage, as it does on a real line.
+///
+/// **One device.** One thing is on the far end of a null-modem cable, so a
+/// second connection is closed as it arrives rather than shouting over the
+/// first.
+///
+/// **Connecting is plugging in.** The Signetics sheet: the chip "is
+/// conditioned to transmit data when the -CTS input is low" and
+/// "conditioned to receive data when the -DCD input is low", so carrying
+/// bytes alone would leave the port unable to do anything with them. A
+/// connection asserts `DSR`, `DCD` and `CTS`, as a device does with its own
+/// `DTR` and `RTS` across a null-modem cable, and hanging up drops all
+/// three.
+pub struct Endpoint {
+    listener: TcpListener,
+    /// The device on the cable, if one is connected, and where from.
+    device: Option<(TcpStream, SocketAddr)>,
+    /// What the port has sent and the socket has not taken.
+    outbox: VecDeque<u8>,
+    /// Whether a device coming and going is printed as it happens.
+    pub trace: bool,
+}
+
+/// What one turn at the socket did to the cable: a device plugged in, or
+/// the one that was there hung up.
+enum Change {
+    PluggedIn,
+    HungUp,
+}
+
+impl Endpoint {
+    /// Listens on `addr`, without blocking.
+    ///
+    /// Port 0 asks the host for one, which is what `tests/serial_endpoint.rs`
+    /// does; [`Endpoint::addr`] then says which.
+    pub fn bind(addr: SocketAddr) -> std::io::Result<Endpoint> {
+        let listener = TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        Ok(Endpoint { listener, device: None, outbox: VecDeque::new(), trace: false })
+    }
+
+    /// Where it is listening.
+    pub fn addr(&self) -> std::io::Result<SocketAddr> {
+        self.listener.local_addr()
+    }
+
+    /// Whether a device is on the cable.
+    pub fn connected(&self) -> bool {
+        self.device.is_some()
+    }
+
+    /// One turn at the socket: what the port sent as far as the socket will
+    /// take it now, up to `room` characters typed at it, and whoever has
+    /// arrived. Never blocks.
+    ///
+    /// The device that is there is served before a new one is accepted, so
+    /// that someone who hangs up and attaches again is not turned away by
+    /// the connection they have just dropped. What the cable saw is the two
+    /// ends of the turn compared: a device that went and another that came
+    /// in the same turn leaves the port plugged in throughout, which is one
+    /// device on the cable rather than none.
+    fn service(&mut self, room: usize) -> (Option<Change>, Vec<u8>) {
+        let was = self.device.is_some();
+        let mut gone = None;
+        if let Some((stream, who)) = self.device.as_mut() {
+            while !self.outbox.is_empty() {
+                let (head, tail) = self.outbox.as_slices();
+                let head = if head.is_empty() { tail } else { head };
+                match stream.write(head) {
+                    Ok(0) => {
+                        gone = Some(*who);
+                        break;
+                    }
+                    Ok(n) => {
+                        self.outbox.drain(..n);
+                    }
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        eprintln!("serial: {who}: {e}");
+                        gone = Some(*who);
+                        break;
+                    }
+                }
+            }
+        }
+        let mut typed = Vec::new();
+        if gone.is_none()
+            && let Some((stream, who)) = self.device.as_mut()
+        {
+            let mut buf = [0u8; 256];
+            while typed.len() < room {
+                let want = buf.len().min(room - typed.len());
+                match stream.read(&mut buf[..want]) {
+                    Ok(0) => {
+                        gone = Some(*who);
+                        break;
+                    }
+                    Ok(n) => typed.extend_from_slice(&buf[..n]),
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        eprintln!("serial: {who}: {e}");
+                        gone = Some(*who);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(who) = gone {
+            if self.trace {
+                eprintln!("serial: {who} hung up");
+            }
+            self.device = None;
+            // What the port sent and the device never took goes with it: a
+            // cable pulled out drops whatever was on the wire.
+            self.outbox.clear();
+        }
+        loop {
+            match self.listener.accept() {
+                Ok((stream, who)) => {
+                    if self.device.is_some() {
+                        if self.trace {
+                            eprintln!("serial: {who} turned away: a device is on the cable");
+                        }
+                        continue;
+                    }
+                    if let Err(e) = stream.set_nonblocking(true) {
+                        eprintln!("serial: {who}: {e}");
+                        continue;
+                    }
+                    // A character at a time is the whole traffic here;
+                    // waiting to coalesce would only add latency.
+                    let _ = stream.set_nodelay(true);
+                    if self.trace {
+                        eprintln!("serial: {who} connected");
+                    }
+                    self.device = Some((stream, who));
+                }
+                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    eprintln!("serial: {e}");
+                    break;
+                }
+            }
+        }
+        let change = match (was, self.device.is_some()) {
+            (false, true) => Some(Change::PluggedIn),
+            (true, false) => Some(Change::HungUp),
+            _ => None,
+        };
+        (change, typed)
+    }
+
+    /// One turn for the behavioural far end at `now` on the machine's
+    /// clock: what the port has finished sending goes to the socket, and
+    /// what was typed at the socket goes on the cable as sent now.
+    ///
+    /// The port takes its own frame time over each character either way ---
+    /// [`Pci::advance`] does that --- so a burst read off the socket in one
+    /// turn is still received one frame at a time.
+    pub fn poll_cable(&mut self, cable: &mut Cable, now: u64) {
+        while let Some((_, byte)) = cable.take() {
+            self.outbox.push_back(byte);
+        }
+        let room = BACKLOG.saturating_sub(cable.pending());
+        let (change, typed) = self.service(room);
+        match change {
+            Some(Change::PluggedIn) => cable.plug(now),
+            Some(Change::HungUp) => cable.unplug(),
+            None => {}
+        }
+        for byte in typed {
+            cable.send(byte, now);
+        }
+    }
+
+    /// The same for the netlist board's far end, which keeps its own time:
+    /// [`OnCable::apply`] moves the wires, and this only hands it
+    /// characters and takes the ones it has assembled.
+    pub fn poll_on_cable(&mut self, far: &mut OnCable) {
+        self.outbox.extend(far.received.drain(..));
+        let room = BACKLOG.saturating_sub(far.queued());
+        let (change, typed) = self.service(room);
+        match change {
+            Some(Change::PluggedIn) => far.plug(),
+            Some(Change::HungUp) => far.unplug(),
+            None => {}
+        }
+        for byte in typed {
+            far.send(byte);
+        }
     }
 }

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! The terminal under `muir` itself: every run serves one, since the
-//! display, the keyboard and the mouse are the machine's only way in and
-//! out; `--terminal` says where; and a second muir on the same host takes
-//! the next display rather than stopping on the first one's port.
+//! display, the keyboard and the mouse are the only way the machine is
+//! worked; `--terminal` says where; and a second muir on the same host
+//! takes the next display rather than stopping on the first one's port.
 
 mod support;
 
