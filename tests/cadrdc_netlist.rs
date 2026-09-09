@@ -835,6 +835,14 @@ impl Probe {
         self.run(b, b.now + 1_000);
     }
 
+    /// Drops the walk so far without printing it, for a run that reads
+    /// something other than the walk: a command list of three CCWs walks
+    /// the read program three times, and printing that buries the reading.
+    fn forget(&mut self) {
+        self.current = None;
+        self.steps.clear();
+    }
+
     /// The steps so far, printed.
     fn steps(&mut self) -> Vec<Step> {
         self.steps.extend(self.current.take());
@@ -2308,6 +2316,507 @@ fn both_busy_lines_low_is_the_middle_of_a_chained_read() {
     let (_, status) = b.cycle(REGS, None);
     assert_eq!(status & 1, 1, "not active: {status:o}");
     assert_eq!(status & ERRORS, 0, "no error: {status:o}");
+}
+
+/// The nets one chained read is watched through, in the order a row of
+/// [`Chain::seen`] carries them; the constants below name the columns.
+const CHAIN_NETS: [&str; 15] = [
+    "-LAST CCW",
+    "LAST CCW",
+    "NEW CCW",
+    "CCW CLK",
+    "CHAN.ACK.T0",
+    "-CHAN.ACK.T1",
+    "XBI0",
+    "-CHAN.MASTER",
+    "END PAGE CLK",
+    "-MBUSY",
+    "-BUSY",
+    "DONE",
+    "DONE TEST",
+    "-CMD1",
+    "-CMD.FROM.MEMORY",
+];
+const NOT_LAST_CCW: usize = 0;
+const LAST_CCW: usize = 1;
+const NEW_CCW: usize = 2;
+const CCW_CLK: usize = 3;
+const ACK_T0: usize = 4;
+const NOT_ACK_T1: usize = 5;
+const XBI0: usize = 6;
+const NOT_CHAN_MASTER: usize = 7;
+const END_PAGE_CLK: usize = 8;
+const NOT_MBUSY: usize = 9;
+const NOT_BUSY: usize = 10;
+const DONE: usize = 11;
+const DONE_TEST: usize = 12;
+const NOT_CMD1: usize = 13;
+const NOT_CMD_FROM_MEMORY: usize = 14;
+
+/// The block a chained read starts on.
+const FIRST_BLOCK: u32 = 2;
+
+/// One chained read, run to the end and watched at five nanoseconds: every
+/// transition of [`CHAIN_NETS`] and of the micro-PC, the command list
+/// pointer off `XBAO/22` at each CCW fetch, the bus cycles the board made
+/// as master, and the status word after it stopped.
+struct Chain {
+    /// When, the fifteen nets, and `UPC/6`.
+    seen: Vec<(u64, Vec<Level>, u32)>,
+    /// `XBAO/22` read while `CCW CLK` is up --- which is inside a fetch,
+    /// so `NEW CCW` is high and the address wires carry the command list
+    /// pointer. This is the reading issue 88 took off the parked machine.
+    clp: Vec<u32>,
+    /// The bus cycles the board made as master.
+    transfers: Vec<Transfer>,
+    status: u32,
+    /// The board was still busy when the run's budget ran out.
+    stuck: bool,
+    /// START, so times read as offsets from it.
+    t0: u64,
+}
+
+impl Chain {
+    /// The rows where a net rose.
+    fn rises(&self, net: usize) -> Vec<usize> {
+        (1..self.seen.len())
+            .filter(|&i| {
+                self.seen[i].1[net] == Level::High && self.seen[i - 1].1[net] == Level::Low
+            })
+            .collect()
+    }
+
+    /// The More flag the LS74 at DCCCW 0E20 latched at each CCW fetch, read
+    /// at the edge that latched it: `-LAST CCW` high is another CCW to come.
+    fn more(&self) -> Vec<bool> {
+        self.rises(CCW_CLK).iter().map(|&i| self.seen[i].1[NOT_LAST_CCW] == Level::High).collect()
+    }
+
+    /// The addresses the board read as master. On a Read those are its CCW
+    /// fetches and nothing else: the channel only ever writes the data.
+    fn fetches(&self) -> Vec<u32> {
+        self.transfers.iter().filter(|t| t.wrote.is_none()).map(|t| t.addr).collect()
+    }
+
+    /// The pages the board wrote, in the order it touched them, with how
+    /// many words went into each.
+    fn pages(&self) -> Vec<(u32, usize)> {
+        let mut out: Vec<(u32, usize)> = Vec::new();
+        for t in self.transfers.iter().filter(|t| t.wrote.is_some()) {
+            let page = t.addr & !0xff;
+            match out.last_mut() {
+                Some((p, n)) if *p == page => *n += 1,
+                _ => out.push((page, 1)),
+            }
+        }
+        out
+    }
+
+    /// The rows where the sequencer entered `addr`. `UPC/6` is one ahead of
+    /// the microinstruction in the UIR, having moved on the edge that
+    /// latched it, so `addr` is being executed while the counter reads
+    /// `addr + 1`.
+    fn entered(&self, addr: u32) -> Vec<usize> {
+        (1..self.seen.len())
+            .filter(|&i| self.seen[i].2 == addr + 1 && self.seen[i - 1].2 != addr + 1)
+            .collect()
+    }
+
+    /// A net's level while the sequencer stood at the row's micro-PC.
+    fn during(&self, row: usize, net: usize) -> Vec<Level> {
+        let upc = self.seen[row].2;
+        self.seen[row..].iter().take_while(|(_, _, u)| *u == upc).map(|(_, s, _)| s[net]).fold(
+            Vec::new(),
+            |mut out, l| {
+                if out.last() != Some(&l) {
+                    out.push(l);
+                }
+                out
+            },
+        )
+    }
+}
+
+/// Addresses in octal, the way the drawings and `newdsk.31` write them.
+fn octal(xs: &[u32]) -> String {
+    xs.iter().map(|x| format!("{x:o}")).collect::<Vec<_>>().join(" ")
+}
+
+/// The board with a quick drive and a memory, and `blocks` blocks written
+/// on the pack from [`FIRST_BLOCK`]: what a chained read needs in place
+/// before it starts. The words written are returned so the pages can be
+/// checked against them.
+fn chain_bench(
+    n: &Netlist,
+    blocks: usize,
+) -> (XbusMaster<'_>, Probe, Vec<[u32; muir::disk_unit::BLOCK_WORDS]>) {
+    let mut b = controller(n);
+    let mut p = Probe::new(&b);
+    let t0 = b.now;
+    let mut drive = quick_drive(t0);
+    let written: Vec<[u32; muir::disk_unit::BLOCK_WORDS]> =
+        (0..blocks).map(|k| words(100 + k as u32)).collect();
+    for (k, w) in written.iter().enumerate() {
+        assert!(drive.unit.write_block_at(0, 0, FIRST_BLOCK + k as u32, w));
+    }
+    p.plug(&mut b, n, drive);
+    p.with_memory(&b, 1 << 15);
+    p.run(&mut b, t0 + 10_000);
+    (b, p, written)
+}
+
+/// One Read command over a command list of `pages.len()` CCWs --- the More
+/// flag set on all but the last --- with `after` planted in the word
+/// immediately past the list, watched from START until the board is idle.
+fn chained_read(p: &mut Probe, b: &mut XbusMaster, pages: &[u32], after: u32) -> Chain {
+    let m = p.memory.as_mut().unwrap();
+    for (k, &page) in pages.iter().enumerate() {
+        // "<0> More flag. If this bit is 0, this is the last CCW in the
+        // list."
+        m.words[CLP as usize + k] = page | (k + 1 < pages.len()) as u32;
+    }
+    m.words[CLP as usize + pages.len()] = after;
+    m.transfers.clear();
+    b.cycle(REGS, Some(0));
+    b.cycle(REGS + 1, Some(CLP));
+    b.cycle(REGS + 2, Some(FIRST_BLOCK));
+    p.cycle(b, REGS + 3, Some(0));
+
+    let t0 = b.now;
+    let watch: Vec<NetId> = CHAIN_NETS.iter().map(|s| b.net(s)).collect();
+    let upc: Vec<NetId> = (0..6).map(|k| b.net(&format!("UPC{k}"))).collect();
+    let xbao: Vec<NetId> = (0..22).map(|k| b.net(&format!("XBAO{k}"))).collect();
+    // A block at the end of the track is most of a revolution away, and
+    // then one sector a page.
+    let deadline = t0 + REVOLUTION_NS + (pages.len() as u64 + 1) * REVOLUTION_NS / 17;
+    let mut seen: Vec<(u64, Vec<Level>, u32)> = Vec::new();
+    let (mut clp, mut pulse, mut stopped) = (Vec::new(), false, None);
+    while b.now < deadline {
+        let now: Vec<Level> = watch.iter().map(|&x| b.chip.net(x)).collect();
+        let pc = b.chip.read(&upc) as u32;
+        if seen.last().is_none_or(|(_, s, u)| *s != now || *u != pc) {
+            seen.push((b.now, now.clone(), pc));
+        }
+        if now[CCW_CLK] == Level::High {
+            if !pulse {
+                clp.push(b.chip.read(&xbao) as u32);
+            }
+            pulse = true;
+        } else {
+            pulse = false;
+        }
+        // `-BUSY` rises a `UCLK^` after `DONE`, so the run goes five
+        // microseconds past the stop to have both edges in the record.
+        if !p.busy(b) {
+            let at = *stopped.get_or_insert(b.now);
+            if b.now >= at + 5_000 {
+                break;
+            }
+        }
+        let next = b.now + 5;
+        p.run(b, next);
+    }
+    let stuck = p.busy(b);
+    // The memory side may still be emptying the FIFO.
+    let settled = b.now + 20_000;
+    p.run(b, settled);
+    // Three pages walk the read program three times; printing it would
+    // bury the reading this test is here for.
+    p.forget();
+    let transfers = p.memory().transfers.clone();
+    let (_, status) = b.cycle(REGS, None);
+    Chain { seen, clp, transfers, status, stuck, t0 }
+}
+
+/// **The channel fetches one CCW a page and never the word past the end of
+/// the list.** Issue 88 read the command list pointer off a parked machine
+/// marching to `0o41000`, one word past a 512-entry list, with `-LAST CCW`
+/// high at every sample; and the hypothesis put to this bench was that the
+/// board runs one CCW ahead, so that while it finishes the last real CCW it
+/// has already fetched the word past the list and latched that word's bit
+/// 0. A bench of zeros past the list could not show it, because zero has
+/// bit 0 clear, where the band's own memory has data there.
+///
+/// **It does not happen.** Three CCWs, the third with its More flag clear,
+/// and the word immediately past the list a valid-looking page address with
+/// bit 0 **set**: the board fetches three CCWs and stops. The command list
+/// pointer, `XBAO/22` at each `CCW CLK`, reads `4000`, `4001`, `4002` and
+/// goes no further; `-LAST CCW` follows the fetch it is in --- high, high,
+/// low; three pages are filled and the page the word past the list names is
+/// never written.
+///
+/// **There is no prefetch to have**, and the wiring says why. `-END OF
+/// PAGE` is `-RCO`, pin 19, of the 74LS569 word counter at DCCCW 0E22, and
+/// it is the D, pin 12, of the LS74 at DCCCW 0E20 clocked by `-CHAN.MASTER`
+/// on pin 11, one edge a channel bus cycle. So `NEW CCW` comes up as a
+/// page's 256th word goes by, and the channel's *next* cycle is a fetch ---
+/// of the CCW that governs the page after it. The list is walked one CCW
+/// behind the pages, never ahead; and the channel asks for that next cycle
+/// only once the disk has given it another word, so a run whose last page
+/// is full never asks at all.
+///
+/// The two controls are here because without them the test proves nothing:
+/// the same chain with zeros past the list stops in exactly the same place,
+/// and a list of one CCW --- whose only entry is the last one --- stops
+/// after one page.
+#[test]
+fn the_word_past_the_ccw_list_is_never_fetched() {
+    const PAGE3: u32 = 0o40000;
+    const PAST: u32 = 0o50000;
+    let n = cadrdc();
+    let list = [PAGE, PAGE2, PAGE3];
+
+    let (mut b, mut p, written) = chain_bench(&n, list.len());
+    let c = chained_read(&mut p, &mut b, &list, PAST | 1);
+    assert!(!c.stuck, "the read never stopped: fetches {}", octal(&c.fetches()));
+    assert_eq!(c.fetches(), [CLP, CLP + 1, CLP + 2], "one CCW a page and no more");
+    assert_eq!(c.clp, c.fetches(), "XBAO/22 at each CCW CLK is the address of that cycle");
+    assert_eq!(c.more(), [true, true, false], "-LAST CCW at each fetch's own CCW CLK");
+    assert_eq!(c.pages(), [(PAGE, 256), (PAGE2, 256), (PAGE3, 256)], "three pages, in order");
+    assert_eq!(c.status & 1, 1, "not active: {:o}", c.status);
+    assert_eq!(c.status & ERRORS, 0, "no error: {:o}", c.status);
+    for (page, w) in list.iter().zip(&written) {
+        let at = *page as usize;
+        assert_eq!(&p.memory().words[at..at + 256], &w[..], "page {page:o}");
+    }
+    assert!(
+        p.memory().words[PAST as usize..PAST as usize + 256].iter().all(|&w| w == 0),
+        "the page the word past the list names is untouched"
+    );
+    eprintln!(
+        "{:o} past the list: CLP {}, -LAST CCW {:?}, {} words in {} pages, status {:o}",
+        PAST | 1,
+        octal(&c.clp),
+        c.more(),
+        c.pages().iter().map(|&(_, n)| n).sum::<usize>(),
+        c.pages().len(),
+        c.status
+    );
+
+    // The control the hypothesis says would hide it. It does not differ.
+    let (mut b, mut p, _) = chain_bench(&n, list.len());
+    let zeros = chained_read(&mut p, &mut b, &list, 0);
+    assert!(!zeros.stuck, "zeros past the list: the read never stopped");
+    assert_eq!(zeros.fetches(), c.fetches(), "the same fetches as with the word set");
+    assert_eq!(zeros.more(), c.more());
+    assert_eq!(zeros.pages(), c.pages());
+    assert_eq!(zeros.status & ERRORS, 0, "no error: {:o}", zeros.status);
+
+    // And a list of one, whose only CCW is the last one.
+    let (mut b, mut p, _) = chain_bench(&n, 1);
+    let one = chained_read(&mut p, &mut b, &[PAGE], PAST | 1);
+    assert!(!one.stuck, "a list of one: the read never stopped");
+    assert_eq!(one.fetches(), [CLP], "one CCW fetched");
+    assert_eq!(one.more(), [false], "and it is the last");
+    assert_eq!(one.pages(), [(PAGE, 256)]);
+    assert_eq!(one.status & 1, 1, "not active: {:o}", one.status);
+    assert_eq!(one.status & ERRORS, 0, "no error: {:o}", one.status);
+}
+
+/// **`CCW CLK` latches the More flag of the fetch it is in.** The other
+/// half of the prefetch hypothesis: if the flop took its D from the
+/// *following* fetch, the last real CCW's More flag would be the word past
+/// the list's. It does not.
+///
+/// `CCW CLK` is the LS11 at DCCCW 0D09, pins 1, 2 and 13 into pin 12:
+/// `CHAN.ACK.T0` and `NEW CCW` and `-CHAN.ACK.T1`. The two taps are one
+/// delay line, the TD250 at DCCHAN 0C20 --- `CHAN.ACK.T0` its 100 ns tap on
+/// pin 4, `CHAN.ACK.T1` its 150 ns tap on pin 10 --- started on the
+/// acknowledgement of the channel's own bus cycle, the NOR pair at DCCHAN
+/// 0E16 taking `-CHAN.XREQ` with `XACK` or `NXM ACK`. So `CCW CLK` is a
+/// 50 ns window opening 100 ns after that cycle is acknowledged, and it is
+/// gated by `NEW CCW`, which is up only during a CCW fetch.
+///
+/// Measured at five nanoseconds, for every fetch of a three-CCW chain and
+/// the last one especially: the window opens 250 ns after the harness
+/// memory sees the request and is 50 ns wide --- the memory's own 150 ns to
+/// acknowledge plus the delay line's 100 --- and it closes on the same edge
+/// that ends the cycle, `-CHAN.MASTER` rising. `XBI0`, the 26S10 receiver
+/// at DCXBUS 0F25 pin 3 off `-XBUS0` on pin 2, is settled at the fetched
+/// word's bit 0 from the moment the cycle begins --- the whole 250 ns
+/// before the edge, and for a word whose bit 0 is clear since long before
+/// that --- and `-LAST CCW` takes it there. No later fetch has begun: the
+/// next request is a page away.
+#[test]
+fn ccw_clk_latches_the_fetch_it_is_in() {
+    const PAGE3: u32 = 0o40000;
+    const PAST: u32 = 0o50000;
+    let n = cadrdc();
+    let list = [PAGE, PAGE2, PAGE3];
+    let (mut b, mut p, _) = chain_bench(&n, list.len());
+    let c = chained_read(&mut p, &mut b, &list, PAST | 1);
+    assert!(!c.stuck, "the read never stopped");
+
+    let opens = c.rises(CCW_CLK);
+    let reads: Vec<&Transfer> = c.transfers.iter().filter(|t| t.wrote.is_none()).collect();
+    assert_eq!(opens.len(), reads.len(), "one CCW CLK a fetch");
+    assert_eq!(opens.len(), list.len(), "and one fetch a page");
+
+    for (k, (&row, cycle)) in opens.iter().zip(&reads).enumerate() {
+        let (at, _, _) = c.seen[row];
+        assert_eq!(at, cycle.at + 250, "fetch {k}: CCW CLK opens 250 ns into the cycle");
+        assert_eq!(c.seen[row].1[NEW_CCW], Level::High, "fetch {k}: inside a CCW fetch");
+        assert_eq!(c.seen[row].1[ACK_T0], Level::High, "fetch {k}: the 100 ns tap opens it");
+        assert_eq!(c.seen[row].1[NOT_ACK_T1], Level::High, "fetch {k}: the 150 ns tap has not");
+        let shut = (row + 1..c.seen.len())
+            .find(|&i| c.seen[i].1[CCW_CLK] == Level::Low)
+            .expect("CCW CLK comes back down");
+        assert_eq!(c.seen[shut].0, at + 50, "fetch {k}: 50 ns wide, the two taps");
+        assert_eq!(c.seen[shut].1[NOT_ACK_T1], Level::Low, "fetch {k}: the 150 ns tap shuts it");
+        assert_eq!(
+            c.seen[shut].1[NOT_CHAN_MASTER],
+            Level::High,
+            "fetch {k}: and shuts as -CHAN.MASTER ends the cycle"
+        );
+        // The word on the bus at the edge, and how long it had been there.
+        let want = if k + 1 < list.len() { Level::High } else { Level::Low };
+        assert_eq!(c.seen[row].1[XBI0], want, "fetch {k}: XBI0 is the CCW's own bit 0");
+        assert_eq!(c.seen[row].1[NOT_LAST_CCW], want, "fetch {k}: and -LAST CCW takes it");
+        let settled =
+            (0..row).rev().find(|&i| c.seen[i].1[XBI0] != want).map_or(c.t0, |i| c.seen[i + 1].0);
+        assert!(
+            settled <= cycle.at,
+            "fetch {k}: XBI0 settled at {} ns, the cycle began at {} ns",
+            settled - c.t0,
+            cycle.at - c.t0
+        );
+        // No later fetch is in flight: the next request is a page away.
+        if let Some(next) = reads.get(k + 1) {
+            assert!(next.at > c.seen[shut].0, "fetch {k}: the next cycle has not begun");
+        }
+        eprintln!(
+            "fetch {k} at {:o}: cycle at {} ns, CCW CLK {} to {} ns, XBI0 {want:?} since {} ns",
+            cycle.addr,
+            cycle.at - c.t0,
+            at - c.t0,
+            c.seen[shut].0 - c.t0,
+            settled - c.t0
+        );
+    }
+}
+
+/// **`DONE` at `047` is what ends a chained read, and only the last
+/// block's visit finds it true.** `DONE` is the second gate of the 9S42 at
+/// DCUC 0D20, its output on pin 9 and its six inputs on 15 down to 10:
+///
+///     DONE = (-MBUSY and DONE TEST)
+///         or (LAST CCW and -CMD.FROM.MEMORY and -CMD1 and DONE TEST)
+///
+/// `DONE TEST` is UIR bit 12 and `newdsk.31`'s read program sets it at
+/// `047` alone, so the sequencer can only finish there; arriving with
+/// `DONE` false, its `JUMP/START` takes it round again with `050`'s
+/// `FUNC/INCREMENT ADDRESS` in the delay slot. That much is
+/// [`the_two_busy_flip_flops_are_one_74s74`]'s reading of the wiring; this
+/// is the gate watched through a three-page read.
+///
+/// **The second term is live on a Read, not dead.** The command register is
+/// the 74LS175 at DCCMD 0C21: `XBI1` on pin 12 into `CMD1` on pin 10 and
+/// `-CMD1` on pin 11, `XBI3` on pin 4 into `CMD.FROM.MEMORY` on pin 2 and
+/// `-CMD.FROM.MEMORY` on pin 3. Read is command 0, so both those D inputs
+/// take a zero and both complements stand **high** for the whole of the
+/// command --- measured here at every transition of the run. The four-input
+/// term is therefore `LAST CCW and DONE TEST`, and a read has two ways to
+/// end, not one.
+///
+/// **What keeps the second term from ending a read a page early is when the
+/// last CCW is fetched.** `LAST CCW` is Q̄, pin 6, of the LS74 at DCCCW
+/// 0E20, up when the CCW last fetched had its More flag clear; whenever it
+/// is up, the next `047` finishes the command whatever the channel is
+/// doing. Over three pages it comes up at the third CCW fetch, and that
+/// fetch falls **after** the second block's `047` --- measured, 3.94 ms
+/// against 3.82 ms. The reason is that the channel asks for the bus only
+/// when the disk has given it a word, so the fetch that ends the list waits
+/// for the first word of the last block, which the sequencer does not reach
+/// until it has left `047` and walked the read program's header again.
+///
+/// So the first two visits to `047` find both terms false and go round
+/// again, and at the third both are true at once: the channel's last word
+/// of the last page clocks `END PAGE CLK`, which takes `-LAST CCW` --- low,
+/// the last CCW's More flag --- into the memory side of the 74S74 at DCBUSY
+/// 0B14 and puts `-MBUSY` up; the sequencer, still walking the block out,
+/// reaches `047` 3.5 us later and finds `DONE`; `-BUSY` follows at the next
+/// `UCLK^` and the sequencer stops with its counter at zero.
+#[test]
+fn done_at_047_ends_a_chained_read() {
+    const PAGE3: u32 = 0o40000;
+    const PAST: u32 = 0o50000;
+    let n = cadrdc();
+    let list = [PAGE, PAGE2, PAGE3];
+    let (mut b, mut p, _) = chain_bench(&n, list.len());
+    let c = chained_read(&mut p, &mut b, &list, PAST | 1);
+    assert!(!c.stuck, "the read never stopped");
+    assert_eq!(c.pages().len(), list.len(), "every page moved");
+
+    // The second term of the gate, over the whole run.
+    assert!(
+        c.seen.iter().all(|(_, s, _)| s[NOT_CMD1] == Level::High),
+        "-CMD1 stands high for a Read: command 0 puts a zero on the 74LS175's D"
+    );
+    assert!(
+        c.seen.iter().all(|(_, s, _)| s[NOT_CMD_FROM_MEMORY] == Level::High),
+        "-CMD.FROM.MEMORY stands high too, so the term is LAST CCW and DONE TEST"
+    );
+
+    // `047` once a block, and `DONE TEST` up there and nowhere else.
+    let visits = c.entered(0o47);
+    assert_eq!(visits.len(), list.len(), "047 once a block");
+    assert_eq!(c.rises(DONE_TEST), visits, "DONE TEST comes up at 047 and nowhere else");
+
+    // `LAST CCW` starts up --- the flop's power-up zero, no CCW fetched ---
+    // and the first fetch puts it down before the sequencer ever reaches
+    // `047`, which is what stops the run ending with nothing moved.
+    assert_eq!(c.seen[0].1[LAST_CCW], Level::High, "no CCW fetched yet");
+    let first = c.transfers.iter().find(|t| t.wrote.is_none()).expect("a CCW fetch");
+    assert!(first.at < c.seen[visits[0]].0, "the first CCW is fetched before the first 047");
+
+    // And it comes back up at the last CCW's fetch, after the block before
+    // it has left `047`.
+    let up = c.rises(LAST_CCW);
+    assert_eq!(up.len(), 1, "LAST CCW comes up once");
+    let up = up[0];
+    assert_eq!(c.seen[up].1[CCW_CLK], Level::High, "at a CCW CLK, which is inside a fetch");
+    assert!(
+        c.seen[visits[1]].0 < c.seen[up].0,
+        "the second block's 047 at {} ns, LAST CCW at {} ns",
+        c.seen[visits[1]].0 - c.t0,
+        c.seen[up].0 - c.t0
+    );
+
+    // `DONE` at each visit.
+    let done: Vec<Vec<Level>> = visits.iter().map(|&i| c.during(i, DONE)).collect();
+    assert_eq!(done[0], [Level::Low], "the first block's 047: not done, round again");
+    assert_eq!(done[1], [Level::Low], "the second block's 047: not done either");
+    assert_eq!(done[2], [Level::High], "the last block's 047: done");
+    assert_eq!(c.rises(DONE), [visits[2]], "DONE rises once, as 047 is entered");
+
+    // The channel finishes first, on the last page's 256th word.
+    let mbusy = c.rises(NOT_MBUSY);
+    assert_eq!(mbusy.len(), 1, "-MBUSY rises once");
+    let mbusy = mbusy[0];
+    assert_eq!(c.seen[mbusy].1[NOT_LAST_CCW], Level::Low, "taking the last CCW's More flag");
+    assert_eq!(c.seen[mbusy].1[END_PAGE_CLK], Level::High, "on END PAGE CLK's rise");
+    let last = c.transfers.iter().rev().find(|t| t.wrote.is_some()).expect("a page written");
+    assert!(c.seen[mbusy].0 > last.at, "-MBUSY at the end of the last page's last word");
+    assert!(c.seen[mbusy].0 < c.seen[visits[2]].0, "and before the 047 that reads it");
+
+    // `-BUSY` follows a `UCLK^` later, and the sequencer stops at zero.
+    let busy = c.rises(NOT_BUSY);
+    assert_eq!(busy.len(), 1, "-BUSY rises once");
+    let busy = busy[0];
+    assert!(c.seen[busy].0 > c.seen[visits[2]].0, "-BUSY after DONE");
+    assert_eq!(c.seen[busy].2, 0, "the sequencer stopped and its counter cleared");
+    assert_eq!(c.status & 1, 1, "not active: {:o}", c.status);
+    assert_eq!(c.status & ERRORS, 0, "no error: {:o}", c.status);
+    eprintln!(
+        "last word {} ns, -MBUSY +{} ns, 047 with DONE +{} ns, -BUSY +{} ns; 047 at {} ns and \
+         LAST CCW at {} ns",
+        last.at - c.t0,
+        c.seen[mbusy].0 - last.at,
+        c.seen[visits[2]].0 - c.seen[mbusy].0,
+        c.seen[busy].0 - c.seen[visits[2]].0,
+        c.seen[visits[1]].0 - c.t0,
+        c.seen[up].0 - c.t0
+    );
 }
 
 /// The net a pin carries. Compared by [`NetId`] rather than by name
