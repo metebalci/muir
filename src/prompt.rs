@@ -78,6 +78,17 @@ pub enum Command {
         /// A bus of this many bits, `NAME0` up, as `MUIR_WATCH` writes it.
         width: Option<u32>,
     },
+    /// So many words of main memory from a **physical** address.
+    ///
+    /// The address is the one the Xbus carries --- the board and the cell
+    /// on it --- and is never translated through the map.  A program's own
+    /// address is virtual and is not this; the band's CCW list, which is
+    /// what wanted the command, is physical.  [`main_dump`] says why the
+    /// choice is that way round and what is refused.
+    Mem {
+        from: usize,
+        words: usize,
+    },
     /// End the run, as a stop does.
     Quit,
     Help,
@@ -123,6 +134,10 @@ mmem [from [n]]         the M memory
 dmem [from [n]]         the dispatch memory
 pdl [from [n]]          the PDL buffer
 spc [from [n]]          the SPC stack
+mem <address> [n]       main memory: the word at a physical address, or n
+                        words from there. Physical, and never through the
+                        map: a program's own address is not one. Answered
+                        while the machine runs, as net is
 screenshot, ss [file]   the screen as it stands, as a PNG, to the file or to
                         muir-yyyymmdd-hhmmss.png in the current directory
 startcapture, sc [file] record the display from here on, as a GIF, to the
@@ -179,6 +194,7 @@ pub fn parse(line: &str) -> Result<Option<Command>, String> {
         "dmem" => parse_dump(Memory::Dmem, arg),
         "pdl" => parse_dump(Memory::Pdl, arg),
         "spc" => parse_dump(Memory::Spc, arg),
+        "mem" => parse_mem(arg),
         "net" => parse_net(arg),
         "screenshot" | "ss" => Ok(Some(Command::Screenshot(file(arg)))),
         "startcapture" | "sc" => Ok(Some(Command::StartCapture(file(arg)))),
@@ -249,6 +265,93 @@ fn parse_dump(memory: Memory, arg: &str) -> Result<Option<Command>, String> {
         return Err(format!("{name} takes an address and a count, no more"));
     }
     Ok(Some(Command::Dump { memory, from, words }))
+}
+
+/// `mem <address> [<words>]`: a physical address, which is required, and a
+/// count of words, which is one if it is left out.  Both octal, as the
+/// other dumps' are.
+///
+/// **The address is not optional, and the count is one.** `amem` and the
+/// rest default to the whole memory because the whole of the largest of
+/// them is 2048 words; main memory is two million, and a command that
+/// wrote half a million lines for a mistyped line is not a default.
+fn parse_mem(arg: &str) -> Result<Option<Command>, String> {
+    let mut args = arg.split_whitespace();
+    let octal = |what: &str, s: &str| {
+        usize::from_str_radix(s, 8).map_err(|_| format!("mem wants an octal {what}, not {s}"))
+    };
+    let Some(from) = args.next() else {
+        return Err("mem wants a physical address, in octal".to_string());
+    };
+    let from = octal("address", from)?;
+    let words = match args.next() {
+        Some(s) => octal("count", s)?,
+        None => 1,
+    };
+    if args.next().is_some() {
+        return Err("mem takes an address and a count, no more".to_string());
+    }
+    Ok(Some(Command::Mem { from, words }))
+}
+
+/// Words the Xbus can name: its address is 22 wires, `-XADDR0` to
+/// `-XADDR21` in `data/busint-connectors.txt`, so no physical address is
+/// larger than this.  A machine holds as many of them as it has memory
+/// boards, 64K a board, and the top four boards' worth is the Xbus I/O
+/// space the devices answer rather than memory
+/// ([`crate::busint::MAX_MEMORY_BOARDS`]).
+pub const PHYSICAL_WORDS: usize = 1 << 22;
+
+/// `mem`'s answer: `words` words of main memory from the physical address
+/// `from`, in [`dump`]'s shape, or why there are none there.  `fitted` is
+/// how many words the machine has, and `read` gives one of them.
+///
+/// **The address is physical, and nothing here translates it.** The two
+/// reasons are that a physical address is the only kind that names a word
+/// of main memory --- on `chip` main memory is cells on a board, and it is
+/// the physical address that says which board and which cell --- and that
+/// a virtual one would have to be read through the map as it stands this
+/// microcycle, so the same argument would name different words at
+/// different instants.  A command whose meaning moved while the machine
+/// ran would be worse than none.
+///
+/// A virtual address is refused where it can be told apart from a physical
+/// one, which is above the 22 bits the Xbus carries; below that the two are
+/// the same numbers and nothing can tell, which is why the help says which
+/// this takes.
+pub fn main_dump(
+    from: usize,
+    words: usize,
+    fitted: usize,
+    read: impl Fn(usize) -> Option<u32>,
+) -> Result<String, String> {
+    if from >= PHYSICAL_WORDS {
+        return Err(format!(
+            "the Xbus carries 22 bits of address and {from:o} is more than that; \
+             mem takes a physical address and does not go through the map"
+        ));
+    }
+    if from >= fitted {
+        return Err(format!(
+            "main memory here is {fitted:o} words, 0 to {:o}, and {from:o} is past its end",
+            fitted.saturating_sub(1)
+        ));
+    }
+    // A count past the end is the rest of the memory, as the other dumps'
+    // is: the largest count the prompt reads would otherwise overflow the
+    // address it is added to.
+    let to = from.saturating_add(words).min(fitted);
+    let mut all = Vec::with_capacity(to - from);
+    for a in from..to {
+        match read(a) {
+            Some(w) => all.push(w),
+            // Inside `fitted` and nothing there: the reader and the count
+            // disagree about what the machine has, which is a bug in
+            // whichever of them is wrong and not a word to print.
+            None => return Err(format!("nothing holds {a:o}, though the machine has that word")),
+        }
+    }
+    Ok(dump(&all, from))
 }
 
 /// How many words a dump writes to a line.

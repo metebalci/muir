@@ -190,3 +190,68 @@ fn a_net_is_named_as_the_drawings_name_it() {
     assert!(parse("net PC/0").is_err());
     assert!(parse("net PC/65").is_err());
 }
+
+/// **`mem` takes a physical address, which it will not do without, and a
+/// count of words, which is one.**
+///
+/// The other dumps default their address to 0 and their count to the whole
+/// memory, because the largest of those memories is 2048 words.  Main
+/// memory is two million, so `mem` on its own is refused rather than
+/// answered with half a million lines, and a count left out is one word ---
+/// which is the question that wanted the command: what is in the 512th
+/// CCW.  Both numbers are octal, as MIT writes them.
+#[test]
+fn mem_wants_a_physical_address_and_gives_one_word() {
+    assert_eq!(parse("mem 40777"), Ok(Some(Command::Mem { from: 0o40777, words: 1 })));
+    assert_eq!(parse("mem  40000 1000 "), Ok(Some(Command::Mem { from: 0o40000, words: 0o1000 })));
+    assert_eq!(parse("mem 0"), Ok(Some(Command::Mem { from: 0, words: 1 })));
+    // Octal, so 10 is eight and 19 is not a number at all.
+    assert_eq!(parse("mem 10"), Ok(Some(Command::Mem { from: 8, words: 1 })));
+    assert!(parse("mem 19").unwrap_err().contains("octal"));
+    assert!(parse("mem").unwrap_err().contains("physical address"));
+    assert!(parse("mem x").unwrap_err().contains("octal address"));
+    assert!(parse("mem 0 x").unwrap_err().contains("octal count"));
+    assert!(parse("mem 0 1 2").unwrap_err().contains("no more"));
+}
+
+/// **What `mem` refuses, and why: the address is physical and nothing
+/// translates it.**
+///
+/// A virtual address is refused where it can be told apart from a physical
+/// one --- above the 22 bits `-XADDR0` to `-XADDR21` carry, which is the
+/// whole of the address space the Xbus has --- and an address inside that
+/// space with no board behind it is told how much memory the machine has.
+/// Below 22 bits a virtual address and a physical one are the same numbers
+/// and nothing can tell them apart, which is why the help says which of the
+/// two this takes.
+///
+/// A count past the end is the rest of the memory, as it is for the
+/// processor's own memories, so that the largest count the prompt can read
+/// does not overflow the address it is added to.
+#[test]
+fn mem_refuses_what_is_not_a_word_of_this_machines_main_memory() {
+    // One board of 64K words, every word holding its own address.
+    let fitted = 0o200000;
+    let read = |a: usize| (a < fitted).then_some(a as u32);
+    let dump = |from, words| muir::prompt::main_dump(from, words, fitted, read);
+
+    let one = dump(0o40777, 1).unwrap();
+    assert_eq!(one.lines().count(), 1, "one word is one line: {one}");
+    assert!(one.starts_with("040777  000041ff"), "the word at 40777: {one}");
+    // Four words to a line, from the address asked for.
+    assert_eq!(dump(0o40777, 4).unwrap().lines().count(), 1);
+    assert_eq!(dump(0o40777, 5).unwrap().lines().count(), 2);
+
+    // Past 22 bits is not a physical address at all.
+    let err = dump(muir::prompt::PHYSICAL_WORDS, 1).unwrap_err();
+    assert!(err.contains("22 bits") && err.contains("does not go through the map"), "{err}");
+    // Inside the Xbus's space, past this machine's boards.
+    let err = dump(fitted, 1).unwrap_err();
+    assert!(err.contains("200000 words, 0 to 177777"), "{err}");
+    assert!(dump(fitted - 1, 1).is_ok(), "the last word is there");
+
+    // A count past the end is the rest of the memory, however far past.
+    let rest = dump(fitted - 6, usize::MAX).unwrap();
+    assert_eq!(rest.lines().count(), 2, "six words, two lines: {rest}");
+    assert!(rest.contains("\n177776  0000fffe 0000ffff "), "and ends at the last word: {rest}");
+}

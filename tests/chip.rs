@@ -4224,6 +4224,128 @@ fn chip_and_rtl_answer_the_processors_own_mapped_cycle_alike() {
     assert_eq!(chip_last_ran, rtl_last_ran, "halted in the same generator cycle");
 }
 
+/// **The prompt's `mem` reads the same words on the boards as `rtl` holds
+/// in its array**, over two whole memory boards, after the processor
+/// itself wrote them.
+///
+/// `mem` names a word of main memory by its physical address, and on
+/// `chip` main memory is thirty-two netlist boards: the address picks the
+/// board and the bank and the cell, and the word is one bit off each of
+/// the 32 4116s of that bank.  [`FarEnd::main_word`] is that reader, and
+/// this is what holds it honest, as
+/// [`chip_and_rtl_hold_the_same_memories`] holds the processor's own
+/// memories.
+///
+/// **The two addresses are the same bank and the same cell on different
+/// boards.**  Physical `40777` and `240777` differ in bit 16 alone, so a
+/// reader that dropped the board bits would give one word for both and the
+/// two would collide --- which is the failure a comparison against a
+/// single address cannot see.  `40777` is also the word issue 88 wanted:
+/// the 512th CCW of a cold-load command list.
+///
+/// What the neighbours own rather than this: writing memory through the
+/// Unibus map from the debug cable and reading it back is
+/// [`chip_and_rtl_answer_the_unibus_map_alike`], and that a word poked
+/// into the cells comes back out of them is `tests/cables.rs`.  This owns
+/// the reader the prompt calls, on words the machine put there itself.
+#[test]
+fn chip_and_rtl_read_the_same_main_memory() {
+    use microcode::*;
+    use muir::engine::Engine;
+    use muir::isa::Insn;
+    use muir::spy;
+
+    let n = netlist::parse(NETLIST).unwrap();
+    let mut m = page_zero_on_the_diagnostic_block();
+    // Virtual page 1 on physical page 101, virtual page 2 on physical page
+    // 501: virtual 777 is physical 40777 on board 0, virtual 1377 is
+    // physical 240777 on board 1, and both are cell 777 of bank 1.
+    m.l2_map[1] = (1 << 23) | (1 << 22) | 0o101;
+    m.l2_map[2] = (1 << 23) | (1 << 22) | 0o501;
+    let first = 0o12345671;
+    let second = 0o76543210;
+    let constants: [u32; 6] = [
+        first,           // 1: the word for board 0
+        0o777,           // 2: its virtual address
+        second,          // 3: the word for board 1
+        0o1377,          // 4: its virtual address
+        0,               // 5: RUN down, for the clock control register
+        spy::CLK as u32, // 6: its address, page 0 being the diagnostic block
+    ];
+    for (k, &v) in constants.iter().enumerate() {
+        m.mmem[k + 1] = v;
+    }
+    let mut prom = vec![filler(); 512];
+    let mut at = 20;
+    for src in [1, 3, 5] {
+        prom[at] = Insn::new(ALU | SETM | m_src(src) | a_src(3) | MD);
+        prom[at + 1] = Insn::new(ALU | SETM | m_src(src + 1) | a_src(3) | START_WRITE);
+        at += 22;
+    }
+    m.load_prom(&prom);
+
+    let (mut c, mut clk, mut far, mut r) = same_program(&n, &m);
+    let clk0 = cpu_clock(&n);
+    // Two writes and the halt, each with twenty fillers behind it.
+    let cycles = 200;
+    let mut chip_last_ran = 0;
+    for k in 0..cycles {
+        if generator_cycle(&mut c, &mut far, &mut clk, clk0) {
+            chip_last_ran = k;
+        }
+    }
+    let mut rtl_last_ran = 0;
+    for k in 0..cycles {
+        r.step().unwrap();
+        if r.executed().is_some() {
+            rtl_last_ran = k;
+        }
+    }
+    assert!(chip_last_ran < cycles - 20, "the board halted");
+    assert!(rtl_last_ran < cycles - 20, "rtl halted");
+    assert_eq!(c.bus(&n, "PC", 14) as u16, r.pc(), "halted at the same PC");
+
+    assert_eq!(far.main_words(), r.machine().main.len(), "as many words of memory on both");
+    // Two whole boards, word for word: the reader against the array.
+    let boards = 2 * 0o200000;
+    let mut differ = 0;
+    let mut on_boards: Vec<(usize, u32)> = Vec::new();
+    for a in 0..boards {
+        let got = far.main_word(a as u32).expect("a word of a board that is there");
+        if got != r.machine().main[a] {
+            differ += 1;
+            if differ <= 8 {
+                eprintln!("main[{a:o}]: chip {got:o} rtl {:o}", r.machine().main[a]);
+            }
+        }
+        if got != 0 {
+            on_boards.push((a, got));
+        }
+    }
+    assert_eq!(differ, 0, "{differ} of the first {boards:o} words differ between chip and rtl");
+    // And the words are where the program put them, not one bank or one
+    // board away, and nowhere else.
+    assert_eq!(
+        on_boards,
+        vec![(0o40777, first), (0o240777, second)],
+        "the two words the program wrote, each on its own board"
+    );
+    // Past the last board there is no word to read, on either.
+    assert_eq!(far.main_word(far.main_words() as u32), None, "past the last board");
+    assert_eq!(r.machine().main.get(far.main_words()), None, "and past rtl's array");
+    // **The reader is on the cells and not on the model behind them.**
+    // `Buses` mirrors every Xbus write into `machine.main`, so that the
+    // model disk controller's DMA can read what the processor wrote, and a
+    // reader that had quietly landed on that mirror would answer exactly
+    // the same here. Clearing the mirror's copy leaves the boards alone.
+    far.buses.machine.main[0o40777] = 0;
+    assert_eq!(far.main_word(0o40777), Some(first), "the boards' cells, not the mirror");
+    eprintln!(
+        "chip and rtl hold the same {boards:o} words over two boards; {} written by the program",
+        on_boards.len()
+    );
+}
+
 // --- Two boards on the debug cable ------------------------------------------
 
 /// Brings a machine that has no event before `t` to `t`: time passes on its

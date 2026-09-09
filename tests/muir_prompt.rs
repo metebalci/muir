@@ -308,6 +308,76 @@ fn control_c_holds_at_the_prompt_and_again_quits() {
     assert!(chk.exists(), "the checkpoint at the stop was written");
 }
 
+/// **`mem` reads main memory at a physical address, and the machine is not
+/// held to answer.**
+///
+/// Every line here is typed while the machine runs, as `net` is, and each
+/// is acted on between two microcycles: no `hold` is sent and no PC line
+/// comes back, which is what a hold would print.  The two refusals are the
+/// interface's substance --- the address is physical, so one past the 22
+/// bits the Xbus carries is not one at all, and one inside those 22 bits
+/// with no board behind it is told how much memory this machine has.
+#[test]
+fn mem_reads_a_physical_address_while_the_machine_runs() {
+    let mut child =
+        muir().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
+    let mut stdin = child.stdin();
+    let said = child.stdout();
+    let line = |head: &'static str| move |t: &str| t.lines().any(|l| l.starts_with(head));
+    // The 512th CCW of a cold-load command list, which is the word issue
+    // 88 wanted: one word, because a count left out is one.
+    writeln!(stdin, "mem 40777").unwrap();
+    said.wait_until(line("040777  "), "the word at 40777, with nothing held");
+    // Sixteen words from 40000: four lines, the middle two the same as the
+    // first and so a `*`, and the last written whole.
+    writeln!(stdin, "mem 40000 20").unwrap();
+    said.wait_until(line("040014  "), "and sixteen words from 40000");
+    writeln!(stdin, "mem 20000000").unwrap();
+    said.wait_until(|t| t.contains("22 bits"), "an address past the Xbus's 22 bits is refused");
+    writeln!(stdin, "mem 10000000").unwrap();
+    said.wait_until(|t| t.contains("past its end"), "and one past the machine's last board");
+    writeln!(stdin, "quit").unwrap();
+    let out = child.wait();
+    drop(stdin);
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert_eq!(pc_lines(&t), 0, "the machine was never held to answer:\n{t}");
+    assert!(t.contains("quit at PC"), "the run ended by quit:\n{t}");
+}
+
+/// **The same on `chip`, held**, which is what the command was built for:
+/// a machine parked in a state that took hours, asked what one word of
+/// main memory holds.
+///
+/// Main memory here is not an array but the memory boards on the
+/// backplane, and the word is a bit off each of the 32 4116s of one bank
+/// of one board: [`muir::cable::FarEnd::main_word`], which
+/// `chip_and_rtl_read_the_same_main_memory` holds to `rtl`'s array.  One
+/// board rather than the usual thirty-two, so that the run is a moment;
+/// the address is on it either way.
+#[test]
+fn chip_reads_a_word_of_a_memory_board_at_the_prompt() {
+    let mut child = muir()
+        .args(["--chip", "--main-memory-boards", "1", "--stop-after", "100"])
+        .stdin(Stdio::piped())
+        .start();
+    let mut stdin = child.stdin();
+    write!(stdin, "hold\nmem 40777\nmem 200000\nquit\n").unwrap();
+    drop(stdin);
+    let out = child.wait();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(
+        t.lines().any(|l| l.starts_with("040777  ")),
+        "the word at 40777, off the board's cells:\n{t}"
+    );
+    assert!(
+        t.contains("main memory here is 200000 words, 0 to 177777"),
+        "and past the one board there is nothing to read:\n{t}"
+    );
+    assert!(t.contains("quit at PC"), "{t}");
+}
+
 /// ^C with no one to type `continue` --- stdin ended --- ends the run on
 /// that one interrupt, as `quit` does.
 ///

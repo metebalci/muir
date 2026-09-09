@@ -376,6 +376,14 @@ engine: rtl</pre>
         </dd>
       </div>
       <div>
+        <dt>mem &lt;address&gt; [n]</dt>
+        <dd>
+        <p>Main memory, in the same shape: the word at an address, or n words from there, both octal. The address is not optional and a count left out is one word, main memory being two million of them where the largest of the memories above is 2048.</p>
+        <p><strong>The address is physical</strong> &mdash; the board and the cell on it &mdash; and is never translated through the map, so a program&rsquo;s own address is not one. An address above the 22 bits the Xbus carries is refused as no physical address at all; one inside them with no board behind it is told how many words this machine has.</p>
+        <p>The machine need not be held. On <code>chip</code> main memory is the memory boards&rsquo; own cells and a word is a bit off each of the 32 4116s of one bank of one board: reading them drives nothing, advances no clock and runs no bus cycle, so a run is not disturbed by the asking.</p>
+        </dd>
+      </div>
+      <div>
         <dt>screenshot, ss [file]</dt>
         <dd><p>The screen as it stands, as a PNG, to the file or to <code>muir-yyyymmdd-hhmmss.png</code> in the current directory.</p></dd>
       </div>
