@@ -1008,6 +1008,13 @@ impl Keyboard {
     ///
     /// This whole function is the one place muir's keyboard invents
     /// anything; everything under it is MIT's.
+    ///
+    /// **Three pieces of state reached through branches is a state machine
+    /// written as conditionals**: `prefix`, `latched` and `tapped`, each
+    /// documented where it is declared. It is tested and it reads --- but a
+    /// fourth would be the one that is hard to reason about, so if this
+    /// grows again, make the machine explicit, a table of state and keysym
+    /// to action, rather than adding another branch.
     pub fn key(&mut self, keysym: u32, down: bool) {
         if self.trace {
             self.key_traced(keysym, down);
