@@ -63,6 +63,21 @@ pub enum Command {
     /// Lisp Machine keyboard, for a user who cannot type a key and wants
     /// to know what would.
     Keys,
+    /// A net or a bus on one of the machine's boards, by the name the
+    /// drawings give it: what the wire is doing at this instant.
+    ///
+    /// `chip` only. The other engines have registers and memories and no
+    /// nets at all, which is the same reason [`Command::Registers`] is
+    /// refused the other way round.
+    Net {
+        /// Which board, where more than one has the name; `None` searches
+        /// them in order and says which one answered.
+        board: Option<String>,
+        /// The net's name, or a bus's prefix.
+        name: String,
+        /// A bus of this many bits, `NAME0` up, as `MUIR_WATCH` writes it.
+        width: Option<u32>,
+    },
     /// End the run, as a stop does.
     Quit,
     Help,
@@ -120,6 +135,13 @@ checkpoint [file]       the machine's whole state to the file, or to
 info, i                 what this run is, as said at the start
 keys                    the keyboard mapping in force: what a viewer's
                         keysyms mean on the Lisp Machine keyboard
+net [board:]name[/width]
+                        chip: what a net is doing at this instant, by the
+                        name the drawings give it --- `net TRIDENT.READY/`
+                        --- or a bus of that many bits from `name0` up,
+                        as MUIR_WATCH writes one. A board where more than
+                        one carries the name: cpu, busint, memory, io, tv,
+                        disk
 quit, q                 end the run, as a stop does
 help, h, ?              this
 
@@ -157,12 +179,47 @@ pub fn parse(line: &str) -> Result<Option<Command>, String> {
         "dmem" => parse_dump(Memory::Dmem, arg),
         "pdl" => parse_dump(Memory::Pdl, arg),
         "spc" => parse_dump(Memory::Spc, arg),
+        "net" => parse_net(arg),
         "screenshot" | "ss" => Ok(Some(Command::Screenshot(file(arg)))),
         "startcapture" | "sc" => Ok(Some(Command::StartCapture(file(arg)))),
         "endcapture" | "ec" => bare(Command::EndCapture),
         "checkpoint" => Ok(Some(Command::Checkpoint(file(arg)))),
         other => Err(format!("{other} is no command; help lists them")),
     }
+}
+
+/// `net [<board>:]<name>[/<width>]`.
+///
+/// The name is taken whole, spaces and all, because MIT's own net names
+/// have spaces in them --- `SYNC PROM ENB`, `-UNIT 0 ENB` --- and quoting
+/// them at a prompt would be one more thing to get wrong. So the board and
+/// the width are recognised by their punctuation and everything else is
+/// the name.
+fn parse_net(arg: &str) -> Result<Option<Command>, String> {
+    if arg.is_empty() {
+        return Err("net wants a name, as the drawings write it".to_string());
+    }
+    // A board prefix is a word before a colon, and a net name never has
+    // one: `TRIDENT.0.SELECT/` and `-XBUS RQ` carry no colons.
+    let (board, rest) = match arg.split_once(':') {
+        Some((b, r)) if !b.contains(char::is_whitespace) => (Some(b.trim().to_string()), r.trim()),
+        _ => (None, arg),
+    };
+    // A width is a number after the last slash. A name may end in one ---
+    // `TRIDENT.READY/` --- and then there is nothing after the slash to
+    // parse as a number, so the same arm that rejects `FOO/bar` takes it.
+    let (name, width) = match rest.rsplit_once('/') {
+        Some((n, w)) => match w.trim().parse::<u32>() {
+            Ok(bits) if (1..=64).contains(&bits) => (n.trim(), Some(bits)),
+            Ok(_) => return Err(format!("a bus is 1 to 64 bits, not {w}")),
+            Err(_) => (rest, None),
+        },
+        _ => (rest, None),
+    };
+    if name.is_empty() {
+        return Err("net wants a name, as the drawings write it".to_string());
+    }
+    Ok(Some(Command::Net { board, name: name.to_string(), width }))
 }
 
 /// The file a command was given, if it was given one.  What is left of
