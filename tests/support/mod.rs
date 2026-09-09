@@ -49,7 +49,19 @@ pub fn pack_100() -> Option<PathBuf> {
     vendor(&["run", "disk-sys-100-0.img"])
 }
 
-/// The Chaosnet numbers the System 304 band holds: this machine
+/// The Chaosnet numbers the **System 100** band holds: this machine
+/// `MIT-LISPM-1` at 3050, and `MIT-OZ`, its file and time host, at 3060.
+/// Read off the release's own `sys/site/hosts.text`, and enforced against
+/// it by `tests/chaos.rs::the_bands_own_hosts_are_named_and_are_not_the_defaults`.
+///
+/// A run has to say them: [`muir::chaos::Config`] defaults to 177001 and
+/// 177002, on the private subnet 376, which is no band's pair on purpose.
+/// A band reached at the wrong pair gets neither the time nor its files
+/// and stops in the cold-load debugger to ask for the date, so every test
+/// that boots this band over the Chaosnet passes these.
+pub const CHAOS_100: (u16, u16) = (0o3050, 0o3060);
+
+/// The Chaosnet numbers the **System 304** band holds: this machine
 /// `AMS-LISPM-1` at 4401, and `OZ`, its file and time host, at 4403. Read
 /// out of the band itself --- `(send (si:parse-host "OZ") :chaos-address)`
 /// answers 2307 decimal, and `si:local-host` is `AMS-LISPM-1` when the
@@ -380,19 +392,22 @@ pub fn quiet() -> Vec<(&'static str, Level)> {
     IDLE_CHAOSNET.iter().chain(IDLE_KEYBOARD).copied().collect()
 }
 
-/// Boots a machine over the Chaosnet server, serving `file_root`, to the
-/// listener: the boot is at its prompt once the rows the `;Reading` line
-/// is printed in hold more than 400 lit pixels, and a moment more for the
-/// prompt to settle. Returns the microcycles it took.
+/// Boots a machine over the Chaosnet server at `chaos` --- this machine's
+/// address and the server's --- serving `file_root`, to the listener: the
+/// boot is at its prompt once the rows the `;Reading` line is printed in
+/// hold more than 400 lit pixels, and a moment more for the prompt to
+/// settle. Returns the microcycles it took.
+///
+/// The pair is the caller's because it is the band's and not muir's:
+/// [`CHAOS_100`] for the System 100 pack, [`CHAOS_304`] for the other, and
+/// a band reached at any other pair --- the defaults included --- boots
+/// but stops to ask for the date and reaches no files.
 ///
 /// Any engine: the Chaosnet is the machine's and not the engine's, and
 /// every engine keeps the machine's clock, which is what the interface
 /// runs on.
-pub fn boot_to_the_prompt<E: Engine>(e: &mut E, file_root: PathBuf) -> u64 {
-    // The band this boots is System 100's, whose own Chaosnet numbers are
-    // what `chaos::Config` defaults to. A band reached at the wrong pair
-    // gets neither the time nor its files and stops to ask for the date;
-    // System 304's wants [`CHAOS_304`], which its own test gives it.
+pub fn boot_to_the_prompt<E: Engine>(e: &mut E, chaos: (u16, u16), file_root: PathBuf) -> u64 {
+    (e.machine_mut().chaos.address, e.machine_mut().chaos.server_address) = chaos;
     e.machine_mut().chaos.file_root = Some(file_root);
     e.machine_mut().chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
     e.machine_mut().plug_chaos(0);

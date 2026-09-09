@@ -26,7 +26,11 @@ use muir::chaos::udp::{self, Link};
 use muir::chaos::{Config, time};
 
 /// This machine, and the Chaosnet server on its cable: the two addresses
-/// the cable already carries.
+/// the cable already carries. System 100's band's pair, which is what a
+/// run of that pack gives `--chaos-address` --- not what
+/// [`Config::default`] holds, that being subnet 376's and no band's --- so
+/// a test here that runs a whole `muir` names the pair on its command
+/// line, and one that builds a [`Config`] sets both fields.
 const ME: u16 = 0o3050;
 const SERVER: u16 = 0o3060;
 /// A peer over UDP, and one this machine was never told about.
@@ -499,6 +503,10 @@ fn a_running_muir_answers_status_over_udp() {
     let root = support::scratch("chudp-file-root");
     let child = support::muir()
         .args(["--micro", "--stop-after", "4000000000"])
+        // The pair this file's cable carries. It has to be given: the
+        // defaults are subnet 376's and no band's, so a run that wants
+        // this machine at [`ME`] and its server at [`SERVER`] says so.
+        .args(["--chaos-address", &format!("{ME:o},{SERVER:o}")])
         .args(["--chaos-udp", "127.0.0.1:0"])
         .args(["--chaos-udp-peer", &format!("{PEER:o}@{peer_at}")])
         .args(["--chaos-file-root", &root.display().to_string()])
@@ -586,6 +594,11 @@ fn answer_to(config: &Config, from: u16) -> u8 {
 fn file_serves_this_machine_and_whoever_the_run_named() {
     let root = std::env::temp_dir();
     let config = Config {
+        // Named, not defaulted: the run says where this machine and its
+        // server are, and [`ME`] and [`SERVER`] are what the rest of this
+        // file's cable carries.
+        address: ME,
+        server_address: SERVER,
         file_root: Some(root),
         file_peers: vec![PEER],
         time: Some(time::TEST_UNIVERSAL),

@@ -14,7 +14,7 @@ use muir::sym::{self, Space};
 use muir::terminal::keyboard::Keyboard;
 
 mod support;
-use support::{boot_to_the_prompt, machine_with_pack, type_at, vendor};
+use support::{CHAOS_100, boot_to_the_prompt, machine_with_pack, type_at, vendor};
 
 /// **The band's cold boot leaves the vertical interrupt off, and
 /// `(SI:SETUP-CPT)` turns it on; then the microcode counts frames on it.**
@@ -53,7 +53,10 @@ fn setup_cpt_enables_the_vertical_interrupt_and_the_microcode_counts_frames() {
 
     let mut e = Rtl::new(machine_with_pack(&pack));
     e.boot();
-    let ran = boot_to_the_prompt(&mut e, root);
+    // The band is System 100's, and it calls its file and time host at
+    // its own host table's numbers rather than at muir's defaults, which
+    // are on the private subnet 376 and no band's.
+    let ran = boot_to_the_prompt(&mut e, CHAOS_100, root);
     let tv = &e.machine().simpletv;
     eprintln!(
         "at the prompt after {ran}: mode {:o}, sync RAM enable {:o}",

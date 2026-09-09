@@ -35,11 +35,11 @@
   <div class="band">
     <h2>Running it</h2>
     <div class="prose">
-      <p>muir builds to one binary. Run it with no flags and it starts an <code>rtl</code> machine, presses the boot button, and runs the boot PROM with no pack in the drive, which the boot waits on for ever. A pack is named: <code>--disk-pack vendor/run/disk-sys-100-0.img</code>, where <code>tools/fetch-system-100.sh</code> puts the System 100 pack. System 304&rsquo;s pack boots too and wants <code>--chaos-address 4401,4403</code> with it.</p>
+      <p>muir builds to one binary. Run it with no flags and it starts an <code>rtl</code> machine, presses the boot button, and runs the boot PROM with no pack in the drive, which the boot waits on for ever. A pack is named: <code>--disk-pack vendor/run/disk-sys-100-0.img</code>, where <code>tools/fetch-system-100.sh</code> puts the System 100 pack, and with it <code>--chaos-address 3050,3060</code>, which is that band&rsquo;s own pair. System 304&rsquo;s pack boots too and wants <code>--chaos-address 4401,4403</code> with it.</p>
 <pre class="cmd">target/release/muir</pre>
       <p>One engine at a time: <code>--micro</code>, <code>--rtl</code> or <code>--chip</code>, and <code>--rtl</code> is what you get without one. A run goes on until a stop, a halt or ^C.</p>
       <p>Every run says what it is before it starts a microcycle, one line a thing, on stderr. Nothing here is hidden state: if a run behaves oddly, the reason is usually in this block.</p>
-<pre class="cmd">$ muir --stop-after 2000000
+<pre class="cmd">$ muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050,3060 --stop-after 2000000
 engine: rtl
 memory: 32 boards, 2 MW
 pack: vendor/run/disk-sys-100-0.img in unit 0
@@ -79,7 +79,7 @@ stop: after 2000000 microcycles
         <p>This machine&rsquo;s Chaosnet address, always, and after a comma the Chaosnet server&rsquo;s &mdash; the address muir&rsquo;s server on the other end of the cable answers at.</p>
         <p>Each address is the sixteen bits in octal, <code>3050</code>, or subnet:host with each in octal, <code>6:50</code> &mdash; the same number, subnet in the high byte.</p>
         <p>Which pair a run wants is the band&rsquo;s own, out of its host table: System 100&rsquo;s puts this machine at <code>3050</code> and its file and time host at <code>3060</code>, System 304&rsquo;s at <code>4401</code> and <code>4403</code>. A server answering anywhere else is one the band never calls, and the machine then boots but stops to ask for the date and reaches no files.</p>
-        <p>Default: <code>3050,3060</code>, which is System 100&rsquo;s pair. The System 304 pack wants <code>4401,4403</code>.</p>
+        <p>Default: <code>177001,177002</code>, on subnet 376 &mdash; the Chaosnet&rsquo;s private, non-routable range &mdash; and so no band&rsquo;s. muir models the CADR and not one distribution of it, and a default out of one band&rsquo;s host table would be the wrong default for every other; a default in the private range cannot collide with an address a real Chaosnet allocated. A run that wants its band to reach the server names the band&rsquo;s pair: <code>--chaos-address 3050,3060</code> for the System 100 pack, <code>4401,4403</code> for System 304&rsquo;s.</p>
         </dd>
       </div>
       <div>
@@ -459,7 +459,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
   <div class="band">
     <h2>The Chaosnet server</h2>
     <div class="prose">
-      <p>The machine&rsquo;s Chaosnet interface is real &mdash; it is half the I/O board, and on <code>chip</code> it is that board&rsquo;s netlist. What is on the other end of the cable is not a machine but a <b>Chaosnet server</b>: an address that answers contact names, so the band has something to talk to. It is <code>MIT-OZ</code> at <code>3060</code> and the machine is <code>MIT-LISPM-1</code> at <code>3050</code>, octal, which are the band&rsquo;s own numbers from <code>sys/site/hosts.text</code>; <code>--chaos-address</code> changes them.</p>
+      <p>The machine&rsquo;s Chaosnet interface is real &mdash; it is half the I/O board, and on <code>chip</code> it is that board&rsquo;s netlist. What is on the other end of the cable is not a machine but a <b>Chaosnet server</b>: an address that answers contact names, so the band has something to talk to. <code>--chaos-address</code> says where the two are, octal, and the pair a run wants is the band&rsquo;s own: System 100&rsquo;s <code>sys/site/hosts.text</code> puts <code>MIT-LISPM-1</code> at <code>3050</code> and <code>MIT-OZ</code> at <code>3060</code>, so that band is run with <code>--chaos-address 3050,3060</code>. The default is neither band&rsquo;s, <code>177001,177002</code> on the private subnet 376, so a machine started without an address of its own answers nowhere a real Chaosnet allocated.</p>
     </div>
 
     <div class="tablewrap">

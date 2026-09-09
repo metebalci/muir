@@ -411,7 +411,9 @@ fn a_peer_is_one_endpoint_and_not_one_of_this_cables_own() {
     ]
     .concat();
     refused(&twice, "--chaos-udp-peer");
-    for a in ["3050", "3060"] {
+    // The cable's own two with no --chaos-address: `chaos::Config`'s
+    // defaults, 177001 and its server at 177002, which are no band's.
+    for a in ["177001", "177002"] {
         let peer = format!("{a}@127.0.0.1:42043");
         let own = [link.as_slice(), &["--chaos-udp-peer", &peer], &["--stop-after", "1"]].concat();
         refused(&own, "--chaos-udp-peer");

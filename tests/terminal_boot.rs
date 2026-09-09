@@ -15,7 +15,7 @@ use muir::rtl::Rtl;
 use muir::terminal::keyboard::Keyboard;
 
 mod support;
-use support::{boot_to_the_prompt, lit_rows, machine_with_pack, type_at, vendor};
+use support::{CHAOS_100, boot_to_the_prompt, lit_rows, machine_with_pack, type_at, vendor};
 
 /// Lit pixels on the screen.
 fn lit(e: &Rtl) -> usize {
@@ -36,7 +36,10 @@ fn a_key_typed_at_the_listener_is_read_and_echoed() {
     };
     let mut e = Rtl::new(machine_with_pack(&pack));
     e.boot();
-    let ran = boot_to_the_prompt(&mut e, root);
+    // The band is System 100's, and it calls its file and time host at
+    // its own host table's numbers rather than at muir's defaults, which
+    // are on the private subnet 376 and no band's.
+    let ran = boot_to_the_prompt(&mut e, CHAOS_100, root);
     let before = lit(&e);
     eprintln!("listener after {ran} microcycles, {before} pixels lit");
     eprintln!(

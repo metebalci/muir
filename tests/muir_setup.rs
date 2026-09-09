@@ -23,7 +23,10 @@ fn the_start_says_what_the_run_is() {
         "memory: 4 boards, 256 KW",
         // The Chaosnet is the machine's and not the engine's, so `micro`
         // has one too: `tests/micro_chaos.rs` boots the band over it.
-        "chaosnet: 3050, the server at 3060, ",
+        // With no --chaos-address these are the defaults, on the private
+        // subnet 376 and no band's; a run that boots a band names the
+        // band's own pair.
+        "chaosnet: 177001, the server at 177002, ",
         "terminal: vnc://127.0.0.1:59",
         "stop: after 10 microcycles",
         "^C holds the machine at the prompt",
@@ -37,7 +40,7 @@ fn the_start_says_what_the_run_is() {
     for line in [
         "engine: rtl",
         "memory: 32 boards, 2 MW",
-        "chaosnet: 3050, the server at 3060, ",
+        "chaosnet: 177001, the server at 177002, ",
         "stop: after 10 microcycles, at PC 23731",
     ] {
         assert!(t.contains(line), "{line}:\n{t}");

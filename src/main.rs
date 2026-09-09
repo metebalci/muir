@@ -75,9 +75,13 @@
 //! stopped. In the lashup the other machine is served a terminal too, the
 //! display above this machine's, and `--debuggee-terminal` puts that
 //! elsewhere. A machine that reaches no server --- `--chaos-address` at a
-//! pair its band does not call, say --- stops in the debugger at the
+//! pair its band does not call, and the default pair is one such, being on
+//! the private subnet 376 and no band's --- stops in the debugger at the
 //! initialization that wants a host: `Super-B` there, then the date and
-//! time it asks for and `y`, finish it. Every engine has a Chaosnet.
+//! time it asks for and `y`, finish it. A run that wants its band to reach
+//! the server names the band's pair: `--chaos-address 3050,3060` for the
+//! System 100 pack, `4401,4403` for System 304's. Every engine has a
+//! Chaosnet.
 //! `--chaos-udp` puts that cable on the network as Chaosnet over UDP, and
 //! every host `--chaos-udp-peer` names is then a station on the same
 //! modelled cable, taking its turn on it. muir stays a leaf: a packet for
@@ -603,9 +607,10 @@ A simulator of the MIT CADR Lisp Machine.
                                3050 and its file and time host at 3060,
                                System 304's at 4401 and 4403, and a server
                                answering anywhere else is a server the band
-                               never calls. [default: 3050,3060, which is
-                               System 100's pair; the System 304 pack wants
-                               4401,4403]
+                               never calls. [default: 177001,177002, on
+                               subnet 376, the Chaosnet's private range and
+                               no band's; a run that boots a band names the
+                               band's own pair]
   --chaos-file-peers <addresses>
                                the Chaosnet addresses, comma separated,
                                that FILE serves besides this machine's

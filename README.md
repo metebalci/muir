@@ -29,9 +29,11 @@ its SHA-256 sum.
 
 Start a machine. That is the `rtl` engine running MIT's own boot PROM, with
 the pack on the disk controller's cable. There is no default pack --- no
-`--disk-pack` is a drive with no pack in it --- so it is named.
+`--disk-pack` is a drive with no pack in it --- so it is named. So is the
+Chaosnet pair, which belongs to the band and not to muir: this band's host
+table puts it at 3050 and its file and time host at 3060.
 
-    target/release/muir --disk-pack vendor/run/disk-sys-100-0.img
+    target/release/muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050,3060
 
 It prints where its terminal is, and boots. Point any VNC viewer at that
 address --- `vnc://127.0.0.1:5900` unless it says otherwise --- and you
@@ -167,10 +169,13 @@ says so. Windows is untested; the scripts are POSIX shell, so use WSL.
 
 The two packs are different machines and want different flags. System 100's
 band is `MIT-LISPM-1`, whose host table puts it at 3050 with `MIT-OZ` at
-3060, which is what `--chaos-address` defaults to; System 304's is
-`AMS-LISPM-1` at 4401 with its file and time host `OZ` at 4403:
+3060; System 304's is `AMS-LISPM-1` at 4401 with its file and time host `OZ`
+at 4403. Neither is what `--chaos-address` defaults to --- that is 177001
+with its server at 177002, on subnet 376, the Chaosnet's private range,
+which is no band's on purpose --- so a run that wants its band to reach the
+server names the band's own pair:
 
-    muir --disk-pack vendor/run/disk-sys-100-0.img
+    muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050,3060
     muir --disk-pack vendor/run/disk-sys-304-0.img --chaos-address 4401,4403
 
 ## Running it
@@ -439,10 +444,14 @@ it does at the prompt.
 The machine's Chaosnet interface is real --- it is half the I/O board, and on
 `chip` it is that board's netlist. What is on the other end of the cable is
 not a machine but a **Chaosnet server**: an address that answers contact names, so
-the band has something to talk to. It is `MIT-OZ` at `3060` and the machine is
-`MIT-LISPM-1` at `3050`, octal, which are the band's own numbers from
-`sys/site/hosts.text`; `--chaos-address <this>[,<server>]` changes
-them.
+the band has something to talk to. `--chaos-address <this>[,<server>]` sets
+this machine's address and the server's, octal, and the pair a run wants is
+the band's own: System 100's `sys/site/hosts.text` puts `MIT-LISPM-1` at
+`3050` and its file and time host `MIT-OZ` at `3060`, so that band is run
+with `--chaos-address 3050,3060`. The default is neither band's --- 177001
+with its server at 177002, on subnet 376, the Chaosnet's private and
+non-routable range --- so that a machine started with no address of its own
+cannot answer where a real Chaosnet put somebody.
 
 | Contact | |
 |---|---|
