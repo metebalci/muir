@@ -151,3 +151,42 @@ fn what_is_no_command_says_so() {
     assert!(parse("continue now").unwrap_err().contains("takes nothing"));
     assert!(parse("pc 3").unwrap_err().contains("takes nothing"));
 }
+
+/// **A net is named the way the drawings name it, punctuation and all.**
+///
+/// MIT's net names carry spaces (`SYNC PROM ENB`), leading minus signs
+/// (`-XBUS RQ`), dots (`TRIDENT.0.SELECT/`) and trailing slashes, so the
+/// whole of the line after the word is the name and only the two pieces of
+/// punctuation that cannot appear in one are read off it: a colon after a
+/// single word is the board, and a slash with digits after it is a bus's
+/// width. A name that *ends* in a slash keeps it.
+#[test]
+fn a_net_is_named_as_the_drawings_name_it() {
+    let net = |board: Option<&str>, name: &str, width: Option<u32>| {
+        Ok(Some(Command::Net { board: board.map(str::to_string), name: name.to_string(), width }))
+    };
+    assert_eq!(parse("net MEMRQ"), net(None, "MEMRQ", None));
+    // A trailing slash is the name's: `TRIDENT.READY/` is a net, not a bus
+    // of no bits.
+    assert_eq!(parse("net TRIDENT.READY/"), net(None, "TRIDENT.READY/", None));
+    assert_eq!(parse("net TRIDENT.0.SELECT/"), net(None, "TRIDENT.0.SELECT/", None));
+    // Spaces and a leading minus are MIT's own.
+    assert_eq!(parse("net -XBUS RQ"), net(None, "-XBUS RQ", None));
+    assert_eq!(parse("net  SYNC PROM ENB "), net(None, "SYNC PROM ENB", None));
+    // A board, where more than one carries the name.
+    assert_eq!(parse("net disk:-XBUS.RQ"), net(Some("disk"), "-XBUS.RQ", None));
+    assert_eq!(parse("net cpu: MEMRQ"), net(Some("cpu"), "MEMRQ", None));
+    // A bus, as MUIR_WATCH writes one.
+    assert_eq!(parse("net PC/14"), net(None, "PC", Some(14)));
+    assert_eq!(parse("net busint:XBI/32"), net(Some("busint"), "XBI", Some(32)));
+    // A colon inside a name is not a board: a board is one word.
+    assert_eq!(parse("net LM UB: GRANTED"), net(None, "LM UB: GRANTED", None));
+    // What is refused, including a board with no name after it.
+    assert!(parse("net").is_err());
+    assert!(parse("net ").is_err());
+    assert!(parse("net :").is_err());
+    assert!(parse("net disk:").is_err());
+    assert!(parse("net disk:  ").is_err());
+    assert!(parse("net PC/0").is_err());
+    assert!(parse("net PC/65").is_err());
+}

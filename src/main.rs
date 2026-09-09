@@ -963,6 +963,90 @@ fn keyboard_path(named: Option<&Path>) -> Option<(PathBuf, bool)> {
     home.exists().then_some((home, false))
 }
 
+/// A net or a bus read off whichever board carries the name: the prompt's
+/// `net` on `chip`.
+///
+/// **A name is unique only within a board.** `-XBUS RQ` is on nearly all of
+/// them and `TRIDENT.READY/` on one, so the boards are searched in the
+/// order the machine is built --- the processor, the interface, a memory
+/// board, then the devices --- and the answer says which one carried it.
+/// Where more than one does, the others are named too, so that a reading
+/// is never quietly the wrong board's.
+///
+/// A bus is `NAME/width`, `NAME0` up, which is how `MUIR_WATCH` writes one.
+/// Its value is read the way a TTL input reads it, an undriven net as a
+/// one, and the count of undriven bits is said beside it, because half the
+/// datapath is tri-state and undriven for part of every cycle.
+fn say_net(
+    on: &[(&str, &Chip, &netlist::Netlist)],
+    want: Option<&str>,
+    name: &str,
+    width: Option<u32>,
+) -> String {
+    use std::fmt::Write;
+    if let Some(board) = want
+        && !on.iter().any(|&(b, _, _)| b == board)
+    {
+        let names: Vec<&str> = on.iter().map(|&(b, _, _)| b).collect();
+        return format!(
+            "prompt: no board called {board} here; this run has {}\n",
+            names.join(", ")
+        );
+    }
+    let named = |n: &netlist::Netlist, what: &str| {
+        n.by_name_id(what).or_else(|| n.by_name_id(&format!("'{what}'")))
+    };
+    // A bus is carried by `NAME0` and there may be no net called `NAME` at
+    // all, so what decides which board carries it is the first bit.
+    let first = match width {
+        None => name.to_string(),
+        Some(_) => format!("{name}0"),
+    };
+    let carries: Vec<&(&str, &Chip, &netlist::Netlist)> = on
+        .iter()
+        .filter(|&&(b, _, n)| want.is_none_or(|w| w == b) && named(n, &first).is_some())
+        .collect();
+    let Some(&&(board, chip, n)) = carries.first() else {
+        let looked: Vec<&str> =
+            on.iter().map(|&(b, _, _)| b).filter(|b| want.is_none_or(|w| w == *b)).collect();
+        return format!("prompt: no net {first} on {}\n", looked.join(", "));
+    };
+    let mut out = String::new();
+    match width {
+        None => {
+            let id = named(n, name).expect("just found");
+            writeln!(out, "{name} on {board}: {:?}", chip.net(id)).unwrap();
+        }
+        Some(bits) => {
+            let missing: Vec<u32> = (0..bits)
+                .filter(|b| {
+                    n.by_name_id(&format!("{name}{b}")).is_none()
+                        && n.by_name_id(&format!("'{name}{b}'")).is_none()
+                })
+                .collect();
+            if !missing.is_empty() {
+                return format!(
+                    "prompt: {board} has no {name}{} --- a bus is {name}0 up\n",
+                    missing[0]
+                );
+            }
+            let nets = chip.bus_nets(n, name, bits);
+            let word = chip.read(&nets);
+            let undriven = nets.iter().filter(|&&id| chip.net(id) == Level::Z).count();
+            write!(out, "{name}/{bits} on {board}: {word:o} octal, {word:#x}").unwrap();
+            match undriven {
+                0 => writeln!(out, ", every bit driven").unwrap(),
+                k => writeln!(out, ", {k} of {bits} bits undriven and read as ones").unwrap(),
+            }
+        }
+    }
+    if carries.len() > 1 {
+        let others: Vec<&str> = carries[1..].iter().map(|&&(b, _, _)| b).collect();
+        writeln!(out, "  ({name} is also on {})", others.join(", ")).unwrap();
+    }
+    out
+}
+
 /// The mapping this run's terminal uses: the built-in one, with whatever
 /// [`keyboard_path`] found over it.  A file that cannot be read or that
 /// says something muir does not understand stops the run rather than
@@ -1523,6 +1607,11 @@ fn time_engine<E: Engine>(name: &str, mut e: E, terminal: Option<&mut Terminal>,
                             Ok(dump) => print!("{dump}"),
                             Err(what) => println!("prompt: {what}"),
                         }
+                    }
+                    Ok(Some(Command::Net { .. })) => {
+                        println!("prompt: nets are the chip engine's --- this machine is");
+                        println!("        registers and memories and has no wires to read;");
+                        println!("        `reg` gives the registers and `pc` the PC");
                     }
                     Ok(Some(Command::Info)) => print!("{setup}"),
                     Ok(Some(Command::Keys)) => print!("{}", keys_in_force()),
@@ -2425,6 +2514,10 @@ fn time_chip(
     let mut stepping: Option<u64> = None;
     let mut quit = false;
     catch_interrupts();
+    // The processor's, the interface's and a memory board's netlists, for
+    // the prompt's `net`: parsed on the first one asked for, since most
+    // runs ask for none.
+    let mut net_netlists: Option<(netlist::Netlist, netlist::Netlist, netlist::Netlist)> = None;
     let mut interrupts_seen = 0;
     let mut asks_seen = 0;
     while !quit && ran < stop.after && !stop.reached(cpu.read(&pc_nets) as u16, prom_enabled(&cpu))
@@ -2612,6 +2705,37 @@ fn time_chip(
                                  nothing written"
                             ),
                         }
+                    }
+                    Ok(Some(Command::Net { board, name, width })) => {
+                        // The netlists are parsed the first time one is
+                        // asked for and kept: a run that never asks pays
+                        // nothing, and one that asks twice parses once.
+                        let (cpu_n, bus_n, mem_n) = net_netlists.get_or_insert_with(|| {
+                            (
+                                netlist::parse(NETLIST).unwrap(),
+                                netlist::parse(BUSINT).unwrap(),
+                                netlist::parse(CADRM).unwrap(),
+                            )
+                        });
+                        let mut on: Vec<(&str, &Chip, &netlist::Netlist)> =
+                            vec![("cpu", &cpu, cpu_n), ("busint", &far.board, bus_n)];
+                        if let Some(m) = far.xbus.boards.first() {
+                            on.push(("memory", m, mem_n));
+                        }
+                        // The devices are built display first, then the
+                        // disk controller: `Xbus::new`'s own order.
+                        let devices = far.xbus.devices.iter();
+                        for ((what, n), chip) in [("tv", boards.tv), ("disk", boards.disk)]
+                            .into_iter()
+                            .filter_map(|(w, n)| n.map(|n| (w, n)))
+                            .zip(devices)
+                        {
+                            on.push((what, chip, n));
+                        }
+                        if let (Some(u), Some(n)) = (far.unibus.as_ref(), boards.io) {
+                            on.push(("io", &u.board, n));
+                        }
+                        print!("{}", say_net(&on, board.as_deref(), &name, width));
                     }
                     Ok(Some(Command::Quit)) => {
                         quit = true;
