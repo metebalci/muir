@@ -119,11 +119,13 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// address implies, version 17 the header compare error that carrying
 /// them makes possible, version 18 the checkword written after each of
 /// those headers, which is the other half of what a formatter lays down, version 19 the spurious sector pulse a drive can be told to emit,
-/// and version 20 the checkword written after each data field with the two
-/// ECC errors a bad one gives.
+/// version 20 the checkword written after each data field with the two
+/// ECC errors a bad one gives, and version 21 the transitions on their way
+/// down a netlist board's delay lines, which is what a machine has to be
+/// saved with to be saved while it is busy.
 #[test]
-fn the_format_is_version_20_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 20, "a new version needs its own tests");
+fn the_format_is_version_21_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 21, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -131,14 +133,16 @@ fn the_format_is_version_20_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 20u32.to_le_bytes());
-    for other in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, u32::MAX] {
+    assert_eq!(&good[at..at + 4], 21u32.to_le_bytes());
+    for other in
+        [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, u32::MAX]
+    {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 20"), "{err}");
+        assert!(err.contains("reads 21"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -383,8 +387,9 @@ fn chip_machine(press: bool) -> (muir::chip::Chip, Behavioural, muir::cable::Far
 }
 
 /// Runs `at_least` microcycles and then on to the first point a checkpoint
-/// may be taken at: the interface between cycles, no tap in flight on any
-/// board and no memory request up. Returns how many microcycles that took.
+/// may be taken at: the interface between cycles and no memory request up.
+/// Returns how many microcycles that took.  A tap in flight is not asked
+/// about --- it is saved; see [`chip_checkpoints_a_busy_machine`].
 fn run_to_quiet(
     c: &mut muir::chip::Chip,
     clk: &mut Behavioural,
@@ -405,11 +410,7 @@ fn run_to_quiet(
             continue;
         }
         ran += 1;
-        if ran >= at_least
-            && far.quiet()
-            && c.next_tap().is_none()
-            && c.net(memrq) != muir::part::Level::High
-        {
+        if ran >= at_least && far.quiet() && c.net(memrq) != muir::part::Level::High {
             return ran;
         }
         assert!(ran < at_least + 1000, "no quiet microcycle within a thousand of {at_least}");
@@ -521,4 +522,115 @@ fn chip_picks_up_where_the_checkpoint_left_off() {
         last = p;
     }
     same_state("the same state 1000 microcycles on", (&c, &clk, &far), (&c2, &clk2, &far2));
+}
+
+/// One microcycle of a netlist machine: transitions until the clock's
+/// phase wraps, which is what a microcycle is here.
+fn one_microcycle(c: &mut muir::chip::Chip, clk: &mut Behavioural, far: &mut muir::cable::FarEnd) {
+    use muir::clock::Clock;
+    let mut last = clk.phase_ns();
+    loop {
+        far.tick_with(c, clk);
+        let p = clk.phase_ns();
+        if p < last {
+            return;
+        }
+        last = p;
+    }
+}
+
+/// **A checkpoint may be taken while the machine is busy.**
+///
+/// Up to format 20 it could not.  The boards' delay lines carry
+/// transitions between an input and its taps, the format had no field for
+/// one in flight, and [`muir::chip::Chip::load`] cleared whatever the
+/// board it loaded onto had --- so a checkpoint had to be taken at a
+/// microcycle with none, and a machine polling a device register every few
+/// microcycles may never present one.  That is issue 89, met on a `chip`
+/// run held after two and a half hours, which is exactly when a
+/// checkpoint is worth having.
+///
+/// So this takes a checkpoint at boundaries whatever is in flight there,
+/// and holds each to the standard a quiet one is held to by
+/// [`chip_picks_up_where_the_checkpoint_left_off`]: it loads and saves as
+/// itself, and the machine loaded from it is the machine that was never
+/// stopped.  The boundaries are counted by what was in flight at each and
+/// the count is printed and asserted, because a run of them that happened
+/// to have nothing in flight would pass for the wrong reason.
+///
+/// **What it does not reach is a bus cycle.** Every boundary sampled here
+/// has `INT BUSY` low and `MEMRQ` low --- the boot PROM's own reads hold
+/// the processor's clock while they are outstanding, so the machine has
+/// no microcycle boundary inside one --- which is why
+/// [`muir::cable::FarEnd::quiet`] still asks about the cycle and this
+/// says nothing about whether it needs to.  The count is printed so that
+/// a window that did reach one is not mistaken for this.
+///
+/// The boot PROM alone, so nothing here needs `vendor/`.
+#[test]
+fn chip_checkpoints_a_busy_machine() {
+    use muir::clock::Clock;
+    let (mut c, mut clk, mut far) = chip_machine(true);
+    let n = muir::netlist::parse(CPU).unwrap();
+    let memrq = n.by_name_id("MEMRQ").unwrap();
+    let pc_nets = c.bus_nets(&n, "PC", 14);
+    // Into the PROM's own work, where the boards are exchanging.
+    for _ in 0..400 {
+        one_microcycle(&mut c, &mut clk, &mut far);
+    }
+    // The machine loaded into, built once and loaded into again at each
+    // boundary: a load replaces everything a fresh board holds, which is
+    // what `chip_picks_up_where_the_checkpoint_left_off` shows.
+    let (mut c2, _, mut far2) = chip_machine(false);
+    let (mut busy, mut with_taps) = (0, 0);
+    const ON: u64 = 60;
+    for boundary in 0..24u64 {
+        one_microcycle(&mut c, &mut clk, &mut far);
+        // What the quiet rule asks, so that the test can say what it took
+        // a checkpoint across rather than hope.
+        with_taps += u64::from(
+            c.taps_pending()
+                || far.board.taps_pending()
+                || far.xbus.taps_pending()
+                || far.unibus.as_ref().is_some_and(|u| u.taps_pending()),
+        );
+        busy += u64::from(!far.quiet() || c.net(memrq) == muir::part::Level::High);
+
+        let body = chip_body(&c, &clk, &far);
+        let mut r = Reader::new(&body);
+        c2.load(&mut r).unwrap();
+        let mut clk2 = Behavioural::load(&mut r).unwrap();
+        far2.resume(&mut r).unwrap();
+        r.done().unwrap();
+        same_state(
+            &format!("the checkpoint at boundary {boundary} loads and saves as itself"),
+            (&c, &clk, &far),
+            (&c2, &clk2, &far2),
+        );
+        far2.join(&mut c2, clk2.time_ns());
+
+        // And the machine loaded from it runs on as the one that was
+        // never stopped, for many times the longest line on any board.
+        // The two run in step, so the next boundary sampled is `ON` on
+        // from this one.
+        for on in 1..=ON {
+            one_microcycle(&mut c, &mut clk, &mut far);
+            one_microcycle(&mut c2, &mut clk2, &mut far2);
+            assert_eq!(
+                c2.read(&pc_nets),
+                c.read(&pc_nets),
+                "the PC {on} microcycles past the checkpoint at boundary {boundary}"
+            );
+        }
+        same_state(
+            &format!("the same state {ON} microcycles past boundary {boundary}"),
+            (&c, &clk, &far),
+            (&c2, &clk2, &far2),
+        );
+    }
+    eprintln!(
+        "24 boundaries: {with_taps} with a tap in flight, {busy} with a bus cycle or a \
+         memory request"
+    );
+    assert!(with_taps > 0, "no boundary here had a tap in flight, so this proved nothing");
 }

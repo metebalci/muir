@@ -109,8 +109,8 @@ pub struct Chip {
     /// it left out --- a delayed gate --- is never counted dirty.
     evaluated: Vec<bool>,
     /// The delay lines on VCTL1; see [`DELAY_LINES`]. Their pending
-    /// transitions are not saved in a checkpoint: a line is at most 250 ns
-    /// long, and a checkpoint is taken between microcycles.
+    /// transitions go into a checkpoint with them, at `CADRCHK7` and
+    /// after, so that a board with one in flight can be saved.
     delays: Vec<Delay>,
     /// The board's one-shots; see [`OneShot`].
     one_shots: Vec<OneShot>,
@@ -1555,7 +1555,7 @@ impl Chip {
     /// would clock every register twice on the first tick, and it is refused
     /// rather than converted.
     pub fn save(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
-        w.write_all(b"CADRCHK6")?;
+        w.write_all(b"CADRCHK7")?;
         w.write_all(&self.fingerprint().to_le_bytes())?;
         for levels in [&self.nets, &self.prev_nets] {
             w.write_all(&(levels.len() as u32).to_le_bytes())?;
@@ -1599,11 +1599,6 @@ impl Chip {
         // an external driver joins the resolution like any other, so a
         // board whose cables' drives were another board's settles to
         // another board's levels.
-        //
-        // The transitions on their way down a line are not here, and do
-        // not need to be: a checkpoint is taken with none in flight,
-        // which is what [`Chip::taps_pending`] is asked before one is
-        // written.
         for d in &self.delays {
             w.write_all(&[d.last.map_or(255, level_byte)])?;
         }
@@ -1611,6 +1606,32 @@ impl Chip {
             match e {
                 None => w.write_all(&[255, 0])?,
                 Some(d) => w.write_all(&[level_byte(d.level), d.drive as u8])?,
+            }
+        }
+        // CADRCHK7: the transitions on their way down the lines, each the
+        // tap it is for, when it is due and what it carries.  **This is
+        // what lets a board be checkpointed while it is busy.**  Up to
+        // here the format had no field for a tap in flight, so a
+        // checkpoint could only be taken at a microcycle that had none ---
+        // and a machine polling a device register every few microcycles
+        // may never present one, which is the state a checkpoint is worth
+        // most in.
+        //
+        // A tap's time is an absolute one, and absolute times are what the
+        // rest of a checkpoint already carries across a resume: the
+        // clock's own `time` and its pending events, an oscillator's
+        // origin, a one-shot's fall, the model's outstanding bus cycle.
+        // A resume picks the clock up where it was left rather than
+        // starting it again, so a tap due at `t` is still due at `t`.
+        //
+        // Last, after the fields `CADRCHK6` ends with, so that a file of
+        // either magic is the same bytes up to here.
+        for d in &self.delays {
+            w.write_all(&(d.pending.len() as u32).to_le_bytes())?;
+            for &(at, tap, level) in &d.pending {
+                w.write_all(&at.to_le_bytes())?;
+                w.write_all(&(tap as u16).to_le_bytes())?;
+                w.write_all(&[level_byte(level)])?;
             }
         }
         Ok(())
@@ -1631,11 +1652,14 @@ impl Chip {
         // one now, and CADRCHK2 stored no timers. Both are fine for a
         // board with none running, which the bus interface's is at any
         // quiet point. CADRCHK4 stored a one-shot by the wrong edge.
-        let (timers, edges, lines) = match &magic {
-            b"CADRCHK6" => (true, true, true),
-            b"CADRCHK5" => (true, true, false),
-            b"CADRCHK3" => (true, false, false),
-            b"CADRCHK2" => (false, false, false),
+        // CADRCHK6 stored no tap in flight, because a checkpoint was only
+        // ever taken with none.
+        let (timers, edges, lines, taps) = match &magic {
+            b"CADRCHK7" => (true, true, true, true),
+            b"CADRCHK6" => (true, true, true, false),
+            b"CADRCHK5" => (true, true, false, false),
+            b"CADRCHK3" => (true, false, false, false),
+            b"CADRCHK2" => (false, false, false, false),
             _ => return Err(bad("not one of ours, or a format this build does not write")),
         };
         let mut word = [0u8; 8];
@@ -1778,15 +1802,39 @@ impl Chip {
                 };
             }
         }
-        // A checkpoint is only ever taken with no delay-line tap in
-        // flight --- [`Chip::taps_pending`] is what says so, and the run
-        // that writes one goes on to a quiet microcycle first --- so a
-        // board loaded into owes none. Whatever taps it has are its own,
-        // from the power-on and settle of the board being loaded into,
-        // and would arrive at times before the instant the checkpoint was
-        // taken at.
+        // Whatever taps the board being loaded into has are its own, from
+        // its power-on and settle, and would arrive at times before the
+        // instant the checkpoint was taken at; the file's replace them.
+        // A `CADRCHK6` file has none to replace them with, and needs
+        // none: up to that magic a checkpoint was only ever taken with no
+        // tap in flight, and the run that wrote one went on to a
+        // microcycle with none first.
         for d in &mut self.delays {
             d.pending.clear();
+        }
+        if taps {
+            let mut count = [0u8; 4];
+            // A tap is when it is due, which tap of the line it is for,
+            // and the level it carries.
+            let mut entry = [0u8; 11];
+            for i in 0..self.delays.len() {
+                r.read_exact(&mut count)?;
+                // Not reserved up front, as the clock's pending events are
+                // not ([`crate::clock::Behavioural::load`]): the count is
+                // the file's, a line carries a handful, and a count past
+                // what the file holds fails on the first tap that is not
+                // there.
+                for _ in 0..u32::from_le_bytes(count) {
+                    r.read_exact(&mut entry)?;
+                    let at = u64::from_le_bytes(entry[..8].try_into().unwrap());
+                    let tap = u16::from_le_bytes(entry[8..10].try_into().unwrap()) as usize;
+                    if tap >= self.delays[i].taps.len() {
+                        return Err(bad("a tap this delay line has not got"));
+                    }
+                    let level = byte_level(entry[10]).map_err(|_| bad("a delay tap's level"))?;
+                    self.delays[i].pending.push((at, tap, level));
+                }
+            }
         }
         self.rebuild_derived();
         self.unsettled = None;
@@ -2151,9 +2199,14 @@ impl Chip {
         taps.chain(edges).chain(falls).min()
     }
 
-    /// Whether a delay line has a tap in flight: the one kind of pending
-    /// event a board should not be checkpointed across. An oscillator's
-    /// next edge and a one-shot's fall are saved with the board.
+    /// Whether a delay line has a tap in flight: a board with one is not
+    /// idle, whatever its nets say, because a net will move when the tap
+    /// arrives. What [`Chip::asleep`] asks so that a board with an
+    /// arrival due is not skipped over it.
+    ///
+    /// **It is no longer a reason a board cannot be checkpointed.** A tap
+    /// in flight is saved with the board at `CADRCHK7`; see
+    /// [`Chip::save`].
     pub fn taps_pending(&self) -> bool {
         self.delays.iter().any(|d| !d.pending.is_empty())
     }

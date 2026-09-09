@@ -154,13 +154,13 @@
 //! `--checkpoint` and `--resume` work on all three engines. On `micro`
 //! and `rtl` a checkpoint is [`Machine`] and the engine's own state; on
 //! `chip` there are no arrays to write, so it is the boards --- every
-//! net, every part's cells and every oscillator and one-shot of the
-//! processor, the bus interface, the memory boards, the I/O board and the
-//! display --- with the machine behind the buses and what each end of
-//! each bus is driving onto the others. It is taken at the first
-//! microcycle from the stop with no bus cycle in flight and no transition
-//! on its way down a delay line, which is the only kind of instant it
-//! describes, and those microcycles are counted and said. A netlist disk
+//! net, every part's cells, every oscillator, one-shot and delay-line
+//! transition in flight on the processor, the bus interface, the memory
+//! boards, the I/O board and the display --- with the machine behind the
+//! buses and what each end of each bus is driving onto the others. It is
+//! taken at the first microcycle from the stop with no bus cycle in
+//! flight, which is the only kind of instant it does not describe, and
+//! those microcycles are counted and said. A netlist disk
 //! controller's drives are on its own cable rather than in the machine,
 //! and the multiplexor between them on its connector rather than the
 //! backplane; both are in a checkpoint too, each where it stood.
@@ -2330,30 +2330,37 @@ fn resume_chip(
 }
 
 /// Runs on to the first point a netlist machine may be checkpointed at,
-/// and says how many microcycles that took, or `None` if it did not come.
+/// and says how many microcycles that took, or what the machine was doing
+/// instead if it did not come.
 ///
 /// **Not every microcycle boundary is one.** A checkpoint carries no bus
-/// cycle in flight and no transition on its way down a delay line ---
-/// [`FarEnd::quiet`] and [`Chip::taps_pending`] are what say so --- and no
-/// memory request from the processor, whose answer would be owed to a
-/// cycle the checkpoint does not describe.  Between cycles those are all
-/// true, and a machine reaches such a point within a few microcycles: the
-/// longest anything holds them is the bus timeout, about twelve
-/// microseconds, which is eighty microcycles.  The bound is well past
-/// that, and a machine that never comes quiet is told about rather than
-/// checkpointed wrong.
+/// cycle in flight --- [`FarEnd::quiet`] is what says so --- and no memory
+/// request from the processor, whose answer would be owed to a cycle the
+/// checkpoint does not describe.  Between cycles both are true, and a
+/// machine reaches such a point within a few microcycles: the longest
+/// anything holds them is the bus timeout, about twelve microseconds,
+/// which is eighty microcycles.  The bound is well past that, and a
+/// machine that never comes quiet is told about rather than checkpointed
+/// wrong.
+///
+/// **A transition on its way down a delay line used to be asked about
+/// here too, and is not any more.** The format had no field for one until
+/// version 21, so a board could not be saved with one in flight; it has
+/// one now, and `tests/checkpoint.rs` holds a machine loaded from a
+/// checkpoint taken with taps in flight to being the machine that was
+/// never stopped.  That was the half of this that a busy machine could
+/// not get past: issue 89, where a run held after two and a half hours
+/// could not be banked.
 fn chip_to_quiet(
     cpu: &mut Chip,
     clk: &mut Behavioural,
     far: &mut FarEnd,
     memrq: netlist::NetId,
-) -> Option<u64> {
-    let quiet = |cpu: &Chip, far: &FarEnd| {
-        far.quiet() && cpu.next_tap().is_none() && cpu.net(memrq) != Level::High
+) -> Result<u64, &'static str> {
+    let mut why = match chip_busy_with(cpu, far, memrq) {
+        None => return Ok(0),
+        Some(why) => why,
     };
-    if quiet(cpu, far) {
-        return Some(0);
-    }
     let mut ran = 0;
     let mut last = clk.phase_ns();
     while ran < 1000 {
@@ -2361,13 +2368,35 @@ fn chip_to_quiet(
         let p = clk.phase_ns();
         if p < last {
             ran += 1;
-            if quiet(cpu, far) {
-                return Some(ran);
+            match chip_busy_with(cpu, far, memrq) {
+                None => return Ok(ran),
+                // The last boundary's, so a run that never came quiet can
+                // say what the machine was doing at one rather than what
+                // it happens to be doing between two.
+                Some(w) => why = w,
             }
         }
         last = p;
     }
-    None
+    Err(why)
+}
+
+/// What is holding a netlist machine off a checkpoint at this instant, or
+/// `None` if nothing is: what [`chip_to_quiet`] runs on until, and what it
+/// says the machine was doing instead when it never came.
+///
+/// The two are told apart because they mean different things to whoever
+/// asked: a bus cycle is the boards', and a machine doing nothing else
+/// but bus cycles may never be between them, while a memory request is
+/// the microcode's and goes as soon as it is answered.
+fn chip_busy_with(cpu: &Chip, far: &FarEnd, memrq: netlist::NetId) -> Option<&'static str> {
+    if !far.quiet() {
+        Some("a bus cycle in flight")
+    } else if cpu.net(memrq) == Level::High {
+        Some("a memory request up")
+    } else {
+        None
+    }
 }
 
 /// Loads the checkpoint read from `path` into `e`, built and booted as the
@@ -2897,7 +2926,7 @@ fn time_chip(
                     Ok(Some(Command::Checkpoint(path))) => {
                         let path = path.unwrap_or_else(|| timestamped("chk"));
                         match chip_to_quiet(&mut cpu, &mut clk, &mut far, memrq) {
-                            Some(on) => {
+                            Ok(on) => {
                                 ran += on;
                                 write_chip_checkpoint(
                                     &path,
@@ -2908,10 +2937,9 @@ fn time_chip(
                                     resumed_at + ran,
                                 );
                             }
-                            None => println!(
-                                "checkpoint: the machine has a bus cycle or a delay line in \
-                                 flight and has not come quiet in a thousand microcycles; \
-                                 nothing written"
+                            Err(why) => println!(
+                                "checkpoint: the machine has {why} and has not come quiet in \
+                                 a thousand microcycles; nothing written"
                             ),
                         }
                     }
@@ -2983,15 +3011,15 @@ fn time_chip(
     // are the run's like any other, so they are counted and said.
     if let Some(path) = &checkpoint {
         match chip_to_quiet(&mut cpu, &mut clk, &mut far, memrq) {
-            Some(on) => {
+            Ok(on) => {
                 if on > 0 {
                     eprintln!("checkpoint: {on} microcycles on to a quiet one");
                 }
                 write_chip_checkpoint(path, &cpu, &clk, &far, tv_board, resumed_at + ran + on);
             }
-            None => eprintln!(
-                "checkpoint: {} not written: the machine has a bus cycle or a delay line in \
-                 flight and has not come quiet in a thousand microcycles",
+            Err(why) => eprintln!(
+                "checkpoint: {} not written: the machine has {why} and has not come quiet in \
+                 a thousand microcycles",
                 path.display()
             ),
         }
