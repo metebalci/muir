@@ -660,6 +660,10 @@ A simulator of the MIT CADR Lisp Machine.
                                and deletes under it. [default:
                                vendor/run/file-root when present; with no
                                root the server answers no FILE at all]
+  --chaos-trace                every Chaosnet packet and frame on the
+                               cable, to stderr. What to reach for when a
+                               lashup goes quiet: it shows whether the
+                               machine is still talking.
   --chaos-udp [<endpoint>]     put the Chaosnet cable on the network:
                                Chaosnet over UDP, which cbridge, usim,
                                klh10 and the live Chaosnet hosts speak.
@@ -991,10 +995,6 @@ A simulator of the MIT CADR Lisp Machine.
                                nothing. The prompt's watch records the next
                                n microcycles the same way, without a
                                restart. [default: off]
-  --chaos-trace                every Chaosnet packet and frame on the
-                               cable, to stderr. What to reach for when a
-                               lashup goes quiet: it shows whether the
-                               machine is still talking.
   -h, --help                   this.
   -V, --version                what this build calls itself: the version,
                                and whether it was built with optimisations
