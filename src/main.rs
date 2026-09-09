@@ -202,6 +202,31 @@ const HARDWARE_CYCLES_PER_S: f64 = 1e9 / 145.0;
 /// How often the terminal is given a turn: about thirty times a second.
 /// The machine's own raster is 64.7 Hz, so a viewer sees every other frame
 /// at best, and the cost does not show in any engine's rate.
+///
+/// **The terminal has no thread of its own on purpose.** It was measured
+/// rather than assumed, release build, one viewer reading as fast as it
+/// can, 768 by 963, the screen scrambled so no run of equal bits flatters
+/// the encoder: a poll costs 0.7 us with nobody connected, 100 to 200 us
+/// on an idle screen, 0.4 ms for a hundred rows changed and 3.0 ms for the
+/// whole screen. At thirty polls a second that is about 0.5% of wall time
+/// idle, 1.2% scrolling, and 9% only if the whole screen repaints every
+/// poll --- which [`terminal::Terminal::FULL_UPDATE_INTERVAL`] already caps
+/// at one whole screen a raster frame. The share is the same on every
+/// engine, the interval being wall clock rather than microcycles.
+///
+/// **1.2% does not buy a lock.** The frame buffer is written by the
+/// processor, by the disk controller's DMA and by the netlist display's
+/// mirror, and none of them has to know a viewer exists; a second thread
+/// reading the screen would put a synchronisation point into a part of the
+/// machine that has none.
+///
+/// What would change the answer: a screen that really does repaint whole
+/// at 30 Hz for long stretches; a terminal doing more per poll than
+/// encoding raw rectangles, such as a compressed encoding or several
+/// viewers wanting different pixel formats; this interval dropping to the
+/// machine's own 64.7 Hz; or a profile of a real session putting the
+/// terminal higher than these figures predict. **Those are one machine on
+/// one day: acting on them means measuring again, not quoting them.**
 const TERMINAL_INTERVAL: Duration = Duration::from_millis(33);
 
 /// Microcycles between glances at the computer's clock to see whether
