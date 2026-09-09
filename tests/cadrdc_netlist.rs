@@ -2132,6 +2132,368 @@ fn a_read_of_two_blocks_increments_the_address() {
     assert_eq!(back, 3, "the last block transferred");
 }
 
+/// **A read across the end of a cylinder seeks to the next one.** The last
+/// block of the last head is next-block code 2, "block 0 on head 0 of next
+/// cylinder", and the Am25LS2536 at DCHDCM 0A23 pulses `INC CYL^` for it:
+/// on DCDA that steps the three cylinder counters and, through the
+/// inverter at 0C23 and the NAND at 0A28, clears the head and the block.
+/// The sequencer's `JUMP/START` then re-enters the read program at `000`,
+/// whose first four steps are a cylinder tag and a wait on `-ON CYL SYNC`,
+/// so the crossing is a real seek and not just a counter.
+///
+/// **The band crosses cylinders and the boot PROM never does**: the PROM
+/// transfers one page a command, while `COLD-DISK-READ` hands
+/// `START-DISK-N-PAGES` up to 512 of them in one command list. So this is
+/// on the band's path and off the PROM's, which is the shape issue 88 is
+/// looking for. It works: both pages land, and the disk address register
+/// reads back cylinder 1, head 0, block 0.
+#[test]
+fn a_read_across_a_cylinder_seeks_to_the_next() {
+    let n = cadrdc();
+    let mut b = controller(&n);
+    let mut p = Probe::new(&b);
+    let t0 = b.now;
+    let mut drive = quick_drive(t0);
+    let g = Geometry::T300;
+    let (last, head, block) = (g.blocks_per_track - 1, g.heads - 1, 0);
+    let (end, next) = (words(91), words(92));
+    assert!(drive.unit.write_block_at(0, head, last, &end));
+    assert!(drive.unit.write_block_at(1, 0, block, &next));
+    p.plug(&mut b, &n, drive);
+    p.with_memory(&b, 1 << 15);
+    p.run(&mut b, t0 + 10_000);
+
+    let first = head << 8 | last;
+    let (status, written) = read_blocks(&mut p, &mut b, first, &[PAGE, PAGE2]);
+    eprintln!("cylinder 0 head {head} block {last}, then cylinder 1: status {status:o}");
+    assert_eq!(status & 1, 1, "not active: {status:o}");
+    assert_eq!(status & ERRORS, 0, "no error: {status:o}");
+    assert_eq!(written.len(), 512, "two pages of words");
+    assert_eq!(&p.memory().words[PAGE as usize..PAGE as usize + 256], &end[..]);
+    assert_eq!(&p.memory().words[PAGE2 as usize..PAGE2 as usize + 256], &next[..]);
+    let (_, back) = b.cycle(REGS + 2, None);
+    assert_eq!(back, 1 << 16, "cylinder 1, head 0, block 0: the last block transferred");
+    assert_eq!(p.drive().position(), (1, 0), "the heads on the next cylinder");
+}
+
+/// **Both busy lines low with `-LAST CCW` high is the middle of a chained
+/// transfer, not a fault.** Issue 88 read five nets off a stuck machine ---
+/// `-ACTIVE`, `-MBUSY` and `-BUSY` low, `-LAST CCW` and `END PAGE CLK`
+/// high --- and took them for two halves that had each failed to finish.
+/// This is the same five nets watched through a healthy two-page read, and
+/// they stand in exactly that state for the whole of the first page.
+///
+/// What the run shows, and none of it is assumed:
+///
+/// - `-MBUSY` rises **once**, at the end of the last page, and `-LAST CCW`
+///   is low at that edge --- the second CCW's More flag, clear;
+/// - `-LAST CCW` is high from the first CCW fetch until the second, which
+///   is the whole of the first page, with both busy lines low throughout;
+/// - `-BUSY` rises once, and after `-MBUSY`: for a read `DONE`'s two terms
+///   are `-MBUSY` and `LAST CCW`, and the channel gets there first;
+/// - the channel makes no request of its own before the disk gives it a
+///   word --- `CHAN.RQ` for a read is `CLK MWD4` at the 9S42 on DCCHAN
+///   0D20 --- so on a read **the memory side is downstream of the
+///   sequencer**, and both halves busy is one stall, not two.
+#[test]
+fn both_busy_lines_low_is_the_middle_of_a_chained_read() {
+    const NAMES: [&str; 6] = ["-BUSY", "-MBUSY", "-ACTIVE", "-LAST CCW", "END PAGE CLK", "NEW CCW"];
+    let (busy, mbusy, active, last_ccw, end_page, new_ccw) = (0, 1, 2, 3, 4, 5);
+    let n = cadrdc();
+    let mut b = controller(&n);
+    let mut p = Probe::new(&b);
+    let t0 = b.now;
+    let mut drive = quick_drive(t0);
+    let (two, three) = (words(81), words(82));
+    assert!(drive.unit.write_block_at(0, 0, 2, &two));
+    assert!(drive.unit.write_block_at(0, 0, 3, &three));
+    p.plug(&mut b, &n, drive);
+    p.with_memory(&b, 1 << 15);
+    p.run(&mut b, t0 + 10_000);
+
+    let watch: Vec<NetId> = NAMES.iter().map(|s| b.net(s)).collect();
+    let read = |b: &XbusMaster| -> Vec<Level> { watch.iter().map(|&x| b.chip.net(x)).collect() };
+    let idle = read(&b);
+    assert_eq!(idle[busy], Level::High, "not busy before the command");
+    assert_eq!(idle[mbusy], Level::High);
+    assert_eq!(idle[active], Level::High);
+    assert_eq!(idle[last_ccw], Level::Low, "no CCW fetched yet: the flop's power-up zero");
+
+    // Two CCWs, the first with MIT's More flag.
+    let m = p.memory.as_mut().unwrap();
+    m.words[CLP as usize] = PAGE | 1;
+    m.words[CLP as usize + 1] = PAGE2;
+    m.transfers.clear();
+    b.cycle(REGS, Some(0));
+    b.cycle(REGS + 1, Some(CLP));
+    b.cycle(REGS + 2, Some(2));
+    p.cycle(&mut b, REGS + 3, Some(0));
+
+    // Every transition of the six, from START until both halves are idle.
+    let deadline = b.now + REVOLUTION_NS + 4 * REVOLUTION_NS / 17;
+    let mut seen: Vec<(u64, Vec<Level>)> = vec![(b.now, read(&b))];
+    loop {
+        let now = read(&b);
+        if now != seen[seen.len() - 1].1 {
+            seen.push((b.now, now.clone()));
+        }
+        if now[busy] == Level::High && now[mbusy] == Level::High {
+            break;
+        }
+        assert!(b.now < deadline, "still busy at {} ns: {now:?}", b.now - t0);
+        let next = b.now + 5;
+        p.run(&mut b, next);
+    }
+    let _ = p.steps();
+
+    let rises = |k: usize| -> Vec<usize> {
+        (1..seen.len())
+            .filter(|&i| seen[i].1[k] == Level::High && seen[i - 1].1[k] == Level::Low)
+            .collect()
+    };
+    let mrise = rises(mbusy);
+    assert_eq!(mrise.len(), 1, "-MBUSY rises once: {mrise:?}");
+    let mrise = mrise[0];
+    assert_eq!(seen[mrise].1[last_ccw], Level::Low, "the last CCW's More flag is clear");
+    assert_eq!(seen[mrise].1[end_page], Level::High, "on END PAGE CLK's rise");
+    let brise = rises(busy);
+    assert_eq!(brise.len(), 1, "-BUSY rises once: {brise:?}");
+    assert!(
+        brise[0] > mrise,
+        "the channel finishes first: -MBUSY at {} ns, -BUSY at {} ns",
+        seen[mrise].0 - t0,
+        seen[brise[0]].0 - t0
+    );
+
+    // The state the stuck machine was read in, and how long a healthy read
+    // spends in it.
+    let stuck = |s: &[Level]| {
+        s[busy] == Level::Low
+            && s[mbusy] == Level::Low
+            && s[active] == Level::Low
+            && s[last_ccw] == Level::High
+            && s[end_page] == Level::High
+    };
+    let (mut held, mut run, mut run_at) = (0u64, 0u64, 0u64);
+    for i in 1..seen.len() {
+        if stuck(&seen[i - 1].1) {
+            run += seen[i].0 - seen[i - 1].0;
+            if run > held {
+                held = run;
+                run_at = seen[i].0 - run;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    let whole = seen[seen.len() - 1].0 - seen[0].0;
+    assert!(held > 500_000, "{held} ns unbroken in the read's five readings, of {whole} ns");
+    eprintln!(
+        "issue 88's five readings held unbroken for {held} ns from {} ns into a {whole} ns \
+         two-page read",
+        run_at - seen[0].0
+    );
+
+    // The first CCW's More flag is what puts -LAST CCW up, and NEW CCW is
+    // down for the whole of the page that follows it.
+    let first = (1..seen.len())
+        .find(|&i| seen[i].1[last_ccw] == Level::High && seen[i - 1].1[last_ccw] == Level::Low)
+        .expect("-LAST CCW goes up on the first CCW fetch");
+    assert!(first < mrise, "and stays up until the second fetch");
+    assert_eq!(seen[first].1[new_ccw], Level::High, "on the fetch cycle itself");
+
+    let written: Vec<(u32, u32)> =
+        p.memory().transfers.iter().filter_map(|t| t.wrote.map(|w| (t.addr, w))).collect();
+    assert_eq!(written.len(), 512, "two pages of words");
+    let (_, status) = b.cycle(REGS, None);
+    assert_eq!(status & 1, 1, "not active: {status:o}");
+    assert_eq!(status & ERRORS, 0, "no error: {status:o}");
+}
+
+/// The net a pin carries. Compared by [`NetId`] rather than by name
+/// because [`netlist::parse`] joins MIT's hand jumpers, so a joined net
+/// answers to either of its names and reports whichever it kept.
+fn pin_net(n: &Netlist, page: &str, reference: &str, pin: u8) -> NetId {
+    let mut found = n
+        .parts
+        .iter()
+        .filter(|p| p.page == page && p.reference == reference)
+        .filter_map(|p| p.pins.iter().find(|&&(k, _)| k == pin).map(|&(_, net)| net));
+    let net =
+        found.next().unwrap_or_else(|| panic!("no pin {pin} on the part at {page} {reference}"));
+    assert!(found.next().is_none(), "{page} {reference} pin {pin} is on two records");
+    net
+}
+
+/// A net by name, quoted or not.
+fn net_id(n: &Netlist, name: &str) -> NetId {
+    n.by_name_id(name)
+        .or_else(|| n.by_name_id(&format!("'{name}'")))
+        .unwrap_or_else(|| panic!("no net {name}"))
+}
+
+/// **What clears `-BUSY`, and what clears `-MBUSY`: the two halves of one
+/// 74S74, and what each is waiting for.** Issue 88.
+///
+/// `-ACTIVE`, `STATUS<0>`, is the LS08 at DCBUSY 0D14: pin 9 `-MBUSY`,
+/// pin 10 `-BUSY`, pin 8 `-ACTIVE`. Both halves have to be idle before
+/// the band's wait loop can leave, and both halves are one part, the
+/// 74S74 at DCBUSY **0B14**.
+///
+/// **The sequencer's half**, pins 1 to 6: `-START` on 1 is the clear, so a
+/// write to register 3 makes the board busy; `-LOSSAGE` on 4 is the
+/// preset, so any error ends the command at once; `DONE` on 2 is the D and
+/// `UCLK^` on 3 the clock; `Q` on 5 is `-BUSY` and `Q/` on 6 is `BUSY`.
+/// So **`-BUSY` waits for `DONE` at a `UCLK^` edge**, and `DONE` is the
+/// second gate of the 9S42 at DCUC 0D20, output on pin 9:
+///
+///     DONE = (-MBUSY and DONE TEST)
+///         or (LAST CCW and -CMD.FROM.MEMORY and -CMD1 and DONE TEST)
+///
+/// `DONE TEST` is a microcode bit --- UIR bit 12, the 74LS273 at DCUI 0D07
+/// pin 12 --- and the read program of `cadrdc/newdsk.31` sets it at one
+/// address only, `047`. So the sequencer can only finish there, and if
+/// `DONE` is false when it arrives the `JUMP/START` on that instruction
+/// takes it round the whole program again with `050`'s
+/// `FUNC/INCREMENT ADDRESS` in the delay slot. **A read that is not done
+/// does not stop: it reads the next block.**
+///
+/// **The memory channel's half**, pins 8 to 13: `-MSTART` on 10 is the
+/// preset --- the OR at DCCMD 0C16, `-START` gated by `CMD2`, so commands
+/// 4 to 7 never start the channel --- `-STOPPED BY ERROR` on 13 the clear,
+/// `-LAST CCW` on 12 the D and `END PAGE CLK` on 11 the clock; `Q` on 9 is
+/// `MBUSY` and `Q/` on 8 is `-MBUSY`. `END PAGE CLK` is `CCO`, pin 18, of
+/// the 74LS569 at DCCCW 0E22, the high half of the eight-bit word counter,
+/// which follows the clock only at the terminal count; the clock is
+/// `-CHAN.MASTER`, one edge per channel bus cycle. So **`-MBUSY` waits for
+/// the end of the 256th word of a page**, and takes `-LAST CCW` there.
+///
+/// `-LAST CCW` is `Q`, pin 5, of the LS74 at DCCCW 0E20, whose D on pin 2
+/// is `XBI0` and whose clock on pin 3 is `CCW CLK`: bit 0 of the last
+/// channel command word fetched from memory, MIT's More flag, 1 for
+/// another CCW to come. **Both of its asynchronous pins are tied high, so
+/// nothing resets it**: its value is the last CCW the channel read, and
+/// before the first fetch of a run it is the model's power-up zero, which
+/// reads `-LAST CCW` low.
+#[test]
+fn the_two_busy_flip_flops_are_one_74s74() {
+    let n = cadrdc();
+    let is = |page: &str, reference: &str, pin: u8, name: &str| {
+        assert_eq!(
+            pin_net(&n, page, reference, pin),
+            net_id(&n, name),
+            "{page} {reference} pin {pin} is not {name}"
+        );
+    };
+
+    // -ACTIVE is the AND of the two.
+    is("DCBUSY", "0D14", 8, "-ACTIVE");
+    is("DCBUSY", "0D14", 9, "-MBUSY");
+    is("DCBUSY", "0D14", 10, "-BUSY");
+    is("DCSTS", "0A12", 2, "-ACTIVE");
+    is("DCSTS", "0A12", 18, "XBO0");
+
+    // The sequencer's half.
+    for (pin, name) in
+        [(1, "-START"), (2, "DONE"), (3, "UCLK^"), (4, "-LOSSAGE"), (5, "-BUSY"), (6, "BUSY")]
+    {
+        is("DCBUSY", "0B14", pin, name);
+    }
+    for (pin, name) in [
+        (9, "DONE"),
+        (15, "-MBUSY"),
+        (14, "DONE TEST"),
+        (13, "LAST CCW"),
+        (12, "-CMD.FROM.MEMORY"),
+        (11, "-CMD1"),
+        (10, "DONE TEST"),
+    ] {
+        is("DCUC", "0D20", pin, name);
+    }
+    is("DCUI", "0D07", 12, "DONE TEST");
+    is("DCUI", "0D07", 13, "UI11");
+
+    // The memory channel's half.
+    for (pin, name) in [
+        (8, "-MBUSY"),
+        (9, "MBUSY"),
+        (10, "-MSTART"),
+        (11, "END PAGE CLK"),
+        (12, "-LAST CCW"),
+        (13, "-STOPPED BY ERROR"),
+    ] {
+        is("DCBUSY", "0B14", pin, name);
+    }
+    is("DCCMD", "0C16", 8, "-MSTART");
+    is("DCCMD", "0C16", 9, "CMD2");
+    is("DCCMD", "0C16", 10, "-START");
+
+    // END PAGE CLK is the word counter's clocked carry and goes nowhere
+    // else, so nothing but a full page can clear the channel's half.
+    is("DCCCW", "0E22", 18, "END PAGE CLK");
+    is("DCCCW", "0E22", 2, "-CHAN.MASTER");
+    let end_page = net_id(&n, "END PAGE CLK");
+    let on: Vec<(&str, &str, u8)> = n
+        .parts
+        .iter()
+        .flat_map(|p| p.pins.iter().map(move |&(pin, net)| (p, pin, net)))
+        .filter(|&(_, _, net)| net == end_page)
+        .map(|(p, pin, _)| (p.page.as_str(), p.reference.as_str(), pin))
+        .collect();
+    assert_eq!(on, vec![("DCBUSY", "0B14", 11), ("DCCCW", "0E22", 18)]);
+
+    // And -LAST CCW is the More flag of the CCW, with nothing to reset it.
+    is("DCCCW", "0E20", 5, "-LAST CCW");
+    is("DCCCW", "0E20", 6, "LAST CCW");
+    is("DCCCW", "0E20", 2, "XBI0");
+    is("DCCCW", "0E20", 3, "CCW CLK");
+    let high = pin_net(&n, "DCCCW", "0E20", 1);
+    assert_eq!(high, pin_net(&n, "DCCCW", "0E20", 4), "clear and preset on one net");
+    assert_eq!(netlist::plain(n.net(high)), "HI1", "and that net is a pull-up");
+
+    // And on a read the channel asks for nothing until the disk has given
+    // it a word: the 9S42 at DCCHAN 0D20's first gate is
+    // `(CLK MWD4 and -CMD.FROM.MEMORY) or (-MRD FULL and CMD.FROM.MEMORY
+    // and MBUSY)`, whose second term is the write direction's. So on a
+    // read the memory side is downstream of the sequencer, and both
+    // halves busy is one stall rather than two.
+    for (pin, name) in [
+        (7, "CHAN.RQ"),
+        (1, "CLK MWD4"),
+        (2, "-CMD.FROM.MEMORY"),
+        (3, "-MRD FULL"),
+        (4, "CMD.FROM.MEMORY"),
+        (5, "MBUSY"),
+    ] {
+        is("DCCHAN", "0D20", pin, name);
+    }
+    is("DCRBUF", "0E08", 15, "CLK MWD4");
+}
+
+/// **Nothing but `-ACTIVE` clears the watchdog**, so a command that hangs
+/// silently cannot outlive it: the 74393 at DCTMOT 0C03 has `-ACTIVE` on
+/// both of its clears, pins 2 and 12, and no other reset. It counts
+/// `TIMEOUT.CLK` from the moment the board goes busy and reaches `TIMEOUT`
+/// 128 periods later whatever the sequencer is doing in between ---
+/// activity does not postpone it, only finishing does.
+///
+/// That is what makes the pair of readings in issue 88 --- both halves
+/// busy, no error --- a statement about the *last* 2.56 seconds and not
+/// about the whole run. [`a_hung_command_times_out`] measures the time;
+/// this holds the wiring that makes the time unavoidable.
+#[test]
+fn only_not_active_clears_the_watchdog() {
+    let n = cadrdc();
+    let active = net_id(&n, "-ACTIVE");
+    assert_eq!(pin_net(&n, "DCTMOT", "0C03", 2), active, "the first half's clear");
+    assert_eq!(pin_net(&n, "DCTMOT", "0C03", 12), active, "the second half's clear");
+    assert_eq!(pin_net(&n, "DCTMOT", "0C03", 1), net_id(&n, "TIMEOUT.CLK"), "the clock");
+    assert_eq!(pin_net(&n, "DCTMOT", "0C03", 8), net_id(&n, "TIMEOUT"), "128 periods on");
+    // The clock is the 74LS124's own section, enabled by the hand jumper.
+    assert_eq!(pin_net(&n, "DCTMOT", "0B04", 7), net_id(&n, "TIMEOUT.CLK"));
+    assert_eq!(pin_net(&n, "DCTMOT", "0B04", 6), net_id(&n, "GND"), "-TIMEOUT ENB grounded");
+}
+
 /// **A read across the end of a track increments the head and clears the
 /// block.** Block 16 is the last on a track, its header's next-block code
 /// is 1, and the 2536 pulses `INC HEAD^` instead: `CLR BLOCK` follows from
