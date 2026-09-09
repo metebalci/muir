@@ -815,14 +815,39 @@ impl Probe {
         }
         let word = b.word();
         self.run(b, b.now + XbusMaster::RELEASE_NS);
+        self.hand_back(b);
+        self.run(b, b.now + 600);
+        (word, seen)
+    }
+
+    /// The address wires let go of after a cycle the harness made, so that
+    /// the board can drive them as master.
+    fn hand_back(&mut self, b: &mut XbusMaster) {
         b.release();
         for k in 0..22 {
             let net = b.net(&format!("-XADDR{k}"));
             b.chip.pull_up(net);
         }
         self.mine = false;
-        self.run(b, b.now + 600);
-        (word, seen)
+    }
+
+    /// [`Probe::cycle`] without the 600 ns settle at the end: the wires go
+    /// back and the call returns at once, so a run that has to be watching
+    /// before the board moves can settle inside its own loop. **A write
+    /// needs this.** Its channel asks for its first CCW within a
+    /// microsecond of START, having nothing to wait for, and the settle
+    /// would swallow the fetch.
+    fn start(&mut self, b: &mut XbusMaster, addr: u32, write: Option<u32>) {
+        let t0 = b.now;
+        self.mine = true;
+        b.request(addr, write);
+        self.sample(b);
+        while !b.acked() {
+            assert!(b.now < t0 + 40_000, "the board never acknowledged");
+            self.run(b, b.now + 5);
+        }
+        self.run(b, b.now + XbusMaster::RELEASE_NS);
+        self.hand_back(b);
     }
 
     /// Runs until `BUSY` drops, and a microsecond past it.
@@ -2318,9 +2343,11 @@ fn both_busy_lines_low_is_the_middle_of_a_chained_read() {
     assert_eq!(status & ERRORS, 0, "no error: {status:o}");
 }
 
-/// The nets one chained read is watched through, in the order a row of
-/// [`Chain::seen`] carries them; the constants below name the columns.
-const CHAIN_NETS: [&str; 15] = [
+/// The nets one chained transfer is watched through, in the order a row of
+/// [`Chain::seen`] carries them; the constants below name the columns. The
+/// last four are the write path's: what the channel asks for, and the
+/// write buffer it is filling.
+const CHAIN_NETS: [&str; 19] = [
     "-LAST CCW",
     "LAST CCW",
     "NEW CCW",
@@ -2336,6 +2363,10 @@ const CHAIN_NETS: [&str; 15] = [
     "DONE TEST",
     "-CMD1",
     "-CMD.FROM.MEMORY",
+    "CHAN.RQ",
+    "MRD FULL",
+    "WFIRA",
+    "WFORA",
 ];
 const NOT_LAST_CCW: usize = 0;
 const LAST_CCW: usize = 1;
@@ -2352,16 +2383,31 @@ const DONE: usize = 11;
 const DONE_TEST: usize = 12;
 const NOT_CMD1: usize = 13;
 const NOT_CMD_FROM_MEMORY: usize = 14;
+const CHAN_RQ: usize = 15;
+const MRD_FULL: usize = 16;
+const WFIRA: usize = 17;
+const WFORA: usize = 18;
 
-/// The block a chained read starts on.
+/// The block a chained transfer starts on.
 const FIRST_BLOCK: u32 = 2;
 
-/// One chained read, run to the end and watched at five nanoseconds: every
+/// `sys/cold/qcom.lisp`'s `%DISK-COMMAND-READ` and `%DISK-COMMAND-WRITE`,
+/// which `sys/ucadr/uc-cadr.lisp` gives the microcode as
+/// `DISK-READ-COMMAND 0` and `DISK-WRITE-COMMAND 11`. Bits `<2:0>` are
+/// `newdsk.31`'s sector --- 0 Read, 1 Write --- and bit 3 is the board's
+/// `CMD.FROM.MEMORY`, set on exactly the commands whose data comes out of
+/// memory: `%DISK-COMMAND-WRITE 11`, `%DISK-COMMAND-WRITE-ALL 13` and
+/// `%DISK-COMMAND-READ-COMPARE 10`, and clear on `%DISK-COMMAND-READ 0`
+/// and `%DISK-COMMAND-READ-ALL 2`.
+const DISK_READ_COMMAND: u32 = 0o0;
+const DISK_WRITE_COMMAND: u32 = 0o11;
+
+/// One chained transfer, run to the end and watched at five nanoseconds: every
 /// transition of [`CHAIN_NETS`] and of the micro-PC, the command list
 /// pointer off `XBAO/22` at each CCW fetch, the bus cycles the board made
 /// as master, and the status word after it stopped.
 struct Chain {
-    /// When, the fifteen nets, and `UPC/6`.
+    /// When, the nineteen nets, and `UPC/6`.
     seen: Vec<(u64, Vec<Level>, u32)>,
     /// `XBAO/22` read while `CCW CLK` is up --- which is inside a fetch,
     /// so `NEW CCW` is high and the address wires carry the command list
@@ -2392,14 +2438,17 @@ impl Chain {
         self.rises(CCW_CLK).iter().map(|&i| self.seen[i].1[NOT_LAST_CCW] == Level::High).collect()
     }
 
-    /// The addresses the board read as master. On a Read those are its CCW
-    /// fetches and nothing else: the channel only ever writes the data.
+    /// The addresses the board read as master. **On a Read** those are its
+    /// CCW fetches and nothing else, the channel only ever writing the
+    /// data; on a Write every cycle is a read and this is not the fetches
+    /// --- [`Chain::clp`] is, being taken at `CCW CLK`.
     fn fetches(&self) -> Vec<u32> {
         self.transfers.iter().filter(|t| t.wrote.is_none()).map(|t| t.addr).collect()
     }
 
     /// The pages the board wrote, in the order it touched them, with how
-    /// many words went into each.
+    /// many words went into each. A Read's, therefore: a Write writes no
+    /// memory at all.
     fn pages(&self) -> Vec<(u32, usize)> {
         let mut out: Vec<(u32, usize)> = Vec::new();
         for t in self.transfers.iter().filter(|t| t.wrote.is_some()) {
@@ -2412,13 +2461,15 @@ impl Chain {
         out
     }
 
-    /// The rows where the sequencer entered `addr`. `UPC/6` is one ahead of
-    /// the microinstruction in the UIR, having moved on the edge that
-    /// latched it, so `addr` is being executed while the counter reads
-    /// `addr + 1`.
-    fn entered(&self, addr: u32) -> Vec<usize> {
+    /// The rows where the sequencer entered `addr` of `sector`. `UPC/6` is
+    /// the six bits below the sector and it is one ahead of the
+    /// microinstruction in the UIR, having moved on the edge that latched
+    /// it, so `addr` is being executed while the counter reads
+    /// `addr - sector + 1`.
+    fn entered(&self, sector: u32, addr: u32) -> Vec<usize> {
+        let upc = addr - sector + 1;
         (1..self.seen.len())
-            .filter(|&i| self.seen[i].2 == addr + 1 && self.seen[i - 1].2 != addr + 1)
+            .filter(|&i| self.seen[i].2 == upc && self.seen[i - 1].2 != upc)
             .collect()
     }
 
@@ -2465,22 +2516,42 @@ fn chain_bench(
     (b, p, written)
 }
 
-/// One Read command over a command list of `pages.len()` CCWs --- the More
-/// flag set on all but the last --- with `after` planted in the word
-/// immediately past the list, watched from START until the board is idle.
-fn chained_read(p: &mut Probe, b: &mut XbusMaster, pages: &[u32], after: u32) -> Chain {
+/// The command list at `clp` in the harness memory: one CCW a page, the
+/// More flag set on all but the last, and `after` in the word immediately
+/// past it.
+fn command_list(p: &mut Probe, clp: u32, pages: &[u32], after: u32) {
     let m = p.memory.as_mut().unwrap();
     for (k, &page) in pages.iter().enumerate() {
         // "<0> More flag. If this bit is 0, this is the last CCW in the
         // list."
-        m.words[CLP as usize + k] = page | (k + 1 < pages.len()) as u32;
+        m.words[clp as usize + k] = page | (k + 1 < pages.len()) as u32;
     }
-    m.words[CLP as usize + pages.len()] = after;
+    m.words[clp as usize + pages.len()] = after;
     m.transfers.clear();
-    b.cycle(REGS, Some(0));
-    b.cycle(REGS + 1, Some(CLP));
+}
+
+/// One [`DISK_READ_COMMAND`] over a command list of `pages.len()` CCWs with
+/// `after` past it, watched from START until the board is idle.
+fn chained_read(p: &mut Probe, b: &mut XbusMaster, clp: u32, pages: &[u32], after: u32) -> Chain {
+    command_list(p, clp, pages, after);
+    chained(p, b, DISK_READ_COMMAND, clp, pages.len())
+}
+
+/// One [`DISK_WRITE_COMMAND`] over the same list, with the pages already
+/// filled by the caller. On a write the channel *reads* memory for both
+/// the CCWs and the pages, so a fetch is told from a page read by
+/// `NEW CCW` rather than by the direction of the cycle.
+fn chained_write(p: &mut Probe, b: &mut XbusMaster, clp: u32, pages: &[u32], after: u32) -> Chain {
+    command_list(p, clp, pages, after);
+    chained(p, b, DISK_WRITE_COMMAND, clp, pages.len())
+}
+
+/// The command written to the four registers and then run, watched.
+fn chained(p: &mut Probe, b: &mut XbusMaster, cmd: u32, clp: u32, pages: usize) -> Chain {
+    b.cycle(REGS, Some(cmd));
+    b.cycle(REGS + 1, Some(clp));
     b.cycle(REGS + 2, Some(FIRST_BLOCK));
-    p.cycle(b, REGS + 3, Some(0));
+    p.start(b, REGS + 3, Some(0));
 
     let t0 = b.now;
     let watch: Vec<NetId> = CHAIN_NETS.iter().map(|s| b.net(s)).collect();
@@ -2488,7 +2559,7 @@ fn chained_read(p: &mut Probe, b: &mut XbusMaster, pages: &[u32], after: u32) ->
     let xbao: Vec<NetId> = (0..22).map(|k| b.net(&format!("XBAO{k}"))).collect();
     // A block at the end of the track is most of a revolution away, and
     // then one sector a page.
-    let deadline = t0 + REVOLUTION_NS + (pages.len() as u64 + 1) * REVOLUTION_NS / 17;
+    let deadline = t0 + REVOLUTION_NS + (pages as u64 + 1) * REVOLUTION_NS / 17;
     let mut seen: Vec<(u64, Vec<Level>, u32)> = Vec::new();
     let (mut clp, mut pulse, mut stopped) = (Vec::new(), false, None);
     while b.now < deadline {
@@ -2555,10 +2626,13 @@ fn chained_read(p: &mut Probe, b: &mut XbusMaster, pages: &[u32], after: u32) ->
 /// only once the disk has given it another word, so a run whose last page
 /// is full never asks at all.
 ///
-/// The two controls are here because without them the test proves nothing:
-/// the same chain with zeros past the list stops in exactly the same place,
-/// and a list of one CCW --- whose only entry is the last one --- stops
-/// after one page.
+/// The controls are here because without them the test proves nothing: the
+/// same chain with zeros past the list stops in exactly the same place; a
+/// list of one CCW --- whose only entry is the last one --- stops after one
+/// page; and the same three CCWs at the cold boot's own geometry, where the
+/// word past the list is [`COPY_BUFFER`], the first word of the first page,
+/// stop too --- there the read plants the trap itself, writing band data
+/// with its bit 0 set into the word its own list ends against.
 #[test]
 fn the_word_past_the_ccw_list_is_never_fetched() {
     const PAGE3: u32 = 0o40000;
@@ -2567,7 +2641,7 @@ fn the_word_past_the_ccw_list_is_never_fetched() {
     let list = [PAGE, PAGE2, PAGE3];
 
     let (mut b, mut p, written) = chain_bench(&n, list.len());
-    let c = chained_read(&mut p, &mut b, &list, PAST | 1);
+    let c = chained_read(&mut p, &mut b, CLP, &list, PAST | 1);
     assert!(!c.stuck, "the read never stopped: fetches {}", octal(&c.fetches()));
     assert_eq!(c.fetches(), [CLP, CLP + 1, CLP + 2], "one CCW a page and no more");
     assert_eq!(c.clp, c.fetches(), "XBAO/22 at each CCW CLK is the address of that cycle");
@@ -2595,7 +2669,7 @@ fn the_word_past_the_ccw_list_is_never_fetched() {
 
     // The control the hypothesis says would hide it. It does not differ.
     let (mut b, mut p, _) = chain_bench(&n, list.len());
-    let zeros = chained_read(&mut p, &mut b, &list, 0);
+    let zeros = chained_read(&mut p, &mut b, CLP, &list, 0);
     assert!(!zeros.stuck, "zeros past the list: the read never stopped");
     assert_eq!(zeros.fetches(), c.fetches(), "the same fetches as with the word set");
     assert_eq!(zeros.more(), c.more());
@@ -2604,13 +2678,36 @@ fn the_word_past_the_ccw_list_is_never_fetched() {
 
     // And a list of one, whose only CCW is the last one.
     let (mut b, mut p, _) = chain_bench(&n, 1);
-    let one = chained_read(&mut p, &mut b, &[PAGE], PAST | 1);
+    let one = chained_read(&mut p, &mut b, CLP, &[PAGE], PAST | 1);
     assert!(!one.stuck, "a list of one: the read never stopped");
     assert_eq!(one.fetches(), [CLP], "one CCW fetched");
     assert_eq!(one.more(), [false], "and it is the last");
     assert_eq!(one.pages(), [(PAGE, 256)]);
     assert_eq!(one.status & 1, 1, "not active: {:o}", one.status);
     assert_eq!(one.status & ERRORS, 0, "no error: {:o}", one.status);
+
+    // And at the cold boot's own geometry, [`COPY_BUFFER`], where the word
+    // past the list is the first word of the first page: the read plants
+    // the trap itself, out of the band, and still stops.
+    let cold = [COPY_BUFFER, COPY_BUFFER + 0o400, COPY_BUFFER + 0o1000];
+    let clp = cold_clp(cold.len());
+    let (mut b, mut p, _) = chain_bench(&n, 0);
+    let blocks = pages_to_write(cold.len());
+    for (k, w) in blocks.iter().enumerate() {
+        let drive = &mut p.cable.as_mut().unwrap().drive;
+        assert!(drive.unit.write_block_at(0, 0, FIRST_BLOCK + k as u32, w));
+    }
+    let c2 = chained_read(&mut p, &mut b, clp, &cold, 0);
+    assert!(!c2.stuck, "the cold geometry: the read never stopped");
+    assert_eq!(c2.fetches(), [clp, clp + 1, clp + 2], "three fetches, and 41000 not among them");
+    assert_eq!(c2.more(), [true, true, false]);
+    assert_eq!(c2.pages(), [(cold[0], 256), (cold[1], 256), (cold[2], 256)]);
+    assert_eq!(c2.status & ERRORS, 0, "no error: {:o}", c2.status);
+    assert_eq!(
+        p.memory().words[COPY_BUFFER as usize] & 1,
+        1,
+        "and the read left the word past the list carrying a More flag"
+    );
 }
 
 /// **`CCW CLK` latches the More flag of the fetch it is in.** The other
@@ -2644,7 +2741,7 @@ fn ccw_clk_latches_the_fetch_it_is_in() {
     let n = cadrdc();
     let list = [PAGE, PAGE2, PAGE3];
     let (mut b, mut p, _) = chain_bench(&n, list.len());
-    let c = chained_read(&mut p, &mut b, &list, PAST | 1);
+    let c = chained_read(&mut p, &mut b, CLP, &list, PAST | 1);
     assert!(!c.stuck, "the read never stopped");
 
     let opens = c.rises(CCW_CLK);
@@ -2743,7 +2840,7 @@ fn done_at_047_ends_a_chained_read() {
     let n = cadrdc();
     let list = [PAGE, PAGE2, PAGE3];
     let (mut b, mut p, _) = chain_bench(&n, list.len());
-    let c = chained_read(&mut p, &mut b, &list, PAST | 1);
+    let c = chained_read(&mut p, &mut b, CLP, &list, PAST | 1);
     assert!(!c.stuck, "the read never stopped");
     assert_eq!(c.pages().len(), list.len(), "every page moved");
 
@@ -2758,7 +2855,7 @@ fn done_at_047_ends_a_chained_read() {
     );
 
     // `047` once a block, and `DONE TEST` up there and nowhere else.
-    let visits = c.entered(0o47);
+    let visits = c.entered(0, 0o47);
     assert_eq!(visits.len(), list.len(), "047 once a block");
     assert_eq!(c.rises(DONE_TEST), visits, "DONE TEST comes up at 047 and nowhere else");
 
@@ -3466,4 +3563,382 @@ fn the_model_and_the_board_end_a_seek_alike() {
     // not pass: the seek is done and the drive is asking.
     assert_eq!(board & 0o7, 0o7, "not active, any attention, attention: {board:o}");
     assert_eq!(model & 0o7, 0o7, "and the same three on the model: {model:o}");
+}
+
+/// The cold boot's own copy buffer, from `sys/ucadr/uc-cold-disk.lisp`.
+/// `DISK-COPY-SECTION` copies a band in chunks, each chunk a
+/// `COLD-DISK-READ` and then a `COLD-DISK-WRITE` through
+/// `START-DISK-N-PAGES`: `COPY-BUFFER-CCW-ORIGIN` 40000 holds the command
+/// list, `COPY-BUFFER-CCW-BLOCK-LENGTH` 1000 is the most CCWs it can hold
+/// --- two pages of them --- and `COPY-BUFFER-PAGE-ORIGIN` 102 is the
+/// first page of the data buffer, 41000. **So a full list ends at 40777
+/// and the word immediately past it is the first word the transfer
+/// touches**, which is the adjacency issue 88's parked machine was read
+/// in: its command list pointer walked to 41000 and kept going.
+const COPY_BUFFER_CCW_ORIGIN: u32 = 0o40000;
+const COPY_BUFFER_CCW_BLOCK_LENGTH: u32 = 0o1000;
+const COPY_BUFFER: u32 = 0o41000;
+
+/// A command list of `pages` CCWs ending where the cold boot's does, so
+/// that the word past it is [`COPY_BUFFER`].
+fn cold_clp(pages: usize) -> u32 {
+    COPY_BUFFER - pages as u32
+}
+
+/// The band's own command word: `START-DISK-OP-1` sets bit 11, the done
+/// interrupt enable, over whatever `A-DISK-COMMAND` holds, and the boot
+/// PROM's working path never does.
+const DONE_INTR_ENB: u32 = 1 << 11;
+
+/// The three pages a chained write sends, the first with its first word's
+/// bit 0 **set** so that it can also serve as a live word past the list.
+fn pages_to_write(n: usize) -> Vec<[u32; muir::disk_unit::BLOCK_WORDS]> {
+    let mut out: Vec<[u32; muir::disk_unit::BLOCK_WORDS]> =
+        (0..n).map(|k| words(200 + k as u32)).collect();
+    out[0][0] |= 1;
+    out
+}
+
+/// **The one bit that makes a write a write, pin by pin.** Bit 3 of the
+/// command register is the board's `CMD.FROM.MEMORY`, and it is the input
+/// the sequencer's `DONE` gate and the channel's request gate both take.
+///
+/// The register is the 74LS175 at DCCMD 0C21 --- `-XINIT` on pin 1 clears
+/// it, `-LOAD CMD` on pin 9 clocks it, and its four D inputs are `XBI3`,
+/// `XBI2`, `XBI1` and `XBI0` on pins 4, 5, 12 and 13. `XBI3` comes out as
+/// `CMD.FROM.MEMORY` on pin 2 and `-CMD.FROM.MEMORY` on pin 3, and `XBI1`
+/// as `CMD1` and `-CMD1` on pins 10 and 11.
+///
+/// **MIT's wire list gives that net a second name and it settles what the
+/// bit means**: `dc.wlr` prints `-CMD.FROM.MEMORY` and `CMD.TO.MEMORY`
+/// over one pin list, off `C21-03(05)`, the `-1Q`. So the wire says which
+/// way the data goes, and `sys/cold/qcom.lisp` sets bit 3 on exactly the
+/// commands whose data comes out of memory --- `%DISK-COMMAND-WRITE 11`,
+/// `%DISK-COMMAND-WRITE-ALL 13`, `%DISK-COMMAND-READ-COMPARE 10` --- and
+/// leaves it clear on `%DISK-COMMAND-READ 0` and `%DISK-COMMAND-READ-ALL
+/// 2`. Drawing and wire list agree here; there is nothing to choose
+/// between.
+#[test]
+fn bit_3_of_the_command_is_cmd_from_memory() {
+    let n = cadrdc();
+    let is = |page: &str, reference: &str, pin: u8, name: &str| {
+        assert_eq!(
+            pin_net(&n, page, reference, pin),
+            net_id(&n, name),
+            "{page} {reference} pin {pin} is not {name}"
+        );
+    };
+
+    // The command register.
+    for (pin, name) in [
+        (1, "-XINIT"),
+        (9, "-LOAD CMD"),
+        (4, "XBI3"),
+        (2, "CMD.FROM.MEMORY"),
+        (3, "-CMD.FROM.MEMORY"),
+        (5, "XBI2"),
+        (7, "CMD2"),
+        (12, "XBI1"),
+        (10, "CMD1"),
+        (11, "-CMD1"),
+        (13, "XBI0"),
+        (15, "CMD0"),
+    ] {
+        is("DCCMD", "0C21", pin, name);
+    }
+
+    // The channel's request, the 9S42 at DCCHAN 0D20: output on pin 7,
+    // inputs 1 to 6, so `(CLK MWD4 and -CMD.FROM.MEMORY) or (-MRD FULL and
+    // CMD.FROM.MEMORY and MBUSY and HI4)`. A read is clocked by the disk
+    // and a write by the memory-read register having room.
+    for (pin, name) in [
+        (7, "CHAN.RQ"),
+        (1, "CLK MWD4"),
+        (2, "-CMD.FROM.MEMORY"),
+        (3, "-MRD FULL"),
+        (4, "CMD.FROM.MEMORY"),
+        (5, "MBUSY"),
+        (6, "HI4"),
+    ] {
+        is("DCCHAN", "0D20", pin, name);
+    }
+
+    // And the same input on the `DONE` gate, the 9S42 at DCUC 0D20.
+    for (pin, name) in [
+        (9, "DONE"),
+        (15, "-MBUSY"),
+        (14, "DONE TEST"),
+        (13, "LAST CCW"),
+        (12, "-CMD.FROM.MEMORY"),
+        (11, "-CMD1"),
+        (10, "DONE TEST"),
+    ] {
+        is("DCUC", "0D20", pin, name);
+    }
+}
+
+/// **A chained write stops at the last CCW, with the cold boot's own
+/// geometry and a live word past the list.** Issue 88's parked machine was
+/// in the write half of `DISK-COPY-SECTION`, not a read: `CMD/3` read 1,
+/// which is Write by `newdsk.31`'s sector list, and `UPC/6` 63 is `162` or
+/// `163`, "Write out the data bytes". The board's write had been benched
+/// one page at a time --- [`a_write_with_a_drive_puts_the_page_on_the_pack`]
+/// --- and never chained.
+///
+/// This is one. Three CCWs at `40775`, `40776`, `40777` --- the More flag
+/// set on the first two --- with the pages at `41000`, `41400` and `42000`,
+/// so the word immediately past the list **is** the transfer's own first
+/// word, and it has bit 0 set. That is the exact shape the cold boot hands
+/// the board, and the exact trap the read half was tested against.
+///
+/// **The board stops.** Three CCW fetches, the command list pointer
+/// `40775 40776 40777` off `XBAO/22` at each `CCW CLK`, `-LAST CCW` high,
+/// high, low, three pages read out of memory, three blocks on the pack
+/// equal to them, not-active with no error. `41000` is read once, as page
+/// data, and never as a CCW.
+///
+/// The controls: the same list away from the buffer stops the same way,
+/// and so does the band's own command word --- `%DISK-COMMAND-WRITE 11`
+/// with `START-DISK-OP-1`'s bit 11 on top, which the boot PROM's working
+/// path never sets and which the issue kept in view as a difference.
+#[test]
+fn a_chained_write_stops_at_the_last_ccw() {
+    let n = cadrdc();
+    let list = [COPY_BUFFER, COPY_BUFFER + 0o400, COPY_BUFFER + 0o1000];
+    let clp = cold_clp(list.len());
+    assert_eq!(clp, 0o40775, "the list ends at 40777, where the cold boot's does");
+
+    let out = pages_to_write(list.len());
+    let (mut b, mut p, _) = chain_bench(&n, 0);
+    for (page, w) in list.iter().zip(&out) {
+        let at = *page as usize;
+        p.memory.as_mut().unwrap().words[at..at + 256].copy_from_slice(w);
+    }
+    // The word past the list is the first page's own first word, put back
+    // as it was so the page is undisturbed.
+    let c = chained_write(&mut p, &mut b, clp, &list, out[0][0]);
+    assert_eq!(out[0][0] & 1, 1, "and it carries the More flag");
+    assert!(!c.stuck, "the write never stopped: CLP {}", octal(&c.clp));
+    assert_eq!(c.clp, [clp, clp + 1, clp + 2], "XBAO/22 at each CCW CLK");
+    assert_eq!(c.more(), [true, true, false], "-LAST CCW at each fetch");
+    assert_eq!(c.status & 1, 1, "not active: {:o}", c.status);
+    assert_eq!(c.status & ERRORS, 0, "no error: {:o}", c.status);
+
+    // On a write every cycle is a read, so the CCW fetches are told from
+    // the page reads by their addresses --- and `41000` appears once,
+    // among the page's own 256 words.
+    let at = |a: u32| c.transfers.iter().filter(|t| t.addr == a).count();
+    assert_eq!(at(clp), 1, "the first CCW, once");
+    assert_eq!(at(clp + 1), 1);
+    assert_eq!(at(clp + 2), 1);
+    assert_eq!(at(COPY_BUFFER), 1, "the word past the list, once: as page data");
+    assert!(c.transfers.iter().all(|t| t.wrote.is_none()), "a write only reads memory");
+    assert_eq!(c.transfers.len(), 3 + 3 * 256, "three fetches and three pages, and nothing else");
+
+    // And the pack has what memory had.
+    for (k, w) in out.iter().enumerate() {
+        let block = FIRST_BLOCK + k as u32;
+        let drive = &mut p.cable.as_mut().unwrap().drive;
+        assert_eq!(drive.bad_writes, 0, "what was written parsed as the format");
+        assert_eq!(drive.unit.block_at(0, 0, block), Some(*w), "block {block} on the pack");
+    }
+    eprintln!(
+        "cold geometry: CLP {}, -LAST CCW {:?}, {} cycles, status {:o}",
+        octal(&c.clp),
+        c.more(),
+        c.transfers.len(),
+        c.status
+    );
+
+    // Away from the buffer, and with the band's own command word.
+    for (what, cmd, clp, list) in [
+        ("a list away from the buffer", DISK_WRITE_COMMAND, CLP, [PAGE, PAGE2, 0o40000]),
+        ("the band's own command word", DISK_WRITE_COMMAND | DONE_INTR_ENB, clp, list),
+    ] {
+        let (mut b, mut p, _) = chain_bench(&n, 0);
+        for (page, w) in list.iter().zip(&out) {
+            let at = *page as usize;
+            p.memory.as_mut().unwrap().words[at..at + 256].copy_from_slice(w);
+        }
+        command_list(&mut p, clp, &list, out[0][0]);
+        let c = chained(&mut p, &mut b, cmd, clp, list.len());
+        assert!(!c.stuck, "{what}: the write never stopped");
+        assert_eq!(c.clp, [clp, clp + 1, clp + 2], "{what}: the command list pointer");
+        assert_eq!(c.more(), [true, true, false], "{what}: -LAST CCW at each fetch");
+        assert_eq!(c.status & 1, 1, "{what}: not active: {:o}", c.status);
+        assert_eq!(c.status & ERRORS, 0, "{what}: no error: {:o}", c.status);
+        for (k, w) in out.iter().enumerate() {
+            let block = FIRST_BLOCK + k as u32;
+            let drive = &mut p.cable.as_mut().unwrap().drive;
+            assert_eq!(drive.unit.block_at(0, 0, block), Some(*w), "{what}: block {block}");
+        }
+    }
+}
+
+/// **On a write the channel runs ahead of the disk, and `DONE` at `174`
+/// has one term where a read has two.**
+///
+/// The two differences are one bit of the command register. `DISK-WRITE-
+/// COMMAND` is `11`, and bit 3 is the board's `CMD.FROM.MEMORY` --- MIT's
+/// wire list gives the same wire a second name, `CMD.TO.MEMORY`, off
+/// `C21-03(05)`, the `-1Q` of the 74LS175 at DCCMD 0C21 --- set on exactly
+/// the commands whose data comes out of memory: `%DISK-COMMAND-WRITE 11`,
+/// `%DISK-COMMAND-WRITE-ALL 13` and `%DISK-COMMAND-READ-COMPARE 10`.
+///
+/// **What it does to the channel's clock.** `CHAN.RQ` is the 9S42 at
+/// DCCHAN 0D20, pin 7 out of pins 1 to 6:
+///
+///     CHAN.RQ = (CLK MWD4 and -CMD.FROM.MEMORY)
+///            or (-MRD FULL and CMD.FROM.MEMORY and MBUSY and HI4)
+///
+/// On a read the first term stands and the channel asks for the bus only
+/// when the disk has given it a word. On a write the second stands and it
+/// asks whenever the memory-read register has room --- **nothing to wait
+/// for**. Measured: the first CCW is fetched 230 ns after START, where a
+/// read's is a seek and a sector away --- 2.00 ms, which
+/// [`ccw_clk_latches_the_fetch_it_is_in`] prints --- and for every row of
+/// the run `CHAN.RQ` is up exactly when `MRD FULL` is down and `MBUSY`
+/// up. The
+/// write buffer is what throttles it: the 67401s at DCWBUF 0F01 and 0F02
+/// fill and `WFIRA` goes down.
+///
+/// **What it does to `DONE`.** `-CMD.FROM.MEMORY` is low for the whole
+/// command, so the four-input term of the 9S42 at DCUC 0D20 is dead and
+/// `DONE` at `174` is `-MBUSY and DONE TEST` alone. That matters here in a
+/// way it does not on a read: because the channel runs ahead, `LAST CCW`
+/// comes up at the last CCW's fetch **before** the block before it reaches
+/// `174` --- measured 3.77 ms against 3.83 ms, the opposite order from a
+/// read --- so a live term would end the write a page early. It is dead,
+/// and all three pages go to the pack.
+#[test]
+fn the_write_channel_runs_ahead_of_the_disk() {
+    let n = cadrdc();
+    let list = [COPY_BUFFER, COPY_BUFFER + 0o400, COPY_BUFFER + 0o1000];
+    let clp = cold_clp(list.len());
+    let out = pages_to_write(list.len());
+    let (mut b, mut p, _) = chain_bench(&n, 0);
+    for (page, w) in list.iter().zip(&out) {
+        let at = *page as usize;
+        p.memory.as_mut().unwrap().words[at..at + 256].copy_from_slice(w);
+    }
+    let c = chained_write(&mut p, &mut b, clp, &list, out[0][0]);
+    assert!(!c.stuck, "the write never stopped");
+
+    // The command register, over the whole run.
+    assert!(
+        c.seen.iter().all(|(_, s, _)| s[NOT_CMD_FROM_MEMORY] == Level::Low),
+        "-CMD.FROM.MEMORY is low for a Write, so the four-input term is dead"
+    );
+    assert!(
+        c.seen.iter().all(|(_, s, _)| s[NOT_CMD1] == Level::High),
+        "-CMD1 is high, as it is on a Read: it is not what kills the term here"
+    );
+
+    // The channel's clock: `CHAN.RQ` is the FIFO's, not the disk's.
+    assert!(
+        c.seen.iter().all(|(_, s, _)| {
+            (s[CHAN_RQ] == Level::High) == (s[MRD_FULL] == Level::Low && s[NOT_MBUSY] == Level::Low)
+        }),
+        "CHAN.RQ is -MRD FULL and MBUSY, the second term of the 9S42, and nothing else"
+    );
+    assert!(
+        c.seen.iter().any(|(_, s, _)| s[WFIRA] == Level::Low),
+        "the write buffer fills: WFIRA goes down"
+    );
+    assert!(c.seen.iter().any(|(_, s, _)| s[WFORA] == Level::High), "and has bytes for the disk");
+    let first = c.transfers.first().expect("a CCW fetch");
+    assert_eq!(first.addr, clp, "the first cycle is the first CCW");
+    assert!(
+        first.at - c.t0 < 1_000,
+        "and it is a microsecond after START, not a seek away: {} ns",
+        first.at - c.t0
+    );
+
+    // `DONE` at `174`, one visit a block.
+    let visits = c.entered(0o100, 0o174);
+    assert_eq!(visits.len(), list.len(), "174 once a block");
+    assert_eq!(c.rises(DONE_TEST), visits, "DONE TEST comes up at 174 and nowhere else");
+    let done: Vec<Vec<Level>> = visits.iter().map(|&i| c.during(i, DONE)).collect();
+    assert_eq!(done[0], [Level::Low], "the first block's 174: not done");
+    assert_eq!(done[1], [Level::Low], "the second block's 174: not done");
+    assert_eq!(done[2], [Level::High], "the last block's 174: done");
+    assert_eq!(c.rises(DONE), [visits[2]], "DONE rises once, as 174 is entered");
+
+    // And `LAST CCW` was already up at the second block's `174`, which on a
+    // read it is not.
+    let up = c.rises(LAST_CCW);
+    assert_eq!(up.len(), 1, "LAST CCW comes up once");
+    let up = up[0];
+    assert_eq!(c.seen[up].1[CCW_CLK], Level::High, "at a CCW CLK");
+    assert!(
+        c.seen[up].0 < c.seen[visits[1]].0,
+        "LAST CCW at {} ns, the second block's 174 at {} ns",
+        c.seen[up].0 - c.t0,
+        c.seen[visits[1]].0 - c.t0
+    );
+
+    // The channel is done well before the disk is.
+    let mbusy = c.rises(NOT_MBUSY);
+    assert_eq!(mbusy.len(), 1, "-MBUSY rises once");
+    let mbusy = mbusy[0];
+    assert_eq!(c.seen[mbusy].1[NOT_LAST_CCW], Level::Low, "taking the last CCW's More flag");
+    assert_eq!(c.seen[mbusy].1[END_PAGE_CLK], Level::High, "on END PAGE CLK's rise");
+    assert!(c.seen[mbusy].0 < c.seen[visits[2]].0, "and before the 174 that reads it");
+    eprintln!(
+        "first CCW +{} ns; LAST CCW +{} ns, second 174 +{} ns; -MBUSY +{} ns, DONE +{} ns",
+        first.at - c.t0,
+        c.seen[up].0 - c.t0,
+        c.seen[visits[1]].0 - c.t0,
+        c.seen[mbusy].0 - c.t0,
+        c.seen[visits[2]].0 - c.t0
+    );
+}
+
+/// **The cold boot's whole chunk: 512 CCWs at 40000, the buffer from
+/// 41000, written.** `DISK-COPY-SECTION` hands the board at most
+/// `COPY-BUFFER-CCW-BLOCK-LENGTH` = 1000 octal pages at a time, and issue
+/// 88's parked machine was in one of those. This is that command, entire.
+///
+/// The board makes 512 CCW fetches and 512 pages of reads --- 131,584
+/// cycles, and nothing else --- walks the command list pointer from `40000`
+/// to `40777` and stops there, with the More flag set on the first 511 and
+/// clear on the last. It does not read `41000` as a CCW.
+///
+/// It is `#[ignore]`d for its length: half a second of board is two minutes
+/// of wall clock at five nanoseconds a step.
+#[test]
+#[ignore = "512 pages: half a second of board, two minutes of wall clock; run with --ignored"]
+fn the_cold_boots_own_chunk_stops_at_the_last_ccw() {
+    let n = cadrdc();
+    let pages = COPY_BUFFER_CCW_BLOCK_LENGTH as usize;
+    let list: Vec<u32> = (0..pages as u32).map(|k| COPY_BUFFER + k * 0o400).collect();
+    let clp = COPY_BUFFER_CCW_ORIGIN;
+    assert_eq!(clp + pages as u32, COPY_BUFFER, "a full list ends where the buffer begins");
+
+    let (mut b, mut p, _) = chain_bench(&n, 0);
+    // The pages the CCWs name run to 441000, so the memory has to reach it.
+    p.with_memory(&b, 1 << 19);
+    let out = pages_to_write(1);
+    let at = COPY_BUFFER as usize;
+    p.memory.as_mut().unwrap().words[at..at + 256].copy_from_slice(&out[0]);
+    let c = chained_write(&mut p, &mut b, clp, &list, out[0][0]);
+    assert!(!c.stuck, "the write never stopped: last CLP {:o}", c.clp.last().copied().unwrap_or(0));
+    assert_eq!(c.clp.len(), pages, "one CCW fetch a page");
+    assert_eq!(c.clp.first(), Some(&clp), "from the origin");
+    assert_eq!(c.clp.last(), Some(&(COPY_BUFFER - 1)), "to 40777, and no further");
+    assert!(c.clp.windows(2).all(|w| w[1] == w[0] + 1), "one word at a time");
+    let more = c.more();
+    assert_eq!(more.len(), pages);
+    assert!(more[..pages - 1].iter().all(|&m| m), "More on all but the last");
+    assert!(!more[pages - 1], "and clear on the last");
+    assert_eq!(c.transfers.len(), pages * 257, "512 fetches and 512 pages, and nothing else");
+    assert_eq!(c.transfers.iter().filter(|t| t.addr == COPY_BUFFER).count(), 1, "41000 once");
+    assert_eq!(c.status & 1, 1, "not active: {:o}", c.status);
+    assert_eq!(c.status & ERRORS, 0, "no error: {:o}", c.status);
+    eprintln!(
+        "512 CCWs from {clp:o} to {:o}: {} cycles, status {:o}",
+        c.clp.last().unwrap(),
+        c.transfers.len(),
+        c.status
+    );
 }
