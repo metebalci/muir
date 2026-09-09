@@ -522,9 +522,11 @@ impl Control {
             // an **asynchronous mark**: `QFILE-PROCESS-ASYNC-MARK` puts
             // the stream in `:ASYNC-MARKED`, and `:CONTINUE`'s own guard
             // is `(EQ STATUS :ASYNC-MARKED)`, so without a mark it does
-            // nothing. Nothing here sends one, so nothing here can be
-            // continued --- and `FILE.c` answers the same way,
-            // "CONTINUE received when not in error state".
+            // nothing. The one mark sent here is a write that ran out of
+            // room, `NMR` from `wrote`, so that is the one
+            // transfer that can be continued; any other handle gets what
+            // `FILE.c` answers, "CONTINUE received when not in error
+            // state".
             "CONTINUE" => self.cont(&tid, &handle),
             other => {
                 self.error(&tid, &handle, "UKC", 'C', &format!("{other} is not served here"));
