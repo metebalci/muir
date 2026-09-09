@@ -681,6 +681,43 @@ impl FarEnd {
         self.board.net(self.int_busy) == Level::Low
     }
 
+    /// One word of main memory by its **physical** address, as it stands:
+    /// the prompt's `mem` on `chip`.  `None` where this machine has no
+    /// memory at that address.
+    ///
+    /// Main memory is the netlist boards' own cells where boards are on
+    /// the backplane and the twins' array where they are not, so the word
+    /// comes from whichever of the two is memory here.  A board's word is
+    /// bits 16 to 21 of the address picking the board, 14 and 15 the bank
+    /// and 0 to 13 the cell, and then a bit off each of the 32 4116s of
+    /// that bank: [`crate::xbus::Xbus::peek`], the reader beside the
+    /// `poke` the disk controller's DMA writes through.
+    ///
+    /// **Asking does not disturb a running machine.** Nothing here drives
+    /// a net, advances a clock or marks a part: it is a read of cells that
+    /// are already what the last write left, and not a bus cycle, so the
+    /// machine is not asked for the bus and never learns it was read.
+    /// What it cannot promise is a word caught in the middle of being
+    /// written --- the cells are the cells, mid-write as at any other
+    /// instant --- which is the caveat any probe carries.
+    pub fn main_word(&self, phys: u32) -> Option<u32> {
+        if self.xbus.boards.is_empty() {
+            self.buses.machine.main.get(phys as usize).copied()
+        } else {
+            self.xbus.peek(phys)
+        }
+    }
+
+    /// How many words of main memory this machine has: the boards on the
+    /// backplane, or the twins' array where there are none.
+    pub fn main_words(&self) -> usize {
+        if self.xbus.boards.is_empty() {
+            self.buses.machine.main.len()
+        } else {
+            self.xbus.boards.len() << 16
+        }
+    }
+
     /// Writes the interface board and then the memory boards after the
     /// processor and the clock in a checkpoint: a board built fresh is not
     /// the board that has been on the bus. The interface holds the Unibus

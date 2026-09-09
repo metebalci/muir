@@ -1806,6 +1806,17 @@ fn time_engine<E: Engine>(
                             Err(what) => println!("prompt: {what}"),
                         }
                     }
+                    // Main memory is an array here and a physical address
+                    // is an index into it; on `chip` it is the memory
+                    // boards' cells and the same address picks the board.
+                    Ok(Some(Command::Mem { from, words })) => {
+                        let m = e.machine();
+                        let read = |a: usize| m.main.get(a).copied();
+                        match muir::prompt::main_dump(from, words, m.main.len(), read) {
+                            Ok(dump) => print!("{dump}"),
+                            Err(what) => println!("prompt: {what}"),
+                        }
+                    }
                     Ok(Some(Command::Net { .. })) => {
                         println!("prompt: nets are the chip engine's --- this machine is");
                         println!("        registers and memories and has no wires to read;");
@@ -2937,6 +2948,18 @@ fn time_chip(
                     // so this prints the same words that comparison checks.
                     Ok(Some(Command::Dump { memory, from, words })) => {
                         match say_chip_memory(&cpu, &rams, memory, from, words) {
+                            Ok(dump) => print!("{dump}"),
+                            Err(what) => println!("prompt: {what}"),
+                        }
+                    }
+                    // Main memory is the boards on the backplane here, so a
+                    // word is a bit off each of the 32 DRAMs of one bank of
+                    // one board: `FarEnd::main_word`, which reads the cells
+                    // and runs no bus cycle, so this is answered while the
+                    // machine runs as `net` is.
+                    Ok(Some(Command::Mem { from, words })) => {
+                        let read = |a: usize| far.main_word(a as u32);
+                        match muir::prompt::main_dump(from, words, far.main_words(), read) {
                             Ok(dump) => print!("{dump}"),
                             Err(what) => println!("prompt: {what}"),
                         }
