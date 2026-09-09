@@ -188,7 +188,7 @@ use muir::machine::Machine;
 use muir::micro::Micro;
 use muir::netlist;
 use muir::part::Level;
-use muir::prompt::{Command, Memory};
+use muir::prompt::{Command, Memory, NetName};
 use muir::rtl::Rtl;
 use muir::serial::Endpoint;
 use muir::terminal::keyboard::{Keyboard, Mapping};
@@ -609,7 +609,8 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <this>[
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
             [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
-            [--tv-capture <gif>] [--tv-capture-no-time] [-V|--version]";
+            [--tv-capture <gif>] [--tv-capture-no-time]
+            [--watch <from>[-<to>]:<net>,<net>,...] [-V|--version]";
 
 /// What `-h` and `--help` print: the usage, then each flag in the order
 /// the usage lists them.
@@ -969,6 +970,27 @@ A simulator of the MIT CADR Lisp Machine.
                                simulated time at the left and the wall
                                clock, the local time of day, at the right,
                                each hh:mm:ss; this drops that line.
+  --watch <from>[-<to>]:<net>,<net>,...
+                               chip: record the named nets over microcycles
+                               <from> to <to>, or from <from> to the end of
+                               the run with no <to>, counted as --stop-after
+                               counts them. Each net as the prompt's `net`
+                               names one --- `disk:NEW CCW`, `PC/14` for a
+                               bus --- and the nets comma separated. The
+                               boards are sampled at every instant they
+                               move, a clock transition, a delay-line tap
+                               or an oscillator edge, and not once a
+                               microcycle, so a pulse shorter than one is
+                               seen: `CCW CLK` is 50 ns. One line on
+                               stderr, prefixed `watch:`, with the time in
+                               nanoseconds, the microcycle and every value
+                               --- a bus in octal, Z while any bit is
+                               undriven --- as the range begins and then at
+                               every change, and nothing while nothing
+                               changes. Outside the range the run pays
+                               nothing. The prompt's watch records the next
+                               n microcycles the same way, without a
+                               restart. [default: off]
   --chaos-trace                every Chaosnet packet and frame on the
                                cable, to stderr. What to reach for when a
                                lashup goes quiet: it shows whether the
@@ -1140,74 +1162,142 @@ fn keyboard_path(named: Option<&Path>) -> Option<(PathBuf, bool)> {
     home.exists().then_some((home, false))
 }
 
-/// A net or a bus read off whichever board carries the name: the prompt's
-/// `net` on `chip`.
+/// Which board of the netlist machine a net is on: where the prompt's
+/// `net` and `--watch` find its chip, [`chip_on`], once a name has been
+/// resolved.  The boards' names, and the order they are searched in, are
+/// [`boards_named`]'s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum On {
+    Cpu,
+    Busint,
+    /// The first memory board on the backplane.
+    Memory,
+    /// A device on the Xbus, by its place in `Xbus::devices`.
+    Device(usize),
+    Io,
+}
+
+/// A board by the name `net` and `--watch` take, where it is, its chip and
+/// its netlist.
+type Named<'a> = (&'static str, On, &'a Chip, &'a netlist::Netlist);
+
+/// The boards of a netlist machine that carry nets, by the names the
+/// prompt's `net` and `--watch` take, in the order a name is searched:
+/// the processor, the interface, a memory board, then the devices.  The
+/// devices are built display first, then the disk controller, which is
+/// `Xbus::new`'s own order; the I/O board is on the Unibus, last.
+fn boards_named<'a>(
+    cpu: &'a Chip,
+    far: &'a FarEnd,
+    boards: &Boards<'a>,
+    (cpu_n, bus_n, mem_n): &'a (netlist::Netlist, netlist::Netlist, netlist::Netlist),
+) -> Vec<Named<'a>> {
+    let mut on: Vec<Named<'a>> =
+        vec![("cpu", On::Cpu, cpu, cpu_n), ("busint", On::Busint, &far.board, bus_n)];
+    if let Some(m) = far.xbus.boards.first() {
+        on.push(("memory", On::Memory, m, mem_n));
+    }
+    let devices = far.xbus.devices.iter().enumerate();
+    for ((what, n), (k, chip)) in [("tv", boards.tv), ("disk", boards.disk)]
+        .into_iter()
+        .filter_map(|(w, n)| n.map(|n| (w, n)))
+        .zip(devices)
+    {
+        on.push((what, On::Device(k), chip, n));
+    }
+    if let (Some(u), Some(n)) = (far.unibus.as_ref(), boards.io) {
+        on.push(("io", On::Io, &u.board, n));
+    }
+    on
+}
+
+/// The chip a resolved net is on, as the machine stands now.  The boards
+/// are where [`boards_named`] found them: a resolved `On` names a board
+/// the machine has.
+fn chip_on<'a>(cpu: &'a Chip, far: &'a FarEnd, on: On) -> &'a Chip {
+    match on {
+        On::Cpu => cpu,
+        On::Busint => &far.board,
+        On::Memory => &far.xbus.boards[0],
+        On::Device(k) => &far.xbus.devices[k],
+        On::Io => &far.unibus.as_ref().expect("resolved on the I/O board, so it is there").board,
+    }
+}
+
+/// A name resolved: the board that carries it, the nets --- one, or a
+/// bus's from bit 0 up --- and any other boards that carry the name too.
+struct Found {
+    board: &'static str,
+    on: On,
+    nets: Vec<netlist::NetId>,
+    also: Vec<&'static str>,
+}
+
+/// A name as `net` takes one, found on whichever board carries it, or why
+/// it was not.
 ///
 /// **A name is unique only within a board.** `-XBUS RQ` is on nearly all of
 /// them and `TRIDENT.READY/` on one, so the boards are searched in the
-/// order the machine is built --- the processor, the interface, a memory
-/// board, then the devices --- and the answer says which one carried it.
-/// Where more than one does, the others are named too, so that a reading
-/// is never quietly the wrong board's.
+/// order [`boards_named`] gives them and the answer says which one carried
+/// it. Where more than one does, the others are named too, so that a
+/// reading is never quietly the wrong board's.
 ///
 /// A bus is `NAME/width`, `NAME0` up, which is how `MUIR_WATCH` writes one.
-/// Its value is read the way a TTL input reads it, an undriven net as a
-/// one, and the count of undriven bits is said beside it, because half the
-/// datapath is tri-state and undriven for part of every cycle.
-fn say_net(
-    on: &[(&str, &Chip, &netlist::Netlist)],
-    want: Option<&str>,
-    name: &str,
-    width: Option<u32>,
-) -> String {
-    use std::fmt::Write;
-    if let Some(board) = want
-        && !on.iter().any(|&(b, _, _)| b == board)
+fn resolve_net(on: &[Named], want: &NetName) -> Result<Found, String> {
+    let NetName { board: want_board, name, width } = want;
+    if let Some(board) = want_board
+        && !on.iter().any(|&(b, ..)| b == board)
     {
-        let names: Vec<&str> = on.iter().map(|&(b, _, _)| b).collect();
-        return format!(
-            "prompt: no board called {board} here; this run has {}\n",
-            names.join(", ")
-        );
+        let names: Vec<&str> = on.iter().map(|&(b, ..)| b).collect();
+        return Err(format!("no board called {board} here; this run has {}", names.join(", ")));
     }
     let named = |n: &netlist::Netlist, what: &str| {
         n.by_name_id(what).or_else(|| n.by_name_id(&format!("'{what}'")))
     };
+    let asked = |b: &str| want_board.as_deref().is_none_or(|w| w == b);
     // A bus is carried by `NAME0` and there may be no net called `NAME` at
     // all, so what decides which board carries it is the first bit.
     let first = match width {
-        None => name.to_string(),
+        None => name.clone(),
         Some(_) => format!("{name}0"),
     };
-    let carries: Vec<&(&str, &Chip, &netlist::Netlist)> = on
-        .iter()
-        .filter(|&&(b, _, n)| want.is_none_or(|w| w == b) && named(n, &first).is_some())
-        .collect();
-    let Some(&&(board, chip, n)) = carries.first() else {
-        let looked: Vec<&str> =
-            on.iter().map(|&(b, _, _)| b).filter(|b| want.is_none_or(|w| w == *b)).collect();
-        return format!("prompt: no net {first} on {}\n", looked.join(", "));
+    let carries: Vec<&Named> =
+        on.iter().filter(|&&(b, _, _, n)| asked(b) && named(n, &first).is_some()).collect();
+    let Some(&&(board, at, chip, n)) = carries.first() else {
+        let looked: Vec<&str> = on.iter().map(|&(b, ..)| b).filter(|b| asked(b)).collect();
+        return Err(format!("no net {first} on {}", looked.join(", ")));
     };
-    let mut out = String::new();
-    match width {
-        None => {
-            let id = named(n, name).expect("just found");
-            writeln!(out, "{name} on {board}: {:?}", chip.net(id)).unwrap();
-        }
+    let nets = match width {
+        None => vec![named(n, name).expect("just found")],
         Some(bits) => {
-            let missing: Vec<u32> = (0..bits)
-                .filter(|b| {
-                    n.by_name_id(&format!("{name}{b}")).is_none()
-                        && n.by_name_id(&format!("'{name}{b}'")).is_none()
-                })
-                .collect();
-            if !missing.is_empty() {
-                return format!(
-                    "prompt: {board} has no {name}{} --- a bus is {name}0 up\n",
-                    missing[0]
-                );
+            if let Some(b) = (0..*bits).find(|b| named(n, &format!("{name}{b}")).is_none()) {
+                return Err(format!("{board} has no {name}{b} --- a bus is {name}0 up"));
             }
-            let nets = chip.bus_nets(n, name, bits);
+            chip.bus_nets(n, name, *bits)
+        }
+    };
+    let also = carries[1..].iter().map(|&&(b, ..)| b).collect();
+    Ok(Found { board, on: at, nets, also })
+}
+
+/// A net or a bus read off whichever board carries the name: the prompt's
+/// `net` on `chip`, which is [`resolve_net`] and a reading.
+///
+/// A bus's value is read the way a TTL input reads it, an undriven net as
+/// a one, and the count of undriven bits is said beside it, because half
+/// the datapath is tri-state and undriven for part of every cycle.
+fn say_net(on: &[Named], want: &NetName) -> String {
+    use std::fmt::Write;
+    let Found { board, on: at, nets, also } = match resolve_net(on, want) {
+        Ok(found) => found,
+        Err(what) => return format!("prompt: {what}\n"),
+    };
+    let chip = on.iter().find(|&&(_, o, ..)| o == at).map(|&(_, _, c, _)| c).expect("named");
+    let name = &want.name;
+    let mut out = String::new();
+    match want.width {
+        None => writeln!(out, "{name} on {board}: {:?}", chip.net(nets[0])).unwrap(),
+        Some(bits) => {
             let word = chip.read(&nets);
             let undriven = nets.iter().filter(|&&id| chip.net(id) == Level::Z).count();
             write!(out, "{name}/{bits} on {board}: {word:o} octal, {word:#x}").unwrap();
@@ -1217,11 +1307,154 @@ fn say_net(
             }
         }
     }
-    if carries.len() > 1 {
-        let others: Vec<&str> = carries[1..].iter().map(|&&(b, _, _)| b).collect();
-        writeln!(out, "  ({name} is also on {})", others.join(", ")).unwrap();
+    if !also.is_empty() {
+        writeln!(out, "  ({name} is also on {})", also.join(", ")).unwrap();
     }
     out
+}
+
+/// `--watch`'s argument, parsed: the first microcycle, the last or `None`
+/// for the end of the run, and the nets, still by name.
+type WatchSpec = (u64, Option<u64>, Vec<NetName>);
+
+/// `<from>[-<to>]:<net>,<net>,...`: the microcycles, counted as
+/// `--stop-after` counts them, and the nets as `net` names them.
+///
+/// The range is before the first colon and has none of its own, so the
+/// colon that ends it is the first one, and a board prefix or a colon in
+/// a name --- `cpu:LM UB: GRANTED` --- is the nets' to parse.
+fn watch_spec(arg: &str) -> Result<WatchSpec, String> {
+    let Some((range, list)) = arg.split_once(':') else {
+        return Err("wants <from>[-<to>]:<net>,<net>,...".to_string());
+    };
+    let (from, to) = match range.split_once('-') {
+        Some((f, "")) => (f, None),
+        Some((f, t)) => (f, Some(t)),
+        None => (range, Some(range)),
+    };
+    let from: u64 = from.parse().map_err(|_| format!("{from:?} is not a microcycle"))?;
+    let to = match to {
+        Some(t) => Some(t.parse::<u64>().map_err(|_| format!("{t:?} is not a microcycle"))?),
+        None => None,
+    };
+    if to.is_some_and(|t| t < from) {
+        return Err(format!("the range ends at {} before it begins at {from}", to.unwrap()));
+    }
+    let nets = muir::prompt::parse_net_names(list, "--watch")?;
+    Ok((from, to, nets))
+}
+
+/// What one watched net read as the last time a line was printed: a net
+/// as `net` prints it, a bus as a word when every bit is driven.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    Net(Level),
+    Bus(Option<u64>),
+}
+
+/// One net or bus being recorded: what to call it, where it is, its nets.
+struct Watched {
+    label: String,
+    on: On,
+    nets: Vec<netlist::NetId>,
+    bus: bool,
+}
+
+/// `--watch` and the prompt's `watch`: the named nets recorded over a range
+/// of microcycles, one line on stderr at every change.
+///
+/// **The record is taken at the chip's own step, which is an event and
+/// not a fixed interval.** [`FarEnd::tick_with`] moves every board to the
+/// next instant anything on any of them is due --- the processor clock's
+/// next transition, or a delay-line tap, an oscillator edge or a one-shot
+/// on some board, whichever comes first --- and the gates are zero-delay,
+/// so between two of those instants no net moves.  Sampled after each,
+/// the record has every level a net settled at, however brief: `CCW CLK`
+/// on the disk controller is two taps of a delay line 50 ns apart, and
+/// once-a-microcycle sampling, 145 to 220 ns, would step over it.  What
+/// it does not have is a level a net took and left inside one instant ---
+/// a glitch of no width --- which is not a level the model has either.
+///
+/// The microcycle is the run's own count, as `--stop-after` and the
+/// prompt's `pc` count it: a resume counts from the checkpoint.  The one
+/// stretch of a run the record does not cover is the walk to a quiet
+/// microcycle a checkpoint makes, [`chip_to_quiet`], which ticks the
+/// boards itself, up to a thousand microcycles: those are counted and
+/// said, and not sampled.
+struct Watch {
+    from: u64,
+    /// `None` runs to the end of the run.
+    to: Option<u64>,
+    nets: Vec<Watched>,
+    /// What was last printed for each, `None` before the first line.
+    last: Vec<Option<Reading>>,
+}
+
+impl Watch {
+    /// The nets resolved against the boards, or which one was not.
+    fn new(from: u64, to: Option<u64>, nets: &[NetName], on: &[Named]) -> Result<Watch, String> {
+        let nets = nets
+            .iter()
+            .map(|want| {
+                let found = resolve_net(on, want)?;
+                Ok(Watched {
+                    label: want.to_string(),
+                    on: found.on,
+                    nets: found.nets,
+                    bus: want.width.is_some(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let last = vec![None; nets.len()];
+        Ok(Watch { from, to, nets, last })
+    }
+
+    /// What is recorded, comma separated, for the line that says so.
+    fn labels(&self) -> String {
+        self.nets.iter().map(|w| w.label.as_str()).collect::<Vec<_>>().join(", ")
+    }
+
+    /// One sample, after one step of the boards: a line if anything
+    /// watched has changed since the last one, or at the first sample of
+    /// the range, so that a reader has the values it began at.  `false`
+    /// once the range is behind, when there is nothing more to sample.
+    ///
+    /// Before the range this is one comparison, and the run pays nothing
+    /// else for a watch still to come.
+    fn sample(&mut self, cycle: u64, now: u64, cpu: &Chip, far: &FarEnd) -> bool {
+        if cycle < self.from {
+            return true;
+        }
+        if self.to.is_some_and(|to| cycle > to) {
+            return false;
+        }
+        let mut changed = false;
+        for (w, last) in self.nets.iter().zip(self.last.iter_mut()) {
+            let chip = chip_on(cpu, far, w.on);
+            let reading = if w.bus {
+                Reading::Bus(chip.read_driven(&w.nets))
+            } else {
+                Reading::Net(chip.net(w.nets[0]))
+            };
+            if *last != Some(reading) {
+                *last = Some(reading);
+                changed = true;
+            }
+        }
+        if changed {
+            use std::fmt::Write;
+            let mut line = format!("watch: {now} ns, microcycle {cycle}:");
+            for (w, last) in self.nets.iter().zip(&self.last) {
+                match last.expect("every net has been read") {
+                    Reading::Net(l) => write!(line, " {}={l:?}", w.label).unwrap(),
+                    Reading::Bus(Some(v)) => write!(line, " {}={v:o}", w.label).unwrap(),
+                    Reading::Bus(None) => write!(line, " {}=Z", w.label).unwrap(),
+                }
+            }
+            eprintln!("{line}");
+        }
+        true
+    }
 }
 
 /// The mapping this run's terminal uses: the built-in one, with whatever
@@ -1817,7 +2050,7 @@ fn time_engine<E: Engine>(
                             Err(what) => println!("prompt: {what}"),
                         }
                     }
-                    Ok(Some(Command::Net { .. })) => {
+                    Ok(Some(Command::Net(_) | Command::Watch { .. })) => {
                         println!("prompt: nets are the chip engine's --- this machine is");
                         println!("        registers and memories and has no wires to read;");
                         println!("        `reg` gives the registers and `pc` the PC");
@@ -2713,6 +2946,7 @@ fn time_chip(
     run: Run,
     resume: Option<(PathBuf, Checkpoint)>,
     tv_board: TvBoard,
+    watch: Option<WatchSpec>,
 ) {
     let Run { stop, capture, checkpoint, setup, hold, clocks } = run;
     let ChipMachine {
@@ -2788,9 +3022,24 @@ fn time_chip(
     let mut quit = false;
     catch_interrupts();
     // The processor's, the interface's and a memory board's netlists, for
-    // the prompt's `net`: parsed on the first one asked for, since most
-    // runs ask for none.
+    // the prompt's `net` and `watch`: parsed on the first one asked for,
+    // since most runs ask for none.
     let mut net_netlists: Option<(netlist::Netlist, netlist::Netlist, netlist::Netlist)> = None;
+    let parse_netlists = || {
+        (
+            netlist::parse(NETLIST).unwrap(),
+            netlist::parse(BUSINT).unwrap(),
+            netlist::parse(CADRM).unwrap(),
+        )
+    };
+    // `--watch`, resolved now that the boards are there: a name no board
+    // carries stops the run before it starts, as the prompt's `net` would
+    // answer it, rather than recording nothing for hours.
+    let mut watch = watch.map(|(from, to, nets)| {
+        let named =
+            boards_named(&cpu, &far, &boards, net_netlists.get_or_insert_with(parse_netlists));
+        Watch::new(from, to, &nets, &named).unwrap_or_else(|what| fail(&format!("--watch: {what}")))
+    });
     let mut interrupts_seen = 0;
     let mut asks_seen = 0;
     while !quit && ran < stop.after && !stop.reached(cpu.read(&pc_nets) as u16, prom_enabled(&cpu))
@@ -2814,6 +3063,15 @@ fn time_chip(
                 }
             }
             last = p;
+            // The record, at every step: [`Watch`] says why a step and
+            // not a microcycle. A run with no watch pays one test here,
+            // and one with a range behind it drops the watch and pays the
+            // same.
+            if let Some(w) = watch.as_mut()
+                && !w.sample(ran, clk.time_ns(), &cpu, &far)
+            {
+                watch = None;
+            }
         }
         // The capture keeps its own cadence, in microcycles.
         if wrapped
@@ -2996,36 +3254,35 @@ fn time_chip(
                             ),
                         }
                     }
-                    Ok(Some(Command::Net { board, name, width })) => {
+                    Ok(Some(Command::Net(want))) => {
                         // The netlists are parsed the first time one is
                         // asked for and kept: a run that never asks pays
                         // nothing, and one that asks twice parses once.
-                        let (cpu_n, bus_n, mem_n) = net_netlists.get_or_insert_with(|| {
-                            (
-                                netlist::parse(NETLIST).unwrap(),
-                                netlist::parse(BUSINT).unwrap(),
-                                netlist::parse(CADRM).unwrap(),
-                            )
-                        });
-                        let mut on: Vec<(&str, &Chip, &netlist::Netlist)> =
-                            vec![("cpu", &cpu, cpu_n), ("busint", &far.board, bus_n)];
-                        if let Some(m) = far.xbus.boards.first() {
-                            on.push(("memory", m, mem_n));
+                        let netlists = net_netlists.get_or_insert_with(parse_netlists);
+                        let on = boards_named(&cpu, &far, &boards, netlists);
+                        print!("{}", say_net(&on, &want));
+                    }
+                    // The next `cycles` microcycles from here: the one in
+                    // progress, or the one about to start if held at a
+                    // boundary, and the rest. A watch already going, or
+                    // one `--watch` set for later, is replaced.
+                    Ok(Some(Command::Watch { cycles, nets })) => {
+                        let netlists = net_netlists.get_or_insert_with(parse_netlists);
+                        let on = boards_named(&cpu, &far, &boards, netlists);
+                        let to = ran + cycles - 1;
+                        match Watch::new(ran, Some(to), &nets, &on) {
+                            // Not `watch: ...`, which is the record's own
+                            // prefix and what a reader greps for.
+                            Ok(w) => {
+                                println!(
+                                    "recording {} over microcycles {ran} to {to}; the record is on \
+                                     stderr, each line prefixed watch:",
+                                    w.labels()
+                                );
+                                watch = Some(w);
+                            }
+                            Err(what) => println!("prompt: {what}"),
                         }
-                        // The devices are built display first, then the
-                        // disk controller: `Xbus::new`'s own order.
-                        let devices = far.xbus.devices.iter();
-                        for ((what, n), chip) in [("tv", boards.tv), ("disk", boards.disk)]
-                            .into_iter()
-                            .filter_map(|(w, n)| n.map(|n| (w, n)))
-                            .zip(devices)
-                        {
-                            on.push((what, chip, n));
-                        }
-                        if let (Some(u), Some(n)) = (far.unibus.as_ref(), boards.io) {
-                            on.push(("io", &u.board, n));
-                        }
-                        print!("{}", say_net(&on, board.as_deref(), &name, width));
                     }
                     Ok(Some(Command::Quit)) => {
                         quit = true;
@@ -3191,6 +3448,9 @@ fn main() {
     let mut serial_at: Option<SocketAddr> = None;
     let mut capture_tv: Option<PathBuf> = None;
     let mut capture_tv_time = true;
+    // `--watch`: the range and the nets, resolved against the boards once
+    // the machine is built.
+    let mut watch: Option<WatchSpec> = None;
 
     // The flags in `~/.muirrc` come first, so that a flag on the command
     // line, which is read after, has the last word.  [`muirrc`] drops the
@@ -3388,6 +3648,14 @@ fn main() {
                 None => usage("--tv-capture wants a file for the GIF"),
             },
             (None, "--tv-capture-no-time") => capture_tv_time = false,
+            (None, "--watch") => {
+                const WANT: &str = "--watch wants <from>[-<to>]:<net>,<net>,...: the microcycles to record over, and the nets as `net` names them";
+                let arg = args.next().unwrap_or_else(|| usage(WANT));
+                match watch_spec(&arg) {
+                    Ok(w) => watch = Some(w),
+                    Err(e) => usage(&format!("--watch {arg}: {e}")),
+                }
+            }
             (None, "--checkpoint") => match args.next() {
                 Some(path) => checkpoint = Some(PathBuf::from(path)),
                 None => usage("--checkpoint wants a file to write"),
@@ -3455,6 +3723,12 @@ fn main() {
             }
             _ => {}
         }
+    }
+    // The debuggee on a cable is stepped by the debugger's events, in
+    // `Remote::step`, and nothing there samples between them; refused
+    // rather than quietly recording nothing.
+    if which == Which::Chip && watch.is_some() && cable_listen.is_some() {
+        usage("--watch is the run's own loop, which a debuggee on a cable does not have");
     }
     if (debuggee_address.is_some() || debuggee_server_address.is_some()) && !debuggee {
         usage(
@@ -3711,6 +3985,7 @@ fn main() {
             ("--main-memory", "chip", which == Which::Chip),
             ("--tv", "chip", which == Which::Chip),
             ("--tv-board", "chip", which == Which::Chip),
+            ("--watch", "chip", which == Which::Chip),
         ] {
             if !has && given.iter().any(|w| w == flag) {
                 writeln!(s, "warning: {flag} is {engines}, and this run is {engine}: ignored")
@@ -4049,6 +4324,7 @@ fn main() {
                     run,
                     resume,
                     tv_board,
+                    watch,
                 );
             }
         }

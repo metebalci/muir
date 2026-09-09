@@ -69,14 +69,16 @@ pub enum Command {
     /// `chip` only. The other engines have registers and memories and no
     /// nets at all, which is the same reason [`Command::Registers`] is
     /// refused the other way round.
-    Net {
-        /// Which board, where more than one has the name; `None` searches
-        /// them in order and says which one answered.
-        board: Option<String>,
-        /// The net's name, or a bus's prefix.
-        name: String,
-        /// A bus of this many bits, `NAME0` up, as `MUIR_WATCH` writes it.
-        width: Option<u32>,
+    Net(NetName),
+    /// The nets recorded over the next so many microcycles from here, at
+    /// every instant the boards move, one line on stderr per change: what
+    /// `--watch` does from the command line, for a machine already
+    /// running.  `chip` only, as [`Command::Net`] is.
+    Watch {
+        /// How many microcycles from now.
+        cycles: u64,
+        /// What to record, each as `net` names one.
+        nets: Vec<NetName>,
     },
     /// So many words of main memory from a **physical** address.
     ///
@@ -92,6 +94,34 @@ pub enum Command {
     /// End the run, as a stop does.
     Quit,
     Help,
+}
+
+/// A net or a bus, named as the drawings name it and as `net`, `watch`
+/// and `--watch` all take one: `[<board>:]<name>[/<width>]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetName {
+    /// Which board, where more than one has the name; `None` searches
+    /// them in order and says which one answered.
+    pub board: Option<String>,
+    /// The net's name, or a bus's prefix.
+    pub name: String,
+    /// A bus of this many bits, `NAME0` up, as `MUIR_WATCH` writes it.
+    pub width: Option<u32>,
+}
+
+impl std::fmt::Display for NetName {
+    /// As it was written: the board, the name and the width, which is
+    /// what a record labels a value with.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(b) = &self.board {
+            write!(f, "{b}:")?;
+        }
+        f.write_str(&self.name)?;
+        if let Some(w) = self.width {
+            write!(f, "/{w}")?;
+        }
+        Ok(())
+    }
 }
 
 /// One of the machine's own memories, by the name the command gives it,
@@ -157,6 +187,13 @@ net [board:]name[/width]
                         as MUIR_WATCH writes one. A board where more than
                         one carries the name: cpu, busint, memory, io, tv,
                         disk
+watch <n> <net>,<net>,...
+                        chip: record the nets, each named as net names
+                        one and comma separated, over the next n
+                        microcycles from here: one line on stderr,
+                        prefixed `watch:`, at every change, sampled at
+                        every instant the boards move --- what --watch
+                        does from the command line
 quit, q                 end the run, as a stop does
 help, h, ?              this
 
@@ -195,7 +232,8 @@ pub fn parse(line: &str) -> Result<Option<Command>, String> {
         "pdl" => parse_dump(Memory::Pdl, arg),
         "spc" => parse_dump(Memory::Spc, arg),
         "mem" => parse_mem(arg),
-        "net" => parse_net(arg),
+        "net" => parse_net_name(arg, "net").map(|n| Some(Command::Net(n))),
+        "watch" => parse_watch(arg),
         "screenshot" | "ss" => Ok(Some(Command::Screenshot(file(arg)))),
         "startcapture" | "sc" => Ok(Some(Command::StartCapture(file(arg)))),
         "endcapture" | "ec" => bare(Command::EndCapture),
@@ -204,16 +242,19 @@ pub fn parse(line: &str) -> Result<Option<Command>, String> {
     }
 }
 
-/// `net [<board>:]<name>[/<width>]`.
+/// `[<board>:]<name>[/<width>]`: how `net` names a net, and how `watch`
+/// and `--watch` name each of theirs.  `who` is which of them is asking,
+/// for what is refused.
 ///
 /// The name is taken whole, spaces and all, because MIT's own net names
 /// have spaces in them --- `SYNC PROM ENB`, `-UNIT 0 ENB` --- and quoting
 /// them at a prompt would be one more thing to get wrong. So the board and
 /// the width are recognised by their punctuation and everything else is
 /// the name.
-fn parse_net(arg: &str) -> Result<Option<Command>, String> {
+pub fn parse_net_name(arg: &str, who: &str) -> Result<NetName, String> {
+    let arg = arg.trim();
     if arg.is_empty() {
-        return Err("net wants a name, as the drawings write it".to_string());
+        return Err(format!("{who} wants a name, as the drawings write it"));
     }
     // A board prefix is a word before a colon, and a net name never has
     // one: `TRIDENT.0.SELECT/` and `-XBUS RQ` carry no colons.
@@ -233,9 +274,35 @@ fn parse_net(arg: &str) -> Result<Option<Command>, String> {
         _ => (rest, None),
     };
     if name.is_empty() {
-        return Err("net wants a name, as the drawings write it".to_string());
+        return Err(format!("{who} wants a name, as the drawings write it"));
     }
-    Ok(Some(Command::Net { board, name: name.to_string(), width }))
+    Ok(NetName { board, name: name.to_string(), width })
+}
+
+/// `<net>,<net>,...`: the nets `watch` and `--watch` record, each as
+/// [`parse_net_name`] takes one.  `who` is which of the two is asking.
+///
+/// A comma is the separator and nothing else, so the one kind of name the
+/// list cannot carry is one with a comma in it: the memory board's `-CAS
+/// 0,1 LH` and its three fellows.  They can be asked about one at a time
+/// with `net`.
+pub fn parse_net_names(list: &str, who: &str) -> Result<Vec<NetName>, String> {
+    if list.trim().is_empty() {
+        return Err(format!("{who} wants a net to record, as the drawings write it"));
+    }
+    list.split(',').map(|s| parse_net_name(s, who)).collect()
+}
+
+/// `watch <n> <net>,<net>,...`: a count of microcycles, then the nets,
+/// which are the rest of the line.
+fn parse_watch(arg: &str) -> Result<Option<Command>, String> {
+    let (count, list) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+    let cycles = match count.parse::<u64>() {
+        Ok(n) if n > 0 => n,
+        _ => return Err(format!("watch wants a count of microcycles, not {count}")),
+    };
+    let nets = parse_net_names(list, "watch")?;
+    Ok(Some(Command::Watch { cycles, nets }))
 }
 
 /// The file a command was given, if it was given one.  What is left of
