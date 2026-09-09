@@ -65,6 +65,57 @@ fn the_serial_port_is_not_the_lashups() {
     }
 }
 
+/// **`--watch` is refused for the shape of its argument**, and the first
+/// line says which flag and what was wrong: no colon between the range
+/// and the nets, a range that is no number or ends before it begins, a
+/// bus of no bits, and no nets at all.
+#[test]
+fn a_watch_that_is_not_a_range_and_nets_is_refused() {
+    for spec in ["PC/14", "x-3:PC/14", "9-3:PC/14", "3:", "3:PC/0", "3:PC/14,", "-:PC/14"] {
+        refused(&["--chip", "--watch", spec, "--stop-after", "1"], "--watch");
+    }
+    refused(&["--chip", "--stop-after", "1", "--watch"], "--watch");
+}
+
+/// **A net `--watch` names has to be on a board this run has**, and the
+/// refusal says which boards those are, as the prompt's `net` does: a net
+/// on no board, a `disk:` net with the model controller in the machine ---
+/// which has no board and so no nets --- and a bus missing its top bit.
+/// This is not the command line's shape, so it is the one-line refusal
+/// and exit status 1, not the usage.
+#[test]
+fn a_watch_on_a_net_the_machine_has_not_got_is_refused() {
+    for (spec, says) in [
+        ("0-1:NOSUCH", "no net NOSUCH on cpu, busint, memory, tv, io"),
+        ("0-1:disk:NEW CCW", "no board called disk here; this run has cpu, busint, memory, tv, io"),
+        ("0-1:cpu:PC/15", "cpu has no PC14 --- a bus is PC0 up"),
+    ] {
+        let out = muir().args(["--chip", "--watch", spec, "--stop-after", "1"]).run();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{spec}: not refused as a run that cannot start:\n{err}"
+        );
+        assert!(err.contains(says), "{spec}: the refusal says {says:?}:\n{err}");
+        assert!(!err.contains("usage:"), "{spec}: and the usage is no help here:\n{err}");
+    }
+}
+
+/// **On the other two engines `--watch` is ignored, and the start says
+/// so**, as it says of every flag that is chip's alone: they have
+/// registers and memories and no nets to record.
+#[test]
+fn a_watch_on_the_other_engines_is_said_to_be_ignored() {
+    for engine in ["--micro", "--rtl"] {
+        let out = muir().args([engine, "--watch", "0-1:PC/14", "--stop-after", "1"]).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}: not refused:\n{t}");
+        assert!(t.contains("warning: --watch is chip, and this run is"), "{engine}: said:\n{t}");
+        assert!(!t.contains("watch: "), "{engine}: and nothing was recorded:\n{t}");
+    }
+}
+
 /// A `.muirrc` of its own for one test, in a directory of its own: the
 /// directory, and the file's path under it.
 fn muirrc(name: &str, text: &str) -> (Scratch, PathBuf) {

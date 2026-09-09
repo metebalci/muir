@@ -298,6 +298,21 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
+        <dt>--watch &lt;from&gt;[-&lt;to&gt;]:&lt;net&gt;,&lt;net&gt;,...</dt>
+        <dd>
+        <p><b>chip:</b> record the named nets over microcycles <code>from</code> to <code>to</code>, or from <code>from</code> to the end of the run when there is no <code>to</code>, counted as <code>--stop-after</code> counts them &mdash; from the start of this run, so a resumed checkpoint counts from the checkpoint. Each net is named as the prompt&rsquo;s <a href="#prompt"><code>net</code></a> names one, <code>disk:NEW CCW</code> or <code>PC/14</code> for a bus, and the nets are comma separated. A name that does not resolve stops the run before it starts, with the boards it was looked for on.</p>
+        <p><b>The boards are sampled at every instant they move, not once a microcycle.</b> A step of the netlist machine is to the next event on any board &mdash; the processor clock&rsquo;s next transition, or a delay-line tap, an oscillator edge or a one-shot on some board, whichever comes first &mdash; and the gates have no delay, so nothing moves between two of them. Sampled after each, the record has every level a net settled at, however brief: <code>CCW CLK</code> on the disk controller is two taps of a delay line 50 ns apart, and a sample once a microcycle, 145 to 220 ns, would step over it.</p>
+        <p>One line on stderr, prefixed <code>watch:</code> so that it can be grepped out from under the run, with the time in nanoseconds, the microcycle and every watched value &mdash; a net as <code>net</code> prints it, a bus in octal, or <code>Z</code> while any bit of it is undriven &mdash; once as the range begins and then at every change, and nothing while nothing changes. Outside the range the run pays nothing.</p>
+<pre class="cmd">$ muir --chip --disk-controller netlist --disk-pack vendor/run/disk-sys-100-0.img,ro \
+    --watch '530000-:disk:NEW CCW,disk:CCW CLK,disk:-CHAN.MASTER,disk:-LAST CCW,disk:XBAO/22' \
+    --stop-after 700000 2>&amp;1 | grep '^watch:'
+watch: 116600440 ns, microcycle 530000: disk:NEW CCW=High disk:CCW CLK=Low disk:-CHAN.MASTER=High disk:-LAST CCW=Low disk:XBAO/22=0
+watch: 118613110 ns, microcycle 539144: disk:NEW CCW=High disk:CCW CLK=Low disk:-CHAN.MASTER=High disk:-LAST CCW=Low disk:XBAO/22=777</pre>
+        <p>The first line is what the range began at; the second is the boot PROM&rsquo;s command list pointer, <code>777</code>, arriving in the controller&rsquo;s address register as it sets up its first read. A range with a beginning and no end is the one to give a long run: nothing is printed until the range, and nothing after the last change.</p>
+        <p>The prompt&rsquo;s <a href="#prompt"><code>watch</code></a> records the next <em>n</em> microcycles the same way, so a machine that has been running for hours can be told to without a restart. Not on a debuggee at the end of a debug cable, whose steps are the debugger&rsquo;s.</p>
+        </dd>
+      </div>
+      <div>
         <dt>-V, --version</dt>
         <dd>
         <p>What this build calls itself, on stdout: the name, the version, and whether it was built with optimisations off &mdash; <code>muir 0.1.0-release</code> or <code>muir 0.1.0-dev</code>. Every run says the same line first, so a report of a run says which muir made it.</p>
@@ -402,6 +417,18 @@ engine: rtl</pre>
       <div>
         <dt>info, i</dt>
         <dd><p>What this run is, as the start said it.</p></dd>
+      </div>
+      <div>
+        <dt>net [board:]name[/width]</dt>
+        <dd>
+        <p><b>chip:</b> what a net is doing at this instant, by the name the drawings give it, spaces and all &mdash; <code>net TRIDENT.READY/</code>, <code>net -XBUS RQ</code> &mdash; or a bus of that many bits from <code>name0</code> up, <code>net PC/14</code>. A name is unique only within a board, so the boards are searched in the order the machine is built, <code>cpu</code>, <code>busint</code>, <code>memory</code>, <code>tv</code>, <code>disk</code>, <code>io</code>, and the answer says which one carried it and which others do; a board before a colon asks that one. The machine need not be held.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>watch &lt;n&gt; &lt;net&gt;,&lt;net&gt;,...</dt>
+        <dd>
+        <p><b>chip:</b> record the nets, each named as <code>net</code> names one and comma separated, over the next <em>n</em> microcycles from here: what <a href="#flags"><code>--watch</code></a> does from the command line, in the same lines on stderr, for a machine already running. A second <code>watch</code> replaces the first.</p>
+        </dd>
       </div>
       <div>
         <dt>quit, q</dt>

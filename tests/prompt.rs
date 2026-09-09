@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use muir::prompt::{Command, Memory, parse};
+use muir::prompt::{Command, Memory, NetName, parse, parse_net_names};
 
 mod support;
 
@@ -163,7 +163,11 @@ fn what_is_no_command_says_so() {
 #[test]
 fn a_net_is_named_as_the_drawings_name_it() {
     let net = |board: Option<&str>, name: &str, width: Option<u32>| {
-        Ok(Some(Command::Net { board: board.map(str::to_string), name: name.to_string(), width }))
+        Ok(Some(Command::Net(NetName {
+            board: board.map(str::to_string),
+            name: name.to_string(),
+            width,
+        })))
     };
     assert_eq!(parse("net MEMRQ"), net(None, "MEMRQ", None));
     // A trailing slash is the name's: `TRIDENT.READY/` is a net, not a bus
@@ -189,6 +193,51 @@ fn a_net_is_named_as_the_drawings_name_it() {
     assert!(parse("net disk:  ").is_err());
     assert!(parse("net PC/0").is_err());
     assert!(parse("net PC/65").is_err());
+}
+
+/// **`watch` takes a count of microcycles and then nets, comma
+/// separated, each named as `net` names one** --- a board before a
+/// colon, a bus's width after a slash, and the name whole between, spaces
+/// and all.  The list is `--watch`'s too, and a name with a comma in it
+/// --- the memory board's `-CAS 0,1 LH` --- is the one kind of name the
+/// list cannot carry.
+#[test]
+fn watch_takes_a_count_and_nets_as_net_names_them() {
+    let name = |board: Option<&str>, name: &str, width: Option<u32>| NetName {
+        board: board.map(str::to_string),
+        name: name.to_string(),
+        width,
+    };
+    assert_eq!(
+        parse("watch 5 PC/14"),
+        Ok(Some(Command::Watch { cycles: 5, nets: vec![name(None, "PC", Some(14))] }))
+    );
+    assert_eq!(
+        parse("watch 1 disk:CCW CLK, disk:NEW CCW ,cpu:PC/14,-XBUS RQ"),
+        Ok(Some(Command::Watch {
+            cycles: 1,
+            nets: vec![
+                name(Some("disk"), "CCW CLK", None),
+                name(Some("disk"), "NEW CCW", None),
+                name(Some("cpu"), "PC", Some(14)),
+                name(None, "-XBUS RQ", None),
+            ],
+        }))
+    );
+    // The list, on its own, as `--watch` takes it after the range.
+    assert_eq!(
+        parse_net_names("disk:XBAO/22,TRIDENT.READY/", "--watch"),
+        Ok(vec![name(Some("disk"), "XBAO", Some(22)), name(None, "TRIDENT.READY/", None)])
+    );
+    // What is refused says what was wanted: a count, a net, a bus's width.
+    for line in ["watch", "watch 5", "watch x PC/14", "watch 0 PC/14", "watch 5 ,", "watch 5 PC/0"]
+    {
+        assert!(parse(line).is_err(), "{line:?} parsed");
+    }
+    assert!(parse("watch 5").unwrap_err().contains("net"));
+    assert!(parse("watch x PC/14").unwrap_err().contains("count"));
+    assert!(parse_net_names("PC/14,", "--watch").unwrap_err().contains("--watch"));
+    assert!(parse_net_names("", "watch").unwrap_err().contains("watch"));
 }
 
 /// **`mem` takes a physical address, which it will not do without, and a
