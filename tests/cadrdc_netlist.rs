@@ -779,13 +779,39 @@ impl Probe {
     /// [`XbusMaster::cycle`], watched through, and the address wires
     /// let go of afterwards so that the board can drive them as master.
     fn cycle(&mut self, b: &mut XbusMaster, addr: u32, write: Option<u32>) -> u32 {
+        self.cycle_watching(b, addr, write, &[]).0
+    }
+
+    /// [`Probe::cycle`] with `watch` read at every step the harness takes
+    /// while the board has the cycle, from the request to the
+    /// acknowledgement.
+    ///
+    /// **This is the only way to ask what a register buffer drives.** A net
+    /// read between two bus cycles finds the tri-state buffers all
+    /// disabled and the internal bus floating, which says nothing about
+    /// the instant a read is answered in.
+    fn cycle_watching(
+        &mut self,
+        b: &mut XbusMaster,
+        addr: u32,
+        write: Option<u32>,
+        watch: &[NetId],
+    ) -> (u32, Vec<Vec<Level>>) {
         let t0 = b.now;
+        let mut seen: Vec<Vec<Level>> = Vec::new();
+        let look = |b: &XbusMaster, seen: &mut Vec<Vec<Level>>| {
+            if !watch.is_empty() {
+                seen.push(watch.iter().map(|&n| b.chip.net(n)).collect());
+            }
+        };
         self.mine = true;
         b.request(addr, write);
         self.sample(b);
+        look(b, &mut seen);
         while !b.acked() {
             assert!(b.now < t0 + 40_000, "the board never acknowledged");
             self.run(b, b.now + 5);
+            look(b, &mut seen);
         }
         let word = b.word();
         self.run(b, b.now + XbusMaster::RELEASE_NS);
@@ -796,7 +822,7 @@ impl Probe {
         }
         self.mine = false;
         self.run(b, b.now + 600);
-        word
+        (word, seen)
     }
 
     /// Runs until `BUSY` drops, and a microsecond past it.
@@ -1841,6 +1867,110 @@ fn internal_parity_is_a_comparison_and_not_an_abort_flag() {
         tears.len(),
         tears.iter().map(|&(at, v)| (at, v >> 23 & 1)).collect::<Vec<_>>()
     );
+}
+
+/// **`STATUS<8>`, "not on cylinder", is `-ON CYL SYNC` through one buffer,
+/// and nothing else can reach the bus pin while the status register is
+/// being read.**
+///
+/// The path, read off `data/CADRDC.netlist` and measured here from the
+/// drive's end to the backplane's:
+///
+/// - `TRIDENT.READY/` off the signal cable reaches the terminator at
+///   DCTRSG 0A03 pin 1 and leaves across the package on pin 16;
+/// - the Schmitt inverter at DCTRSG 0A04 takes it on pin 1 and puts
+///   `SEL UNIT ON CYL` on pin 2;
+/// - that is the D input, pin 12, of the 74LS74 at DCCLK 0F16, clocked on
+///   `2USEC.CLK^` at pin 11 with both asynchronous inputs tied high; its
+///   `Q` on pin 9 is `ON CYL SYNC` and its `Q/` on pin 8 is
+///   `-ON CYL SYNC`;
+/// - `-ON CYL SYNC` is pin 2 of the 74LS244 at DCSTS 0A13, whose pin 18
+///   is `XBO8`, both halves enabled by `-READ STS` on pins 1 and 19;
+/// - and the 26S10 at DCXBUS 0F27 takes `XBO8` on pin 4 and pulls
+///   `-XBUS8`, pin 2, low for a one, enabled by `-DRIVE XBUS` on pin 12.
+///
+/// **`XBO8` is a shared internal bus with five drivers**, so "and nothing
+/// else" is the other half of the claim. Four are register read-backs
+/// selected one at a time by the 74S138 at DCREG 0E12 --- `-READ STS`,
+/// `-READ MA` (the 74LS374 at DCCLP 0C25), `-READ DA` (the 74LS244 at
+/// DCDA 0B19, `HEAD0`) and `-READ ECC` (the 74LS244 at DCPOSC 0B25,
+/// `POSC8`) --- and the fifth is outside the decoder: the 74LS374 at
+/// DCRBUF 0F09 puts `RBUF0` on `XBO8` whenever `-CHAN.MASTER` is low,
+/// which is how a word read off the disk reaches memory. This asserts
+/// that the four that are not the status buffer stay disabled for the
+/// whole of a status read.
+///
+/// Both states of the bit, taken at every step the harness makes inside
+/// the cycle rather than between two of them. Issue 88.
+#[test]
+fn status_8_is_the_on_cylinder_synchroniser() {
+    const OFF_CYLINDER: u32 = 1 << 8;
+    let n = cadrdc();
+    let mut b = controller(&n);
+    let mut p = Probe::new(&b);
+    let t0 = b.now;
+    p.plug(&mut b, &n, quick_drive(t0));
+    p.run(&mut b, t0 + 10_000);
+
+    const NAMES: [&str; 8] = [
+        "-READ STS",
+        "-READ MA",
+        "-READ DA",
+        "-READ ECC",
+        "-CHAN.MASTER",
+        "-ON CYL SYNC",
+        "XBO8",
+        "-XBUS8",
+    ];
+    let watch: Vec<NetId> = NAMES.iter().map(|s| b.net(s)).collect();
+    let (sts, ma, da, ecc, master, sync, xbo8, xbus8) = (0, 1, 2, 3, 4, 5, 6, 7);
+
+    let check = |what: &str, status: u32, seen: &[Vec<Level>]| {
+        let read: Vec<&Vec<Level>> = seen.iter().filter(|s| s[sts] == Level::Low).collect();
+        assert!(!read.is_empty(), "{what}: the status buffer was never enabled");
+        for s in &read {
+            for (k, name) in [(ma, "-READ MA"), (da, "-READ DA"), (ecc, "-READ ECC")] {
+                assert_eq!(s[k], Level::High, "{what}: {name} with -READ STS, on {s:?}");
+            }
+            assert_eq!(s[master], Level::High, "{what}: -CHAN.MASTER low, on {s:?}");
+            assert_eq!(s[xbo8], s[sync], "{what}: XBO8 is not -ON CYL SYNC, on {s:?}");
+            assert_eq!(
+                s[xbus8],
+                match s[xbo8] {
+                    Level::High => Level::Low,
+                    _ => Level::High,
+                },
+                "{what}: -XBUS8 is not XBO8 inverted, on {s:?}"
+            );
+        }
+        eprintln!("{what}: status {status:o}, {} samples inside the read", read.len());
+    };
+
+    // On cylinder: `READY/` low, the synchroniser holding it, and the bit
+    // down all the way to the backplane.
+    let (status, seen) = p.cycle_watching(&mut b, REGS, None, &watch);
+    assert!(seen.iter().all(|s| s[sync] == Level::Low), "-ON CYL SYNC while on cylinder");
+    check("on cylinder", status, &seen);
+    assert_eq!(status & OFF_CYLINDER, 0, "status {status:o}");
+
+    // Off cylinder: a seek to 100, read while the heads are moving.
+    b.cycle(REGS, Some(0o4));
+    b.cycle(REGS + 2, Some(100 << 16));
+    p.cycle(&mut b, REGS + 3, Some(0));
+    p.run_to_done(&mut b, 40_000);
+    let (status, seen) = p.cycle_watching(&mut b, REGS, None, &watch);
+    assert!(seen.iter().all(|s| s[sync] == Level::High), "-ON CYL SYNC while seeking");
+    check("seeking", status, &seen);
+    assert_ne!(status & OFF_CYLINDER, 0, "status {status:o}");
+
+    // And back down when the heads arrive, so that the bit is the
+    // drive's line and not a latch that stays where a command put it.
+    let arrived = b.now + 400_000;
+    p.run(&mut b, arrived);
+    let (status, seen) = p.cycle_watching(&mut b, REGS, None, &watch);
+    assert!(seen.iter().all(|s| s[sync] == Level::Low), "-ON CYL SYNC once the heads arrive");
+    check("arrived", status, &seen);
+    assert_eq!(status & OFF_CYLINDER, 0, "status {status:o}");
 }
 
 /// **A write with a drive on the cable puts the page on the pack.**
