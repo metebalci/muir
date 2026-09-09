@@ -862,12 +862,14 @@ A simulator of the MIT CADR Lisp Machine.
                                checkpoint replaces. The stops count from
                                here.
   --serial <endpoint>          where the serial port at J9 is reached: a
-                               TCP port, or address:port. Attach with nc
-                               or telnet; a connection is the device on
-                               the null-modem cable plugging in, which
-                               asserts DSR, DCD and CTS, and hanging up
-                               drops them. One device at a time, and a
-                               second connection is closed as it arrives.
+                               TCP port, or address:port. Attach with
+                               `nc <host> <port>` --- a space there, not
+                               the colon this flag takes --- or telnet. A
+                               connection is the device on the null-modem
+                               cable plugging in, which asserts DSR, DCD
+                               and CTS, and hanging up drops them. One
+                               device at a time, and a second connection
+                               is closed as it arrives.
                                The rate and the frame are whatever the
                                machine has programmed into the 2651 ---
                                MIT's driver defaults to 300 baud, seven
