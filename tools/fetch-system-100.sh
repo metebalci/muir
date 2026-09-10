@@ -30,7 +30,7 @@
 # below, whether just downloaded or already in place; SYSTEM_100_BASE
 # names another place to download from, the upstream directory for one.
 #
-# It also makes the directory the Chaosnet server serves files from,
+# It also makes the directory the tests' Chaosnet server serves files from,
 # vendor/run/file-root, with `tree` pointing at the release's sources.
 # The band's site file makes its file host OZ the SYS host and translates
 # `SYS: SYS2; FOO LISP` to `/tree/sys2/foo.lisp` there, so the release's

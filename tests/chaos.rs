@@ -6,15 +6,15 @@
 //! and, as the layers come, the packet, the wire and the transport.
 
 use muir::chaos::ether::Node;
-use muir::chaos::packet::{Framed, Packet};
-use muir::chaos::server::{self, Out, Response, Server, Service, Session, op};
-use muir::chaos::status::Status;
-use muir::chaos::time::Time;
+use muir::chaos::packet::{Framed, Packet, op};
 use muir::chaos::{Config, packet, wire};
 use muir::prom::parse_mit;
 
 mod support;
 use support::release;
+use support::server::{self, Out, Response, Server, Service, Session};
+use support::status::Status;
+use support::time::Time;
 
 /// **An address is read either way it is written.** A Chaosnet address is
 /// sixteen bits, the subnet in the high byte and the host in the low, and
@@ -73,22 +73,19 @@ fn an_address_is_read_either_way_it_is_written() {
 /// the pair every test that boots this band hands it, and it is read off
 /// `sys/site/hosts.text` here so that a change on either side shows.
 ///
-/// The second: `Config::default()` is not that pair and is no band's. It
-/// is this machine at 177001 with its server at 177002, subnet 376, the
-/// Chaosnet's private and non-routable range, so that a run started with
-/// no `--chaos-address` cannot answer at an address a real Chaosnet
-/// allocated to someone else. muir models the CADR and not one
-/// distribution of it, and a default out of one band's host table would
-/// be the wrong default for every other band.
+/// The second: `Config::default()` is not that machine and is no band's.
+/// It is 177001, on subnet 376, the Chaosnet's private and non-routable
+/// range, so that a run started with no `--chaos-address` cannot answer at
+/// an address a real Chaosnet allocated to someone else. muir models the
+/// CADR and not one distribution of it, and a default out of one band's
+/// host table would be the wrong default for every other band. The host's
+/// half of the pair is not muir's to default at all: a CADR carries no
+/// file or time server, so the host is a peer over CHUDP.
 #[test]
 fn the_bands_own_hosts_are_named_and_are_not_the_defaults() {
     let d = Config::default();
-    assert_eq!(
-        (d.address, d.server_address),
-        (0o177001, 0o177002),
-        "the defaults are the private subnet's, not a band's"
-    );
-    assert_eq!((d.address >> 8, d.server_address >> 8), (0o376, 0o376), "both on subnet 376");
+    assert_eq!(d.address, 0o177001, "the default is the private subnet's, not a band's");
+    assert_eq!(d.address >> 8, 0o376, "on subnet 376");
 
     let Some(text) = release("site/hosts.text") else { return };
     // `HOST MIT-OZ,<tabs>CHAOS 3060,SERVER,UNIX,VAX,[OZ]`
@@ -116,11 +113,7 @@ fn the_bands_own_hosts_are_named_and_are_not_the_defaults() {
         (address("MIT-LISPM-1"), address("MIT-OZ")),
         "what a run hands this band is what the band's own host table gives it"
     );
-    assert_ne!(
-        support::CHAOS_100,
-        (d.address, d.server_address),
-        "and it is handed to the band, never defaulted to"
-    );
+    assert_ne!(support::CHAOS_100.0, d.address, "and it is handed to the band, never defaulted to");
 }
 
 /// Reads a `.promt` table: rows of 0/1 columns, `inputs` of them then
@@ -308,9 +301,9 @@ fn next_from(h: &mut Server, now: u64) -> Option<Packet> {
 /// believes is down.
 #[test]
 fn the_chaosnet_server_serves_status_as_mit_oz() {
-    let d = Config::default();
-    let mut h = d.server(0);
-    h.receive(100, &arriving(&rfc((d.address, 3), d.server_address, 1, "STATUS")));
+    let (me, server) = support::CHAOS_100;
+    let mut h = support::ChaosServer::new(server).build(0);
+    h.receive(100, &arriving(&rfc((me, 3), server, 1, "STATUS")));
     let ans = next_from(&mut h, 100).expect("MIT-OZ answers STATUS");
     assert_eq!(ans.opcode, op::ANS);
     let end = ans.data[..32].iter().position(|&b| b == 0).expect("a name");
@@ -318,8 +311,8 @@ fn the_chaosnet_server_serves_status_as_mit_oz() {
     let id = u16::from_le_bytes([ans.data[32], ans.data[33]]);
     assert_eq!(
         id,
-        0o400 + (d.server_address >> 8),
-        "the subnet is the address's high byte, 376 for the defaults"
+        0o400 + (server >> 8),
+        "the subnet is the address's high byte, 6 for System 100's host"
     );
 }
 
@@ -554,7 +547,7 @@ fn a_stream_opens_moves_data_and_closes() {
     assert_eq!((again.opcode, again.number), (op::OPN, opn2.number));
 }
 
-use muir::chaos::file::{self, File, NEWLINE};
+use support::file::{self, File, NEWLINE};
 
 /// A user end for the FILE protocol: enough of the transport to open the
 /// control connection, listen for the data connection the server calls,
@@ -1130,8 +1123,8 @@ fn lisp_machine_text_becomes_unix_text() {
 }
 
 /// **The FILE service never writes outside the tree it serves.** The root is
-/// the server's `/`, and `--chaos-file-root`'s help promises that everything
-/// the service writes, renames and deletes stays under it. The tree is the
+/// the server's `/`, and [`support::ChaosServer::serving`] promises that
+/// everything the service writes, renames and deletes stays under it. The tree is the
 /// root and what the root's own links lead to --- each release's fetch
 /// script puts its sources there by such a link, under the name that band
 /// asks for --- so a pathname is taken
@@ -1530,7 +1523,7 @@ fn temporaries(dir: &std::path::Path) -> Vec<String> {
 /// the same; they come at once.
 #[test]
 fn a_wildcard_is_matched_in_linear_time() {
-    use muir::chaos::file::matches;
+    use support::file::matches;
     for (pattern, name, want) in [
         ("*", "anything", true),
         ("*", "", true),
@@ -1923,13 +1916,12 @@ fn the_lockout_ends_between_the_mid_cell_transition_and_the_next_cell() {
 /// on it, addressed from 4401 to 4403, and the server answers. At any
 /// other pair nothing is sent at all --- 4403 is on another subnet from
 /// 3050, and the band, hearing no route to it, never transmits --- and the
-/// machine comes up asking for the date instead. Neither release's pair is
-/// what `chaos::Config` defaults to --- that is subnet 376's and no
+/// machine comes up asking for the date instead. Neither release's address
+/// is what `chaos::Config` defaults to --- that is subnet 376's and no
 /// band's --- so each release's tests hand their band the pair it holds.
 #[test]
 fn the_304_band_reaches_the_server_at_its_own_numbers() {
-    let (Some(pack), Some(root)) = (support::pack_304(), support::vendor(&["run", "file-root"]))
-    else {
+    let (Some(pack), Some(root)) = (support::pack_304(), support::file_root()) else {
         return;
     };
     use muir::engine::Engine as _;
@@ -1937,10 +1929,11 @@ fn the_304_band_reaches_the_server_at_its_own_numbers() {
     e.boot();
     let m = e.machine_mut();
     m.chaos.address = support::CHAOS_304.0;
-    m.chaos.server_address = support::CHAOS_304.1;
-    m.chaos.file_root = Some(root);
-    m.chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
-    m.plug_chaos(0);
+    support::ChaosServer::new(support::CHAOS_304.1)
+        .named("OZ")
+        .serving(root)
+        .at_time(support::time::TEST_UNIVERSAL)
+        .plug(m, 0);
     m.ioboard.chaos.as_mut().unwrap().ether_mut().unwrap().keep_log(true);
     let ran = support::wait_for_the_prompt(&mut e);
 

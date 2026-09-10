@@ -20,17 +20,20 @@ mod support;
 use support::Run;
 
 use muir::chaos::ether::{Ether, Event, Node, SLOT_NS};
-use muir::chaos::packet::{self, Framed, Packet};
-use muir::chaos::server::op;
+use muir::chaos::packet::{self, Framed, Packet, op};
 use muir::chaos::udp::{self, Link};
-use muir::chaos::{Config, time};
 
-/// This machine, and the Chaosnet server on its cable: the two addresses
-/// the cable already carries. System 100's band's pair, which is what a
-/// run of that pack gives `--chaos-address` --- not what
-/// [`Config::default`] holds, that being subnet 376's and no band's --- so
-/// a test here that runs a whole `muir` names the pair on its command
-/// line, and one that builds a [`Config`] sets both fields.
+use support::{ChaosServer, time};
+
+/// This machine, and the Chaosnet server standing in for its band's file
+/// and time host. System 100's band's pair, which is what a run of that
+/// pack gives `--chaos-address` --- not what `chaos::Config::default`
+/// holds, that being subnet 376's and no band's.
+///
+/// Under `muir` only [`ME`] is on the cable: the server is the harness's,
+/// and a real run reaches its host over this very link. The tests here
+/// that build an [`Ether`] of their own put both on it, which is what
+/// [`Link::node`]'s `local` list is for.
 const ME: u16 = 0o3050;
 const SERVER: u16 = 0o3060;
 /// A peer over UDP, and one this machine was never told about.
@@ -485,31 +488,37 @@ fn a_packet_does_not_move_an_endpoint_a_flag_named() {
 
 // --- a running machine --------------------------------------------------
 
-/// **A running muir answers STATUS over UDP.** The whole path, in a
-/// process started from the command line: `--chaos-udp` binds the
-/// socket, `--chaos-udp-peer` says where this test is, the node goes on
-/// the I/O board's cable beside the Chaosnet server, and an RFC that
-/// arrives as a datagram comes back as an ANS.
+/// **A datagram reaches a running muir's cable.** The whole path, in a
+/// process started from the command line: `--chaos-address` starts the
+/// link and says which machine this is, `--chaos-udp` says where it
+/// listens, `--chaos-udp-peer` says where this test lives, the node goes
+/// on the I/O board's cable, and an RFC that arrives as a datagram is put
+/// on the modelled cable for the interface to hear.
+///
+/// **The answer is not muir's to give.** A CADR has no file or time
+/// server in it, so a run carries none: nothing on that cable answers an
+/// RFC but a booted band, which is minutes of machine time away, and the
+/// host a band calls is `ozd` or another program on the network. So what
+/// is checked here is the half muir owns --- the datagram taken in and
+/// laid on the cable --- read off `--chaos-trace`, which is what the node
+/// says of every frame it decides about. The other half, a frame off the
+/// cable going out as a datagram, is `a_frame_for_a_peer_goes_out_as_a_datagram`
+/// above, in process.
 ///
 /// `--chaos-udp 127.0.0.1:0` lets the host choose the port and the start
 /// banner says which, so the test needs no port of its own to be free.
 #[test]
-fn a_running_muir_answers_status_over_udp() {
+fn a_datagram_reaches_a_running_muirs_cable() {
     let (peer, peer_at) = peer_socket();
-    // Long enough that the machine has a turn on its cable between one
-    // datagram and the next, short enough that the loop below resends
-    // several times inside its own deadline.
-    peer.set_read_timeout(Some(Duration::from_secs(2))).expect("a timeout");
-    let root = support::scratch("chudp-file-root");
     let child = support::muir()
         .args(["--micro", "--stop-after", "4000000000"])
-        // The pair this file's cable carries. It has to be given: the
-        // defaults are subnet 376's and no band's, so a run that wants
-        // this machine at [`ME`] and its server at [`SERVER`] says so.
-        .args(["--chaos-address", &format!("{ME:o},{SERVER:o}")])
+        // The address has to be given: the default is subnet 376's and no
+        // band's, so a run that wants this machine at [`ME`] says so. It
+        // is also what starts the link.
+        .args(["--chaos-address", &format!("{ME:o}")])
         .args(["--chaos-udp", "127.0.0.1:0"])
         .args(["--chaos-udp-peer", &format!("{PEER:o}@{peer_at}")])
-        .args(["--chaos-file-root", &root.display().to_string()])
+        .args(["--chaos-trace"])
         .start();
     child.stderr().wait_until(
         |t| t.contains("chaosnet udp: listening at"),
@@ -522,28 +531,24 @@ fn a_running_muir_answers_status_over_udp() {
         .nth(4)
         .and_then(|w| w.trim_end_matches(',').parse().ok())
         .unwrap_or_else(|| panic!("an endpoint in {line:?}"));
-    // An RFC for STATUS from this test to the Chaosnet server, resent
-    // until it is answered: the machine is running and UDP does not
-    // promise the first one arrives while it is looking.
-    let rfc = Packet { dest: SERVER, source: PEER, ..status_rfc() };
-    let mut buf = [0u8; 1024];
+    // An RFC for STATUS from this test to the machine, resent until the
+    // trace shows it landed: the machine is running and UDP does not
+    // promise the first one arrives while the node is looking.
+    let rfc = Packet { dest: ME, source: PEER, ..status_rfc() };
+    let landed = format!("{PEER:o} -> {ME:o} RFC for the cable");
     let deadline = Instant::now() + Duration::from_secs(60);
-    let answer = loop {
-        assert!(Instant::now() < deadline, "no answer; muir wrote:\n{}", child.stderr().so_far());
-        send_packet(&peer, at, &rfc, SERVER, PEER);
-        match peer.recv_from(&mut buf) {
-            Ok((n, _)) => break udp::unwrap(&buf[..n]).expect("the answer reads"),
-            Err(_) => continue,
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the datagram never reached the cable; muir wrote:\n{}",
+            child.stderr().so_far()
+        );
+        send_packet(&peer, at, &rfc, ME, PEER);
+        if child.stderr().so_far().contains(&landed) {
+            break;
         }
-    };
-    let (p, cable_dest) = Packet::from_buffer(&answer.buffer).expect("a packet");
-    assert_eq!(p.opcode, op::ANS, "an ANS: {p:?}");
-    assert_eq!(p.source, SERVER, "from the Chaosnet server");
-    assert_eq!(p.dest, PEER, "to this test");
-    assert_eq!(cable_dest, PEER, "and addressed to it on the cable");
-    assert_eq!(answer.source, SERVER, "the hardware source is the server's");
-    let name = p.data.iter().take_while(|&&b| b != 0).copied().collect::<Vec<_>>();
-    assert_eq!(String::from_utf8_lossy(&name), Config::default().server_name);
+        std::thread::sleep(Duration::from_millis(50));
+    }
     child.kill();
 }
 
@@ -573,43 +578,40 @@ fn file_rfc(from: u16) -> Packet {
 
 /// What the server answers an RFC with: the opcode of the first packet
 /// it sends after it.
-fn answer_to(config: &Config, from: u16) -> u8 {
-    let mut h = config.server(0);
+fn answer_to(server: &ChaosServer, from: u16) -> u8 {
+    let mut h = server.build(0);
     h.receive(100, &arriving(&file_rfc(from), SERVER));
     let b = h.transmit(100).expect("the server answers");
     Packet::from_buffer(&b).expect("a packet").0.opcode
 }
 
-/// **Reachability is not authorisation: FILE serves this machine and
-/// whoever the run named, and refuses the rest.**
+/// **Reachability is not authorisation: FILE serves the hosts it was
+/// given and refuses the rest.**
 ///
 /// The service reads, writes, renames and deletes a real directory under
 /// containment rules written for a cable with one trusted machine on it.
-/// A CHUDP peer that a packet arrived from is answerable --- that is
-/// what `--chaos-udp-dynamic` decides --- and being answerable is not
-/// being allowed at the files, which is what `--chaos-file-peers`
-/// decides. TIME, UPTIME and STATUS answer anyone; they give nothing
-/// away.
+/// A CHUDP peer that a packet arrived from is answerable --- that is what
+/// `--chaos-udp-dynamic` decides --- and being answerable is not being
+/// allowed at the files. TIME, UPTIME and STATUS answer anyone; they give
+/// nothing away.
+///
+/// Who a *run* of muir lets at its files is no longer a question muir
+/// answers: the file host is another program on the network, and the
+/// containment is its own. What is here is the harness's server, which is
+/// the code that has to keep the rule.
 #[test]
-fn file_serves_this_machine_and_whoever_the_run_named() {
+fn file_serves_the_hosts_it_was_given() {
     let root = std::env::temp_dir();
-    let config = Config {
-        // Named, not defaulted: the run says where this machine and its
-        // server are, and [`ME`] and [`SERVER`] are what the rest of this
-        // file's cable carries.
-        address: ME,
-        server_address: SERVER,
-        file_root: Some(root),
-        file_peers: vec![PEER],
-        time: Some(time::TEST_UNIVERSAL),
-        ..Config::default()
-    };
-    assert_eq!(answer_to(&config, ME), op::OPN, "this machine is served, as it always was");
-    assert_eq!(answer_to(&config, PEER), op::OPN, "and the peer the run named");
-    assert_eq!(answer_to(&config, STRANGER), op::CLS, "and nobody else");
-    // With no peer named it is this machine and nobody else, which is
-    // what a run with no CHUDP link has always had.
-    let alone = Config { file_peers: Vec::new(), ..config };
+    // Named, not defaulted: [`ME`] and [`SERVER`] are what this file's
+    // cable carries.
+    let server = || ChaosServer::new(SERVER).serving(root.clone()).at_time(time::TEST_UNIVERSAL);
+    let named = server().for_hosts(vec![ME, PEER]);
+    assert_eq!(answer_to(&named, ME), op::OPN, "the machine is served, as it always was");
+    assert_eq!(answer_to(&named, PEER), op::OPN, "and the peer that was named with it");
+    assert_eq!(answer_to(&named, STRANGER), op::CLS, "and nobody else");
+    // With the machine alone it is the machine and nobody else, which is
+    // what every test that boots a band over this server has.
+    let alone = server().for_hosts(vec![ME]);
     assert_eq!(answer_to(&alone, ME), op::OPN);
     assert_eq!(answer_to(&alone, PEER), op::CLS);
 }

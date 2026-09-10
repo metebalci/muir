@@ -29,11 +29,15 @@ its SHA-256 sum.
 
 Start a machine. That is the `rtl` engine running MIT's own boot PROM, with
 the pack on the disk controller's cable. There is no default pack --- no
-`--disk-pack` is a drive with no pack in it --- so it is named. So is the
-Chaosnet pair, which belongs to the band and not to muir: this band's host
-table puts it at 3050 and its file and time host at 3060.
+`--disk-pack` is a drive with no pack in it --- so it is named. So are the
+Chaosnet numbers, which belong to the band and not to muir: this band's host
+table puts the machine at 3050 and its file and time host at 3060. That host
+is not muir --- a CADR had no file or time server in it --- so it is a
+program of its own on the network, [ozd](https://github.com/metebalci/ozd),
+reached over Chaosnet-over-UDP.
 
-    target/release/muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050,3060
+    target/release/muir --disk-pack vendor/run/disk-sys-100-0.img \
+        --chaos-address 3050 --chaos-udp-peer 3060@127.0.0.1:42043
 
 It prints where its terminal is, and boots. Point any VNC viewer at that
 address --- `vnc://127.0.0.1:5900` unless it says otherwise --- and you
@@ -170,13 +174,15 @@ says so. Windows is untested; the scripts are POSIX shell, so use WSL.
 The two packs are different machines and want different flags. System 100's
 band is `MIT-LISPM-1`, whose host table puts it at 3050 with `MIT-OZ` at
 3060; System 304's is `AMS-LISPM-1` at 4401 with its file and time host `OZ`
-at 4403. Neither is what `--chaos-address` defaults to --- that is 177001
-with its server at 177002, on subnet 376, the Chaosnet's private range,
-which is no band's on purpose --- so a run that wants its band to reach the
-server names the band's own pair:
+at 4403. Neither address is what `--chaos-address` defaults to --- that is
+177001, on subnet 376, the Chaosnet's private range, which is no band's on
+purpose --- so a run that wants its band to reach a host names the band's
+own address, and names the host with `--chaos-udp-peer`:
 
-    muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050,3060
-    muir --disk-pack vendor/run/disk-sys-304-0.img --chaos-address 4401,4403
+    muir --disk-pack vendor/run/disk-sys-100-0.img \
+        --chaos-address 3050 --chaos-udp-peer 3060@127.0.0.1:42043
+    muir --disk-pack vendor/run/disk-sys-304-0.img \
+        --chaos-address 4401 --chaos-udp-peer 4403@127.0.0.1:42043
 
 ## Running it
 
@@ -258,13 +264,12 @@ them, each machine's DBGOUT on the other's DBGIN, as MIT ran two CADRs. The
 window and the stops are the first machine's; the second boots the same PROM
 with no pack unless `--debuggee-disk-pack` names one, and its console belongs
 to CC. Each machine has a Chaosnet of its own --- muir's cable carries one
-machine, so the second gets its own cable with its own server on it, at the
-first's addresses unless `--debuggee-chaos-address` gives it others. The two
-cannot hear each other over it; the only wire between them is the debug
-cable. The second machine's server answers `STATUS`, `TIME` and `UPTIME` but
-no `FILE` unless `--debuggee-chaos-file-root` gives it a directory: two
-servers rooted at one directory are two hosts sharing a filesystem, with
-nothing between them to keep one from writing what the other is reading.
+machine, so the second gets a cable of its own, at the first's address
+unless `--debuggee-chaos-address` gives it another. The two cannot hear each
+other over it; the only wire between them is the debug cable. The second
+machine has no CHUDP link either --- one socket belongs to one cable --- so
+it reaches no file or time host and its own boot stops in the cold-load
+debugger, which is where CC finds it.
 Both machines get a terminal, the second at the display above the first's,
 or wherever `--debuggee-terminal` says. So you connect a viewer to
 the machine you invoked and CC there debugs the other, and a second viewer
@@ -443,35 +448,40 @@ it does at the prompt.
 
 The machine's Chaosnet interface is real --- it is half the I/O board, and on
 `chip` it is that board's netlist. What is on the other end of the cable is
-not a machine but a **Chaosnet server**: an address that answers contact names, so
-the band has something to talk to. `--chaos-address <this>[,<server>]` sets
-this machine's address and the server's, octal, and the pair a run wants is
-the band's own: System 100's `sys/site/hosts.text` puts `MIT-LISPM-1` at
-`3050` and its file and time host `MIT-OZ` at `3060`, so that band is run
-with `--chaos-address 3050,3060`. The default is neither band's --- 177001
-with its server at 177002, on subnet 376, the Chaosnet's private and
-non-routable range --- so that a machine started with no address of its own
-cannot answer where a real Chaosnet put somebody.
+**not in muir**. A CADR had no file or time server inside it: it called its
+**associated machine**, the host its boot banner names --- "with associated
+machine OZ" --- for its files and for the date. So muir is a machine and
+nothing else, and a band that wants a host wants one on the network.
+
+[ozd](https://github.com/metebalci/ozd) is that host: the OZ daemon, one
+server for however many Lisp machines are on the cable, which is the
+commoner case than one. It answers the four contact names a band asks for.
 
 | Contact | |
 |---|---|
-| `STATUS` | the host's name and its subnet meters. AIM-628 §5.1 requires every node to answer it, and it is how a machine decides another is up: `HOST-UP-P` asks for nothing else, and `(hostat)` prints what comes back. The meters are zero, which is the true count for a host with no interface |
-| `TIME` | the universal time in four bytes, least significant first --- seconds since midnight GMT, 1 January 1900. The tests fix it, so two runs of a boot do the same work |
-| `UPTIME` | seconds since the server came up, by the ether's clock |
-| `FILE` | the file protocol the band loads `SYS:` over --- a control connection and data connections beside it. Served only when `--chaos-file-root` gives it a directory, which it serves as the server's `/` |
+| `STATUS` | the host's name and its subnet meters. AIM-628 §5.1 requires every node to answer it, and it is how a machine decides another is up: `HOST-UP-P` asks for nothing else, and `(hostat)` prints what comes back |
+| `TIME` | the universal time in four bytes, least significant first --- seconds since midnight GMT, 1 January 1900 |
+| `UPTIME` | seconds since the host came up |
+| `FILE` | the file protocol the band loads `SYS:` over --- a control connection and data connections beside it, over a directory the host serves as its `/` |
 
 `FILE` is what makes the acceptance test possible: CC is not in the band, so
 `sys/cc/*.qfasl` has to come over the network, the way it would have on a real
 machine.
 
-The cable carries this machine and that server alone until `--chaos-udp` puts
-**Chaosnet over UDP** on it --- the encapsulation `cbridge`, `usim`, `klh10`
-and the live Chaosnet hosts speak. Every host `--chaos-udp-peer 3040@host:port`
-names is then a station on the same modelled cable, taking its turn on it like
-any other. muir stays a leaf: a packet for somewhere else is dropped rather
-than forwarded, and a `cbridge` beside it is what routes. Who may reach the
-machine and who may have its files are separate --- `--chaos-udp-dynamic`
-decides the first, `--chaos-file-peers` the second.
+`--chaos-address` gives this machine its own address and, with it, puts the
+cable on the network as **Chaosnet over UDP** --- the encapsulation
+`cbridge`, `usim`, `klh10`, `ozd` and the live Chaosnet hosts speak --- at
+the protocol's own port unless `--chaos-udp` says where. Every host
+`--chaos-udp-peer 3060@host:port` names is then a station on the same
+modelled cable, taking its turn on it like any other, and that is how a run
+names its band's file and time host. muir stays a leaf: a packet for another
+host is dropped rather than forwarded, and a `cbridge` beside it is what
+routes. `--chaos-udp-dynamic` lets a host muir was never told about be
+answered where its packets came from.
+
+muir's own tests do not want a daemon running beside them, so they put a
+Chaosnet server of their own on the modelled cable, in process. It lives in
+`tests/support/` and is no part of the simulator.
 
 ## Layout
 

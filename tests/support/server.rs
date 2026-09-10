@@ -4,7 +4,7 @@
 //! A host on the model side of the ether: the transport protocol of
 //! AIM-628 chapters 3 and 4, and the services that answer on it.
 //!
-//! The host is a [`super::ether::Node`]. Every packet on the cable
+//! The host is a [`muir::chaos::ether::Node`]. Every packet on the cable
 //! reaches it; it keeps those addressed to it or broadcast, runs the
 //! connection protocol, and hands what arrives to a [`Service`] by
 //! contact name. A service either answers a request outright --- the
@@ -13,42 +13,11 @@
 //! ended with EOF and CLS as §4.4 says. Adding a service is one
 //! `impl Service`; the transport does not know what any of them do.
 
-use super::ether::Node;
-use super::packet::{Framed, MAX_DATA, Packet};
+use muir::chaos::ether::Node;
+use muir::chaos::packet::{Framed, MAX_DATA, Packet, op, op_name};
+use muir::machine::Machine;
 use std::collections::VecDeque;
-
-/// Packet opcodes, AIM-628 chapter 4, as `sys/network/chaos/chsncp.lisp`
-/// numbers them.
-pub mod op {
-    pub const RFC: u8 = 0o1;
-    pub const OPN: u8 = 0o2;
-    pub const CLS: u8 = 0o3;
-    pub const FWD: u8 = 0o4;
-    pub const ANS: u8 = 0o5;
-    pub const SNS: u8 = 0o6;
-    pub const STS: u8 = 0o7;
-    pub const RUT: u8 = 0o10;
-    pub const LOS: u8 = 0o11;
-    pub const LSN: u8 = 0o12;
-    pub const MNT: u8 = 0o13;
-    pub const EOF: u8 = 0o14;
-    pub const UNC: u8 = 0o15;
-    pub const BRD: u8 = 0o16;
-    /// "Opcodes 200 through 277 (octal) are controlled packets with user
-    /// data in 8-bit bytes"; 200 is the default.
-    pub const DAT: u8 = 0o200;
-    /// "Opcodes 300 through 377 ... 16-bit bytes"; 300 is the default.
-    pub const DWD: u8 = 0o300;
-    /// Whether an opcode carries user data.
-    pub fn is_data(op: u8) -> bool {
-        op >= DAT
-    }
-    /// Whether packets of this opcode are controlled --- numbered,
-    /// acknowledged and retransmitted, §3.8.
-    pub fn is_controlled(op: u8) -> bool {
-        matches!(op, RFC | OPN | EOF) || is_data(op)
-    }
-}
+use std::path::PathBuf;
 
 /// What a service does with a request for connection.
 pub enum Response {
@@ -707,24 +676,131 @@ fn fmt_data(op: u8, data: &[u8]) -> String {
     }
 }
 
-pub fn op_name(op: u8) -> String {
-    match op {
-        op::RFC => "RFC".into(),
-        op::OPN => "OPN".into(),
-        op::CLS => "CLS".into(),
-        op::FWD => "FWD".into(),
-        op::ANS => "ANS".into(),
-        op::SNS => "SNS".into(),
-        op::STS => "STS".into(),
-        op::RUT => "RUT".into(),
-        op::LOS => "LOS".into(),
-        op::LSN => "LSN".into(),
-        op::MNT => "MNT".into(),
-        op::EOF => "EOF".into(),
-        op::UNC => "UNC".into(),
-        op::BRD => "BRD".into(),
-        o if o >= op::DWD => format!("DWD{:o}", o),
-        o if o >= op::DAT => format!("DAT{:o}", o),
-        o => format!("op{o:o}"),
+/// The **Chaosnet server** the tests put on a machine's cable: muir's
+/// implementation of the server side of STATUS, TIME, UPTIME and FILE,
+/// standing in for the servers that ran on the machine's **associated
+/// machine**, MIT's term (`si:associated-machine`, `sys/man/fd-hac.text`)
+/// for the file and time server a Lisp Machine talks to, which the boot
+/// banner names: "with associated machine OZ". It is not a model of that
+/// machine, only of its services.
+///
+/// **It is the harness's, not the simulator's.** A CADR has no file or
+/// time server in it, so `muir` carries none: a run reaches a host on the
+/// network over CHUDP, and `ozd` (`https://github.com/metebalci/ozd`) is
+/// one. `cargo test` cannot want a daemon running beside it, so the tests
+/// put this server on the modelled cable themselves --- a
+/// [`muir::chaos::ether::Node`] like any other, taking its turn --- and
+/// the whole boot over the Chaosnet stays in one process.
+///
+/// The address is the band's, not muir's: System 100's band calls its file
+/// and time host at 3060 (`support::CHAOS_100`) and System 304's at 4403
+/// (`support::CHAOS_304`), and a server answering anywhere else is a server the
+/// band never calls.
+pub struct ChaosServer {
+    /// Where the server answers.
+    pub address: u16,
+    /// The name it answers STATUS with, which is what `(hostat)` prints.
+    pub name: String,
+    /// The directory FILE serves as its `/`; none, and there is no FILE
+    /// service at all.
+    pub file_root: Option<PathBuf>,
+    /// Who FILE serves; empty, and it serves whoever can reach it, which
+    /// on a cable with no CHUDP link is the machine alone.
+    pub hosts: Vec<u16>,
+    /// The universal time TIME answers with and FILE dates new files by,
+    /// fixed; none, and both use the machine's clock. The tests fix it
+    /// ([`super::time::TEST_UNIVERSAL`]) so a boot over the model network does
+    /// the same work every run.
+    pub time: Option<u32>,
+    /// Every packet the server handles or sends, printed as it goes.
+    pub trace: bool,
+}
+
+impl ChaosServer {
+    /// A server at `address` answering STATUS, TIME and UPTIME, and no
+    /// files. The name is `MIT-OZ`, System 100's own in
+    /// `sys/site/hosts.text` for the file and time host it calls at 3060;
+    /// [`ChaosServer::named`] is how System 304's tests say `OZ` instead.
+    pub fn new(address: u16) -> ChaosServer {
+        ChaosServer {
+            address,
+            name: "MIT-OZ".to_string(),
+            file_root: None,
+            hosts: Vec::new(),
+            time: None,
+            trace: std::env::var_os("MUIR_CHAOS_TRACE").is_some(),
+        }
+    }
+
+    /// The name STATUS answers with.
+    pub fn named(mut self, name: &str) -> ChaosServer {
+        self.name = name.to_string();
+        self
+    }
+
+    /// Serves `root` as its `/`: the band asks it for `/tree/sys/...` on
+    /// System 100 and `/sys/...` on System 304.
+    pub fn serving(mut self, root: PathBuf) -> ChaosServer {
+        self.file_root = Some(root);
+        self
+    }
+
+    /// Serves files to these hosts and refuses the rest.
+    ///
+    /// **Reachability and authorisation are separate.** A peer a packet
+    /// reached this cable from can be answered; being answerable is not
+    /// being allowed to read and write a real directory. TIME, UPTIME and
+    /// STATUS answer anyone: they give nothing away.
+    pub fn for_hosts(mut self, hosts: Vec<u16>) -> ChaosServer {
+        self.hosts = hosts;
+        self
+    }
+
+    /// Answers `universal` for the time, and dates new files by it.
+    pub fn at_time(mut self, universal: u32) -> ChaosServer {
+        self.time = Some(universal);
+        self
+    }
+
+    pub fn traced(mut self, trace: bool) -> ChaosServer {
+        self.trace = trace;
+        self
+    }
+
+    /// The server itself, with its services, at `powered_at` on the
+    /// ether's clock.
+    pub fn build(&self, powered_at: u64) -> Server {
+        let mut h = Server::new(self.address);
+        h.trace = self.trace;
+        h.serve(Box::new(match self.time {
+            Some(t) => super::time::Time::fixed(t),
+            None => super::time::Time::new(),
+        }));
+        h.serve(Box::new(super::time::Uptime::new(powered_at)));
+        // STATUS, so that `(hostat)` on the machine sees the server at all:
+        // the name is the band's for this address, and the subnet its high
+        // byte.
+        h.serve(Box::new(
+            super::status::Status::new(&self.name).on_subnet((self.address >> 8) as u8),
+        ));
+        if let Some(root) = &self.file_root {
+            let mut f = super::file::File::new(root.clone()).with_time(self.time);
+            if !self.hosts.is_empty() {
+                f = f.serving(self.hosts.clone());
+            }
+            h.serve(Box::new(f));
+        }
+        h
+    }
+
+    /// Plugs `m`'s Chaosnet in at `powered_at` and puts this server on the
+    /// cable, serving the machine's own address and nobody else's when a
+    /// file root was given and no hosts were named.
+    pub fn plug(mut self, m: &mut Machine, powered_at: u64) {
+        if self.file_root.is_some() && self.hosts.is_empty() {
+            self.hosts = vec![m.chaos.address];
+        }
+        m.plug_chaos(powered_at);
+        m.attach_chaos_node(Box::new(self.build(powered_at)));
     }
 }

@@ -35,15 +35,17 @@
   <div class="band">
     <h2>Running it</h2>
     <div class="prose">
-      <p>muir builds to one binary. Run it with no flags and it starts an <code>rtl</code> machine, presses the boot button, and runs the boot PROM with no pack in the drive, which the boot waits on for ever. A pack is named: <code>--disk-pack vendor/run/disk-sys-100-0.img</code>, where <code>tools/fetch-system-100.sh</code> puts the System 100 pack, and with it <code>--chaos-address 3050,3060</code>, which is that band&rsquo;s own pair. System 304&rsquo;s pack boots too and wants <code>--chaos-address 4401,4403</code> with it.</p>
+      <p>muir builds to one binary. Run it with no flags and it starts an <code>rtl</code> machine, presses the boot button, and runs the boot PROM with no pack in the drive, which the boot waits on for ever. A pack is named: <code>--disk-pack vendor/run/disk-sys-100-0.img</code>, where <code>tools/fetch-system-100.sh</code> puts the System 100 pack, and with it <code>--chaos-address 3050</code>, which is that band&rsquo;s own address, and <code>--chaos-udp-peer 3060@&lt;where ozd is&gt;</code>, which is where that band looks for its files and the date. System 304&rsquo;s pack boots too and wants <code>--chaos-address 4401</code> with <code>--chaos-udp-peer 4403@&hellip;</code>.</p>
 <pre class="cmd">target/release/muir</pre>
       <p>One engine at a time: <code>--micro</code>, <code>--rtl</code> or <code>--chip</code>, and <code>--rtl</code> is what you get without one. A run goes on until a stop, a halt or ^C.</p>
       <p>Every run says what it is before it starts a microcycle, one line a thing, on stderr. Nothing here is hidden state: if a run behaves oddly, the reason is usually in this block.</p>
-<pre class="cmd">$ muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050,3060 --stop-after 2000000
+<pre class="cmd">$ muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050 \
+       --chaos-udp-peer 3060@127.0.0.1:42043 --stop-after 2000000
 engine: rtl
 memory: 32 boards, 2 MW
 pack: vendor/run/disk-sys-100-0.img in unit 0
-chaosnet: 3050, the server at 3060, file root vendor/run/file-root
+chaosnet: 3050, on the network over UDP
+chaosnet udp: listening at 127.0.0.1:42042, 3060 at 127.0.0.1:42043
 terminal: vnc://127.0.0.1:5900 --- RFB, no password
 stop: after 2000000 microcycles
 ^C holds the machine at the prompt; help lists muir&rsquo;s commands</pre>
@@ -74,52 +76,36 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
-        <dt>--chaos-address &lt;this&gt;[,&lt;server&gt;]</dt>
+        <dt>--chaos-address &lt;address&gt;</dt>
         <dd>
-        <p>This machine&rsquo;s Chaosnet address, always, and after a comma the Chaosnet server&rsquo;s &mdash; the address muir&rsquo;s server on the other end of the cable answers at.</p>
-        <p>Each address is the sixteen bits in octal, <code>3050</code>, or subnet:host with each in octal, <code>6:50</code> &mdash; the same number, subnet in the high byte.</p>
-        <p>Which pair a run wants is the band&rsquo;s own, out of its host table: System 100&rsquo;s puts this machine at <code>3050</code> and its file and time host at <code>3060</code>, System 304&rsquo;s at <code>4401</code> and <code>4403</code>. A server answering anywhere else is one the band never calls, and the machine then boots but stops to ask for the date and reaches no files.</p>
-        <p>Default: <code>177001,177002</code>, on subnet 376 &mdash; the Chaosnet&rsquo;s private, non-routable range &mdash; and so no band&rsquo;s. muir models the CADR and not one distribution of it, and a default out of one band&rsquo;s host table would be the wrong default for every other; a default in the private range cannot collide with an address a real Chaosnet allocated. A run that wants its band to reach the server names the band&rsquo;s pair: <code>--chaos-address 3050,3060</code> for the System 100 pack, <code>4401,4403</code> for System 304&rsquo;s.</p>
-        </dd>
-      </div>
-      <div>
-        <dt>--chaos-file-peers &lt;addresses&gt;</dt>
-        <dd>
-        <p>The Chaosnet addresses, comma separated, that <code>FILE</code> serves besides this machine&rsquo;s own: <code>3040</code> or <code>3040,3041</code>, each in octal or subnet:host.</p>
-        <p><code>FILE</code> reads, writes, renames and deletes a real directory under containment rules written for a cable with one trusted machine on it, so who may use it is typed rather than followed from who could send a packet. A peer reached over <code>--chaos-udp</code> is refused unless it is named here, whether it was named as a peer or learned. <code>TIME</code>, <code>UPTIME</code> and <code>STATUS</code> answer anyone; they give nothing away.</p>
-        <p>It needs <code>--chaos-udp</code>, there being no one else to serve without it.</p>
-        <p>Default: this machine alone.</p>
-        </dd>
-      </div>
-      <div>
-        <dt>--chaos-file-root &lt;dir&gt;</dt>
-        <dd>
-        <p>The directory the Chaosnet server serves as its <code>/</code>; the band asks it for <code>/tree/sys/...</code>. It may not be <code>/</code>: the service writes, renames and deletes under it.</p>
-        <p>Default: <code>vendor/run/file-root</code> when present; with no root the server answers no <code>FILE</code> at all.</p>
+        <p>This machine&rsquo;s Chaosnet address: the sixteen address switches on the I/O board, the bits in octal, <code>3050</code>, or subnet:host with each in octal, <code>6:50</code> &mdash; the same number, subnet in the high byte.</p>
+        <p>Giving it also puts the cable on the network, as <code>--chaos-udp</code> does, since an address is what a run has to reach a file and time host by.</p>
+        <p>Which address a run wants is its band&rsquo;s own, out of its host table: System 100&rsquo;s puts this machine at <code>3050</code> and its file and time host at <code>3060</code>, System 304&rsquo;s at <code>4401</code> and <code>4403</code>. muir is not that host &mdash; a CADR had no file or time server in it &mdash; so the host is another program on the network, named with <code>--chaos-udp-peer</code>. A host answering anywhere else is one the band never calls, and the machine then boots but stops to ask for the date and reaches no files.</p>
+        <p>Default: <code>177001</code>, on subnet 376 &mdash; the Chaosnet&rsquo;s private, non-routable range &mdash; and so no band&rsquo;s, with the cable off the network. muir models the CADR and not one distribution of it, and a default out of one band&rsquo;s host table would be the wrong default for every other; a default in the private range cannot collide with an address a real Chaosnet allocated. A run that wants its band to reach a host names the band&rsquo;s address: <code>--chaos-address 3050</code> for the System 100 pack, <code>4401</code> for System 304&rsquo;s.</p>
         </dd>
       </div>
       <div>
         <dt>--chaos-udp [&lt;endpoint&gt;]</dt>
         <dd>
-        <p>Put the Chaosnet cable on the network: <b>Chaosnet over UDP</b>, the encapsulation <code>cbridge</code>, <code>usim</code>, <code>klh10</code> and the live Chaosnet hosts speak. Ordinary UDP, so it needs no privileges and it crosses a NAT.</p>
+        <p>Where the Chaosnet cable is on the network: <b>Chaosnet over UDP</b>, the encapsulation <code>cbridge</code>, <code>usim</code>, <code>klh10</code>, <code>ozd</code> and the live Chaosnet hosts speak. Ordinary UDP, so it needs no privileges and it crosses a NAT.</p>
         <p>Nothing, a port, an address or address:port. A bare port is on the loopback, which is where a server nobody authenticates belongs, so reaching another host means naming an address to listen on. Two muirs on one host are two peers on the loopback and want no other transport between them.</p>
-        <p>muir is a leaf and not a router: a packet addressed to neither this machine nor its Chaosnet server is dropped, never forwarded. A <code>cbridge</code> beside muir is what routes.</p>
-        <p>Default: off; <code>42042</code>, the protocol&rsquo;s own port, when the flag is given with no port.</p>
+        <p>muir is a leaf and not a router: a packet addressed to another host is dropped, never forwarded. A <code>cbridge</code> beside muir is what routes.</p>
+        <p>Default: <code>127.0.0.1:42042</code>, the protocol&rsquo;s own port, when <code>--chaos-address</code> is given; off with neither flag.</p>
         </dd>
       </div>
       <div>
         <dt>--chaos-udp-dynamic</dt>
         <dd>
         <p>Learn where a peer is from the packets it sends, so that a host <code>--chaos-udp-peer</code> never named can still be answered.</p>
-        <p>Off by default: with it on, whatever can reach the port puts itself in the address table under whatever Chaosnet address it claims. An endpoint <code>--chaos-udp-peer</code> named is not moved by a packet. Learning is reachability and not authorisation &mdash; a learned peer is served files only if <code>--chaos-file-peers</code> names it.</p>
-        <p>It needs <code>--chaos-udp</code>.</p>
+        <p>Off by default: with it on, whatever can reach the port puts itself in the address table under whatever Chaosnet address it claims. An endpoint <code>--chaos-udp-peer</code> named is not moved by a packet.</p>
+        <p>It needs the link, so <code>--chaos-address</code> or <code>--chaos-udp</code>.</p>
         </dd>
       </div>
       <div>
         <dt>--chaos-udp-peer &lt;address&gt;@&lt;host&gt;:&lt;port&gt;</dt>
         <dd>
-        <p>A Chaosnet host reached over UDP and where it lives: <code>3040@127.0.0.1:42043</code>, the address in octal or subnet:host and the host a name or an address, resolved once at the start. The port may be left off for <code>42042</code>.</p>
-        <p>Once per peer, and the address may not be one this machine&rsquo;s own cable already carries. It needs <code>--chaos-udp</code>.</p>
+        <p>A Chaosnet host reached over UDP and where it lives: <code>3060@127.0.0.1:42043</code>, the address in octal or subnet:host and the host a name or an address, resolved once at the start. The port may be left off for <code>42042</code>. This is how a run names its band&rsquo;s file and time host.</p>
+        <p>Once per peer, and the address may not be this machine&rsquo;s own. It needs the link, so <code>--chaos-address</code> or <code>--chaos-udp</code>.</p>
         </dd>
       </div>
       <div>
@@ -157,17 +143,10 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
-        <dt>--debuggee-chaos-address &lt;this&gt;[,&lt;server&gt;]</dt>
+        <dt>--debuggee-chaos-address &lt;address&gt;</dt>
         <dd>
-        <p><b>rtl:</b> the other machine&rsquo;s Chaosnet, as <code>--chaos-address</code> is this machine&rsquo;s. The other machine has a Chaosnet of its own: its own cable with its own server on it, since muir&rsquo;s cable carries one machine. The two cannot hear each other over it, and the only wire between them is the debug cable.</p>
-        <p>Default: the same addresses as this machine&rsquo;s, which collide with nothing, the two cables never meeting.</p>
-        </dd>
-      </div>
-      <div>
-        <dt>--debuggee-chaos-file-root &lt;dir&gt;</dt>
-        <dd>
-        <p><b>rtl:</b> the directory the other machine&rsquo;s Chaosnet server serves, as <code>--chaos-file-root</code> is this machine&rsquo;s. Two servers rooted at one directory are two hosts sharing a filesystem, with nothing between them to keep one from writing what the other is reading.</p>
-        <p>Default: none, so its server answers <code>STATUS</code>, <code>TIME</code> and <code>UPTIME</code> but no <code>FILE</code>.</p>
+        <p><b>rtl:</b> the other machine&rsquo;s Chaosnet address, as <code>--chaos-address</code> is this machine&rsquo;s. The other machine has a cable of its own, since muir&rsquo;s cable carries one machine: the two cannot hear each other over it, and the only wire between them is the debug cable. It has no link of its own either, so the address is all it has.</p>
+        <p>Default: the same address as this machine&rsquo;s, which collides with nothing, the two cables never meeting.</p>
         </dd>
       </div>
       <div>
@@ -494,24 +473,26 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
   <div class="band">
     <h2>The Chaosnet server</h2>
     <div class="prose">
-      <p>The machine&rsquo;s Chaosnet interface is real &mdash; it is half the I/O board, and on <code>chip</code> it is that board&rsquo;s netlist. What is on the other end of the cable is not a machine but a <b>Chaosnet server</b>: an address that answers contact names, so the band has something to talk to. <code>--chaos-address</code> says where the two are, octal, and the pair a run wants is the band&rsquo;s own: System 100&rsquo;s <code>sys/site/hosts.text</code> puts <code>MIT-LISPM-1</code> at <code>3050</code> and <code>MIT-OZ</code> at <code>3060</code>, so that band is run with <code>--chaos-address 3050,3060</code>. The default is neither band&rsquo;s, <code>177001,177002</code> on the private subnet 376, so a machine started without an address of its own answers nowhere a real Chaosnet allocated.</p>
+      <p>The machine&rsquo;s Chaosnet interface is real &mdash; it is half the I/O board, and on <code>chip</code> it is that board&rsquo;s netlist. What is on the other end of the cable is <b>not in muir</b>. A CADR had no file or time server inside it: it called its <b>associated machine</b>, the host the boot banner names &mdash; &ldquo;with associated machine OZ&rdquo; &mdash; for its files and for the date. So muir carries a machine and nothing else, and a band that wants a host wants one on the network.</p>
+      <p><b><a href="https://github.com/metebalci/ozd">ozd</a> is that host.</b> It is the OZ daemon: one server for however many Lisp machines are on the cable, which is the commoner case than one, and it answers the four contact names a band asks for.</p>
     </div>
 
     <div class="tablewrap">
       <table>
-        <thead><tr><th class="name">Contact</th><th>What it answers</th></tr></thead>
+        <thead><tr><th class="name">Contact</th><th>What the host answers</th></tr></thead>
         <tbody>
-          <tr><td class="name">STATUS</td><td>The host&rsquo;s name and its subnet meters. AIM-628 &sect;5.1 requires every node to answer it, and it is how a machine decides another is up: <code>HOST-UP-P</code> asks for nothing else, and <code>(hostat)</code> prints what comes back. The meters are zero, which is the true count for a host with no interface.</td></tr>
-          <tr><td class="name">TIME</td><td>The universal time in four bytes, least significant first &mdash; seconds since midnight GMT, 1 January 1900. The tests fix it, so two runs of a boot do the same work.</td></tr>
-          <tr><td class="name">UPTIME</td><td>Seconds since the server came up, by the ether&rsquo;s clock.</td></tr>
-          <tr><td class="name">FILE</td><td>The file protocol the band loads <code>SYS:</code> over &mdash; a control connection and data connections beside it. Served only when <code>--chaos-file-root</code> gives it a directory, which it serves as the server&rsquo;s <code>/</code>.</td></tr>
+          <tr><td class="name">STATUS</td><td>The host&rsquo;s name and its subnet meters. AIM-628 &sect;5.1 requires every node to answer it, and it is how a machine decides another is up: <code>HOST-UP-P</code> asks for nothing else, and <code>(hostat)</code> prints what comes back.</td></tr>
+          <tr><td class="name">TIME</td><td>The universal time in four bytes, least significant first &mdash; seconds since midnight GMT, 1 January 1900.</td></tr>
+          <tr><td class="name">UPTIME</td><td>Seconds since the host came up.</td></tr>
+          <tr><td class="name">FILE</td><td>The file protocol the band loads <code>SYS:</code> over &mdash; a control connection and data connections beside it, over a directory the host serves as its <code>/</code>.</td></tr>
         </tbody>
       </table>
     </div>
 
     <div class="prose">
       <p><code>FILE</code> is what makes the acceptance test possible: CC is not in the band, so <code>sys/cc/*.qfasl</code> has to come over the network, the way it would have on a real machine.</p>
-      <p>The cable carries this machine and that server alone until <code>--chaos-udp</code> puts <b>Chaosnet over UDP</b> on it. Then every host <code>--chaos-udp-peer</code> names is a station on the same modelled cable, taking its turn on it like any other, and a packet from one goes on with that host&rsquo;s own address in the hardware source. muir stays a leaf: a packet for somewhere else is dropped rather than forwarded, and a <code>cbridge</code> beside it is what routes. Who may reach the machine and who may have its files are separate &mdash; <code>--chaos-udp-dynamic</code> decides the first, <code>--chaos-file-peers</code> the second.</p>
+      <p><b>How a run reaches it.</b> <code>--chaos-address</code> gives this machine its own address and, with it, puts the cable on the network as <b>Chaosnet over UDP</b>; <code>--chaos-udp</code> says where it listens if the protocol&rsquo;s own port will not do. Every host <code>--chaos-udp-peer</code> names is then a station on the same modelled cable, taking its turn on it like any other, and a packet from one goes on with that host&rsquo;s own address in the hardware source. The numbers are the band&rsquo;s own: System 100&rsquo;s <code>sys/site/hosts.text</code> puts <code>MIT-LISPM-1</code> at <code>3050</code> and <code>MIT-OZ</code> at <code>3060</code>, so that band is run with <code>--chaos-address 3050 --chaos-udp-peer 3060@&lt;where ozd is&gt;</code>. muir stays a leaf: a packet for another host is dropped rather than forwarded, and a <code>cbridge</code> beside it is what routes. <code>--chaos-udp-dynamic</code> lets a host muir was never told about be answered where its packets came from.</p>
+      <p>muir&rsquo;s own tests do not want a daemon running beside them, so they put a Chaosnet server of their own on the modelled cable, in process. It lives in <code>tests/support/</code> and is no part of the simulator.</p>
     </div>
   </div>
 </section>
@@ -521,7 +502,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
     <h2>Two machines</h2>
     <div class="prose">
       <p>MIT debugged a CADR from another CADR, over a <b>debug cable</b>: 21 wires from one machine&rsquo;s DBGOUT connector to the other&rsquo;s DBGIN, through which the console program <b>CC</b> halts the other machine, reads its registers and drives its bus. muir runs that lashup, and it is the project&rsquo;s acceptance test.</p>
-      <p>Each machine has a Chaosnet of its own: muir&rsquo;s cable carries one machine, so the other gets its own cable with its own server on it. The two cannot hear each other over it &mdash; the only wire between them is the debug cable &mdash; and the other machine&rsquo;s server answers <code>STATUS</code>, <code>TIME</code> and <code>UPTIME</code> but no <code>FILE</code> unless <code>--debuggee-chaos-file-root</code> gives it a directory. Two servers rooted at one directory are two hosts sharing a filesystem, with nothing between them to keep one from writing what the other is reading.</p>
+      <p>Each machine has a Chaosnet of its own: muir&rsquo;s cable carries one machine, so the other gets a cable of its own. The two cannot hear each other over it &mdash; the only wire between them is the debug cable &mdash; and the other machine has no CHUDP link either, one socket belonging to one cable, so it reaches no file or time host and its own boot stops in the cold-load debugger. That is where CC finds it, and it is what the acceptance test wants.</p>
       <p><code>--debug-in-process</code> puts both machines in one process with both cables between them. <code>--debug-cable-listen</code> and <code>--debug-cable-connect</code> put the same cable over TCP with one machine in each process, the listener being the debuggee; both take an endpoint the same way and meet at <code>127.0.0.1:7661</code> without one. The listener may be a <code>--chip</code> machine, and then the netlist board&rsquo;s own DBGIN answers the debugger, an event at a time, at the netlist&rsquo;s pace.</p>
     </div>
   </div>

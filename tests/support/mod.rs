@@ -4,9 +4,23 @@
 //! Shared by the test binaries, each taking what it needs: where the tests
 //! find MIT's files and the fetched release, the checks every board's
 //! netlist gets, MIT's own census and wire list read back, the I/O board's
-//! inputs at rest, and the boot to the listener.
+//! inputs at rest, the **Chaosnet server** the boots are given, and the
+//! boot to the listener.
+//!
+//! The Chaosnet server is here rather than in `src/` because a CADR has no
+//! file or time server inside it: `muir` reaches a host on the network
+//! over CHUDP, and `cargo test` cannot want a daemon running beside it.
+//! [`server`], [`mod@file`], [`mod@time`] and [`status`] are that server,
+//! and [`ChaosServer`] is how a test puts one on a machine's cable.
 
 #![allow(dead_code)]
+
+pub mod file;
+pub mod server;
+pub mod status;
+pub mod time;
+
+pub use server::ChaosServer;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -54,11 +68,12 @@ pub fn pack_100() -> Option<PathBuf> {
 /// Read off the release's own `sys/site/hosts.text`, and enforced against
 /// it by `tests/chaos.rs::the_bands_own_hosts_are_named_and_are_not_the_defaults`.
 ///
-/// A run has to say them: [`muir::chaos::Config`] defaults to 177001 and
-/// 177002, on the private subnet 376, which is no band's pair on purpose.
-/// A band reached at the wrong pair gets neither the time nor its files
-/// and stops in the cold-load debugger to ask for the date, so every test
-/// that boots this band over the Chaosnet passes these.
+/// A run has to say them: [`muir::chaos::Config`] defaults to 177001, on
+/// the private subnet 376, which is no band's address on purpose, and it
+/// carries no server's address at all. A band reached at the wrong pair
+/// gets neither the time nor its files and stops in the cold-load debugger
+/// to ask for the date, so every test that boots this band over the
+/// Chaosnet passes these.
 pub const CHAOS_100: (u16, u16) = (0o3050, 0o3060);
 
 /// The Chaosnet numbers the **System 304** band holds: this machine
@@ -69,6 +84,28 @@ pub const CHAOS_100: (u16, u16) = (0o3050, 0o3060);
 /// `tests/chaos.rs::the_304_band_reaches_the_server_at_its_own_numbers`.
 /// A server answering anywhere else is a server this band never calls.
 pub const CHAOS_304: (u16, u16) = (0o4401, 0o4403);
+
+/// The directory the Chaosnet server's FILE service serves as its `/`,
+/// `vendor/run/file-root`, or `None` with the skip line.
+///
+/// A directory of its own rather than `vendor/` or a release, because the
+/// service writes, renames and deletes under its root and fetched material
+/// should not be in reach of a running machine by accident. Each band asks
+/// its file host under a name of its own --- System 100's translates
+/// `SYS: SYS2; FOO LISP` to `//TREE//SYS2//FOO LISP`, and System 304's to
+/// `OZ: //sys//sys2//foo.lisp` --- so
+///
+/// ```text
+/// mkdir -p vendor/run/file-root
+/// ln -s ../../system-100-0/sys       vendor/run/file-root/tree
+/// ln -s ../../system-304-0/sys-304-0 vendor/run/file-root/sys
+/// ```
+///
+/// makes `SYS:` resolve for either, one root serving both. The fetch
+/// script for each release makes its own link.
+pub fn file_root() -> Option<PathBuf> {
+    vendor(&["run", "file-root"])
+}
 
 /// A file under `vendor/`, where the fetch scripts put the releases, or
 /// `None` with a line saying so: a test that needs a release skips
@@ -400,17 +437,18 @@ pub fn quiet() -> Vec<(&'static str, Level)> {
 ///
 /// The pair is the caller's because it is the band's and not muir's:
 /// [`CHAOS_100`] for the System 100 pack, [`CHAOS_304`] for the other, and
-/// a band reached at any other pair --- the defaults included --- boots
-/// but stops to ask for the date and reaches no files.
+/// a band reached at any other pair --- the default address included ---
+/// boots but stops to ask for the date and reaches no files. The server is
+/// the harness's, [`ChaosServer`]: `muir` has none, and a run of it names
+/// an external host with `--chaos-udp-peer` instead.
 ///
 /// Any engine: the Chaosnet is the machine's and not the engine's, and
 /// every engine keeps the machine's clock, which is what the interface
 /// runs on.
 pub fn boot_to_the_prompt<E: Engine>(e: &mut E, chaos: (u16, u16), file_root: PathBuf) -> u64 {
-    (e.machine_mut().chaos.address, e.machine_mut().chaos.server_address) = chaos;
-    e.machine_mut().chaos.file_root = Some(file_root);
-    e.machine_mut().chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
-    e.machine_mut().plug_chaos(0);
+    let m = e.machine_mut();
+    m.chaos.address = chaos.0;
+    ChaosServer::new(chaos.1).serving(file_root).at_time(time::TEST_UNIVERSAL).plug(m, 0);
     wait_for_the_prompt(e)
 }
 
