@@ -20,7 +20,7 @@ use muir::terminal::keyboard::Keyboard;
 use muir::terminal::mouse::Mouse;
 
 mod support;
-use support::{CHAOS_100, boot_to_the_prompt, machine_with_pack, type_at, vendor};
+use support::{CHAOS_100, boot_to_the_prompt, machine_with_pack, type_at};
 
 /// A fixnum out of A memory, signed from its 24-bit pointer field.
 fn fixnum(word: u32) -> i32 {
@@ -41,7 +41,7 @@ fn the_pointer_moves_the_machines_mouse() {
     let (Some(pack), Some(symbols), Some(root)) = (
         support::pack_100(),
         support::release_100_file(&["ubin", "ucadr.sym"]),
-        vendor(&["run", "file-root"]),
+        support::file_root(),
     ) else {
         return;
     };

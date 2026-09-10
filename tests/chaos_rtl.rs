@@ -12,15 +12,15 @@
 
 use muir::chaos::ether::{Capture, Ether, turn_byte};
 use muir::chaos::interface::{self as chaos, csr};
-use muir::chaos::packet::Packet;
-use muir::chaos::server::{Server, op};
-use muir::chaos::time::Time;
+use muir::chaos::packet::{Packet, op};
 use muir::ioboard::IoBoard;
 use muir::netlist::Netlist;
 use muir::part::Level;
 use muir::unibus::UnibusMaster;
 
 mod support;
+use support::server::Server;
+use support::time::Time;
 use support::{cadrio, quiet};
 
 const MY_ADDRESS: u16 = 0o3050;

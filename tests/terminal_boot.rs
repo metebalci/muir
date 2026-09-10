@@ -15,7 +15,7 @@ use muir::rtl::Rtl;
 use muir::terminal::keyboard::Keyboard;
 
 mod support;
-use support::{CHAOS_100, boot_to_the_prompt, lit_rows, machine_with_pack, type_at, vendor};
+use support::{CHAOS_100, boot_to_the_prompt, lit_rows, machine_with_pack, type_at};
 
 /// Lit pixels on the screen.
 fn lit(e: &Rtl) -> usize {
@@ -31,7 +31,7 @@ fn lit(e: &Rtl) -> usize {
 /// Then the listener echoes it, and the screen has more on it than it had.
 #[test]
 fn a_key_typed_at_the_listener_is_read_and_echoed() {
-    let (Some(pack), Some(root)) = (support::pack_100(), vendor(&["run", "file-root"])) else {
+    let (Some(pack), Some(root)) = (support::pack_100(), support::file_root()) else {
         return;
     };
     let mut e = Rtl::new(machine_with_pack(&pack));

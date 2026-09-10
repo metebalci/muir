@@ -132,14 +132,12 @@ fn muirrc(name: &str, text: &str) -> (Scratch, PathBuf) {
 fn the_flags_in_the_file_are_the_runs() {
     // A directory with a space in its name, for the rest of the line.
     let dir = scratch("rc root");
-    // --chaos-file-root resolves what it is given, and the temporary
-    // directory is behind a symbolic link on macOS.
-    let root = dir.canonicalize().unwrap();
+    let gif = dir.join("a recording.gif");
     let (_rc_dir, rc) = muirrc(
         "flags",
         &format!(
-            "# what every run of mine wants\n\n--rtl\n--stop-after 10\n--chaos-file-root {}\n",
-            dir.display()
+            "# what every run of mine wants\n\n--rtl\n--stop-after 10\n--tv-capture {}\n",
+            gif.display()
         ),
     );
     let out = muir().env("MUIR_RC", &rc).run();
@@ -148,7 +146,7 @@ fn the_flags_in_the_file_are_the_runs() {
     assert!(t.contains("engine: rtl"), "the engine came from the file:\n{t}");
     assert!(t.contains("stop: after 10 microcycles"), "and the stop:\n{t}");
     assert!(
-        t.contains(&format!("file root {}", root.display())),
+        t.contains(&format!("capture: {}", gif.display())),
         "the rest of the line is one word, spaces and all:\n{t}"
     );
     assert!(t.contains(&format!("from {}", rc.display())), "the start says where from:\n{t}");
@@ -436,23 +434,23 @@ fn a_running_chip_says_where_it_is_when_asked() {
     assert!(text.contains("ran out at 6000"), "and ran to its stop after answering:\n{text}");
 }
 
-/// **The CHUDP flags describe a link that has to be there.** Without
-/// `--chaos-udp` nothing is listening, so a peer, a request to learn
-/// where one is, and a list of who may have files are each a statement
-/// about a link that does not exist.
+/// **The CHUDP flags describe a link that has to be there.** With neither
+/// `--chaos-address` nor `--chaos-udp` nothing is listening, so a peer and
+/// a request to learn where one is are each a statement about a link that
+/// does not exist.
 #[test]
 fn the_chudp_flags_need_the_link() {
     refused(&["--chaos-udp-peer", "3040@127.0.0.1:42043", "--stop-after", "1"], "--chaos-udp-peer");
     refused(&["--chaos-udp-dynamic", "--stop-after", "1"], "--chaos-udp-dynamic");
-    refused(&["--chaos-file-peers", "3040", "--stop-after", "1"], "--chaos-file-peers");
 }
 
-/// **A peer is one endpoint, and not an address the cable already
-/// carries.** Two endpoints for one address are two answers to where one
-/// host lives; an address this machine or its Chaosnet server answers at
-/// is a host that is here, not one over the network.
+/// **A peer is one endpoint, and not this machine's own address.** Two
+/// endpoints for one address are two answers to where one host lives; the
+/// address this machine answers at is not a host over the network. Only
+/// this machine's: nothing else is on the cable, the file and time host
+/// being a peer like any other.
 #[test]
-fn a_peer_is_one_endpoint_and_not_one_of_this_cables_own() {
+fn a_peer_is_one_endpoint_and_not_this_machines_own() {
     let link = ["--chaos-udp", "127.0.0.1:0"];
     let twice = [
         link.as_slice(),
@@ -462,17 +460,24 @@ fn a_peer_is_one_endpoint_and_not_one_of_this_cables_own() {
     ]
     .concat();
     refused(&twice, "--chaos-udp-peer");
-    // The cable's own two with no --chaos-address: `chaos::Config`'s
-    // defaults, 177001 and its server at 177002, which are no band's.
-    for a in ["177001", "177002"] {
-        let peer = format!("{a}@127.0.0.1:42043");
-        let own = [link.as_slice(), &["--chaos-udp-peer", &peer], &["--stop-after", "1"]].concat();
-        refused(&own, "--chaos-udp-peer");
-    }
-    // But the same address is a peer when this machine is somewhere else.
+    // The cable's own with no --chaos-address: `chaos::Config`'s default,
+    // 177001, which is no band's.
+    let own =
+        [link.as_slice(), &["--chaos-udp-peer", "177001@127.0.0.1:42043"], &["--stop-after", "1"]]
+            .concat();
+    refused(&own, "--chaos-udp-peer");
+    // 177002 was the old server's address, and is now a peer like any
+    // other: nothing on this cable answers there.
     let out = muir()
         .args(link)
-        .args(["--chaos-address", "4401,4403"])
+        .args(["--chaos-udp-peer", "177002@127.0.0.1:42043", "--micro", "--stop-after", "1"])
+        .run();
+    assert!(out.status.success(), "{}", text(&out));
+    // And this machine's own address is a peer when this machine is
+    // somewhere else.
+    let out = muir()
+        .args(link)
+        .args(["--chaos-address", "4401"])
         .args(["--chaos-udp-peer", "3050@127.0.0.1:42043", "--micro", "--stop-after", "1"])
         .run();
     assert!(out.status.success(), "{}", text(&out));
@@ -517,17 +522,117 @@ fn a_peer_is_an_address_and_where_it_lives() {
 fn the_start_says_what_the_link_is() {
     let out = muir()
         .args(["--micro", "--stop-after", "1", "--chaos-udp", "127.0.0.1:0"])
-        .args(["--chaos-udp-peer", "3040@127.0.0.1:42043", "--chaos-udp-dynamic"])
-        .args(["--chaos-file-peers", "3040"])
+        .args(["--chaos-udp-peer", "3060@127.0.0.1:42043", "--chaos-udp-dynamic"])
         .run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     let line = t.lines().find(|l| l.starts_with("chaosnet udp:")).unwrap_or_else(|| panic!("{t}"));
     assert!(line.contains("listening at 127.0.0.1:"), "where it listens: {line}");
-    assert!(line.contains("3040 at 127.0.0.1:42043"), "and who is on it: {line}");
+    assert!(line.contains("3060 at 127.0.0.1:42043"), "and who is on it: {line}");
     assert!(line.contains("learning where others are"), "and that it learns: {line}");
-    assert!(line.contains("FILE to 3040"), "and who may have files: {line}");
+    // A link with no peer named is a run that reaches no file or time
+    // host, and the line says so rather than leaving it to be found out
+    // at the cold-load debugger.
+    let out = muir().args(["--micro", "--stop-after", "1", "--chaos-udp", "127.0.0.1:0"]).run();
+    let t = text(&out);
+    let line = t.lines().find(|l| l.starts_with("chaosnet udp:")).unwrap_or_else(|| panic!("{t}"));
+    assert!(line.contains("no peer named, so no file or time host"), "{line}");
     // And with no link there is no line at all.
     let out = muir().args(["--micro", "--stop-after", "1"]).run();
     assert!(!text(&out).contains("chaosnet udp:"), "{}", text(&out));
+}
+
+/// **The flags of the Chaosnet server muir used to carry are refused, and
+/// the refusal says where the host went.** muir has no file or time server
+/// in it any more --- a CADR had none --- so `--chaos-file-root`,
+/// `--chaos-file-peers` and `--debuggee-chaos-file-root` configure
+/// nothing. A run whose `.muirrc` still names one would otherwise boot
+/// quietly to the cold-load debugger asking for the date, so it is stopped
+/// with the answer in the first line: the host is another program on the
+/// network, `ozd`, named with `--chaos-udp-peer`.
+#[test]
+fn the_file_server_flags_are_gone_and_say_where_the_host_went() {
+    for flag in ["--chaos-file-root", "--chaos-file-peers", "--debuggee-chaos-file-root"] {
+        let out = muir().args([flag, ".", "--stop-after", "1"]).run();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{flag}: not a usage error:\n{err}");
+        let first = err.lines().next().unwrap_or("");
+        assert!(first.contains(flag), "{flag}: the first line names it:\n{err}");
+        assert!(first.contains("--chaos-udp-peer"), "{flag}: and what replaced it:\n{err}");
+        assert!(first.contains("ozd"), "{flag}: and which host that is:\n{err}");
+    }
+}
+
+/// **`--chaos-address` takes one address.** The second half was the
+/// Chaosnet server's, and there is no Chaosnet server in muir to give an
+/// address to; a run that still writes the old pair is refused rather than
+/// left to find out at the cold-load debugger.
+#[test]
+fn the_chaos_address_is_one_address() {
+    for arg in ["3050,3060", "4401,4403", "3050,"] {
+        refused(&["--chaos-address", arg, "--stop-after", "1"], "--chaos-address");
+    }
+    // And what is refused says where the host is named instead.
+    let out = muir().args(["--chaos-address", "3050,3060", "--stop-after", "1"]).run();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.lines().next().is_some_and(|l| l.contains("--chaos-udp-peer")), "{err}");
+    // One address is taken, in octal or subnet:host.
+    for arg in ["3050", "6:50"] {
+        let out = muir()
+            .args(["--micro", "--stop-after", "1", "--chaos-address", arg])
+            .args(["--chaos-udp", "127.0.0.1:0"])
+            .run();
+        let t = text(&out);
+        assert!(out.status.success(), "{arg}:\n{t}");
+        assert!(t.contains("chaosnet: 3050,"), "{arg}: the same number either way:\n{t}");
+    }
+}
+
+/// **`--chaos-address` starts Chaosnet over UDP, and a run without it
+/// opens no socket.**
+///
+/// An address is a run saying which machine on which network this is, and
+/// a network it cannot reach is no network: the file and time host a band
+/// calls is another program, so the link is what the address is for. It
+/// goes on the protocol's own port, 42042, unless `--chaos-udp` says
+/// where.
+///
+/// And a plain `muir` binds nothing. That is what lets many runs go at
+/// once --- this file alone starts dozens --- and a port bound by every
+/// run of a simulator that mostly does not want one would be a port nobody
+/// asked for.
+///
+/// **The default-port half skips when something else holds 42042**, and
+/// says so. It is the protocol's own port, so a Chaosnet daemon on the
+/// same machine --- `ozd`, a `cbridge` --- has it, and a suite that failed
+/// for that would be failing about the machine it runs on rather than
+/// about muir.
+#[test]
+fn an_address_starts_the_link_and_nothing_else_does() {
+    let out = muir().args(["--micro", "--stop-after", "1", "--chaos-address", "3050"]).run();
+    let t = text(&out);
+    if !out.status.success() && t.contains("--chaos-udp 127.0.0.1:42042") {
+        eprintln!("skipped: something on this machine already holds port 42042");
+    } else {
+        assert!(out.status.success(), "{t}");
+        assert!(
+            t.contains("chaosnet udp: listening at 127.0.0.1:42042"),
+            "the protocol's own port:\n{t}"
+        );
+    }
+    // --chaos-udp says where instead, and is still usable on its own.
+    let out = muir()
+        .args(["--micro", "--stop-after", "1", "--chaos-address", "3050"])
+        .args(["--chaos-udp", "127.0.0.1:0"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("chaosnet udp: listening at 127.0.0.1:"), "{t}");
+    assert!(!t.contains(":42042"), "the flag had the last word:\n{t}");
+    // With no address there is no socket at all.
+    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(!t.contains("chaosnet udp:"), "no link:\n{t}");
+    assert!(t.contains("--chaos-address puts it on a network"), "and the line says so:\n{t}");
 }

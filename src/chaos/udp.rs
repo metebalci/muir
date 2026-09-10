@@ -11,17 +11,15 @@
 //! Chaosnet, does not.
 //!
 //! **muir is a leaf, not a router.** A datagram whose hardware
-//! destination is neither this machine, nor the Chaosnet server on its
-//! cable, nor the broadcast address is dropped rather than forwarded;
-//! AIM-628 chapter 6's routing is a bridge's job and `cbridge` is beside
-//! muir to do it.
+//! destination is neither an address on this machine's cable nor the
+//! broadcast address is dropped rather than forwarded; AIM-628 chapter
+//! 6's routing is a bridge's job and `cbridge` is beside muir to do it.
 //!
 //! **The link is a [`super::ether::Node`] and nothing else.** It waits
-//! its turn on the modelled cable as the Chaosnet server does, so the
-//! board sees a station taking its turn rather than a transceiver that
-//! has failed. What comes in over UDP goes on the cable at the node's
-//! turn; what the board puts on the cable for a peer goes out as a
-//! datagram.
+//! its turn on the modelled cable as any other station does, so the board
+//! sees a station taking its turn rather than a transceiver that has
+//! failed. What comes in over UDP goes on the cable at the node's turn;
+//! what the board puts on the cable for a peer goes out as a datagram.
 //!
 //! ## The frame
 //!
@@ -303,9 +301,9 @@ impl Link {
     }
 
     /// The node this link puts on a cable. `local` are the addresses
-    /// already on that cable --- this machine's and the Chaosnet
-    /// server's --- which are never learned, never sent out, and never
-    /// spoken for.
+    /// already on that cable --- this machine's, and whatever else this
+    /// process put there --- which are never learned, never sent out, and
+    /// never spoken for.
     pub fn node(&self, local: &[u16], trace: bool) -> Chudp {
         Chudp {
             socket: self.socket.clone(),
@@ -420,7 +418,7 @@ impl Chudp {
             eprintln!(
                 "chudp {now:>6}: from {from}: {:o} -> {dest:o} {} for the cable{}",
                 f.source,
-                super::server::op_name(p.opcode),
+                super::packet::op_name(p.opcode),
                 if f.check_ok { "" } else { ", its check word not the hardware's" }
             );
         }
@@ -468,7 +466,7 @@ impl Node for Chudp {
                 eprintln!(
                     "chudp {now:>6}: {:o} -> {dest:o} {} to {addr}",
                     packet.source,
-                    super::server::op_name(p.opcode)
+                    super::packet::op_name(p.opcode)
                 );
             }
             if let Err(e) = self.socket.send_to(&datagram, addr)

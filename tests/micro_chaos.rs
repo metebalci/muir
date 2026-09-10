@@ -24,8 +24,7 @@
 use std::sync::Mutex;
 
 use muir::chaos::ether::Event;
-use muir::chaos::packet::Packet;
-use muir::chaos::server::op;
+use muir::chaos::packet::{Packet, op};
 use muir::engine::Engine;
 use muir::micro::Micro;
 use muir::rtl::Rtl;
@@ -33,7 +32,8 @@ use muir::terminal::keyboard::Keyboard;
 
 mod support;
 use support::{
-    CHAOS_100, lit_rows, machine_with_pack, pack_100, type_at, vendor, wait_for_the_prompt,
+    CHAOS_100, ChaosServer, file_root, lit_rows, machine_with_pack, pack_100, time, type_at,
+    wait_for_the_prompt,
 };
 
 /// The two machines here serve one directory, so they take turns: two
@@ -66,7 +66,7 @@ fn text(p: &Packet) -> String {
 /// This is what settles issue #28.
 #[test]
 fn the_band_boots_over_the_chaosnet_on_micro() {
-    let (Some(pack), Some(root)) = (pack_100(), vendor(&["run", "file-root"])) else {
+    let (Some(pack), Some(root)) = (pack_100(), file_root()) else {
         return;
     };
     boots_and_reads_a_file(Micro::new(machine_with_pack(&pack)), root, "micro");
@@ -77,7 +77,7 @@ fn the_band_boots_over_the_chaosnet_on_micro() {
 /// than `micro` being held to what someone thought it ought to say.
 #[test]
 fn the_band_boots_over_the_chaosnet_on_rtl() {
-    let (Some(pack), Some(root)) = (pack_100(), vendor(&["run", "file-root"])) else {
+    let (Some(pack), Some(root)) = (pack_100(), file_root()) else {
         return;
     };
     boots_and_reads_a_file(Rtl::new(machine_with_pack(&pack)), root, "rtl");
@@ -92,10 +92,8 @@ fn boots_and_reads_a_file<E: Engine>(mut e: E, root: std::path::PathBuf, name: &
     // 376 and are no band's, so the pair is named here; without it the
     // band calls an address nothing answers at, and nothing this test
     // looks for goes on the cable at all.
-    (m.chaos.address, m.chaos.server_address) = CHAOS_100;
-    m.chaos.file_root = Some(root);
-    m.chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
-    m.plug_chaos(0);
+    m.chaos.address = CHAOS_100.0;
+    ChaosServer::new(CHAOS_100.1).serving(root).at_time(time::TEST_UNIVERSAL).plug(m, 0);
     // After the plug, so the log is this interface's own.
     m.ioboard.chaos.as_mut().unwrap().ether_mut().unwrap().keep_log(true);
 

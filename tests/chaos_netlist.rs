@@ -651,9 +651,9 @@ fn the_board_takes_broadcasts_and_not_others_packets() {
     assert_eq!(&back[..words.len()], &words[..]);
 }
 
-use muir::chaos::packet::Packet;
-use muir::chaos::server::{Server, op};
-use muir::chaos::time::Time;
+use muir::chaos::packet::{Packet, op};
+use support::server::Server;
+use support::time::Time;
 
 /// **TIME, over the board.** What the Lisp Machine's `SERVER-TIME` does
 /// through these registers, done through them: an RFC to `TIME` at 3060

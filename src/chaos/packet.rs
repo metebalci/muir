@@ -17,6 +17,64 @@
 /// 488".
 pub const MAX_DATA: usize = 488;
 
+/// Packet opcodes, AIM-628 chapter 4, as `sys/network/chaos/chsncp.lisp`
+/// numbers them.
+pub mod op {
+    pub const RFC: u8 = 0o1;
+    pub const OPN: u8 = 0o2;
+    pub const CLS: u8 = 0o3;
+    pub const FWD: u8 = 0o4;
+    pub const ANS: u8 = 0o5;
+    pub const SNS: u8 = 0o6;
+    pub const STS: u8 = 0o7;
+    pub const RUT: u8 = 0o10;
+    pub const LOS: u8 = 0o11;
+    pub const LSN: u8 = 0o12;
+    pub const MNT: u8 = 0o13;
+    pub const EOF: u8 = 0o14;
+    pub const UNC: u8 = 0o15;
+    pub const BRD: u8 = 0o16;
+    /// "Opcodes 200 through 277 (octal) are controlled packets with user
+    /// data in 8-bit bytes"; 200 is the default.
+    pub const DAT: u8 = 0o200;
+    /// "Opcodes 300 through 377 ... 16-bit bytes"; 300 is the default.
+    pub const DWD: u8 = 0o300;
+    /// Whether an opcode carries user data.
+    pub fn is_data(op: u8) -> bool {
+        op >= DAT
+    }
+    /// Whether packets of this opcode are controlled --- numbered,
+    /// acknowledged and retransmitted, §3.8.
+    pub fn is_controlled(op: u8) -> bool {
+        matches!(op, RFC | OPN | EOF) || is_data(op)
+    }
+}
+
+/// An opcode's name, for a trace: the mnemonic of [`op`], or `DAT`/`DWD`
+/// with the opcode in octal for the data ranges, or `op<n>` for one
+/// AIM-628 does not name.
+pub fn op_name(op: u8) -> String {
+    match op {
+        op::RFC => "RFC".into(),
+        op::OPN => "OPN".into(),
+        op::CLS => "CLS".into(),
+        op::FWD => "FWD".into(),
+        op::ANS => "ANS".into(),
+        op::SNS => "SNS".into(),
+        op::STS => "STS".into(),
+        op::RUT => "RUT".into(),
+        op::LOS => "LOS".into(),
+        op::LSN => "LSN".into(),
+        op::MNT => "MNT".into(),
+        op::EOF => "EOF".into(),
+        op::UNC => "UNC".into(),
+        op::BRD => "BRD".into(),
+        o if o >= op::DWD => format!("DWD{:o}", o),
+        o if o >= op::DAT => format!("DAT{:o}", o),
+        o => format!("op{o:o}"),
+    }
+}
+
 /// The software header and data, AIM-628 §3.5.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Packet {

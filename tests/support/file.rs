@@ -55,8 +55,8 @@
 //! and followed by a *synchronous mark* on the data connection, which is
 //! what the user end reads until.
 
-use super::packet::MAX_DATA;
 use super::server::{Out, Response, Service, Session};
+use muir::chaos::packet::MAX_DATA;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -107,8 +107,8 @@ impl File {
     /// A service answering **every** host that can reach it, which is
     /// what a cable in one process carries: this machine. A CHUDP link
     /// is what puts anyone else on that cable, and
-    /// [`super::Config::server`] narrows the service to
-    /// `--chaos-file-peers` before there is one.
+    /// [`super::ChaosServer`] narrows the service with
+    /// [`File::serving`] before there is one.
     pub fn new(root: impl Into<PathBuf>) -> File {
         File { root: root.into(), time: None, hosts: None }
     }
@@ -356,7 +356,7 @@ impl Control {
     /// The file under the root that a pathname names, or why not.
     ///
     /// The root is the service's `/`, and nothing the service does may
-    /// reach a file outside the tree it serves: `--chaos-file-root`'s help
+    /// reach a file outside the tree it serves: [`super::ChaosServer::serving`]
     /// promises that what it writes, renames and deletes stays there. The
     /// tree is the root and what the root's own links lead to ---
     /// each release's fetch script puts its sources under the root by such

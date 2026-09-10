@@ -474,14 +474,14 @@ impl FarEnd {
             let drive = crate::disk_unit::Trident::new(unit, powered_at);
             xbus.plug_unit(u as u8, drive, powered_at);
         }
-        // The Chaosnet server goes on the I/O board's Chaosnet cable, with its
-        // services: TIME and UPTIME always, FILE when given a root.
+        // The I/O board's Chaosnet cable, carrying the hosts that are not
+        // in this process if a CHUDP link was bound: one node, taking its
+        // turn. Nothing else is on it --- a CADR has no file or time
+        // server in it --- and [`FarEnd::attach_chaos_node`] is how a
+        // caller in this process puts one there.
         let unibus = boards.io.map(|io| {
             let mut u = Unibus::new(busint, io, powered_at, chaos.address);
             let mut ether = crate::chaos::ether::Ether::new();
-            ether.attach(Box::new(chaos.server(powered_at)));
-            // And the Chaosnet hosts that are not in this process, if a
-            // CHUDP link was bound: one more node, taking its turn.
             if let Some(node) = chaos.udp_node() {
                 ether.attach(node);
             }
@@ -501,6 +501,23 @@ impl FarEnd {
             int_busy: busint.by_name_id("'INT BUSY'").expect("INT BUSY"),
             joined: false,
         }
+    }
+
+    /// Puts `node` on the I/O board's Chaosnet cable, beside the CHUDP
+    /// link's if there is one: a station like any other, heard by the
+    /// board and taking its turn to transmit. What
+    /// [`crate::machine::Machine::attach_chaos_node`] is on the other two
+    /// engines.
+    ///
+    /// The cable is the netlist I/O board's, so a far end built without
+    /// one has none, and this panics rather than dropping the node on the
+    /// floor.
+    pub fn attach_chaos_node(&mut self, node: Box<dyn crate::chaos::ether::Node>) {
+        self.unibus
+            .as_mut()
+            .and_then(|u| u.ether_mut())
+            .expect("an I/O board netlist with a Chaosnet cable")
+            .attach(node);
     }
 
     /// Settles everything against everything at `now`: the cables between

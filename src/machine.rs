@@ -165,7 +165,8 @@ pub struct Machine {
     /// board is always there; whether a drive is plugged into it is
     /// [`Controller::attach`].
     pub disk: Controller,
-    /// The Chaosnet: this machine's address and the host across the cable.
+    /// The Chaosnet: this machine's address, and the link its cable
+    /// reaches the rest of the network over.
     pub chaos: crate::chaos::Config,
     /// The standard black-and-white display.
     pub simpletv: SimpleTv,
@@ -457,17 +458,37 @@ impl Machine {
 
     /// Plugs the Chaosnet in as [`Machine::chaos`] describes it: the
     /// interface on the I/O board at the configured address, and on its
-    /// cable the Chaosnet server with its services, powered at `powered_at` on
-    /// the machine's clock.
+    /// cable the Chaosnet hosts that are not in this process, if a CHUDP
+    /// link was bound. Powered at `powered_at` on the machine's clock.
+    ///
+    /// **Nothing else is on that cable.** A CADR carries no file or time
+    /// server, so neither does this; what a band calls for its files and
+    /// the date is a host on the network, reached over the link.
+    /// [`Machine::attach_chaos_node`] is how a caller in this process ---
+    /// the test harness, with its Chaosnet server --- puts one there
+    /// instead.
     pub fn plug_chaos(&mut self, powered_at: u64) {
         let mut ether = crate::chaos::ether::Ether::new();
-        ether.attach(Box::new(self.chaos.server(powered_at)));
-        // And the Chaosnet hosts that are not in this process, if a
-        // CHUDP link was bound: one more node, taking its turn.
         if let Some(node) = self.chaos.udp_node() {
             ether.attach(node);
         }
         self.ioboard.plug_chaos(self.chaos.address, Some(ether), powered_at, self.chaos.trace);
+    }
+
+    /// Puts `node` on this machine's Chaosnet cable, beside the CHUDP
+    /// link's if there is one: a station like any other, heard by the
+    /// interface and taking its turn to transmit.
+    ///
+    /// After [`Machine::plug_chaos`], which is what makes the cable; a
+    /// machine with none has nothing to attach to and this panics rather
+    /// than dropping the node on the floor.
+    pub fn attach_chaos_node(&mut self, node: Box<dyn crate::chaos::ether::Node>) {
+        self.ioboard
+            .chaos
+            .as_mut()
+            .and_then(|c| c.ether_mut())
+            .expect("a Chaosnet cable: plug_chaos first")
+            .attach(node);
     }
 
     /// The bus interface's own registers, as the board reads them back.

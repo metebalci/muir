@@ -7,7 +7,7 @@
 # the behaviour this job also checks.
 #
 # `system-100` fetches System 100, the target --- the pack the engines boot
-# and the sources the Chaosnet server serves --- and runs the same suite
+# and the sources the tests' Chaosnet server serves --- and runs the same suite
 # with it there, so the tests that boot the band run, CC's own quick
 # diagnostic of the machine among them. The two downloads, some 34 MB, are
 # cached on the script's hash; the pack is unpacked from them on every run.
@@ -113,7 +113,7 @@ jobs:
         run: tools/fetch-system-100.sh
 
       # Everything, with the pack there: the engines boot the band, the
-      # Chaosnet server serves the sources, and CC checks the machine.
+      # tests' Chaosnet server serves the sources, and CC checks the machine.
       # The System 304 test skips, as it does on a fresh clone; that
       # release is not fetched here.
       - name: Tests, with the release
