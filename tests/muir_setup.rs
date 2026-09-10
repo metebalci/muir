@@ -23,10 +23,10 @@ fn the_start_says_what_the_run_is() {
         "memory: 4 boards, 256 KW",
         // The Chaosnet is the machine's and not the engine's, so `micro`
         // has one too: `tests/micro_chaos.rs` boots the band over it.
-        // With no --chaos-address these are the defaults, on the private
-        // subnet 376 and no band's; a run that boots a band names the
-        // band's own pair.
-        "chaosnet: 177001, the server at 177002, ",
+        // With no --chaos-address this is the default, on the private
+        // subnet 376 and no band's, and the cable is off the network; a
+        // run that boots a band names its own address and its host.
+        "chaosnet: 177001, alone on its cable",
         "terminal: vnc://127.0.0.1:59",
         "stop: after 10 microcycles",
         "^C holds the machine at the prompt",
@@ -40,7 +40,7 @@ fn the_start_says_what_the_run_is() {
     for line in [
         "engine: rtl",
         "memory: 32 boards, 2 MW",
-        "chaosnet: 177001, the server at 177002, ",
+        "chaosnet: 177001, alone on its cable",
         "stop: after 10 microcycles, at PC 23731",
     ] {
         assert!(t.contains(line), "{line}:\n{t}");
@@ -73,29 +73,36 @@ fn the_start_says_what_the_run_is() {
 }
 
 /// **A path under the directory muir was run from is written relative to
-/// it**: the pack and the Chaosnet server's file root are looked for
-/// there, and their whole paths say nothing a reader does not know.  A
-/// path elsewhere is written whole.
+/// it**: the pack and the file of flags are looked for there, and their
+/// whole paths say nothing a reader does not know.  A path elsewhere is
+/// written whole.
 #[test]
 fn paths_under_the_run_directory_are_written_relative() {
     let here = std::env::current_dir().unwrap();
     // Under `target/`, the one place in the repository a test may write.
-    let root =
-        Scratch::at(here.join("target").join(format!("muir-file-root-{}", std::process::id())));
-    let out = muir().args(["--rtl", "--stop-after", "10", "--chaos-file-root"]).arg(&*root).run();
+    let dir = Scratch::at(here.join("target").join(format!("muir-rc-{}", std::process::id())));
+    let rc = dir.join(".muirrc");
+    std::fs::write(&rc, "--stop-after 10\n").unwrap();
+    let out = muir().env("MUIR_RC", &rc).args(["--rtl"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
-    let relative = format!("file root target/muir-file-root-{}", std::process::id());
+    let relative = format!("from target/muir-rc-{}/.muirrc", std::process::id());
     assert!(t.contains(&relative), "{relative}:\n{t}");
     assert!(!t.contains(&here.display().to_string()), "and not the whole path:\n{t}");
 
     // Elsewhere: the whole path, since there is nothing shorter to say.
-    let elsewhere = std::env::temp_dir().canonicalize().unwrap();
-    let out =
-        muir().args(["--rtl", "--stop-after", "10", "--chaos-file-root"]).arg(&elsewhere).run();
+    let elsewhere = Scratch::at(
+        std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("muir-rc-{}", std::process::id())),
+    );
+    let rc = elsewhere.join(".muirrc");
+    std::fs::write(&rc, "--stop-after 10\n").unwrap();
+    let out = muir().env("MUIR_RC", &rc).args(["--rtl"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
-    assert!(t.contains(&format!("file root {}", elsewhere.display())), "{t}");
+    assert!(t.contains(&format!("from {}", rc.display())), "{t}");
 }
 
 /// **`info` says it again**, on stdout, as the start did on stderr.

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! What the CC tests share: two `rtl` machines under [`Lashup`], A booting
-//! System 100 from the pack with the Chaosnet server serving the release as
-//! `SYS:`, B running the boot PROM with no pack; A typed at through its
+//! System 100 from the pack with the harness's Chaosnet server on its cable
+//! serving the release as `SYS:`, B running the boot PROM with no pack; A typed at through its
 //! keyboard; CC loaded over the FILE service; the two screens recorded on
 //! one canvas as they go; and a way to run a form on A and get what it
 //! printed back over the FILE service.
@@ -25,8 +25,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use muir::capture::Recorder;
 use muir::chaos::ether::Event;
-use muir::chaos::packet::Packet;
-use muir::chaos::server::op;
+use muir::chaos::packet::{Packet, op};
 use muir::disk_unit::{Geometry, Unit};
 use muir::engine::Engine;
 use muir::lashup::Lashup;
@@ -36,7 +35,7 @@ use muir::rtl::Rtl;
 use muir::simpletv::WIDTH;
 use muir::terminal::keyboard::{Keyboard, keysym};
 
-pub use crate::support::{pack_100, vendor};
+pub use crate::support::{ChaosServer, pack_100, time, vendor};
 
 /// The two machines, A's keyboard, the FILE service's root and the
 /// recording of the two screens.
@@ -123,8 +122,8 @@ impl Release {
     /// this release's band holds them: `MIT-LISPM-1` at 3050 with `MIT-OZ`
     /// at 3060, `AMS-LISPM-1` at 4401 with `OZ` at 4403.  A server
     /// answering anywhere else is a server the band never calls, and
-    /// `chaos::Config`'s defaults are such a server on purpose --- subnet
-    /// 376's, no band's --- so the pair comes from here.
+    /// `chaos::Config`'s default address is on subnet 376, which is no
+    /// band's on purpose --- so the pair comes from here.
     pub fn chaos(self) -> (u16, u16) {
         match self {
             Release::System100 => crate::support::CHAOS_100,
@@ -467,7 +466,7 @@ pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
 /// service's link points at.  What is typed afterwards is the caller's.
 pub fn boot_and_login_on(release: Release, debuggee_pack: bool) -> Option<Cc> {
     let (Some(prom), Some(pack), Some(root)) =
-        (release.prom(), release.pack(), vendor(&["run", "file-root"]))
+        (release.prom(), release.pack(), crate::support::file_root())
     else {
         return None;
     };
@@ -488,12 +487,14 @@ pub fn boot_and_login_on(release: Release, debuggee_pack: bool) -> Option<Cc> {
     // The band's own numbers.  At any other pair the machine boots and
     // reaches no server at all: 4403 is off 3050's subnet, so System 304's
     // band, hearing no route to it, never transmits.
-    (a.chaos.address, a.chaos.server_address) = release.chaos();
-    a.chaos.server_name = release.server_name();
-    a.chaos.file_root = Some(root.clone());
+    let (me, server) = release.chaos();
+    a.chaos.address = me;
     a.chaos.trace = std::env::var_os("MUIR_CHAOS_TRACE").is_some();
-    a.chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
-    a.plug_chaos(0);
+    ChaosServer::new(server)
+        .named(&release.server_name())
+        .serving(root.clone())
+        .at_time(time::TEST_UNIVERSAL)
+        .plug(&mut a, 0);
     // `Cc::data_frames` counts what has crossed A's cable, and the log is
     // off unless a run asks for it.
     a.ioboard.chaos.as_mut().unwrap().ether_mut().unwrap().keep_log(true);
@@ -503,16 +504,18 @@ pub fn boot_and_login_on(release: Release, debuggee_pack: bool) -> Option<Cc> {
         b.disk.attach(0, Unit::open(&pack, Geometry::T300).expect("the release's pack"));
     }
     // B's own Chaosnet, as `muir --debug-in-process` gives it: its own
-    // ether with its own server on it, since one cable carries one
-    // machine.  The same fixed time as A's, so its band asks the network
-    // for the date rather than the screen, and **no file root**: two
-    // servers rooted at one directory are two hosts sharing a filesystem,
-    // and this run's directory is A's, temporary files and all.
+    // cable, since one cable carries one machine.  The harness puts a
+    // server of its own on it, with the same fixed time as A's, so its
+    // band asks the network for the date rather than the screen, and
+    // **no file root**: two servers rooted at one directory are two hosts
+    // sharing a filesystem, and this run's directory is A's, temporary
+    // files and all.
+    b.chaos.address = me;
     b.chaos.trace = std::env::var_os("MUIR_CHAOS_TRACE").is_some();
-    b.chaos.time = Some(muir::chaos::time::TEST_UNIVERSAL);
-    (b.chaos.address, b.chaos.server_address) = release.chaos();
-    b.chaos.server_name = release.server_name();
-    b.plug_chaos(0);
+    ChaosServer::new(server)
+        .named(&release.server_name())
+        .at_time(time::TEST_UNIVERSAL)
+        .plug(&mut b, 0);
     let (mut ea, mut eb) = (Rtl::new(a), Rtl::new(b));
     ea.boot();
     eb.boot();

@@ -190,8 +190,8 @@ pub struct Unibus {
     /// Whether that skips the exchange. Off, every wire is carried every
     /// time, the slow way: [`crate::cable::FarEnd::unoptimised`].
     pub skip_unchanged: bool,
-    /// The Chaosnet cable, with the Chaosnet server on it, if plugged in:
-    /// [`Unibus::plug`]. Not in a checkpoint, like the drive: a resume
+    /// The Chaosnet cable, with whatever stations are on it, if plugged
+    /// in: [`Unibus::plug`]. Not in a checkpoint, like the drive: a resume
     /// brings it up fresh.
     chaos: Option<crate::chaos::cable::OnCable>,
     /// When the ether next moves of its own accord.
@@ -334,6 +334,12 @@ impl Unibus {
     /// The ether on the cable, if one is plugged in.
     pub fn ether(&self) -> Option<&crate::chaos::ether::Ether> {
         self.chaos.as_ref().map(|c| &c.ether)
+    }
+
+    /// The same cable, to be configured: another station put on it, or
+    /// [`crate::chaos::ether::Ether::keep_log`] turned on.
+    pub fn ether_mut(&mut self) -> Option<&mut crate::chaos::ether::Ether> {
+        self.chaos.as_mut().map(|c| &mut c.ether)
     }
 
     /// Puts a keyboard on the board's keyboard cable at `now`, in place of

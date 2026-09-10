@@ -24,14 +24,15 @@
 //! it) and would hide exactly the thing being tested.
 
 use muir::chaos::interface::{self as chaos, csr};
-use muir::chaos::packet::Packet;
-use muir::chaos::server::op;
+use muir::chaos::packet::{Packet, op};
 use muir::engine::Engine;
 use muir::machine::Machine;
 use muir::micro::Micro;
 use muir::rtl::Rtl;
 
-/// This machine's switches, and the address the frame comes from.
+/// This machine's switches, and the address the frame comes from --- the
+/// band's file and time host, which is off the cable and not modelled
+/// here: the frame is put on the wire directly.
 const ME: u16 = 0o3050;
 const OTHER: u16 = 0o3060;
 
@@ -69,7 +70,6 @@ fn machine() -> Machine {
     let mut m = Machine::new();
     m.load_prom(&muir::prom::boot_prom());
     m.chaos.address = ME;
-    m.chaos.server_address = OTHER;
     m.plug_chaos(0);
     let ns = m.ns;
     m.ioboard.write(chaos::CSR, csr::RECEIVE_INT_ENABLE, ns);

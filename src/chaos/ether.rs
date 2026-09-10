@@ -14,7 +14,8 @@
 //!
 //! One side of this ether is the netlist board, through
 //! [`super::cable::OnCable`]; the other is any number of [`Node`]s ---
-//! the Chaosnet server with its services, and one day a bridge to a wider Chaosnet ---
+//! the CHUDP link that carries the hosts off this machine, and whatever a
+//! caller in this process puts there ---
 //! which see every packet and offer packets to send. The ether frames,
 //! codes and decodes, and keeps the etiquette of §2.6: a node takes its
 //! turn after a packet, and goes if the cable is idle then. A transmitter
