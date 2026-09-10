@@ -37,7 +37,7 @@
 //! Chaosnet server has no interface: a lost packet or a CRC error cannot
 //! happen to it, so nought is the true count of those. A transmission
 //! aborted on interference can, now that the ether collides
-//! ([`super::ether`]), and is not carried from the cable to this service:
+//! ([`muir::chaos::ether`]), and is not carried from the cable to this service:
 //! that meter's nought is a known omission. What the server can answer
 //! truthfully is its name and which subnet it is on, and it does.
 

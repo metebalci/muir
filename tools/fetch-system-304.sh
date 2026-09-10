@@ -57,7 +57,7 @@
 # version 3 or later, as the sources' own `doc/sys100.msg` says; muir's own
 # licence is the same.
 #
-# It also makes the directory the Chaosnet server serves files from,
+# It also makes the directory the tests' Chaosnet server serves files from,
 # vendor/run/file-root, with `sys` pointing at the release's sources. This
 # band translates `SYS: SYS2; FOO LISP` to `OZ: //sys//sys2//foo.lisp`, so
 # the sources belong at `sys` under the root and a link is all it takes for
@@ -66,9 +66,11 @@
 # same root and the two live side by side.
 #
 # The band's own host table puts this machine at `AMS-LISPM-1`, 4401 octal,
-# and its file and time host `OZ` at 4403, which is not where muir answers
-# unless told: a run with this pack wants `--chaos-address 4401,4403`, and
-# without it the machine boots but asks for the date and reaches no files.
+# and its file and time host `OZ` at 4403. muir is not that host --- a CADR
+# has no file or time server in it --- so a run with this pack wants
+# `--chaos-address 4401` and `--chaos-udp-peer 4403@<where the host is>`,
+# and without them the machine boots but asks for the date and reaches no
+# files. The tests put a server of their own on the modelled cable instead.
 #
 # Re-running this is safe: whatever is already in place is left alone, and
 # nothing else in vendor/ is touched.

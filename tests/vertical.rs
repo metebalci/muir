@@ -14,7 +14,7 @@ use muir::sym::{self, Space};
 use muir::terminal::keyboard::Keyboard;
 
 mod support;
-use support::{CHAOS_100, boot_to_the_prompt, machine_with_pack, type_at, vendor};
+use support::{CHAOS_100, boot_to_the_prompt, machine_with_pack, type_at};
 
 /// **The band's cold boot leaves the vertical interrupt off, and
 /// `(SI:SETUP-CPT)` turns it on; then the microcode counts frames on it.**
@@ -44,7 +44,7 @@ fn setup_cpt_enables_the_vertical_interrupt_and_the_microcode_counts_frames() {
     let (Some(pack), Some(symbols), Some(root)) = (
         support::pack_100(),
         support::release_100_file(&["ubin", "ucadr.sym"]),
-        vendor(&["run", "file-root"]),
+        support::file_root(),
     ) else {
         return;
     };

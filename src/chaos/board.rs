@@ -3,8 +3,8 @@
 
 //! The Chaosnet interface as a behaviour, for the engines whose I/O board
 //! is `rtl`'s model: the registers of [`super::interface`] over an
-//! [`Ether`], so that the Chaosnet server and its FILE service answer `rtl` as
-//! they answer the netlist board.  The netlist board is the authority:
+//! [`Ether`], so that the stations on the cable answer `rtl` as they
+//! answer the netlist board.  The netlist board is the authority:
 //! `tests/chaos_rtl.rs` runs the same register sequences on both, and
 //! holds the instants.
 //!
@@ -230,8 +230,8 @@ pub struct Interface {
     /// The time as last advanced to, for what the registers show of the
     /// cable at the instant they are read.
     now: u64,
-    /// The cable, with the Chaosnet server on it; none, and a frame sent goes
-    /// nowhere and nothing ever comes.
+    /// The cable, with whatever stations are on it; none, and a frame sent
+    /// goes nowhere and nothing ever comes.
     ether: Option<Box<Ether>>,
     /// `--chaos-trace`: say what the receiver takes and drops, and when
     /// the transmitter's turn comes.
@@ -681,8 +681,8 @@ impl Interface {
 impl Interface {
     /// The interface into a checkpoint: its switches and registers, both
     /// buffers, the frames due off the cable and the turn timer.  Not the
-    /// cable, which a resume plugs in afresh with the Chaosnet server on
-    /// it, and not the trace switch.
+    /// cable, which a resume plugs in afresh with whatever the flags put
+    /// on it, and not the trace switch.
     pub fn save(&self, w: &mut crate::checkpoint::Writer) {
         let Interface {
             address,

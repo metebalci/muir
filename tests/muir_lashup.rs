@@ -175,39 +175,36 @@ fn a_debuggee_terminal_wants_the_lashup() {
     panic!("no free port in five tries");
 }
 
-/// **The other machine has a Chaosnet of its own**: its own cable with its
-/// own server on it, at the debugger's addresses unless it is given
-/// others, and with no file service unless one is named for it --- two
-/// servers rooted at one directory being two hosts sharing a filesystem.
-/// Both flags are the other machine's, so both want the lashup.
+/// **The other machine has a Chaosnet of its own**: a cable of its own,
+/// with nothing else on it, at the debugger's address unless it is given
+/// another. It has no CHUDP link either --- one socket belongs to one
+/// cable --- so the only wire between the two machines is the debug cable.
+/// The flag is the other machine's, so it wants the lashup.
 #[test]
 fn the_debuggee_has_a_chaosnet_of_its_own() {
     let out = muir().args(["--rtl", "--debug-in-process", "--stop-after", "100"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(
-        t.contains("debuggee chaosnet: 177001, its own server at 177002, no file root"),
-        "the debugger's addresses, and no FILE:\n{t}"
+        t.contains("debuggee chaosnet: 177001, alone on a cable of its own"),
+        "the debugger's address, and nothing else on the cable:\n{t}"
     );
 
     let out = muir()
-        .args(["--rtl", "--debug-in-process", "--debuggee-chaos-address", "3051,3061"])
+        .args(["--rtl", "--debug-in-process", "--debuggee-chaos-address", "3051"])
         .args(["--stop-after", "100"])
         .run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
-    assert!(t.contains("debuggee chaosnet: 3051, its own server at 3061"), "{t}");
+    assert!(t.contains("debuggee chaosnet: 3051, alone on a cable of its own"), "{t}");
     assert!(
-        t.contains("chaosnet: 177001, the server at 177002"),
-        "this machine's are its own, and here its defaults:\n{t}"
+        t.contains("chaosnet: 177001,"),
+        "this machine's is its own, and here its default:\n{t}"
     );
 
-    for (flag, value) in [("--debuggee-chaos-address", "3051"), ("--debuggee-chaos-file-root", ".")]
-    {
-        let out = muir().args(["--rtl", flag, value, "--stop-after", "1"]).run();
-        assert!(!out.status.success(), "{flag}: {}", text(&out));
-        assert!(text(&out).contains("needs --debug-in-process"), "{flag}: {}", text(&out));
-    }
+    let out = muir().args(["--rtl", "--debuggee-chaos-address", "3051", "--stop-after", "1"]).run();
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("needs --debug-in-process"), "{}", text(&out));
 }
 
 /// `--chip --debug-cable-listen`: the netlist board is the debuggee over

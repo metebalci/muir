@@ -17,6 +17,26 @@
 
 use std::path::PathBuf;
 
+// The Chaosnet server is the test harness's and not the simulator's: a
+// CADR has no file or time server in it, so `muir` carries none and a run
+// of it reaches a host on the network with `--chaos-udp-peer`. This
+// program is the acceptance test run by hand, so it takes the same server
+// the tests take, from the same files.
+// This program uses one corner of them, as each test binary does, so what
+// it does not reach is not dead code.
+#[allow(dead_code)]
+#[path = "../tests/support/file.rs"]
+mod file;
+#[allow(dead_code)]
+#[path = "../tests/support/server.rs"]
+mod server;
+#[allow(dead_code)]
+#[path = "../tests/support/status.rs"]
+mod status;
+#[allow(dead_code)]
+#[path = "../tests/support/time.rs"]
+mod time;
+
 use muir::disk_unit::{Geometry, Unit};
 use muir::engine::Engine;
 use muir::lashup::Lashup;
@@ -83,13 +103,13 @@ fn main() {
             .expect("the System 100 pack"),
     );
     // The band is System 100's: `MIT-LISPM-1` at 3050 calling `MIT-OZ` at
-    // 3060, out of the release's own `sys/site/hosts.text`. muir's
-    // defaults are subnet 376's and no band's, so the pair is named here
-    // or the band reaches neither its time nor its files.
-    (a.chaos.address, a.chaos.server_address) = (0o3050, 0o3060);
-    a.chaos.file_root = Some(vendor(&["run", "file-root"]));
+    // 3060, out of the release's own `sys/site/hosts.text`. muir's default
+    // is subnet 376's and no band's, so the address is named here, and the
+    // server is put on the cable here, or the band reaches neither its
+    // time nor its files.
+    a.chaos.address = 0o3050;
     a.chaos.trace = std::env::var_os("MUIR_CHAOS_TRACE").is_some();
-    a.plug_chaos(0);
+    server::ChaosServer::new(0o3060).serving(vendor(&["run", "file-root"])).plug(&mut a, 0);
     let mut b = Machine::new();
     b.load_prom(&prom);
     let (mut ea, mut eb) = (Rtl::new(a), Rtl::new(b));
