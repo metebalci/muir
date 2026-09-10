@@ -262,7 +262,7 @@
 
     <figure class="fig">
       <div class="scroll">
-        <svg viewBox="16 18 868 444" role="img" aria-label="The processor board connects over five flat cables carrying two buses to the bus interface, which fans out to the Xbus carrying main memory, the disk controller with a Trident drive on its cable, and the TV, and to the Unibus carrying the I/O board, which also has the serial port, with the Chaosnet server beside it. The serial port's far end and the Chaosnet's route off the machine are drawn as dashed boxes below the I/O board. A debug cable of 21 wires leaves the bus interface for a second machine's, the two-machine lashup. The TV's video and the I/O board's keyboard, mouse and beep meet the terminal, which serves them over RFB to any VNC client. Each of the three models reaches something outside: the drive a disk image file, the terminal a VNC client, the Chaosnet server a directory of files.">
+        <svg viewBox="16 18 1087 528" role="img" aria-label="The processor board connects over five flat cables carrying two buses to the bus interface, which fans out to the Xbus carrying main memory, the disk controller and the TV, and to the Unibus carrying the I/O board, which also has the serial port and the Chaosnet. The disk controller's cable goes down to a Trident drive, and a second path from it goes right to the disk multiplexor and down to another drive; a box drawn round those two says that path belongs to the netlist controller alone. The serial port's far end and the Chaosnet's route off the machine are drawn as dashed boxes below the I/O board. A debug cable of 21 wires leaves the bus interface for a second machine's, the two-machine lashup. The TV's video and the I/O board's keyboard, mouse and beep meet the terminal, which serves them over RFB to any VNC client. Each of the models reaches something outside: the drive a disk image file, the terminal a VNC client, the Chaosnet hosts anywhere over UDP.">
           <rect class="d-box" x="24" y="26" width="250" height="76"/>
           <text class="d-t" x="149" y="53" text-anchor="middle">processor and control store</text>
           <text class="d-n" x="149" y="71" text-anchor="middle">CADR.netlist</text>
@@ -275,19 +275,19 @@
           <text class="d-t" x="490" y="53" text-anchor="middle">bus interface</text>
           <text class="d-n" x="490" y="71" text-anchor="middle">BUSINT.netlist</text>
           <text class="d-n" x="490" y="87" text-anchor="middle">176 parts</text>
-          <line class="d-line" x1="608" y1="64" x2="712" y2="64"/>
-          <text class="d-s" x="660" y="46" text-anchor="middle">debug cable</text>
-          <text class="d-s" x="660" y="84" text-anchor="middle">DBGOUT to DBGIN</text>
-          <text class="d-s" x="660" y="98" text-anchor="middle">21 wires</text>
-          <rect class="d-dash" x="716" y="26" width="150" height="76"/>
-          <text class="d-t" x="791" y="53" text-anchor="middle">another muir</text>
-          <text class="d-s" x="791" y="71" text-anchor="middle">the two-machine lashup</text>
-          <path class="d-line" d="M490,102 L490,130 M250,130 L610,130 M250,130 L250,164 M610,130 L610,164"/>
-          <line class="d-bus" x1="40" y1="164" x2="460" y2="164"/>
+          <line class="d-line" x1="608" y1="64" x2="931" y2="64"/>
+          <text class="d-s" x="769" y="46" text-anchor="middle">debug cable</text>
+          <text class="d-s" x="769" y="84" text-anchor="middle">DBGOUT to DBGIN</text>
+          <text class="d-s" x="769" y="98" text-anchor="middle">21 wires</text>
+          <rect class="d-dash" x="935" y="26" width="150" height="76"/>
+          <text class="d-t" x="1010" y="53" text-anchor="middle">another muir</text>
+          <text class="d-s" x="1010" y="71" text-anchor="middle">the two-machine lashup</text>
+          <path class="d-line" d="M490,102 L490,130 M250,130 L840,130 M250,130 L250,164 M840,130 L840,164"/>
+          <line class="d-bus" x1="40" y1="164" x2="690" y2="164"/>
           <text class="d-s" x="40" y="152">Xbus, 32 bits, synchronous</text>
-          <line class="d-bus" x1="520" y1="164" x2="876" y2="164"/>
-          <text class="d-s" x="876" y="152" text-anchor="end">Unibus, 16 bits, open collector</text>
-          <path class="d-line" d="M110,164 L110,200 M250,164 L250,200 M390,164 L390,200 M610,164 L610,200"/>
+          <line class="d-bus" x1="750" y1="164" x2="1100" y2="164"/>
+          <text class="d-s" x="1100" y="152" text-anchor="end">Unibus, 16 bits, open collector</text>
+          <path class="d-line" d="M110,164 L110,200 M250,164 L250,200 M620,164 L620,200 M840,164 L840,200"/>
           <rect class="d-box" x="45" y="200" width="130" height="100"/>
           <text class="d-t" x="110" y="223" text-anchor="middle">main memory</text>
           <text class="d-s" x="110" y="240" text-anchor="middle">32 boards,</text>
@@ -300,52 +300,66 @@
           <text class="d-s" x="250" y="254" text-anchor="middle">microcode</text>
           <text class="d-n" x="250" y="274" text-anchor="middle">CADRDC.netlist</text>
           <text class="d-n" x="250" y="289" text-anchor="middle">171 parts</text>
-          <rect class="d-box" x="325" y="200" width="130" height="100"/>
-          <text class="d-t" x="390" y="223" text-anchor="middle">TV</text>
-          <text class="d-s" x="390" y="240" text-anchor="middle">frame buffer,</text>
-          <text class="d-s" x="390" y="254" text-anchor="middle">mode register</text>
-          <text class="d-n" x="390" y="274" text-anchor="middle">SIMPLETV.netlist</text>
-          <text class="d-n" x="390" y="289" text-anchor="middle">171 parts</text>
-          <rect class="d-box" x="535" y="200" width="150" height="100"/>
-          <text class="d-t" x="610" y="223" text-anchor="middle">I/O board</text>
-          <text class="d-s" x="610" y="240" text-anchor="middle">keyboard, mouse, clocks,</text>
-          <text class="d-s" x="610" y="254" text-anchor="middle">serial, and Chaosnet</text>
-          <text class="d-n" x="610" y="274" text-anchor="middle">CADRIO.netlist</text>
-          <text class="d-n" x="610" y="289" text-anchor="middle">173 parts</text>
-          <path class="d-line" d="M250,300 L250,330 M390,300 L390,330 M610,300 L610,330"/>
-          <text class="d-s" x="258" y="319">cable</text>
-          <text class="d-s" x="398" y="319">video</text>
-          <text class="d-s" x="618" y="319">Chaosnet</text>
-          <path class="d-line" d="M535,266 L481,266 L481,365 L455,365"/>
-          <text class="d-s" x="487" y="304">keys</text>
-          <text class="d-s" x="487" y="317">mouse</text>
-          <text class="d-s" x="487" y="330">beep</text>
+          <rect class="d-box" x="555" y="200" width="130" height="100"/>
+          <text class="d-t" x="620" y="223" text-anchor="middle">TV</text>
+          <text class="d-s" x="620" y="240" text-anchor="middle">frame buffer,</text>
+          <text class="d-s" x="620" y="254" text-anchor="middle">mode register</text>
+          <text class="d-n" x="620" y="274" text-anchor="middle">SIMPLETV.netlist</text>
+          <text class="d-n" x="620" y="289" text-anchor="middle">171 parts</text>
+          <rect class="d-box" x="765" y="200" width="150" height="100"/>
+          <text class="d-t" x="840" y="223" text-anchor="middle">I/O board</text>
+          <text class="d-s" x="840" y="240" text-anchor="middle">keyboard, mouse, clocks,</text>
+          <text class="d-s" x="840" y="254" text-anchor="middle">serial, and Chaosnet</text>
+          <text class="d-n" x="840" y="274" text-anchor="middle">CADRIO.netlist</text>
+          <text class="d-n" x="840" y="289" text-anchor="middle">173 parts</text>
+          <path class="d-line" d="M250,300 L250,330 M620,300 L620,330 M840,300 L840,330"/>
+          <text class="d-s" x="258" y="319">cable, 0 to 7</text>
+          <text class="d-s" x="628" y="319">video</text>
+          <text class="d-s" x="848" y="319">Chaosnet</text>
+          <path class="d-line" d="M765,266 L711,266 L711,365 L685,365"/>
+          <text class="d-s" x="717" y="304">keys</text>
+          <text class="d-s" x="717" y="317">mouse</text>
+          <text class="d-s" x="717" y="330">beep</text>
           <rect class="d-dash" x="185" y="330" width="130" height="70"/>
           <text class="d-t" x="250" y="351" text-anchor="middle">Trident T-300</text>
           <text class="d-s" x="250" y="367" text-anchor="middle">a drive and its pack</text>
           <text class="d-n" x="250" y="387" text-anchor="middle">behavioural model</text>
-          <rect class="d-dash" x="325" y="330" width="130" height="70"/>
-          <text class="d-t" x="390" y="351" text-anchor="middle">terminal</text>
-          <text class="d-s" x="390" y="367" text-anchor="middle">an RFB server</text>
-          <text class="d-n" x="390" y="387" text-anchor="middle">behavioural model</text>
-          <rect class="d-dash" x="535" y="330" width="150" height="70"/>
-          <text class="d-t" x="610" y="351" text-anchor="middle">Chaosnet server</text>
-          <text class="d-s" x="610" y="367" text-anchor="middle">STATUS, TIME, UPTIME, FILE</text>
-          <text class="d-n" x="610" y="387" text-anchor="middle">muir&rsquo;s own server</text>
-          <rect class="d-dash" x="705" y="330" width="150" height="70"/>
-          <text class="d-t" x="780" y="351" text-anchor="middle">serial far end</text>
-          <text class="d-s" x="780" y="367" text-anchor="middle">DSR, DCD and CTS asserted</text>
-          <text class="d-n" x="780" y="387" text-anchor="middle">a null-modem plug</text>
-          <path class="d-line" d="M685,266 L780,266 L780,330"/>
-          <path class="d-line" d="M250,400 L250,420 M390,400 L390,420 M610,400 L610,420 M780,400 L780,420"/>
+          <rect class="d-ring" x="340" y="312" width="160" height="204"/>
+          <text class="d-n" x="420" y="532" text-anchor="middle">the netlist controller only</text>
+          <path class="d-line" d="M315,250 L420,250 L420,330"/>
+          <text class="d-s" x="368" y="243" text-anchor="middle">cable</text>
+          <rect class="d-dash" x="355" y="330" width="130" height="70"/>
+          <text class="d-t" x="420" y="351" text-anchor="middle">disk multiplexor</text>
+          <text class="d-s" x="420" y="367" text-anchor="middle">eight drive ports</text>
+          <text class="d-n" x="420" y="387" text-anchor="middle">DM.netlist</text>
+          <path class="d-line" d="M420,400 L420,430"/>
+          <text class="d-s" x="428" y="419">units 0 to 7</text>
+          <rect class="d-dash" x="355" y="430" width="130" height="70"/>
+          <text class="d-t" x="420" y="451" text-anchor="middle">Trident T-300</text>
+          <text class="d-s" x="420" y="467" text-anchor="middle">a drive and its pack</text>
+          <text class="d-n" x="420" y="487" text-anchor="middle">behavioural model</text>
+          <rect class="d-dash" x="555" y="330" width="130" height="70"/>
+          <text class="d-t" x="620" y="351" text-anchor="middle">terminal</text>
+          <text class="d-s" x="620" y="367" text-anchor="middle">an RFB server</text>
+          <text class="d-n" x="620" y="387" text-anchor="middle">behavioural model</text>
+          <rect class="d-dash" x="765" y="330" width="150" height="70"/>
+          <text class="d-t" x="840" y="351" text-anchor="middle">Chaosnet</text>
+          <text class="d-s" x="840" y="367" text-anchor="middle">the cable, bridged to UDP</text>
+          <text class="d-n" x="840" y="387" text-anchor="middle">behavioural model</text>
+          <rect class="d-dash" x="935" y="330" width="150" height="70"/>
+          <text class="d-t" x="1010" y="351" text-anchor="middle">serial far end</text>
+          <text class="d-s" x="1010" y="367" text-anchor="middle">DSR, DCD and CTS asserted</text>
+          <text class="d-n" x="1010" y="387" text-anchor="middle">a null-modem plug</text>
+          <path class="d-line" d="M915,266 L1010,266 L1010,330"/>
+          <path class="d-line" d="M250,400 L250,420 M620,400 L620,420 M840,400 L840,420 M1010,400 L1010,420"/>
           <text class="d-s" x="250" y="435" text-anchor="middle">a disk image file</text>
           <text class="d-n" x="250" y="451" text-anchor="middle">--disk-pack</text>
-          <text class="d-s" x="390" y="435" text-anchor="middle">a VNC client,</text>
-          <text class="d-s" x="390" y="451" text-anchor="middle">anywhere</text>
-          <text class="d-s" x="780" y="435" text-anchor="middle">a TCP client, anywhere</text>
-          <text class="d-n" x="780" y="451" text-anchor="middle">--serial</text>
-          <text class="d-s" x="610" y="435" text-anchor="middle">files, and a wider Chaosnet</text>
-          <text class="d-n" x="610" y="451" text-anchor="middle">--chaos-file-root, --chaos-udp</text>
+          <text class="d-s" x="620" y="435" text-anchor="middle">a VNC client,</text>
+          <text class="d-s" x="620" y="451" text-anchor="middle">anywhere</text>
+          <text class="d-s" x="840" y="435" text-anchor="middle">hosts anywhere, over UDP</text>
+          <text class="d-n" x="840" y="451" text-anchor="middle">--chaos-udp, --chaos-udp-peer</text>
+          <text class="d-s" x="1010" y="435" text-anchor="middle">a TCP client, anywhere</text>
+          <text class="d-n" x="1010" y="451" text-anchor="middle">--serial</text>
         </svg>
       </div>
       <figcaption><p>The <code>chip</code> engine runs every board as the netlist of MIT&rsquo;s own drawings for it, held pin for pin to MIT&rsquo;s wire list for the same board. Three things on the diagram are not boards: the Trident disk unit, a drive cabinet on the end of the controller&rsquo;s cable, a behavioural model; the Chaosnet server the machine talks to, muir&rsquo;s own, standing in for the servers on its associated machine, OZ; and the terminal. All three run inside muir, and each is pointed at something outside it: the drive at a disk image file, the terminal at a VNC client, the server at a directory it serves as OZ&rsquo;s <code>/</code>. The Chaosnet reaches further than that now: <code>--chaos-udp</code> puts a CHUDP node on the modelled ether, so the cable can carry hosts outside this process. muir is a leaf there and not a router &mdash; a packet for neither this machine nor its server is dropped rather than forwarded &mdash; and being reachable is kept separate from serving files, which <code>--chaos-file-peers</code> grants by address. Any board can be run as its model instead, one at a time. The <code>rtl</code> engine runs the models throughout, and the two engines are held to each other at every microcycle, so where a board and its model part, one of them is wrong.</p><p>The terminal is where the machine meets a person: the picture goes out of it, keyboard and mouse events come back in to the I/O board, and the beep goes the other way &mdash; the beeper is in the keyboard, not the TV. All of it over RFB, so the screen and the keys are a VNC client &mdash; on this machine or anywhere else. Where the picture comes from depends on the engine. <code>micro</code> and <code>rtl</code> have no video timing at all, so the terminal reads their frame buffer; <code>chip</code> with the TV as a netlist really scans out, and the terminal takes what a monitor takes, the differential video pair and the two syncs. That pair is the one signal the board deliberately leaves unterminated, because the pull-down belongs at the far end of the cable &mdash; so the terminal supplies it, as the far end already holds the Chaosnet&rsquo;s receive pair and the keyboard&rsquo;s.</p><p>Two of the boxes are one board standing for a choice. The TV is drawn as the SIMPLE TV, which is what System 100 drives and what muir runs by default, but <code>--tv-board lispm-tv</code> puts the colour board that replaced it in 1980 there instead, 172 parts against 171, near enough the same board. And the I/O board is two machines&rsquo; worth of function on one board: 94 parts on the keyboard, mouse, clock and serial pages against 84 on the Chaosnet&rsquo;s, near enough half each. They are not two boards in disguise, though, which is why the diagram does not draw them apart. Forty-seven signals cross between the halves &mdash; the buffered Unibus data and address lines, the reset, the address decode that makes the Chaosnet&rsquo;s own select, and its bus reply and interrupt going back out through the I/O half &mdash; and the clock the I/O half counts microseconds on is the Chaosnet half&rsquo;s own 32 MHz crystal. The serial port is on that half too &mdash; the Signetics 2651 at IOBSER 0A12, its 5.0688 MHz baud-rate can beside it, and the MC1488 and MC1489 out to the RS-232 connector at J9 &mdash; and until recently it was the one thing on the board with no far end outside muir. <code>--serial</code> gives it one: a TCP endpoint, off unless asked for, which plugs the cable when something connects &mdash; DSR, DCD and CTS asserted as a device on a null-modem does with its DTR and RTS, because the 2651 is conditioned to transmit on <code>-CTS</code> low and receive on <code>-DCD</code> low, so carrying bytes is not enough. The far end takes its rate and framing from the port, whatever the machine programmed into it: a far end that picks its own produces garbage rather than an error.</p><p>The five cables carry two buses. One is the memory bus. The other is the diagnostic bus, SPY: sixteen registers on the processor&rsquo;s two boards, read and written by whoever masters the bus interface&rsquo;s Unibus, which is how the console program CC halts, steps and inspects a machine. They are not a board and are not drawn as one. Every engine has them, and the netlist is held to <code>rtl</code> on them through the microcode&rsquo;s own reads and writes of its own registers. The fourth dashed box is not a model but a second machine: the debug cable, 21 wires from the DBGOUT connector of one bus interface to the DBGIN connector of another, over which one machine&rsquo;s Unibus cycles run on the other&rsquo;s bus. Both connectors&rsquo; pages are in the netlist; the cable and the machine at its far end are the two-machine lashup, the acceptance test. It runs on <code>rtl</code> and <code>chip</code> only: the cable is the bus interface&rsquo;s timing and nothing else &mdash; the arbitration for the debuggee&rsquo;s bus, the acknowledgement at its instant, the timeout &mdash; and <code>micro</code>, having no timing model, has no end of it and cannot be debugged over it. And the disk controller is the one board that defaults the other way: the <code>chip</code> engine runs its model unless told <code>--disk-controller netlist</code>.</p></figcaption>

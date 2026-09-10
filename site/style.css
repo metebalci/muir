@@ -240,6 +240,10 @@ figure.screen img {
 .d-dash { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 6 5; }
 .d-line { fill: none; stroke: currentColor; stroke-width: 1.5; }
 .d-bus  { fill: none; stroke: currentColor; stroke-width: 4; }
+/* A ring round part of the picture, saying that what is inside it is
+   there only under a condition the label gives.  Lighter than a box so
+   it groups rather than competes with what it encloses. */
+.d-ring { fill: none; stroke: currentColor; stroke-width: 1; opacity: .4; stroke-dasharray: 2 4; }
 .d-plate { fill: var(--paper); }
 .d-t { font: 500 13px var(--sans); fill: currentColor; }
 .d-s { font: 400 11px var(--sans); fill: currentColor; }
