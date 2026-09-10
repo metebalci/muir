@@ -48,7 +48,7 @@
 //! each, in the geometry's order. It is opened read-write and written as a
 //! drive writes its pack. After the image, in either order, come the
 //! drive's unit --- 0 unless a DISK MULTIPLEXOR is fitted with
-//! `--disk-use-multiplexor`, the netlist controller having one port of its
+//! `--disk-multiplexor`, the netlist controller having one port of its
 //! own --- and
 //! `ro`, the drive's read-only switch, `STATUS<7>`, with the file opened
 //! read-only behind it, and a write then faults as MIT says it does. With
@@ -379,7 +379,7 @@ fn peer_spec(arg: &str) -> Result<(u16, SocketAddr), String> {
 
 /// A pack flag's argument parsed, or the usage. Which units a run can
 /// fill is the controller's business and not the flag's: see
-/// `--disk-use-multiplexor`.
+/// `--disk-multiplexor`.
 fn pack_flag(flag: &str, arg: Option<String>) -> Pack {
     let arg = arg.unwrap_or_else(|| usage(&format!("{flag} wants <image>[,<unit>][,ro]")));
     pack_spec(&arg).unwrap_or_else(|e| usage(&format!("{flag} {arg}: {e}")))
@@ -579,8 +579,8 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--debuggee-chaos-address <address>]
             [--debuggee-disk-pack <image>[,<unit>][,ro]]
             [--debuggee-terminal [<endpoint>]]
-            [--disk-controller netlist|model]
-            [--disk-pack <image>[,<unit>][,ro]] [--disk-use-multiplexor]
+            [--disk-controller netlist|model] [--disk-multiplexor]
+            [--disk-pack <image>[,<unit>][,ro]]
             [--io-board netlist|model]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
             [--keyboard-mapping-trace]
@@ -734,6 +734,25 @@ A simulator of the MIT CADR Lisp Machine.
                                127.0.0.1:5901 when it is at :0]
   --disk-controller netlist|model
                                chip: the disk controller. [default: model]
+  --disk-multiplexor           chip: a DISK MULTIPLEXOR on the netlist
+                               controller's cable, which is what gives it
+                               eight drive ports instead of one. Without
+                               it the board cannot drive UNIT<2:0> at all
+                               --- they are inputs and nothing on the
+                               controller answers them --- so the six
+                               one-board jumpers ground them, and the one
+                               port is unit 0. So a second --disk-pack, or
+                               one past unit 0, is refused without this:
+                               the board it needs is a board somebody
+                               chose to have, and muir says so rather than
+                               fitting one nobody asked for. The model
+                               controller needs no board at all and has
+                               always had eight units. It takes no
+                               netlist-or-model, as the other board flags
+                               do: MIT drew one multiplexor and there is
+                               nothing to model it against. [default: off
+                               with one pack in unit 0, and the jumpers
+                               on; the start says when it is fitted]
   --disk-pack <image>[,<unit>][,ro]
                                the pack in a drive: its blocks end to end.
                                The file is only ever read; a block the
@@ -748,22 +767,6 @@ A simulator of the MIT CADR Lisp Machine.
                                [default: unit 0; no pack unless one is
                                named, which is a drive with no pack in it
                                and a boot that waits on it for ever]
-  --disk-use-multiplexor       chip: a DISK MULTIPLEXOR on the netlist
-                               controller's cable, which is what gives it
-                               eight drive ports instead of one. Without
-                               it the board cannot drive UNIT<2:0> at all
-                               --- they are inputs and nothing on the
-                               controller answers them --- so the six
-                               one-board jumpers ground them, and the one
-                               port is unit 0. A second --disk-pack, or
-                               one past unit 0, is a multiplexor by
-                               necessity and fits the board without this;
-                               the flag is for a single drive behind one,
-                               which is a machine somebody might want. The
-                               model controller needs no board at all and
-                               has always had eight units. [default: off
-                               with one pack in unit 0, and the jumpers
-                               on; the start says when it is fitted]
   --io-board netlist|model     chip: the I/O board. [default: netlist]
   --keyboard-mapping <file>    what a viewer's keysyms mean on the Lisp
                                Machine keyboard: `key <keysym> <key>` a
@@ -3396,7 +3399,7 @@ fn main() {
                 }
                 packs.push(p);
             }
-            (None, "--disk-use-multiplexor") => use_multiplexor = true,
+            (None, "--disk-multiplexor") => use_multiplexor = true,
             (None, "--chaos-address") => {
                 // One address: this machine's sixteen switches, in octal
                 // or subnet:host. The file and time host's is not muir's
@@ -3746,7 +3749,7 @@ fn main() {
     // units all along, `disk_controller::UNITS`.
     if use_multiplexor && !disk_controller {
         usage(
-            "--disk-use-multiplexor is a board on the netlist controller's cable: it needs --disk-controller netlist",
+            "--disk-multiplexor is a board on the netlist controller's cable: it needs --disk-controller netlist",
         );
     }
     // Without it the netlist controller has one drive port --- and not
@@ -3759,13 +3762,18 @@ fn main() {
     // 74LS175 at 0F05 latches `XBI<30:28>` and reports the unit back on
     // those three posts.
     //
-    // So a second drive, or a drive past unit 0, **is** a multiplexor,
-    // and the flag is not something to make the user say twice. The
-    // model controller implies nothing: it wants no board for its eight
-    // units. What keeps an implied board from being a silent one is that
-    // the start says it is fitted.
-    if disk_controller && (packs.len() > 1 || packs.iter().any(|p| p.unit != 0)) {
-        use_multiplexor = true;
+    // So a second drive, or a drive past unit 0, wants a multiplexor ---
+    // and is refused until it is asked for. muir could fit one by
+    // implication, and used to; a board that appears because of how a
+    // pack was spelled is a board the machine has without anybody
+    // choosing it, and which machine is being simulated is the user's to
+    // say. The model controller is refused nothing: it wants no board for
+    // its eight units.
+    if disk_controller && !use_multiplexor && (packs.len() > 1 || packs.iter().any(|p| p.unit != 0))
+    {
+        usage(
+            "the netlist disk controller has one drive port, unit 0: a second --disk-pack, or one past unit 0, wants --disk-multiplexor",
+        );
     }
     // The run goes on until a stop, a halt or ^C unless a window was asked for.
     let window = cycles.unwrap_or(u64::MAX);

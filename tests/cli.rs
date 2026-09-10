@@ -315,8 +315,8 @@ fn version_says_what_this_build_is() {
     }
 }
 
-/// **A drive the netlist controller has no port for fits the multiplexor
-/// itself.**
+/// **A drive the netlist controller has no port for is refused until the
+/// multiplexor is asked for.**
 ///
 /// Not because the unit number is forced to 0. `UNIT<2:0>` reach one
 /// 74LS244's inputs on the controller and nothing else --- `cadrdc/dc.wlr`
@@ -324,15 +324,19 @@ fn version_says_what_this_build_is() {
 /// board has no driver for them at all, and the six one-board jumpers
 /// ground them to stop three inputs floating. Unit 0 is the consequence.
 /// The DISK MULTIPLEXOR is what supplies the driver, so a second drive or
-/// a drive past unit 0 **is** a multiplexor and the machine fits one
-/// rather than asking to be told twice. What keeps that from being silent
-/// is the start saying the board is there.
+/// a drive past unit 0 wants one.
 ///
-/// The model controller implies nothing, because it wants no board: it is
-/// behavioural and has addressed eight units all along,
+/// **muir does not fit it by implication**, though it could and once did:
+/// a board that appears because of the way a pack was spelled is a board
+/// the machine has without anybody choosing it, and which machine is
+/// being simulated is the user's to say. So the run stops and names the
+/// flag.
+///
+/// The model controller is refused nothing, because it wants no board: it
+/// is behavioural and has addressed eight units all along,
 /// `disk_controller::UNITS`.
 #[test]
-fn a_drive_past_unit_0_fits_the_multiplexor_itself() {
+fn a_drive_past_unit_0_wants_the_multiplexor_named() {
     const FITTED: &str = "with a multiplexor";
     let start =
         |args: &[&str]| String::from_utf8_lossy(&muir().args(args).run().stderr).into_owned();
@@ -347,13 +351,24 @@ fn a_drive_past_unit_0_fits_the_multiplexor_itself() {
     // before it is built, and a missing pack stops the run after that.
     let one = start(&with(&["--disk-pack", "nothing.img"]));
     assert!(!one.contains(FITTED), "one drive in unit 0 wants no board:\n{one}");
+    // A drive the one port cannot reach, refused by name.
     for extra in [
         &["--disk-pack", "nothing.img,3"][..],
         &["--disk-pack", "a.img", "--disk-pack", "b.img,1"][..],
-        &["--disk-use-multiplexor", "--disk-pack", "nothing.img"][..],
+    ] {
+        let said = start(&with(extra));
+        assert!(said.contains("--disk-multiplexor"), "{extra:?} names the flag:\n{said}");
+        assert!(said.contains("usage:"), "{extra:?} is refused:\n{said}");
+    }
+    // And with the flag, fitted and said to be.
+    for extra in [
+        &["--disk-multiplexor", "--disk-pack", "nothing.img"][..],
+        &["--disk-multiplexor", "--disk-pack", "nothing.img,3"][..],
+        &["--disk-multiplexor", "--disk-pack", "a.img", "--disk-pack", "b.img,1"][..],
     ] {
         let said = start(&with(extra));
         assert!(said.contains(FITTED), "{extra:?} fits the board, and says so:\n{said}");
+        assert!(!said.contains("usage:"), "{extra:?} is not refused:\n{said}");
     }
     // The model controller takes the units and fits nothing --- asked on
     // `chip`, where the start says which boards are on the buses and so
@@ -371,8 +386,8 @@ fn a_drive_past_unit_0_fits_the_multiplexor_itself() {
 /// one pack a drive.
 #[test]
 fn the_multiplexor_is_the_netlist_controllers_board() {
-    refused(&["--chip", "--disk-use-multiplexor", "--stop-after", "1"], "--disk-use-multiplexor");
-    refused(&["--micro", "--disk-use-multiplexor", "--stop-after", "1"], "--disk-use-multiplexor");
+    refused(&["--chip", "--disk-multiplexor", "--stop-after", "1"], "--disk-multiplexor");
+    refused(&["--micro", "--disk-multiplexor", "--stop-after", "1"], "--disk-multiplexor");
     refused(
         &["--micro", "--disk-pack", "a.img,1", "--disk-pack", "b.img,1", "--stop-after", "1"],
         "--disk-pack",
