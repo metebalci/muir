@@ -11,7 +11,7 @@
 //!     muir [--micro|--rtl|--chip] [--chaos-address <address>]
 //!          [--chaos-udp [<endpoint>]] [--chaos-udp-dynamic]
 //!          [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
-//!          [--debug-cable-connect [<endpoint>]]
+//!          [--debug-cable-connect [<endpoint>|0x<address>]]
 //!          [--debug-cable-listen [<endpoint>]] [--debug-in-process]
 //!          [--debuggee-disk-pack <image>[,<unit>][,ro]]
 //!          [--debuggee-terminal [<endpoint>]]
@@ -187,7 +187,7 @@ use muir::clock::{Behavioural, Clock};
 use muir::disk_unit::{Geometry, Unit};
 use muir::engine::Engine;
 use muir::isa::Insn;
-use muir::lashup::{Lashup, Remote};
+use muir::lashup::{FreeRunning, Lashup, Remote};
 use muir::machine::Machine;
 use muir::micro::Micro;
 use muir::netlist;
@@ -319,6 +319,46 @@ fn bind_terminal(at: TerminalAt) -> Result<Terminal, String> {
 /// 766100. IANA leaves 7649-7662 unassigned (its registry, read 6 Sep 2026)
 /// and it is below the ranges macOS and Linux hand out to clients.
 const DEBUG_CABLE_PORT: u16 = 7661;
+
+/// Where `--debug-cable-connect` puts the debuggee: at an endpoint on the
+/// network, which is another program speaking the cable's frames, or
+/// behind a window of memory-mapped registers, which is a CADR in FPGA
+/// fabric on the board muir is running on ([`muir::fabric`]).
+///
+/// One flag rather than two, because it is one concept --- this machine is
+/// the debugger and here is the debuggee --- and the argument says which
+/// it is: `0x` is unambiguous against a port, a host name and a host with
+/// a port, so nothing has to be remembered about which flag takes which. A
+/// host genuinely named `0x…` is not supported.
+#[derive(Clone, Copy)]
+enum Connect {
+    Endpoint(SocketAddr),
+    Window(u64),
+}
+
+/// Whether a debug cable flag's argument names the fabric's register
+/// window rather than an endpoint: `0x` or `0X`.
+fn names_a_window(spec: Option<&str>) -> bool {
+    spec.is_some_and(|v| v.starts_with("0x") || v.starts_with("0X"))
+}
+
+/// The physical address the fabric's register window is at, out of a
+/// `--debug-cable-connect 0x…`: hexadecimal after the prefix, and a
+/// multiple of four, the window being 32-bit registers and every access to
+/// it one 32-bit load or store. Page alignment is not asked for, which
+/// would be a needless restriction. There is no default: where the window
+/// sits is a property of the bitstream and muir holds no opinion about it.
+fn window_address(flag: &str, spec: &str) -> u64 {
+    let want = format!(
+        "{flag} {spec}: the fabric's register window is 0x and a physical address in hexadecimal, \
+         a multiple of 4"
+    );
+    let at = u64::from_str_radix(&spec[2..], 16).unwrap_or_else(|_| usage(&want));
+    if !at.is_multiple_of(4) {
+        usage(&want);
+    }
+    at
+}
 
 /// A pack flag's argument: the image, and after commas in either order
 /// the drive's unit and `ro`, its read-only switch.
@@ -574,7 +614,8 @@ fn report(name: &str, cycles: u64, secs: f64) {
 const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <address>]
             [--chaos-trace] [--chaos-udp [<endpoint>]] [--chaos-udp-dynamic]
             [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
-            [-c|--config <file>] [--debug-cable-connect [<endpoint>]]
+            [-c|--config <file>]
+            [--debug-cable-connect [<endpoint>|0x<address>]]
             [--debug-cable-listen [<endpoint>]] [--debug-in-process]
             [--debuggee-chaos-address <address>]
             [--debuggee-disk-pack <image>[,<unit>][,ro]]
@@ -682,12 +723,25 @@ A simulator of the MIT CADR Lisp Machine.
                                directory --- the first of the three there,
                                not all of them. MUIR_RC names a file in
                                place of the two that are looked for.
-  --debug-cable-connect [<endpoint>]
+  --debug-cable-connect [<endpoint>|0x<address>]
                                rtl: this machine is the debugger: its DBGOUT
                                connects to a debuggee listening at the
                                endpoint, a port, an address or
                                address:port. Either end may be another
                                program that speaks the cable's frames.
+                               An argument beginning 0x is no endpoint but
+                               the physical address of the window of
+                               registers a CADR in FPGA fabric presents its
+                               DBGIN at, which muir reaches through
+                               /dev/mem: the debugger is then muir running
+                               on the board's own processor under Linux,
+                               and the two machines run free of each other
+                               rather than in step, as two CADRs on a bench
+                               did. Where the window sits is a property of
+                               the bitstream, so there is no default for
+                               it, and muir refuses a window that does not
+                               identify itself as the cable's rather than
+                               store anything into it.
                                [default: 127.0.0.1:7661]
   --debug-cable-listen [<endpoint>]
                                rtl, chip: this machine is the debuggee at
@@ -1748,6 +1802,82 @@ fn time_remote(name: &str, mut remote: Remote<Rtl>, stop: Stop, terminal: Option
     }
     if let Some(term) = terminal {
         serve_last_screen(term, &remote.machine.machine().simpletv);
+    }
+}
+
+/// The debugger's end of the cable to a debuggee in FPGA fabric: this
+/// machine stepped and the window polled beside it by
+/// [`FreeRunning::step`], with the terminal and the stops as for a machine
+/// alone. Nothing is promised either way and there is nothing at the far
+/// end to agree with about stopping: the run ends where this machine's
+/// own stops say, with any request left at the window lifted as the window
+/// goes.
+fn time_fabric(
+    mut run: FreeRunning<muir::fabric::Fabric<muir::fabric::Mapped>>,
+    stop: Stop,
+    terminal: Option<&mut Terminal>,
+) {
+    let t = Instant::now();
+    let mut halt = None;
+    let mut terminal = terminal;
+    let (mut keyboard, mut mouse) = (a_keyboard(), Mouse::new());
+    let mut last_poll = Instant::now();
+    let mut ran = 0;
+    catch_interrupts();
+    let mut interrupts_seen = 0;
+    loop {
+        let e = &run.debugger;
+        if ran >= stop.after || stop.reached(e.pc(), !e.machine().mode.prom_disable) {
+            break;
+        }
+        if interrupted(&mut interrupts_seen) {
+            break;
+        }
+        match run.step() {
+            Ok(()) => ran += 1,
+            Err(muir::lashup::Error::Halt(h)) => {
+                halt = Some(h);
+                break;
+            }
+            Err(e) => {
+                eprintln!("muir: the debug cable: {e}");
+                break;
+            }
+        }
+        // A window that stops answering as the adapter is the end of the
+        // run: what it gives after that is not data. An adapter that has
+        // lost muir's request is said and not stopped on --- the cycle is
+        // one the debugger times out, and the next begins again.
+        if let Some(fault) = run.debuggee.fault() {
+            eprintln!("muir: the fabric's window: {}", fault.what);
+            if fault.fatal {
+                break;
+            }
+        }
+        if ran % TERMINAL_CHECK == 0 {
+            let e = &mut run.debugger;
+            let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
+            attend(terminal.as_deref_mut(), poll, e.machine_mut(), &mut keyboard, &mut mouse);
+            if poll {
+                last_poll = Instant::now();
+            }
+        }
+    }
+    report("rtl, debugger", ran, t.elapsed().as_secs_f64());
+    let e = &run.debugger;
+    stop.conclude(ran, e.pc(), !e.machine().mode.prom_disable, halt);
+    match run.debuggee.taken() {
+        Some((count, faults)) => println!(
+            "       {} debug cycles on the cable; the window took {count} requests, faults {faults:#x}",
+            run.debugger.debug_cycles()
+        ),
+        None => println!(
+            "       {} debug cycles on the cable; the window no longer answers as the adapter",
+            run.debugger.debug_cycles()
+        ),
+    }
+    if let Some(term) = terminal {
+        serve_last_screen(term, &run.debugger.machine().simpletv);
     }
 }
 
@@ -3354,7 +3484,7 @@ fn main() {
     // Absent, or present with or without an endpoint.
     let mut debuggee_terminal: Option<Option<String>> = None;
     let mut cable_listen: Option<SocketAddr> = None;
-    let mut cable_connect: Option<SocketAddr> = None;
+    let mut cable_connect: Option<Connect> = None;
     // The serial port's endpoint: nothing unless `--serial` names one.
     let mut serial_at: Option<SocketAddr> = None;
     let mut capture_tv: Option<PathBuf> = None;
@@ -3513,6 +3643,17 @@ fn main() {
             (None, "--debug-cable-listen") => {
                 // The endpoint is optional: the next word is it unless it is a flag.
                 let spec = args.next_if(|v| !v.starts_with('-'));
+                // The window is the other flag's. What is to be built in
+                // fabric is the debuggee's DBGIN end, so the fabric is
+                // always the debuggee and muir always the debugger; there
+                // is no listening at a window and none is proposed.
+                if names_a_window(spec.as_deref()) {
+                    usage(
+                        "--debug-cable-listen takes an endpoint and not a window: the fabric is \
+                         the debuggee and muir the debugger, so the window is \
+                         --debug-cable-connect's",
+                    );
+                }
                 match endpoint(spec.as_deref(), DEBUG_CABLE_PORT) {
                     Some(a) => cable_listen = Some(a),
                     None => usage(
@@ -3523,11 +3664,17 @@ fn main() {
             (None, "--debug-cable-connect") => {
                 // The endpoint is optional: the next word is it unless it is a flag.
                 let spec = args.next_if(|v| !v.starts_with('-'));
-                match endpoint(spec.as_deref(), DEBUG_CABLE_PORT) {
-                    Some(a) => cable_connect = Some(a),
-                    None => usage(
-                        "--debug-cable-connect wants nothing, a port, an address or address:port",
-                    ),
+                if names_a_window(spec.as_deref()) {
+                    let at = window_address("--debug-cable-connect", spec.as_deref().unwrap());
+                    cable_connect = Some(Connect::Window(at));
+                } else {
+                    match endpoint(spec.as_deref(), DEBUG_CABLE_PORT) {
+                        Some(a) => cable_connect = Some(Connect::Endpoint(a)),
+                        None => usage(
+                            "--debug-cable-connect wants nothing, a port, an address, \
+                             address:port or 0x<address>",
+                        ),
+                    }
                 }
             }
             (None, "--tv-capture") => match args.next() {
@@ -3611,6 +3758,14 @@ fn main() {
             _ => {}
         }
     }
+    // A window muir cannot map is refused by name, and before anything is
+    // built: the mapping is `/dev/mem`, which only Linux has, and the
+    // debugger has to be a muir running on the board's own processor.
+    if let Some(Connect::Window(at)) = cable_connect
+        && let Some(why) = muir::fabric::unmappable()
+    {
+        usage(&format!("--debug-cable-connect {at:#x}: {why}"));
+    }
     // The debuggee on a cable is stepped by the debugger's events, in
     // `Remote::step`, and nothing there samples between them; refused
     // rather than quietly recording nothing.
@@ -3682,7 +3837,7 @@ fn main() {
     }
     if capture_tv.is_some() && (cable_listen.is_some() || cable_connect.is_some()) {
         usage(
-            "--tv-capture records a machine on its own or the lashup in one process, not an end of the debug cable over TCP",
+            "--tv-capture records a machine on its own or the lashup in one process, not an end of the debug cable to another program or to the fabric",
         );
     }
     // The prompt's `startcapture` makes a recorder too, so the flag means
@@ -3959,9 +4114,15 @@ fn main() {
             }
         } else if let Some(a) = cable_listen {
             writeln!(s, "debug cable: this machine the debuggee, DBGIN listening at {a}").unwrap();
-        } else if let Some(a) = cable_connect {
+        } else if let Some(Connect::Endpoint(a)) = cable_connect {
             writeln!(s, "debug cable: this machine the debugger, DBGOUT connecting to {a}")
                 .unwrap();
+        } else if let Some(Connect::Window(a)) = cable_connect {
+            writeln!(
+                s,
+                "debug cable: this machine the debugger, DBGOUT at the fabric's window at {a:#x}"
+            )
+            .unwrap();
         }
         let clocks = if capture_tv_time { "" } else { ", no clocks" };
         if let Some((p, _)) = &capture {
@@ -4085,7 +4246,7 @@ fn main() {
                     stop,
                     terminal.as_mut(),
                 );
-            } else if let Some(addr) = cable_connect {
+            } else if let Some(Connect::Endpoint(addr)) = cable_connect {
                 // The debuggee may still be starting: try for five seconds.
                 let mut tries = 0;
                 let stream = loop {
@@ -4109,6 +4270,16 @@ fn main() {
                     stop,
                     terminal.as_mut(),
                 );
+            } else if let Some(Connect::Window(at)) = cable_connect {
+                // The identity is read before anything is stored, and a
+                // window that is not the adapter ends the run here: there
+                // is no falling back to the network and no retrying.
+                let window = muir::fabric::open(at).unwrap_or_else(|why| {
+                    eprintln!("muir: --debug-cable-connect {at:#x}: {why}");
+                    std::process::exit(1);
+                });
+                eprintln!("debug cable: DBGOUT at the fabric's window at {at:#x}");
+                time_fabric(FreeRunning::new(e, window), stop, terminal.as_mut());
             } else {
                 if let Some(p) = &resume {
                     resume_engine("rtl", &mut e, p);

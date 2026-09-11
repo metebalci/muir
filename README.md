@@ -198,7 +198,8 @@ work.
          [--terminal [<endpoint>]]
          [--debug-in-process [--debuggee-disk-pack <image>[,<unit>][,ro]]
                              [--debuggee-terminal [<endpoint>]]]
-         [--debug-cable-listen [<endpoint>]] [--debug-cable-connect [<endpoint>]]
+         [--debug-cable-listen [<endpoint>]]
+         [--debug-cable-connect [<endpoint>|0x<address>]]
          [--checkpoint <file>] [--resume <file>]
          [--stop-after <microcycles>] [--stop-at <pc>] [--stop-at-prom <pc>]
 
@@ -279,6 +280,17 @@ debuggee. Both take an endpoint the same way and meet at 127.0.0.1:7661
 without one. The listener may be a `--chip` machine: the netlist board's
 own DBGIN then answers the debugger, an event at a time, at the netlist's
 pace.
+
+There is a third transport, where the debuggee is not a program at all.
+`--debug-cable-connect 0x<address>` is a CADR in the programmable logic of
+a board muir is itself running on, and the cable's 21 wires are a small
+window of memory-mapped registers muir reaches with ordinary loads and
+stores through `/dev/mem`. The other two transports keep the two machines'
+simulated clocks in step by exchanging promises; fabric runs on its own
+crystal in real time, so nothing is promised, only the debugger is
+stepped, and the debugger's own 11.05 us timeout is what ends a cycle
+nothing answers. The window's layout is proposed and nothing has been
+built to it yet.
 
 `--tv-capture <gif>` records the display as the run goes: an animated GIF
 of the rectangles that change, timed by the machine's clock, with the

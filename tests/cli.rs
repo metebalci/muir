@@ -22,6 +22,16 @@ fn refused(args: &[&str], flag: &str) {
     );
 }
 
+/// A usage error whose message says something in particular, for the
+/// refusals that name the engine or the other flag rather than the one
+/// that was given.
+fn refused_saying(args: &[&str], says: &str) {
+    let out = muir().args(args).run();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{args:?}: not a usage error:\n{err}");
+    assert!(err.contains(says), "{args:?}: the refusal says {says:?}:\n{err}");
+}
+
 /// **The memory board count is one to sixty, on every engine.** The
 /// Xbus I/O space begins where the sixty-first board would, so sixty is
 /// the backplane's most; zero is no memory at all --- the model memory on
@@ -39,6 +49,67 @@ fn the_memory_board_count_is_one_to_sixty() {
         let out = muir().args([engine, "--main-memory-boards", n, "--stop-after", "1"]).run();
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(out.status.success(), "{engine} with {n} boards:\n{err}");
+    }
+}
+
+/// **`--debug-cable-connect` takes either a debuggee on the network or a
+/// debuggee in FPGA fabric, and `0x` is which.** One flag rather than two
+/// for one concept --- this machine is the debugger and here is the
+/// debuggee --- and the argument is self-describing where it is used: `0x`
+/// is unambiguous against a port, a host name and a host with a port.
+///
+/// The window is `rtl`'s alone, as the endpoint already is: `micro` has no
+/// timing model and on `chip` the debug cable is the board's own DBGIN.
+/// It is `--debug-cable-connect`'s alone too, since what is to be built in
+/// fabric is the debuggee's DBGIN end, so there is no listening at a
+/// window. It must be a multiple of four, the window being 32-bit
+/// registers, and it has no default: where the window sits is a property
+/// of the bitstream.
+///
+/// **The last case is the platform.** The mapping is `/dev/mem`, which
+/// only Linux has; muir is developed on macOS, where the flag is refused
+/// by name rather than failing to build. Either way the run stops and the
+/// first line names the flag.
+#[test]
+fn a_window_address_is_rtls_and_the_debuggers_and_a_multiple_of_four() {
+    for engine in ["--micro", "--chip"] {
+        refused_saying(
+            &[engine, "--debug-cable-connect", "0x80000080", "--stop-after", "1"],
+            if engine == "--micro" { "no timing model" } else { "the board's DBGIN only" },
+        );
+    }
+    refused(
+        &["--rtl", "--debug-cable-listen", "0x80000080", "--stop-after", "1"],
+        "--debug-cable-listen",
+    );
+    refused_saying(
+        &["--rtl", "--debug-cable-listen", "--debug-cable-connect", "0x80000080"],
+        "one lashup at a time",
+    );
+    for bad in ["0x80000082", "0x80000081", "0xnothex", "0x"] {
+        refused(
+            &["--rtl", "--debug-cable-connect", bad, "--stop-after", "1"],
+            "--debug-cable-connect",
+        );
+    }
+    // An argument that is not 0x is still an endpoint, and a bad one is
+    // refused as an endpoint.
+    refused(
+        &["--rtl", "--debug-cable-connect", "300000", "--stop-after", "1"],
+        "--debug-cable-connect",
+    );
+    // And a window this build cannot map at all.
+    let out =
+        muir().args(["--rtl", "--debug-cable-connect", "0x80000080", "--stop-after", "1"]).run();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a window muir cannot reach is no run:\n{err}");
+    assert!(
+        err.lines().next().is_some_and(|l| l.contains("--debug-cable-connect")),
+        "the first line names the flag:\n{err}"
+    );
+    if !cfg!(target_os = "linux") {
+        assert_eq!(out.status.code(), Some(2), "refused by name, not attempted:\n{err}");
+        assert!(err.contains("/dev/mem, which only Linux has"), "and says why:\n{err}");
     }
 }
 
