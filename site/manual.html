@@ -122,9 +122,10 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
-        <dt>--debug-cable-connect [&lt;endpoint&gt;]</dt>
+        <dt>--debug-cable-connect [&lt;endpoint&gt;|0x&lt;address&gt;]</dt>
         <dd>
         <p><b>rtl:</b> this machine is the debugger: its DBGOUT connects to a debuggee listening at the endpoint, a port, an address or address:port. Either end may be another program that speaks the cable&rsquo;s frames.</p>
+        <p>An argument beginning <code>0x</code> is no endpoint but the physical address of the window of registers a CADR in FPGA fabric presents its DBGIN at, which muir reaches through <code>/dev/mem</code> with ordinary loads and stores. The debugger is then muir running on the board&rsquo;s own processor under Linux; there is no remote form of it. The two machines run free of each other rather than in step, since fabric runs on its own crystal and cannot be asked to wait, so no timing measured across that cable means anything. Where the window sits is a property of the bitstream, so there is no default address, and muir refuses a window that does not identify itself as the cable&rsquo;s rather than store anything into it. <code>--debug-cable-listen</code> takes no window: what is built in fabric is the debuggee&rsquo;s end.</p>
         <p>Default: <code>127.0.0.1:7661</code>.</p>
         </dd>
       </div>
@@ -504,6 +505,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
       <p>MIT debugged a CADR from another CADR, over a <b>debug cable</b>: 21 wires from one machine&rsquo;s DBGOUT connector to the other&rsquo;s DBGIN, through which the console program <b>CC</b> halts the other machine, reads its registers and drives its bus. muir runs that lashup, and it is the project&rsquo;s acceptance test.</p>
       <p>Each machine has a Chaosnet of its own: muir&rsquo;s cable carries one machine, so the other gets a cable of its own. The two cannot hear each other over it &mdash; the only wire between them is the debug cable &mdash; and the other machine has no CHUDP link either, one socket belonging to one cable, so it reaches no file or time host and its own boot stops in the cold-load debugger. That is where CC finds it, and it is what the acceptance test wants.</p>
       <p><code>--debug-in-process</code> puts both machines in one process with both cables between them. <code>--debug-cable-listen</code> and <code>--debug-cable-connect</code> put the same cable over TCP with one machine in each process, the listener being the debuggee; both take an endpoint the same way and meet at <code>127.0.0.1:7661</code> without one. The listener may be a <code>--chip</code> machine, and then the netlist board&rsquo;s own DBGIN answers the debugger, an event at a time, at the netlist&rsquo;s pace.</p>
+      <p>There is a third transport, where the debuggee is not a program at all: <code>--debug-cable-connect 0x&lt;address&gt;</code> is a CADR in the programmable logic of a board muir is itself running on, and the cable&rsquo;s 21 wires are a small window of memory-mapped registers muir reaches with ordinary loads and stores. The first two transports keep the two machines&rsquo; simulated clocks in step by exchanging promises; fabric runs on its own crystal in real time, so nothing is promised, only the debugger is stepped, and the debugger&rsquo;s own 11.05&nbsp;&micro;s timeout is what ends a cycle nothing answers. The window&rsquo;s layout is proposed and nothing has been built to it yet.</p>
     </div>
   </div>
 </section>

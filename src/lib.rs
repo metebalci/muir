@@ -27,6 +27,7 @@ pub mod disk_unit;
 pub mod diskpack;
 pub mod dm;
 pub mod engine;
+pub mod fabric;
 pub mod ioboard;
 pub mod isa;
 pub mod lashup;

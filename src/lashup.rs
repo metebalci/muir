@@ -406,12 +406,20 @@ impl Message {
 /// is --- DBGIN's for a debuggee, DBGOUT's for a debugger.  An end
 /// implements the side it can be: [`Rtl`] is either, the netlist board
 /// with the machine behind it is a debuggee ([`crate::cable::DebugIn`]),
-/// and a call for the other side is an error in the caller.
+/// the fabric's register window is a debuggee with no clock of muir's
+/// ([`crate::fabric::Fabric`]), and a call an end cannot answer is an
+/// error in the caller.
 pub trait CableEnd {
-    /// The machine's clock, in nanoseconds.
-    fn ns(&self) -> u64;
+    /// The machine's clock, in nanoseconds.  An end that is not a
+    /// simulated machine has none: [`FreeRunning`] steps the debugger
+    /// alone and asks its debuggee for neither.
+    fn ns(&self) -> u64 {
+        unreachable!("this end of the cable has no clock of its own")
+    }
     /// One step, running no further past `limit` than [`max_step_ns`].
-    fn step_until(&mut self, limit: u64) -> Result<(), Halt>;
+    fn step_until(&mut self, _limit: u64) -> Result<(), Halt> {
+        unreachable!("this end of the cable has no clock of its own")
+    }
 
     // --- DBGIN: this end as the debuggee ---
 
@@ -795,5 +803,89 @@ impl<E: CableEnd> Remote<E> {
                 "the other end of the cable went away",
             )),
         }
+    }
+}
+
+// --- The cable to an end with no clock: the third transport ------------------
+
+/// The debugger and a debuggee that keeps no clock of muir's, with the
+/// cable between them: the driver for the fabric's register window
+/// ([`crate::fabric::Fabric`]), and the smallest of the three.
+///
+/// **Only the debugger is stepped and nothing is promised either way.**
+/// [`Lashup`] and [`Remote`] keep two simulated clocks in step by
+/// exchanging the earliest instant each can next do anything; a debuggee
+/// in fabric runs on its own crystal in real time and cannot be asked to
+/// wait, so there is nothing to exchange and nothing of it to step.  The
+/// debugger's own interface is what ends a cycle nothing answers: it times
+/// out [`crate::busint::DEBUG_TIMEOUT_NS`] after the grant and puts the
+/// release on the cable itself, which bounds the polling at about fifty
+/// steps.
+///
+/// **The debuggee is polled as soon as the request is placed**, before the
+/// next step, because the three register strobes are acknowledged
+/// combinationally --- `DEBUG ACK` is `(DBUB MASTER AND SSYN T0) OR
+/// NAND(-DB ADR1 CLK, -DB ADR0 CLK, -DB READ STATUS)`, the 74S08, 74S10
+/// and 74S32 at DBGIN 0A12, 0A14 and 0A09 --- so their acknowledgement is
+/// already up when the first load lands, and a strobe costs one store, one
+/// load and one store.
+///
+/// Any debuggee [`CableEnd`] will do, which is what makes the transport
+/// checkable with no fabric and no board: `tests/fabric.rs` runs this
+/// driver against a model of the window with the netlist's own DBGIN
+/// connector behind it ([`crate::cable::DebugIn`]).
+pub struct FreeRunning<D: CableEnd> {
+    pub debugger: Rtl,
+    pub debuggee: D,
+    /// The standing request's answer has been carried to the debugger, or
+    /// there is no request standing.
+    carried: bool,
+    /// Steps of the debugger taken, for the curious.
+    pub steps: u64,
+}
+
+impl<D: CableEnd> FreeRunning<D> {
+    /// Plugs the cable into the debugger's DBGOUT: a cycle into its debug
+    /// block waits for a real acknowledgement from here on, instead of the
+    /// pull-up's.
+    pub fn new(mut debugger: Rtl, debuggee: D) -> FreeRunning<D> {
+        debugger.attach_debug_cable();
+        FreeRunning { debugger, debuggee, carried: true, steps: 0 }
+    }
+
+    /// One step of the debugger, what it put on the cable carried to the
+    /// debuggee, and the debuggee's answer carried back.
+    pub fn step(&mut self) -> Result<(), Error> {
+        let limit = self.debugger.ns().saturating_add(max_step_ns());
+        self.debugger.step_until(limit)?;
+        self.steps += 1;
+        let refused = |what: String| Error::Io(io::Error::new(io::ErrorKind::InvalidData, what));
+        if let Some(event) = self.debugger.debug_out_take() {
+            match event {
+                CableEvent::Request { at, request } => {
+                    self.debuggee.debug_request(at, request).map_err(refused)?;
+                    self.carried = false;
+                }
+                CableEvent::Release { at } => {
+                    self.debuggee.debug_release(at).map_err(refused)?;
+                    self.carried = true;
+                }
+            }
+        }
+        if !self.carried
+            && let Some((at, word)) = self.debuggee.debug_ack()
+        {
+            self.carried = true;
+            self.debugger.debug_out_answer(at, word);
+        }
+        Ok(())
+    }
+
+    /// Runs the debugger to `ns` at least.
+    pub fn run_until(&mut self, ns: u64) -> Result<(), Error> {
+        while self.debugger.ns() < ns {
+            self.step()?;
+        }
+        Ok(())
     }
 }
