@@ -432,7 +432,8 @@ fn the_disk_bus_is_the_drawings() {
 // ---------------------------------------------------------------------------
 
 use muir::disk_controller::{Controller, REGS};
-use muir::disk_unit::{Geometry, OnCable, REVOLUTION_NS, SECTOR_NS, Trident, Unit};
+use muir::disk_unit::{Geometry, OnCable, Ports, REVOLUTION_NS, SECTOR_NS, Trident, Unit};
+use muir::dm::Dm;
 use muir::netlist::NetId;
 use muir::part::Level;
 use muir::xbus::XbusMaster;
@@ -650,8 +651,14 @@ struct Probe {
     bus: Vec<NetId>,
     steps: Vec<Step>,
     current: Option<Step>,
-    /// A drive on the two cables, if one is plugged in.
-    cable: Option<OnCable>,
+    /// The drives by unit number. With no multiplexor the controller has
+    /// one port of its own and only unit 0 can be on it.
+    units: [Option<OnCable>; 8],
+    /// A DISK MULTIPLEXOR on the controller's edge connector, if one is
+    /// fitted. Then the drive's per-unit half is that board's and the
+    /// cable between the two boards is carried at every step the harness
+    /// takes: [`Probe::carry`].
+    dm: Option<Dm>,
     /// A memory on the backplane for the channel to talk to, if one is.
     memory: Option<Memory>,
     /// Whether the harness itself has a cycle on the bus, which the
@@ -677,7 +684,8 @@ impl Probe {
             bus: (0..10).map(|k| b.net(&format!("TRIDENT.BUS{k}/"))).collect(),
             steps: Vec::new(),
             current: None,
-            cable: None,
+            units: std::array::from_fn(|_| None),
+            dm: None,
             memory: None,
             mine: false,
         }
@@ -699,13 +707,115 @@ impl Probe {
     /// gate and a read or write stops by error at START --- and the two
     /// attention lines to the drive's own.
     fn plug(&mut self, b: &mut XbusMaster, n: &Netlist, drive: Trident) {
+        assert!(self.dm.is_none(), "with a multiplexor the ports are its: plug_unit");
         let mut cable = OnCable::new(n, drive);
         cable.apply(&mut b.chip, b.now);
-        self.cable = Some(cable);
+        self.units[0] = Some(cable);
+    }
+
+    /// Puts a DISK MULTIPLEXOR on the controller's edge connector, as
+    /// [`muir::xbus::Xbus::plug_multiplexor`] does on the backplane. `dc`
+    /// must be the netlist [`netlist::parse_with_multiplexor`] made --- the
+    /// one whose six one-board jumpers are off --- or the board would be
+    /// driving nets tied to ground and to each other.
+    fn plug_multiplexor(&mut self, b: &mut XbusMaster, dc: &Netlist, dmn: &Netlist) {
+        assert!(
+            self.units.iter().all(Option::is_none),
+            "the multiplexor goes on before the drives: their ports are its"
+        );
+        assert_ne!(
+            dc.by_name_id("UNIT0"),
+            dc.by_name_id("GND"),
+            "the controller's netlist still has its one-board jumpers on"
+        );
+        let mut dm = Dm::new(dc, dmn, b.now);
+        dm.settle(&mut b.chip, b.now);
+        self.dm = Some(dm);
+    }
+
+    /// Puts a drive on `unit`'s port of the multiplexor: the per-unit half
+    /// of its cable is that board's and the shared half is still the
+    /// controller's, so the two halves come from two netlists.
+    fn plug_unit(
+        &mut self,
+        b: &mut XbusMaster,
+        dc: &Netlist,
+        dmn: &Netlist,
+        unit: u8,
+        drive: Trident,
+    ) {
+        let dm = self.dm.as_mut().expect("a multiplexor for the drive's port");
+        assert!(self.units[usize::from(unit)].is_none(), "unit {unit} is taken");
+        let mut cable = OnCable::on(Ports { per_unit: dmn, unit, shared: dc }, drive);
+        cable.apply_on(&mut dm.board, &mut b.chip, b.now);
+        dm.settle(&mut b.chip, b.now);
+        self.units[usize::from(unit)] = Some(cable);
+    }
+
+    /// Every drive and the multiplexor given what the controller has on
+    /// the cables at `b.now`, and their answers carried back: the
+    /// multiplexor's own events first, then each drive's answer on to
+    /// whichever board each half of its cable is, then the board-to-board
+    /// cable settled against the controller. This is
+    /// [`muir::xbus::Xbus`]'s `run_disks` for one instant, on the harness.
+    ///
+    /// **Every drive answers at every step, not only the addressed one.**
+    /// A Trident's spindle does not wait to be selected and neither does
+    /// its answer to a select: a drive left holding `SELECTED/` from when
+    /// it was plugged in is a second unit selected, and the multiplexor's
+    /// comparator drops `SELECT OK` for it --- correctly, and the
+    /// transfer then stops before it begins.
+    fn carry(&mut self, b: &mut XbusMaster) {
+        match &mut self.dm {
+            Some(dm) => {
+                dm.transition_due(b.now);
+                for c in self.units.iter_mut().flatten() {
+                    c.apply_on(&mut dm.board, &mut b.chip, b.now);
+                }
+                dm.settle(&mut b.chip, b.now);
+            }
+            None => {
+                for c in self.units.iter_mut().flatten() {
+                    c.apply(&mut b.chip, b.now);
+                }
+            }
+        }
+    }
+
+    /// The controller run to `until`, with the multiplexor carried at every
+    /// tap of the controller's on the way --- what
+    /// [`muir::xbus::Xbus::transition_due`] does, where each of the
+    /// controller's own events is preceded and followed by the drives' and
+    /// the multiplexor's. With no multiplexor this is `b.run` exactly.
+    fn advance(&mut self, b: &mut XbusMaster, until: u64) {
+        if self.dm.is_none() {
+            b.run(until);
+            return;
+        }
+        while b.now < until {
+            let mut to = until;
+            for tap in [b.chip.next_tap(), self.dm.as_ref().and_then(Dm::next_tap)] {
+                if let Some(t) = tap.filter(|&t| t > b.now) {
+                    to = to.min(t);
+                }
+            }
+            b.run(to);
+            self.carry(b);
+        }
     }
 
     fn drive(&self) -> &Trident {
-        &self.cable.as_ref().expect("a drive on the cable").drive
+        self.drive_on(0)
+    }
+
+    /// The drive on `unit`'s port.
+    fn drive_on(&self, unit: u8) -> &Trident {
+        &self.units[usize::from(unit)].as_ref().expect("a drive on that port").drive
+    }
+
+    /// The same, to be read back after a write or moved by a test.
+    fn drive_mut(&mut self, unit: u8) -> &mut Trident {
+        &mut self.units[usize::from(unit)].as_mut().expect("a drive on that port").drive
     }
 
     fn busy(&self, b: &XbusMaster) -> bool {
@@ -755,18 +865,16 @@ impl Probe {
 
     /// Runs the board to `until`, watching: five nanoseconds at a time
     /// while the sequencer is busy, a microsecond otherwise, and never
-    /// past the next thing the drive on the cable does.
+    /// past the next thing a drive on a cable does.
     fn run(&mut self, b: &mut XbusMaster, until: u64) {
         while b.now < until {
             let step = if self.busy(b) { 5 } else { 1_000 };
             let mut next = (b.now + step).min(until);
-            if let Some(c) = &self.cable {
+            for c in self.units.iter().flatten() {
                 next = next.min(c.next_change(b.now));
             }
-            b.run(next);
-            if let Some(c) = &mut self.cable {
-                c.apply(&mut b.chip, b.now);
-            }
+            self.advance(b, next);
+            self.carry(b);
             if let Some(m) = &mut self.memory
                 && !self.mine
             {
@@ -1600,16 +1708,19 @@ fn read_block(
     p.memory.as_mut().unwrap().words[CLP as usize] = page;
     p.memory.as_mut().unwrap().transfers.clear();
     let (cmd, da) = (0o0, block);
-    b.cycle(REGS, Some(cmd));
-    b.cycle(REGS + 1, Some(CLP));
-    b.cycle(REGS + 2, Some(da));
+    p.cycle(b, REGS, Some(cmd));
+    p.cycle(b, REGS + 1, Some(CLP));
+    p.cycle(b, REGS + 2, Some(da));
     p.cycle(b, REGS + 3, Some(0));
-    p.run_to_done(b, 3 * REVOLUTION_NS / 17);
+    // A block whose sector pulse has just gone by waits a whole
+    // revolution for the next one, which is what a command that follows
+    // another on the same block does.
+    p.run_to_done(b, REVOLUTION_NS + 3 * REVOLUTION_NS / 17);
     // The memory side may still be emptying the FIFO.
     let settled = b.now + 20_000;
     p.run(b, settled);
     let steps = p.steps();
-    let (_, status) = b.cycle(REGS, None);
+    let status = p.cycle(b, REGS, None);
     let transfers = p.memory().transfers.clone();
     assert_eq!(transfers[0].wrote, None, "the CCW fetch first");
     assert_eq!(transfers[0].addr, CLP);
@@ -1621,8 +1732,12 @@ fn read_block(
     let executed: Vec<u32> = steps.iter().filter_map(|s| s.executing(0)).collect();
     assert_eq!(executed, program, "the read program, start to done");
     check_walk(&steps, store, 0, &program, cmd, da);
-    let (_, back) = b.cycle(REGS + 2, None);
-    assert_eq!(back & 0x0fff_ffff, da, "the disk address of the last block transferred");
+    let back = p.cycle(b, REGS + 2, None);
+    assert_eq!(
+        back & 0x0fff_ffff,
+        da & 0x0fff_ffff,
+        "the disk address of the last block transferred"
+    );
     (status, written)
 }
 
@@ -2006,6 +2121,52 @@ fn status_8_is_the_on_cylinder_synchroniser() {
     assert_eq!(status & OFF_CYLINDER, 0, "status {status:o}");
 }
 
+/// One write command from START to not-active, with the drive and the
+/// memory plugged in: the CCW at [`CLP`] pointing at `page`, the addresses
+/// the channel read out of memory, the walk, and the status word when it
+/// is over. [`read_block`]'s mirror image, and the channel runs the other
+/// way --- every cycle it makes is a read, the CCW fetch and the page
+/// alike.
+fn write_block(
+    p: &mut Probe,
+    b: &mut XbusMaster,
+    store: &[u32],
+    block: u32,
+    page: u32,
+) -> (u32, Vec<u32>) {
+    p.memory.as_mut().unwrap().words[CLP as usize] = page;
+    p.memory.as_mut().unwrap().transfers.clear();
+    let (cmd, da) = (0o11, block);
+    p.cycle(b, REGS, Some(cmd));
+    p.cycle(b, REGS + 1, Some(CLP));
+    p.cycle(b, REGS + 2, Some(da));
+    p.cycle(b, REGS + 3, Some(0));
+    // A block whose sector pulse has just gone by waits a whole
+    // revolution for the next one, which is what a command that follows
+    // another on the same block does.
+    p.run_to_done(b, REVOLUTION_NS + 3 * REVOLUTION_NS / 17);
+    // The memory side may still be emptying the FIFO.
+    let settled = b.now + 20_000;
+    p.run(b, settled);
+    let steps = p.steps();
+    let status = p.cycle(b, REGS, None);
+    let transfers = p.memory().transfers.clone();
+    assert_eq!((transfers[0].addr, transfers[0].wrote), (CLP, None), "the CCW fetch first");
+    let read: Vec<u32> = transfers[1..]
+        .iter()
+        .map(|t| {
+            assert_eq!(t.wrote, None, "the channel only reads");
+            t.addr
+        })
+        .collect();
+    assert_eq!(read, (page..page + 256).collect::<Vec<_>>(), "the page, word by word");
+    let program: Vec<u32> = (0o100..=0o174).collect();
+    let executed: Vec<u32> = steps.iter().filter_map(|s| s.executing(0o100)).collect();
+    assert_eq!(executed, program, "the write program, start to done");
+    check_walk(&steps, store, 0o100, &program, cmd, da);
+    (status, read)
+}
+
 /// **A write with a drive on the cable puts the page on the pack.**
 ///
 /// The other direction, sector 1 of the control store: the channel
@@ -2034,36 +2195,12 @@ fn a_write_with_a_drive_puts_the_page_on_the_pack() {
     m.words[CLP as usize] = PAGE;
     p.run(&mut b, t0 + 10_000);
 
-    let (cmd, da) = (0o11, 2);
-    b.cycle(REGS, Some(cmd));
-    b.cycle(REGS + 1, Some(CLP));
-    b.cycle(REGS + 2, Some(da));
-    p.cycle(&mut b, REGS + 3, Some(0));
-    p.run_to_done(&mut b, 3 * REVOLUTION_NS / 17);
-    let settled = b.now + 20_000;
-    p.run(&mut b, settled);
-    let steps = p.steps();
-    let (_, status) = b.cycle(REGS, None);
+    let (status, _) = write_block(&mut p, &mut b, &store, 2, PAGE);
     eprintln!("status {status:o}");
-
-    let transfers = p.memory().transfers.clone();
-    assert_eq!((transfers[0].addr, transfers[0].wrote), (CLP, None), "the CCW fetch first");
-    let read: Vec<u32> = transfers[1..]
-        .iter()
-        .map(|t| {
-            assert_eq!(t.wrote, None, "the channel only reads");
-            t.addr
-        })
-        .collect();
-    assert_eq!(read, (PAGE..PAGE + 256).collect::<Vec<_>>(), "the page, word by word");
     assert_eq!(status & 1, 1, "not active: {status:o}");
     assert_eq!(status & ERRORS, 0, "no error: {status:o}");
-    let program: Vec<u32> = (0o100..=0o174).collect();
-    let executed: Vec<u32> = steps.iter().filter_map(|s| s.executing(0o100)).collect();
-    assert_eq!(executed, program, "the write program, start to done");
-    check_walk(&steps, &store, 0o100, &program, cmd, da);
 
-    let drive = &mut p.cable.as_mut().unwrap().drive;
+    let drive = p.drive_mut(0);
     assert_eq!(drive.bad_writes, 0, "what was written parsed as the format");
     assert_eq!(drive.unit.block_at(0, 0, 2), Some(data), "the page, on the pack");
     assert_eq!(drive.unit.block_at(0, 0, 1), Some([0u32; 256]), "and no other block");
@@ -2116,16 +2253,16 @@ fn read_blocks(
         m.words[CLP as usize + k] = page | (k + 1 < pages.len()) as u32;
     }
     m.transfers.clear();
-    b.cycle(REGS, Some(0));
-    b.cycle(REGS + 1, Some(CLP));
-    b.cycle(REGS + 2, Some(first));
+    p.cycle(b, REGS, Some(0));
+    p.cycle(b, REGS + 1, Some(CLP));
+    p.cycle(b, REGS + 2, Some(first));
     p.cycle(b, REGS + 3, Some(0));
     // A block at the end of the track is most of a revolution away.
     p.run_to_done(b, REVOLUTION_NS + 4 * REVOLUTION_NS / 17);
     let settled = b.now + 20_000;
     p.run(b, settled);
     let _ = p.steps();
-    let (_, status) = b.cycle(REGS, None);
+    let status = p.cycle(b, REGS, None);
     let written =
         p.memory().transfers.iter().filter_map(|t| t.wrote.map(|w| (t.addr, w))).collect();
     (status, written)
@@ -2548,9 +2685,9 @@ fn chained_write(p: &mut Probe, b: &mut XbusMaster, clp: u32, pages: &[u32], aft
 
 /// The command written to the four registers and then run, watched.
 fn chained(p: &mut Probe, b: &mut XbusMaster, cmd: u32, clp: u32, pages: usize) -> Chain {
-    b.cycle(REGS, Some(cmd));
-    b.cycle(REGS + 1, Some(clp));
-    b.cycle(REGS + 2, Some(FIRST_BLOCK));
+    p.cycle(b, REGS, Some(cmd));
+    p.cycle(b, REGS + 1, Some(clp));
+    p.cycle(b, REGS + 2, Some(FIRST_BLOCK));
     p.start(b, REGS + 3, Some(0));
 
     let t0 = b.now;
@@ -2595,7 +2732,7 @@ fn chained(p: &mut Probe, b: &mut XbusMaster, cmd: u32, clp: u32, pages: usize) 
     // bury the reading this test is here for.
     p.forget();
     let transfers = p.memory().transfers.clone();
-    let (_, status) = b.cycle(REGS, None);
+    let status = p.cycle(b, REGS, None);
     Chain { seen, clp, transfers, status, stuck, t0 }
 }
 
@@ -2694,7 +2831,7 @@ fn the_word_past_the_ccw_list_is_never_fetched() {
     let (mut b, mut p, _) = chain_bench(&n, 0);
     let blocks = pages_to_write(cold.len());
     for (k, w) in blocks.iter().enumerate() {
-        let drive = &mut p.cable.as_mut().unwrap().drive;
+        let drive = p.drive_mut(0);
         assert!(drive.unit.write_block_at(0, 0, FIRST_BLOCK + k as u32, w));
     }
     let c2 = chained_read(&mut p, &mut b, clp, &cold, 0);
@@ -3181,7 +3318,7 @@ fn reversed_channel(n: &Netlist, cmd: u32, within: u64) -> Reversed {
     let stored: Vec<u32> = transfers.iter().filter(|t| t.wrote.is_some()).map(|t| t.addr).collect();
     let fetched: Vec<u32> =
         transfers.iter().filter(|t| t.wrote.is_none()).map(|t| t.addr).collect();
-    let drive = &mut p.cable.as_mut().unwrap().drive;
+    let drive = p.drive_mut(0);
     Reversed {
         busy,
         status,
@@ -3738,7 +3875,7 @@ fn a_chained_write_stops_at_the_last_ccw() {
     // And the pack has what memory had.
     for (k, w) in out.iter().enumerate() {
         let block = FIRST_BLOCK + k as u32;
-        let drive = &mut p.cable.as_mut().unwrap().drive;
+        let drive = p.drive_mut(0);
         assert_eq!(drive.bad_writes, 0, "what was written parsed as the format");
         assert_eq!(drive.unit.block_at(0, 0, block), Some(*w), "block {block} on the pack");
     }
@@ -3769,7 +3906,7 @@ fn a_chained_write_stops_at_the_last_ccw() {
         assert_eq!(c.status & ERRORS, 0, "{what}: no error: {:o}", c.status);
         for (k, w) in out.iter().enumerate() {
             let block = FIRST_BLOCK + k as u32;
-            let drive = &mut p.cable.as_mut().unwrap().drive;
+            let drive = p.drive_mut(0);
             assert_eq!(drive.unit.block_at(0, 0, block), Some(*w), "{what}: block {block}");
         }
     }
@@ -3940,5 +4077,338 @@ fn the_cold_boots_own_chunk_stops_at_the_last_ccw() {
         c.clp.last().unwrap(),
         c.transfers.len(),
         c.status
+    );
+}
+
+// --- transfers through the DISK MULTIPLEXOR ---------------------------------
+
+const DM: &str = include_str!("../data/DM.netlist");
+
+/// The controller's netlist for a board built to sit beside a DISK
+/// MULTIPLEXOR, and the multiplexor's.
+fn multiplexed() -> (Netlist, Netlist) {
+    (netlist::parse_with_multiplexor(CADRDC).unwrap(), netlist::parse(DM).unwrap())
+}
+
+/// The controller with a memory, a drive carrying `blocks` on cylinder 0
+/// head 0, and a DISK MULTIPLEXOR between the two if `multiplexor`, the
+/// drive then on `unit`'s port of it. `n` has to match: the netlist
+/// `netlist::parse_with_multiplexor` made where the board is fitted and
+/// `netlist::parse`'s where it is not.
+///
+/// Everything else is the same either way --- the same pack contents, the
+/// same drive started at the same instant, the same memory --- so that a
+/// difference between two runs of this is the board and nothing else.
+fn bench<'a>(
+    n: &'a Netlist,
+    dmn: &Netlist,
+    multiplexor: bool,
+    unit: u8,
+    blocks: &[(u32, [u32; muir::disk_unit::BLOCK_WORDS])],
+) -> (XbusMaster<'a>, Probe) {
+    let mut b = controller(n);
+    let mut p = Probe::new(&b);
+    let t0 = b.now;
+    let mut drive = quick_drive(t0);
+    for (block, data) in blocks {
+        assert!(drive.unit.write_block_at(0, 0, *block, data));
+    }
+    if multiplexor {
+        p.plug_multiplexor(&mut b, n, dmn);
+        p.plug_unit(&mut b, n, dmn, unit, drive);
+    } else {
+        assert_eq!(unit, 0, "with no board the controller has one port, and it is unit 0's");
+        p.plug(&mut b, n, drive);
+    }
+    p.with_memory(&b, 1 << 15);
+    p.run(&mut b, t0 + 10_000);
+    (b, p)
+}
+
+/// **A block read through the DISK MULTIPLEXOR is the block read without
+/// one, word for word.**
+///
+/// The same pack contents, the same drive started at the same instant, the
+/// same command for the same block of the same unit: once with the drive
+/// on the controller's own port and once with the multiplexor between.
+/// The two runs are held to the same 256 words in memory, the same bus
+/// cycles in the same order, and the same status word, so nothing the
+/// board does to a transfer can pass unremarked --- not the data, not the
+/// channel, not the errors.
+///
+/// **This is the first thing anywhere in the project that moves data
+/// through the multiplexor.** `tests/dm_cable.rs` has the board's
+/// signals --- the attention fan-in, the unit number, the select, the
+/// spindle pulses --- and not one transfer, and the board is the one with
+/// no wire list on the tapes, so a transfer is the only way to find out
+/// whether the drawings' account of it works. What a transfer reaches that
+/// the signals do not is the read path: the drive's clock and data pairs
+/// into the SN75107s on `DMRDWR`, out of the 74S240 at `DMMUX` 0C11 as
+/// `DISK.CLK^ B` and `READ DATA B`, and through the 74S241 at `DMMUX` 0F12
+/// on to the cable; and the block counters, which on a multiplexor machine
+/// are that board's sixteen 74LS569s and not the controller's two.
+#[test]
+fn a_read_through_the_multiplexor_is_the_read_without_it() {
+    let store = control_store();
+    let data = words(61);
+    let (n, dmn) = multiplexed();
+
+    let one = cadrdc();
+    let (mut b, mut p) = bench(&one, &dmn, false, 0, &[(2, data)]);
+    let (alone, alone_written) = read_block(&mut p, &mut b, &store, 2, PAGE);
+    let alone_page = p.memory().words[PAGE as usize..PAGE as usize + 256].to_vec();
+    assert_eq!(alone_page, data.to_vec(), "the block, off the controller's own port");
+
+    let (mut b, mut p) = bench(&n, &dmn, true, 0, &[(2, data)]);
+    let (status, written) = read_block(&mut p, &mut b, &store, 2, PAGE);
+    let page = p.memory().words[PAGE as usize..PAGE as usize + 256].to_vec();
+    eprintln!("through the multiplexor: status {status:o}, on the controller's port {alone:o}");
+    assert_eq!(page, data.to_vec(), "the block, through the multiplexor");
+    assert_eq!(page, alone_page, "word for word what the one-board machine read");
+    assert_eq!(written, alone_written, "by the same cycles in the same order");
+    assert_eq!(status, alone, "and the same status word");
+}
+
+/// **A drive on a port that is not unit 0 transfers, and it is the board
+/// that chose the port.** The same read, on port 5, with the unit number
+/// in the disk address register's `<30:28>`: the 74LS175 at `DMSEL` 0F05
+/// latches those three bits on `-LOAD DA`, the Am25LS2538 at `DMSECT` 0E05
+/// decodes them, and the data comes off port 5's SN75107s.
+///
+/// Without this the test above passes on a board that ignores the unit
+/// number entirely, unit 0 being what the register holds out of reset. So
+/// a drive sits on port 0 as well, with **different words in the same
+/// block**, and the read of unit 5 is held to unit 5's: a board that fanned
+/// in the wrong port, or both, would say so here and nowhere else.
+#[test]
+fn a_drive_on_another_port_transfers_through_the_multiplexor() {
+    const UNIT: u8 = 5;
+    let store = control_store();
+    let (theirs, mine) = (words(71), words(72));
+    let (n, dmn) = multiplexed();
+
+    let mut b = controller(&n);
+    let mut p = Probe::new(&b);
+    let t0 = b.now;
+    p.plug_multiplexor(&mut b, &n, &dmn);
+    let mut decoy = quick_drive(t0);
+    assert!(decoy.unit.write_block_at(0, 0, 2, &theirs));
+    p.plug_unit(&mut b, &n, &dmn, 0, decoy);
+    let mut drive = quick_drive(t0);
+    assert!(drive.unit.write_block_at(0, 0, 2, &mine));
+    p.plug_unit(&mut b, &n, &dmn, UNIT, drive);
+    p.with_memory(&b, 1 << 15);
+    p.run(&mut b, t0 + 10_000);
+
+    let (status, _) = read_block(&mut p, &mut b, &store, u32::from(UNIT) << 28 | 2, PAGE);
+    eprintln!("unit {UNIT} block 2: status {status:o}");
+    assert_eq!(status & 1, 1, "not active: {status:o}");
+    assert_eq!(status & ERRORS, 0, "no error: {status:o}");
+    assert_eq!(
+        &p.memory().words[PAGE as usize..PAGE as usize + 256],
+        &mine[..],
+        "unit {UNIT}'s words, and unit 0 has other words in that block"
+    );
+}
+
+/// **The boot PROM's own sequence goes through the multiplexor**: a
+/// chained read of three blocks, then a write, then a read of what was
+/// written.
+///
+/// `promh.9` writes a page to a block and reads it back to compare before
+/// it loads anything, and `COLD-DISK-READ` then hands the channel a
+/// command list of many pages at once; so these are the three shapes the
+/// machine actually asks the board for. The chained read is what a band
+/// load is made of.
+///
+/// The write is the direction the reads never take. It runs the other way
+/// through the board --- `WRITE DATA` and `WRITE GATE` off the cable into
+/// the 74S175 at `DMMUX` 0F13 and the 74S241 at 0F12, and out through the
+/// addressed port's SN75110 on `DMRDWR` --- and no read touches any of it.
+#[test]
+fn a_chained_read_then_a_write_and_a_read_back_go_through_the_multiplexor() {
+    const PAGE3: u32 = 0o40000;
+    const PAGES: [u32; 3] = [PAGE, PAGE2, PAGE3];
+    let store = control_store();
+    let (n, dmn) = multiplexed();
+    let written: Vec<[u32; muir::disk_unit::BLOCK_WORDS]> =
+        (0..3).map(|k| words(120 + k as u32)).collect();
+    let on_pack: Vec<(u32, [u32; muir::disk_unit::BLOCK_WORDS])> =
+        (0..3).map(|k| (FIRST_BLOCK + k as u32, written[k])).collect();
+    let (mut b, mut p) = bench(&n, &dmn, true, 0, &on_pack);
+
+    // A band load's shape: one command, one CCW a page, three blocks.
+    let c = chained_read(&mut p, &mut b, CLP, &PAGES, 0);
+    assert!(
+        !c.stuck,
+        "the chained read stopped: last CLP {:o}",
+        c.clp.last().copied().unwrap_or(0)
+    );
+    assert_eq!(c.status & 1, 1, "not active: {:o}", c.status);
+    assert_eq!(c.status & ERRORS, 0, "no error: {:o}", c.status);
+    assert_eq!(c.clp, vec![CLP, CLP + 1, CLP + 2], "one CCW fetch a page, and no more");
+    assert_eq!(c.pages(), vec![(PAGE, 256), (PAGE2, 256), (PAGE3, 256)], "three pages filled");
+    for (k, page) in PAGES.iter().enumerate() {
+        assert_eq!(
+            &p.memory().words[*page as usize..*page as usize + 256],
+            &written[k][..],
+            "page {k} through the multiplexor"
+        );
+    }
+
+    // The PROM's write and read-back, on a block the read did not touch.
+    let fresh = words(129);
+    let spare = FIRST_BLOCK + 3;
+    let m = p.memory.as_mut().unwrap();
+    m.words[PAGE as usize..PAGE as usize + 256].copy_from_slice(&fresh);
+    let (status, _) = write_block(&mut p, &mut b, &store, spare, PAGE);
+    eprintln!("write of block {spare}: status {status:o}");
+    assert_eq!(status & 1, 1, "not active: {status:o}");
+    assert_eq!(status & ERRORS, 0, "no error: {status:o}");
+    let drive = p.drive_mut(0);
+    assert_eq!(drive.bad_writes, 0, "what was written parsed as the format");
+    assert_eq!(
+        drive.unit.block_at(0, 0, spare),
+        Some(fresh),
+        "the page, on the pack through the multiplexor"
+    );
+
+    let (status, _) = read_block(&mut p, &mut b, &store, spare, PAGE2);
+    eprintln!("read back of block {spare}: status {status:o}");
+    assert_eq!(status & 1, 1, "not active: {status:o}");
+    assert_eq!(status & ERRORS, 0, "no error: {status:o}");
+    assert_eq!(
+        &p.memory().words[PAGE2 as usize..PAGE2 as usize + 256],
+        &fresh[..],
+        "what the write put there, read back through the board"
+    );
+}
+
+/// **The DIPs `cadrdc/dc.eco` leaves out of a multiplexor-version
+/// controller are exactly the ones that would fight the multiplexor.**
+///
+/// Section iii of that file --- "When stuffing multiplexor version DC
+/// board, leave out DIPs in A7 A8 A9 A10 B7 B8" --- reaches us in one file
+/// and one only: `cadrdc/disk.hand` carries the same ECO's jumpers by a
+/// different route and says nothing about its DIPs. So the second reading
+/// is taken off the two boards instead, and this is it.
+///
+/// With those six locations stuffed, twelve of the cable's twenty-five
+/// signals have an output on the controller as well as on the multiplexor.
+/// Every one of the twelve is an output that is never off:
+///
+/// - `BLOCK.CLK^` from the 74LS14 at `DCTRID` 0A07 p8 and `NO SELECT` from
+///   its p10, both totem-pole, against the multiplexor's 74S241 at `DMMUX`
+///   0F12 --- whose 2G on pin 19 is tied to `HI2` --- and its open
+///   collector at `DMSEL` 0E03;
+/// - `READ DATA` and `DISK.CLK^` from the SN75107 at `DCTRID` 0A10, whose
+///   strobes are tied to `HI7`, against that same 74S241;
+/// - `BLOCK.CTR<7:0>` from the two 74LS569s at `DCTRID` 0B07 and 0B08,
+///   whose `-G` on pin 17 is on the ground net, against the addressed
+///   port's pair on the multiplexor;
+/// - `UNIT 0 ATTENTION` from the open collector at `DCTRSG` 0A07 p2,
+///   which with no drive on the controller's own port holds the wire down
+///   for ever and buries every unit's attention.
+///
+/// With the DIPs out, no cable signal has an output on both boards.
+#[test]
+fn the_multiplexor_dips_are_the_nets_both_boards_would_drive() {
+    /// Every cable signal this board has a driving pin on, and which pins.
+    fn outputs(n: &Netlist) -> BTreeMap<String, Vec<String>> {
+        let names: BTreeMap<NetId, String> = muir::dm::wire_names()
+            .into_iter()
+            .map(|name| {
+                let id = n
+                    .by_name_id(&name)
+                    .or_else(|| n.by_name_id(&format!("'{name}'")))
+                    .unwrap_or_else(|| panic!("no net {name}"));
+                (id, name)
+            })
+            .collect();
+        let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for p in &n.parts {
+            let Some(po) = muir::part::pinout(&p.kind) else { continue };
+            for &(pin, net) in &p.pins {
+                if po.drive_of(pin).is_none_or(|d| d == muir::part::Drive::Passive) {
+                    continue;
+                }
+                if let Some(name) = names.get(&net) {
+                    out.entry(name.clone())
+                        .or_default()
+                        .push(format!("{} {} ({}) p{pin}", p.page, p.reference, p.kind));
+                }
+            }
+        }
+        out
+    }
+
+    let one = cadrdc();
+    let (n, dmn) = multiplexed();
+    let (stuffed, left_out, board) = (outputs(&one), outputs(&n), outputs(&dmn));
+
+    let both: Vec<&str> =
+        stuffed.keys().filter(|k| board.contains_key(*k)).map(String::as_str).collect();
+    let mut want: Vec<String> =
+        ["BLOCK.CLK^", "DISK.CLK^", "NO SELECT", "READ DATA", "UNIT 0 ATTENTION"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+    want.extend((0..8).map(|k| format!("BLOCK.CTR{k}")));
+    want.sort();
+    for name in &both {
+        eprintln!("{name}: controller {:?}, multiplexor {:?}", stuffed[*name], board[*name]);
+    }
+    assert_eq!(
+        both,
+        want.iter().map(String::as_str).collect::<Vec<_>>(),
+        "the cable signals a stuffed controller drives and the multiplexor drives too"
+    );
+
+    // The controller's eight block-counter outputs are the tri-state ones,
+    // and they are never off: pin 17, `-G`, is on the ground net.
+    for reference in ["0B07", "0B08"] {
+        let part = one
+            .parts
+            .iter()
+            .find(|p| p.reference == reference && p.page == "DCTRID")
+            .unwrap_or_else(|| panic!("a block counter at {reference}"));
+        let enable = part.pins.iter().find(|&&(k, _)| k == 17).expect("pin 17").1;
+        assert_eq!(one.net(enable), "GND", "{reference}'s output enable is tied low");
+    }
+
+    // With the DIPs out, no cable signal is driven from both ends.
+    let left: Vec<&String> = left_out.keys().filter(|k| board.contains_key(*k)).collect();
+    assert!(left.is_empty(), "still driven from both ends: {left:?}");
+
+    // And nothing else went with them: what left is the six locations of
+    // the ECO, every record of them, and every one is on the controller's
+    // own single drive port.
+    let gone: Vec<String> = one
+        .parts
+        .iter()
+        .filter(|p| !n.parts.iter().any(|q| q.reference == p.reference))
+        .map(|p| format!("{} {} {}", p.page, p.reference, p.kind))
+        .collect();
+    assert_eq!(
+        gone,
+        [
+            "DCTRID 0A10 CAP1",
+            "DCTRID 0A07 LS14L",
+            "DCTRID 0A08 75110",
+            "DCTRID 0A10 75107",
+            "DCTRID 0A09 16DUMMY",
+            "DCTRID 0A07 LS14L",
+            "DCTRID 0B08 74LS569",
+            "DCTRID 0B07 74LS569",
+            "DCTRSG 0A07 OLS14L",
+            "DCTRSG 0A07 OLS14L",
+            "DCTRSG 0A07 OLS14L",
+        ],
+        "the parts a multiplexor-version board is not stuffed with"
+    );
+    assert_eq!(
+        gone.iter().filter(|g| g.ends_with("CAP1") || g.ends_with("16DUMMY")).count(),
+        2,
+        "two of the eleven are the passives of those locations, which carry no logic"
     );
 }
