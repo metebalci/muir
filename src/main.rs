@@ -1003,16 +1003,30 @@ A simulator of the MIT CADR Lisp Machine.
                                restart. [default: off]
   -h, --help                   this.
   -V, --version                what this build calls itself: the version,
+                               the commit it was built from --- with -dirty
+                               after it if the tree had uncommitted work ---
                                and whether it was built with optimisations
                                off. Every run says it in its first line too.
 ";
 
-/// What this build calls itself: the crate's version, and whether it was
-/// built with optimisations off. `--version` prints it, and every run says
+/// What this build calls itself: the crate's version, the commit it was
+/// built from, and whether it was built with optimisations off ---
+/// `muir 0.1.0-e4d8aeb-release`. `--version` prints it, and every run says
 /// it in its first line, so a report of a run says which muir made it.
+///
+/// **A tree with uncommitted work in it says `-dirty` after the commit**,
+/// because the commit alone would name something that was never built.
+/// The commit is stamped in at build time by `build.rs`, which asks git
+/// once there; nothing here runs git, and a built muir does not need it.
+/// Built where there is no repository --- a source archive, a machine
+/// with no git --- there is no commit to name and the version is the
+/// crate's and the build's alone.
 fn version() -> String {
     let build = if cfg!(debug_assertions) { "dev" } else { "release" };
-    format!("muir {}-{build}", env!("CARGO_PKG_VERSION"))
+    match option_env!("MUIR_GIT") {
+        Some(commit) => format!("muir {}-{commit}-{build}", env!("CARGO_PKG_VERSION")),
+        None => format!("muir {}-{build}", env!("CARGO_PKG_VERSION")),
+    }
 }
 
 /// A run that cannot start, for a reason that is not the command line's
