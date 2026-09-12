@@ -28,20 +28,35 @@
 //! install --path .` puts it on the path. The programs in `examples/` stay
 //! `cargo run --example` programs.
 //!
-//! The engine flags are mutually exclusive and `--rtl` is the default.
-//! `chip` runs main memory and the I/O board as netlists unless told
-//! `model`, which is `rtl`'s twin of each --- the same timing, no gates ---
-//! and `--main-memory-boards` is how many 64K-word boards the machine has
-//! --- main memory on every engine, the boards on the Xbus on `chip` ---
-//! 32 by default for the two million words. `--tv` is the
-//! display, a netlist on the backplane unless told `model`, and
+//! The engine flags are mutually exclusive and `--rtl` is the default,
+//! which is the engine for ordinary use: the models throughout, at about
+//! twice the machine's own rate. `chip` is the reference, and it runs
+//! every board as a netlist. Each board flag takes `model` instead ---
+//! `rtl`'s twin of that board, the same timing, no gates --- which is how
+//! one board is taken out of the picture while something else is under
+//! investigation, rather than a machine to run for its own sake.
+//! `--main-memory` is main memory; `--main-memory-boards` is how many
+//! 64K-word boards the machine has --- main memory on every engine, the
+//! boards on the Xbus on `chip` --- 32 by default for the two million
+//! words. `--io-board` is the I/O board, `--tv` the display, and
 //! `--tv-board` which display: the SIMPLE TV, the black-and-white board
 //! System 100 drives, or the LISPM TV that replaced it. `--disk-controller`
 //! is the disk controller, whose netlist runs its own microcode with the
 //! pack on its cable as a drive and takes the drive's time over every
-//! block, milliseconds where the model takes none; `model` is its default,
-//! alone among the boards, until a boot through it has been run to the
-//! end. The other engines run the models always.
+//! block, milliseconds where the model takes none. **A run that touches no
+//! pack pays about 3% for that, and a run that reads one pays days**:
+//! System 100 booted through the netlist controller on 12 September 2026
+//! in 2 days 14 hours and 301 million microcycles, 51 hours of it the cold
+//! boot's copy of all 21,342 pages of the band. The controller's sequencer
+//! waits on the drive's clocks and on its own delay lines, so it cannot be
+//! untimed the way the model is, and `--disk-controller model` is how a
+//! `chip` run that does not care about the disk is made quick.
+//! `--main-memory model` takes the disk controller down with it, the
+//! netlist controller being a second master on the Xbus that the model
+//! memory does not answer; asking for that memory and
+//! `--disk-controller netlist` together is refused, being a backplane that
+//! cannot be built. Either way the start says which controller the run
+//! has. The other engines run the models always.
 //! `--disk-pack` takes a pack image --- the System 100 release's
 //! `disk-sys-100-0.img` --- and there is no default: no flag is a drive
 //! with no pack in it. The image is the pack's blocks end to end, 256 words of 32 bits
@@ -585,8 +600,8 @@ enum Which {
 /// What the ratio does **not** include: the disk.
 ///
 /// This is microcycles against microcycles. With the disk controller as a
-/// behavioural model --- always on `micro` and `rtl`, and on `chip` unless
-/// it is given `--disk-controller netlist` --- a transfer completes inside
+/// behavioural model --- always on `micro` and `rtl`, and on `chip` when
+/// it is given `--disk-controller model` --- a transfer completes inside
 /// the store to `START` and a seek takes no time. The machine spent
 /// milliseconds on a seek and spent them running the microcode's polling
 /// loop, so a 55 ms seek is about 380,000 microcycles the hardware executes
@@ -746,7 +761,14 @@ A simulator of the MIT CADR Lisp Machine.
                                display above this machine's, 127.0.0.1:5901
                                when it is at :0]
   --disk-controller netlist|model
-                               chip: the disk controller. [default: model]
+                               chip: the disk controller. The netlist takes
+                               the drive's real milliseconds over every
+                               block: a run that touches no pack pays about
+                               3% for that, and System 100's boot through it
+                               took two and a half days. model is how a run
+                               that does not care about the disk is made
+                               quick, and is what --main-memory model
+                               leaves. [default: netlist]
   --disk-multiplexor           chip: a DISK MULTIPLEXOR on the netlist
                                controller's cable, which is what gives it
                                eight drive ports instead of one. Without it
@@ -796,7 +818,12 @@ A simulator of the MIT CADR Lisp Machine.
                                line can be pasted into a mapping file.
                                [default: off]
   --main-memory netlist|model  chip: main memory as MIT's board or as rtl's
-                               model of it. [default: netlist]
+                               model of it. model takes the disk controller
+                               down with it, the netlist controller being a
+                               second master the model memory does not
+                               answer; asking for it and --disk-controller
+                               netlist together is refused. [default:
+                               netlist]
   --main-memory-boards <n>     how many 64K-word boards, 1 to 60: main
                                memory on every engine, and on chip the
                                boards on the backplane. [default: 32, the

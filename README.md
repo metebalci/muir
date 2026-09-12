@@ -87,22 +87,36 @@ microcycle boundary. Run the fast one, check it against the slow one.
 
 Those figures are microcycles against the machine's own 145 ns microcycle,
 and **the disk is outside them**. With the disk controller as a behavioural
-model --- always on `micro` and `rtl`, and on `chip` unless it is given
-`--disk-controller netlist` --- a transfer completes inside the store to
+model --- always on `micro` and `rtl`, and on `chip` when it is given
+`--disk-controller model` --- a transfer completes inside the store to
 `START` and a seek takes no time. The hardware spent milliseconds on a seek
 and spent them running the microcode's polling loop, so a 55 ms seek is
 about 380,000 microcycles a CADR executes and muir does not. A program that
 seeks finishes further ahead of the hardware than the table says, by an
 amount that depends on the program.
 
-On `--disk-controller netlist` it inverts: the drive takes its own time and
-that polling loop runs through every gate on the board, so a seeking program
-comes out slower than 1/4,000 rather than faster.
+`chip` runs the netlist controller, and there it inverts: the drive takes
+its own time and that polling loop runs through every gate on the board, so
+a program that waits on the disk comes out slower than 1/4,000 rather than
+faster. **A run that touches no pack pays about 3% for that; a run that
+reads one pays days.** System 100 booted through the netlist controller on
+12 September 2026 in 2 days 14 hours and 301 million microcycles --- 51
+hours of it the cold boot's copy of all 21,342 pages of the band, at about
+330 pages an hour. The controller's sequencer waits on the drive's clocks
+and on its own delay lines, so it cannot be untimed the way the model is,
+and `--disk-controller model` is how a `chip` run that does not care about
+the disk is made quick.
 
-Any board can run as `rtl`'s behavioural model instead, one at a time, which
-is faster: `--main-memory`, `--io-board`, `--tv` and `--disk-controller` take
-`netlist` or `model`; the disk controller is the one that defaults to
-`model`. `--main-memory-boards` sets how many 64K-word boards the machine
+`rtl` is the engine for ordinary use, and `chip` means the gate-level
+machine throughout: `--main-memory`, `--io-board`, `--tv` and
+`--disk-controller` all start there as netlists, and each takes `model` for
+`rtl`'s behavioural one instead, one board at a time. Those mixes are
+instruments rather than machines --- the two engines are held to each other
+at every microcycle, so where a board and its model part one of them is
+wrong, and running a board as its model is how you find out which.
+`--main-memory model` takes the disk controller down with it, the netlist
+controller being a second master on the Xbus that the model memory does not
+answer. `--main-memory-boards` sets how many 64K-word boards the machine
 has, on every engine: 32 by default, up to 60.
 
 ## The netlists

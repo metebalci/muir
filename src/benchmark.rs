@@ -402,8 +402,13 @@ pub fn engine_vma<E: Engine>(e: &mut E) -> u32 {
     e.machine().vma
 }
 
-/// The board as `muir --chip` runs it: every board a netlist but the disk
-/// controller, thirty-two memory boards, and no pack.
+/// The boards these programs need as netlists: the processor, the
+/// interface, main memory, the I/O board and the display, with thirty-two
+/// memory boards and no pack.
+///
+/// **Not every board `muir --chip` runs**, which now includes MIT's disk
+/// controller: there is no disk board here at all, and none of these
+/// programs touches a pack. What the figures measure is the datapath.
 pub fn chip(
     cpu: &Netlist,
     busint: &Netlist,

@@ -430,8 +430,9 @@ impl FarEnd {
     /// either way; with no I/O board netlist, its registers likewise from
     /// the behavioural board on the twin's times. `chip` runs the
     /// netlists unless told otherwise (`--main-memory model`,
-    /// `--io-board model`, `--tv model` on `muir`; `MUIR_MAIN_MEMORY=model`,
-    /// `MUIR_IO_BOARD=model`, `MUIR_TV=model` on the tests). `tv` and `disk`
+    /// `--io-board model`, `--tv model`, `--disk-controller model` on
+    /// `muir`; `MUIR_MAIN_MEMORY=model`, `MUIR_IO_BOARD=model`,
+    /// `MUIR_TV=model`, `MUIR_DISK_CONTROLLER=model` on the tests). `tv` and `disk`
     /// are the display and the disk controller as netlists on the
     /// backplane; without them [`Buses`] answers each from the machine's
     /// model. With a display board, [`Buses`] still mirrors every write to

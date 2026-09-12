@@ -55,8 +55,9 @@ const HARNESS: Chosen =
 /// `MUIR_MAIN_MEMORY` and `MUIR_IO_BOARD` are netlists by default, the
 /// timing being the board's either way.
 ///
-/// `MUIR_TV` is the model by default, and that is the one board this
-/// harness does not run as `muir --chip` runs it: `rtl` has no timing twin
+/// `MUIR_TV` is the model by default, and that is one of the two boards
+/// this harness does not run as `muir --chip` runs it --- the disk
+/// controller below is the other: `rtl` has no timing twin
 /// for the display as it has for memory and the I/O board, so with the
 /// display netlist on the backplane the two machines stop keeping the same
 /// time. Measured, on the System 100 pack:
@@ -109,12 +110,15 @@ const HARNESS: Chosen =
 /// `MUIR_TV_BOARD=lispm-tv` puts the LISPM TV there in place of the SIMPLE
 /// TV.
 ///
-/// `MUIR_DISK_CONTROLLER` is the model by default, and there it agrees
-/// with `muir --chip` --- but by coincidence rather than by decision,
-/// which is what [`muir_builds_this_harnesss_machine_but_for_the_display`]
-/// is for. The netlist controller takes the pack in unit 0 on its cable as
-/// a drive, and its transfers then take the drive's time, milliseconds a
-/// block, where the model's take none.
+/// `MUIR_DISK_CONTROLLER` is the model by default, and **that is the
+/// second board this harness keeps from `muir --chip`**, which has run the
+/// netlist controller since a boot through it was run to the end (issue
+/// 40). The reason is the comparison itself: `rtl` has no netlist disk, so
+/// a netlist controller here would be comparing two machines rather than
+/// two models of one. [`muir_builds_this_harnesss_machine_but_for_the_display`]
+/// holds the difference deliberate. The netlist controller takes the pack
+/// in unit 0 on its cable as a drive, and its transfers then take the
+/// drive's time, milliseconds a block, where the model's take none.
 fn chosen() -> Chosen {
     let asked = |what: &str, default: bool| match std::env::var(what).as_deref() {
         Ok("netlist") => true,
