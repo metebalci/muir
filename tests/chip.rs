@@ -168,6 +168,12 @@ fn far_end(n: &netlist::Netlist, machine: muir::machine::Machine) -> FarEnd {
 /// green --- which is how issue 60 was found, at 25 minutes of wall clock
 /// a bisect.
 ///
+/// **Two boards are exceptions, and both for the comparison's sake.** The
+/// display is one; the disk controller is the other, `muir --chip` running
+/// its netlist since a boot through it was run to the end (issue 40) while
+/// this file keeps the behavioural one, because what it compares `chip`
+/// against is `rtl`, which has no netlist disk to compare with.
+///
 /// The reason for the display's exception is that the comparison is wrong
 /// with the netlist board on the backplane, not that the board is dear to
 /// run. Measured on the whole of this file, at the 40 microcycles the
@@ -249,7 +255,18 @@ fn muir_builds_this_harnesss_machine_but_for_the_display() {
     assert_eq!(muirs.memory, HARNESS.memory, "{}", same("memory boards"));
     assert_eq!(muirs.io, HARNESS.io, "{}", same("I/O board"));
     assert_eq!(muirs.tv_board, HARNESS.tv_board, "{}", same("kind of TV board"));
-    assert_eq!(muirs.disk, HARNESS.disk, "{}", same("disk controller"));
+    // **The disk controller is the second exception, for the same kind of
+    // reason as the display.**  `muir --chip` runs the netlist controller
+    // since a boot through it was run to the end (issue 40), and this file
+    // compares `chip` against `rtl`, which has the behavioural one ---
+    // so a netlist controller here would be comparing two machines rather
+    // than two models of one.  `MUIR_DISK_CONTROLLER=netlist` is how the
+    // netlist board is asked for, and then nothing is being compared.
+    assert!(muirs.disk, "muir --chip runs the netlist controller: issue 40");
+    assert_ne!(
+        muirs.disk, HARNESS.disk,
+        "the disk controller is this file's second exception, beside the display: muir runs the \n          netlist board and the harness keeps the model, there being no netlist disk on rtl to \n          compare it with. If muir has gone back to the model, the exception is over and both \n          this and `chosen` should say so."
+    );
     assert!(
         !boards.contains("multiplexor"),
         "muir --chip now puts a DISK MULTIPLEXOR on by default and this harness does not: \
