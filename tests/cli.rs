@@ -16,9 +16,11 @@ fn refused(args: &[&str], flag: &str) {
     let out = muir().args(args).run();
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "{args:?}: not a usage error:\n{err}");
+    // The refusal, not the first line: the version and any file of flags
+    // are written before anything is parsed, so they come before it.
     assert!(
-        err.lines().next().is_some_and(|l| l.contains(flag)),
-        "{args:?}: the first line names {flag}:\n{err}"
+        err.lines().find(|l| l.starts_with("muir: ")).is_some_and(|l| l.contains(flag)),
+        "{args:?}: the refusal names {flag}:\n{err}"
     );
 }
 
@@ -104,8 +106,10 @@ fn a_window_address_is_rtls_and_the_debuggers_and_a_multiple_of_four() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "a window muir cannot reach is no run:\n{err}");
     assert!(
-        err.lines().next().is_some_and(|l| l.contains("--debug-cable-connect")),
-        "the first line names the flag:\n{err}"
+        err.lines()
+            .find(|l| l.starts_with("muir: "))
+            .is_some_and(|l| l.contains("--debug-cable-connect")),
+        "the refusal names the flag:\n{err}"
     );
     if !cfg!(target_os = "linux") {
         assert_eq!(out.status.code(), Some(2), "refused by name, not attempted:\n{err}");
@@ -197,6 +201,68 @@ fn muirrc(name: &str, text: &str) -> (Scratch, PathBuf) {
 }
 
 /// **The flags in the file are the run's**, comments and blank lines
+/// **The version comes first, then the file of flags, then everything
+/// else --- and a run that is refused has said both before it says why.**
+///
+/// A report of a run says which muir made it, and a report of a *refused*
+/// run wants the same two facts most of all: which muir, and which file
+/// of flags it read, since a file it was not asked about is the commonest
+/// reason a run will not start.  So both are written before anything is
+/// parsed, and an error follows them rather than standing alone.
+#[test]
+fn the_version_and_the_file_are_said_before_anything_is_parsed() {
+    let (_dir, rc) = muirrc("flags", "--chaos-address 3050,3060\n");
+    let out = muir().env("MUIR_RC", &rc).args(["--stop-after", "1"]).run();
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(2), "the run is refused:\n{t}");
+    let lines: Vec<&str> = t.lines().collect();
+    assert!(lines[0].starts_with("muir 0.1.0"), "the version is the first line:\n{t}");
+    assert!(lines[1].contains(&rc.display().to_string()), "the file of flags is the second:\n{t}");
+    let why = lines.iter().position(|l| l.starts_with("muir: ")).expect("a refusal");
+    assert!(why > 1, "and the refusal comes after both:\n{t}");
+
+    // A run that starts says them once and not twice.
+    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert_eq!(t.matches("muir 0.1.0").count(), 1, "the version once:\n{t}");
+    assert!(!t.contains("flags:"), "and no file, this run having none:\n{t}");
+}
+
+/// **`--version` and `--help` are answered before the file of flags is
+/// read at all**, because neither runs a machine and so nothing a file
+/// configures applies to either.
+///
+/// A file outlives the flags it holds. `--chaos-address 3050,3060` was
+/// the spelling until the Chaosnet server left muir, and a file still
+/// holding it is refused --- rightly, for a run. But `muir --version`
+/// asks what this build is, and a build that cannot say so because of a
+/// file it was not asked to use leaves a person with no way to report
+/// which muir they have.
+#[test]
+fn the_version_and_the_help_are_answered_whatever_the_file_holds() {
+    let (_dir, rc) = muirrc("flags", "--chaos-address 3050,3060\n");
+    // The file really is refused for a run, or this test proves nothing.
+    let out = muir().env("MUIR_RC", &rc).args(["--stop-after", "1"]).run();
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(2), "the file is refused for a run:\n{t}");
+    assert!(t.contains("--chaos-address"), "by name:\n{t}");
+
+    for flag in ["--version", "-V"] {
+        let out = muir().env("MUIR_RC", &rc).arg(flag).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{flag} is answered all the same:\n{t}");
+        assert!(t.starts_with("muir "), "{flag} says what this build is:\n{t}");
+        assert!(!t.contains("usage:"), "{flag} is no run:\n{t}");
+    }
+    for flag in ["--help", "-h"] {
+        let out = muir().env("MUIR_RC", &rc).arg(flag).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{flag} is answered all the same:\n{t}");
+        assert!(t.contains("usage: muir"), "{flag} prints the usage:\n{t}");
+    }
+}
+
 /// apart, and whatever a flag takes is the rest of the line, spaces and
 /// all. The start says which flags came from the file, and where from.
 #[test]
@@ -491,19 +557,22 @@ fn a_running_chip_says_where_it_is_when_asked() {
     // Long enough to still be running when the signal lands, short enough
     // that the test is a second or two: `chip` does about 2,200
     // microcycles a second.
-    let child = muir()
-        .args(["--chip", "--main-memory-boards", "4", "--stop-after", "6000"])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("muir did not start");
+    // **Signalled once the run says it is listening, not after a guess at
+    // how long that takes.**  The default action for `SIGUSR1` is to kill
+    // the process, so a signal sent before the handler is installed kills
+    // the run --- and building a `chip` machine takes as long as it takes,
+    // which on a loaded machine is longer than any sleep worth writing.
+    // The run's own start line says when it is armed.
+    let child =
+        muir().args(["--chip", "--main-memory-boards", "4", "--stop-after", "6000"]).start();
+    child.stderr().wait_until(|t| t.contains("where: kill -USR1"), "muir says it is listening");
     let pid = child.id().to_string();
-    std::thread::sleep(std::time::Duration::from_millis(700));
     let killed = std::process::Command::new("kill")
         .args(["-USR1", &pid])
         .status()
         .expect("kill did not run");
     assert!(killed.success(), "the signal was delivered");
-    let out = child.wait_with_output().expect("muir did not finish");
+    let out = child.wait();
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     let said = text
         .lines()
@@ -642,8 +711,8 @@ fn the_file_server_flags_are_gone_and_say_where_the_host_went() {
         let out = muir().args([flag, ".", "--stop-after", "1"]).run();
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(2), "{flag}: not a usage error:\n{err}");
-        let first = err.lines().next().unwrap_or("");
-        assert!(first.contains(flag), "{flag}: the first line names it:\n{err}");
+        let first = err.lines().find(|l| l.starts_with("muir: ")).unwrap_or("");
+        assert!(first.contains(flag), "{flag}: the refusal names it:\n{err}");
         assert!(first.contains("--chaos-udp-peer"), "{flag}: and what replaced it:\n{err}");
         assert!(first.contains("ozd"), "{flag}: and which host that is:\n{err}");
     }
@@ -661,7 +730,12 @@ fn the_chaos_address_is_one_address() {
     // And what is refused says where the host is named instead.
     let out = muir().args(["--chaos-address", "3050,3060", "--stop-after", "1"]).run();
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.lines().next().is_some_and(|l| l.contains("--chaos-udp-peer")), "{err}");
+    assert!(
+        err.lines()
+            .find(|l| l.starts_with("muir: "))
+            .is_some_and(|l| l.contains("--chaos-udp-peer")),
+        "{err}"
+    );
     // One address is taken, in octal or subnet:host.
     for arg in ["3050", "6:50"] {
         let out = muir()

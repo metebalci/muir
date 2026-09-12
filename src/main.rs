@@ -724,24 +724,23 @@ A simulator of the MIT CADR Lisp Machine.
                                not all of them. MUIR_RC names a file in
                                place of the two that are looked for.
   --debug-cable-connect [<endpoint>|0x<address>]
-                               rtl: this machine is the debugger: its DBGOUT
-                               connects to a debuggee listening at the
-                               endpoint, a port, an address or
+                               rtl: this machine is the debugger, its
+                               DBGOUT connected to a debuggee listening at
+                               the endpoint --- a port, an address or
                                address:port. Either end may be another
                                program that speaks the cable's frames.
                                An argument beginning 0x is no endpoint but
-                               the physical address of the window of
-                               registers a CADR in FPGA fabric presents its
-                               DBGIN at, which muir reaches through
-                               /dev/mem: the debugger is then muir running
-                               on the board's own processor under Linux,
-                               and the two machines run free of each other
-                               rather than in step, as two CADRs on a bench
-                               did. Where the window sits is a property of
-                               the bitstream, so there is no default for
-                               it, and muir refuses a window that does not
-                               identify itself as the cable's rather than
-                               store anything into it.
+                               a physical address, where the muir-fpga
+                               project's CADR presents its DBGIN as a
+                               window of registers, which muir reaches
+                               through /dev/mem; it is that project's
+                               window and nothing else's, and muir refuses
+                               one that does not say so rather than store
+                               into it. The debugger is then muir on the
+                               board's own processor under Linux, and the
+                               two machines run free of each other. Where
+                               the window sits is the bitstream's to say,
+                               so there is no default for it.
                                [default: 127.0.0.1:7661]
   --debug-cable-listen [<endpoint>]
                                rtl, chip: this machine is the debuggee at
@@ -3512,7 +3511,40 @@ fn main() {
     // ones the command line gives too, for the few that may not be given
     // twice.
     let typed: Vec<String> = std::env::args().skip(1).collect();
+    // **Asked what this build is, muir answers before it reads anything
+    // else.**  Neither of these runs a machine, so nothing a file of
+    // flags configures applies to either, and a file outlives the flags
+    // it holds: one still holding a spelling muir has since stopped
+    // taking is rightly refused for a run, and would otherwise leave a
+    // person with no way to ask which muir they have.  The loop below
+    // answers them again, for a file that names one, which is harmless
+    // and reaches nothing this has not.
+    for a in &typed {
+        if a == "-h" || a == "--help" {
+            help();
+        }
+        if a == "-V" || a == "--version" {
+            println!("{}", version());
+            std::process::exit(0);
+        }
+    }
+    // **Which muir, and which file of flags, before anything is parsed.**
+    // A report of a refused run wants those two facts most of all, and a
+    // file the person at the keyboard was not asked about is the
+    // commonest reason a run will not start: one written when a flag was
+    // spelled differently outlives the spelling.  So both are said here,
+    // and every refusal below follows them.  The rest of the setup waits
+    // until there is a machine to describe.
     let (from_file, rc) = muirrc(&typed);
+    {
+        let mut head = format!("{} started\n", version());
+        if let Some(path) = &rc
+            && !from_file.is_empty()
+        {
+            head.push_str(&format!("flags: {}, from {}\n", from_file.join(" "), shown(path)));
+        }
+        eprint!("{head}");
+    }
     let words: Vec<String> = from_file.iter().chain(&typed).cloned().collect();
     // Kept to say afterwards which flags the chosen engine has no use for.
     let given = words.clone();
@@ -4027,7 +4059,6 @@ fn main() {
             Which::Rtl => "rtl",
             Which::Chip => "chip",
         };
-        writeln!(s, "{} started", version()).unwrap();
         // A flag the chosen engine has no use for is not an error --- one
         // `.muirrc` serves runs of every engine --- but a run that quietly
         // ignored it would look as though it had obeyed.
@@ -4043,11 +4074,6 @@ fn main() {
                 writeln!(s, "warning: {flag} is {engines}, and this run is {engine}: ignored")
                     .unwrap();
             }
-        }
-        if let Some(path) = &rc
-            && !from_file.is_empty()
-        {
-            writeln!(s, "flags: {}, from {}", from_file.join(" "), shown(path)).unwrap();
         }
         writeln!(s, "engine: {engine}").unwrap();
         writeln!(s, "prom: {}", prom_shown(prom_file.as_deref(), &prom)).unwrap();
@@ -4189,6 +4215,12 @@ fn main() {
         }
         s
     };
+    // **Armed before it is announced.**  The line below says `kill -USR1`
+    // asks a run where it is, and the default action for that signal is
+    // to kill the process, so a signal sent on the strength of the line
+    // must find a handler already installed.  Each engine's loop calls
+    // this again, which costs nothing: the same handler, installed twice.
+    catch_interrupts();
     eprint!("{setup}");
 
     match which {
