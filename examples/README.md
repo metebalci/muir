@@ -46,11 +46,15 @@ by what one time round the loop costs --- because a machine that has stalled
 toggles fewer nets and looks *faster*.
 
 Neither program touches the disk, and the rate it prints against the
-machine's own 145 ns microcycle does not account for one. Unless `chip` is
-given `--disk-controller netlist`, a seek takes no time in muir where the
+machine's own 145 ns microcycle does not account for one. The controller
+behind the bus here is the behavioural model, as it is on `micro` and `rtl`
+and on `muir --chip --disk-controller model`: a seek takes no time where the
 hardware spent milliseconds running the microcode's polling loop, so a
-program that seeks does better against a CADR than this rate implies. See
-the note on `report` in `benchmark.rs`.
+program that seeks does better against a CADR than this rate implies.
+`muir --chip` comes up with MIT's controller on the backplane instead, and
+there the drive takes its own time --- about 3% on a run that touches no
+pack, and days on one that reads a band. See the note on `report` in
+`benchmark.rs`.
 
 ## What needs fetching
 

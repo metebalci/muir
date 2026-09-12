@@ -31,8 +31,8 @@ const HARDWARE_CYCLES_PER_S: f64 = 1e9 / 145.0;
 /// What the ratio does **not** include: the disk.
 ///
 /// This is microcycles against microcycles. With the disk controller as a
-/// behavioural model --- always on `micro` and `rtl`, and on `chip` unless
-/// it is given `--disk-controller netlist` --- a transfer completes inside
+/// behavioural model --- always on `micro` and `rtl`, and on `chip` when
+/// it is given `--disk-controller model` --- a transfer completes inside
 /// the store to `START` and a seek takes no time. The machine spent
 /// milliseconds on a seek and spent them running the microcode's polling
 /// loop, so a 55 ms seek is about 380,000 microcycles the hardware executes
