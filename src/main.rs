@@ -3536,7 +3536,7 @@ fn main() {
     // and every refusal below follows them.  The rest of the setup waits
     // until there is a machine to describe.
     let (from_file, rc) = muirrc(&typed);
-    {
+    let head = {
         let mut head = format!("{} started\n", version());
         if let Some(path) = &rc
             && !from_file.is_empty()
@@ -3544,7 +3544,8 @@ fn main() {
             head.push_str(&format!("flags: {}, from {}\n", from_file.join(" "), shown(path)));
         }
         eprint!("{head}");
-    }
+        head
+    };
     let words: Vec<String> = from_file.iter().chain(&typed).cloned().collect();
     // Kept to say afterwards which flags the chosen engine has no use for.
     let given = words.clone();
@@ -4222,6 +4223,7 @@ fn main() {
     // this again, which costs nothing: the same handler, installed twice.
     catch_interrupts();
     eprint!("{setup}");
+    let setup = format!("{head}{setup}");
 
     match which {
         Which::Micro => {

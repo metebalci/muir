@@ -7,6 +7,8 @@
 
 mod support;
 
+use std::io::Write;
+
 use std::path::{Path, PathBuf};
 
 use support::{Run, Scratch, muir, scratch, text};
@@ -227,6 +229,21 @@ fn the_version_and_the_file_are_said_before_anything_is_parsed() {
     assert!(out.status.success(), "{t}");
     assert_eq!(t.matches("muir 0.1.0").count(), 1, "the version once:\n{t}");
     assert!(!t.contains("flags:"), "and no file, this run having none:\n{t}");
+
+    // And `info` says it again, being what the run is: the two lines are
+    // written before there is a machine to describe, and the prompt has
+    // them all the same.
+    let mut child =
+        muir().args(["--micro", "--no-auto-boot"]).stdin(std::process::Stdio::piped()).start();
+    let mut stdin = child.stdin();
+    write!(stdin, "info\nquit\n").expect("muir took the lines");
+    drop(stdin);
+    let out = child.wait();
+    let t = text(&out);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("muir 0.1.0"),
+        "info says which muir:\n{t}"
+    );
 }
 
 /// **`--version` and `--help` are answered before the file of flags is
