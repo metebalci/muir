@@ -472,7 +472,7 @@ it does at the prompt.
     $ diskpack made.img load MCR2
     MCR2: 12449 control store words, 114 blocks of 148, the rest zeroed
 
-## The Chaosnet server
+## The Chaosnet
 
 The machine's Chaosnet interface is real --- it is half the I/O board, and on
 `chip` it is that board's netlist. What is on the other end of the cable is
@@ -553,6 +553,8 @@ depending on it says **unverified**, and why.
 | [cpus-caddr](https://github.com/lisper/cpus-caddr) | Brad Parker's Verilog CADR |
 | [ams/cadr4](https://github.com/ams/cadr4) | faithful VHDL CADR, with a TTL part library |
 | [LM-3](https://tumbleweed.nu/lm-3/) | the system software releases |
+| [ozd](https://github.com/metebalci/ozd) | the OZ daemon: the file and time host a band calls |
+| [muir-fpga](https://github.com/metebalci/muir-fpga) | the CADR in programmable logic, debugged over the cable from here |
 | [cbridge](https://github.com/bictorv/chaosnet-bridge) | Chaosnet, for when networking matters |
 
 ## How it was written

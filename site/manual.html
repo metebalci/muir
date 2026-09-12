@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>muir manual &mdash; running the CADR simulator</title>
-<meta name="description" content="The muir manual: what the simulator does, how to run it, every command-line flag, the prompt and its commands, the terminal, the Chaosnet server, the two-machine lashup, how the three engines work, and the wire protocol that runs two of them against each other over TCP.">
+<meta name="description" content="The muir manual: what the simulator does, how to run it, every command-line flag, the prompt and its commands, the terminal, the Chaosnet, the two-machine lashup, how the three engines work, and the wire protocol that runs two of them against each other over TCP.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -27,7 +27,7 @@
   <div class="band">
     <h1>Manual</h1>
     <p class="lede">What muir does when you run it, every flag it takes, and what it is doing underneath.</p>
-    <p class="sub">This is the whole of the program: <a href="#running">running it</a>, <a href="#flags">the command line</a>, <a href="#rc">flags in a file</a>, <a href="#prompt">the prompt</a>, <a href="#terminal">the terminal</a>, <a href="#files">what a run can write</a>, <a href="#chaosnet">the Chaosnet server</a>, <a href="#lashup">the two-machine lashup</a>, <a href="#internals">how the engines work</a>, and <a href="#netlists">where the netlists come from</a>. <a href="index.html#install">Installing</a> is on the front page.</p>
+    <p class="sub">This is the whole of the program: <a href="#running">running it</a>, <a href="#flags">the command line</a>, <a href="#rc">flags in a file</a>, <a href="#prompt">the prompt</a>, <a href="#terminal">the terminal</a>, <a href="#files">what a run can write</a>, <a href="#chaosnet">the Chaosnet</a>, <a href="#lashup">the two-machine lashup</a>, <a href="#internals">how the engines work</a>, and <a href="#netlists">where the netlists come from</a>. <a href="index.html#install">Installing</a> is on the front page.</p>
   </div>
 </section>
 
@@ -529,7 +529,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
 
 <section id="chaosnet">
   <div class="band">
-    <h2>The Chaosnet server</h2>
+    <h2>The Chaosnet</h2>
     <div class="prose">
       <p>The machine&rsquo;s Chaosnet interface is real &mdash; it is half the I/O board, and on <code>chip</code> it is that board&rsquo;s netlist. What is on the other end of the cable is <b>not in muir</b>. A CADR had no file or time server inside it: it called its <b>associated machine</b>, the host the boot banner names &mdash; &ldquo;with associated machine OZ&rdquo; &mdash; for its files and for the date. So muir carries a machine and nothing else, and a band that wants a host wants one on the network.</p>
       <p><b><a href="https://github.com/metebalci/ozd">ozd</a> is that host.</b> It is the OZ daemon: one server for however many Lisp machines are on the cable, which is the commoner case than one, and it answers the four contact names a band asks for.</p>
@@ -562,7 +562,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
       <p>MIT debugged a CADR from another CADR, over a <b>debug cable</b>: 21 wires from one machine&rsquo;s DBGOUT connector to the other&rsquo;s DBGIN, through which the console program <b>CC</b> halts the other machine, reads its registers and drives its bus. muir runs that lashup, and it is the project&rsquo;s acceptance test.</p>
       <p>Each machine has a Chaosnet of its own: muir&rsquo;s cable carries one machine, so the other gets a cable of its own. The two cannot hear each other over it &mdash; the only wire between them is the debug cable &mdash; and the other machine has no CHUDP link either, one socket belonging to one cable, so it reaches no file or time host and its own boot stops in the cold-load debugger. That is where CC finds it, and it is what the acceptance test wants.</p>
       <p><code>--debug-in-process</code> puts both machines in one process with both cables between them. <code>--debug-cable-listen</code> and <code>--debug-cable-connect</code> put the same cable over TCP with one machine in each process, the listener being the debuggee; both take an endpoint the same way and meet at <code>127.0.0.1:7661</code> without one. The listener may be a <code>--chip</code> machine, and then the netlist board&rsquo;s own DBGIN answers the debugger, an event at a time, at the netlist&rsquo;s pace.</p>
-      <p>There is a third transport, where the debuggee is not a program at all: <code>--debug-cable-connect 0x&lt;address&gt;</code> is a CADR in the programmable logic of a board muir is itself running on, and the cable&rsquo;s 21 wires are a small window of memory-mapped registers muir reaches with ordinary loads and stores. The first two transports keep the two machines&rsquo; simulated clocks in step by exchanging promises; fabric runs on its own crystal in real time, so nothing is promised, only the debugger is stepped, and the debugger&rsquo;s own 11.05&nbsp;&micro;s timeout is what ends a cycle nothing answers. The window&rsquo;s layout is proposed and nothing has been built to it yet.</p>
+      <p>There is a third transport, where the debuggee is not a program at all: <code>--debug-cable-connect 0x&lt;address&gt;</code> is the CADR of the <a href="https://github.com/metebalci/muir-fpga">muir-fpga</a> project, in the programmable logic of a Zynq board with Linux on the Arm cores beside it, which is where muir runs to be its debugger. The cable&rsquo;s 21 wires are a window of memory-mapped registers muir reaches with ordinary loads and stores, and it is that project&rsquo;s window and no other: muir refuses one that does not identify itself rather than store into it. The first two transports keep the two machines&rsquo; simulated clocks in step by exchanging promises; fabric runs on its own crystal in real time, so nothing is promised, only the debugger is stepped, and the debugger&rsquo;s own 11.05&nbsp;&micro;s timeout is what ends a cycle nothing answers. The window&rsquo;s layout is proposed and nothing has been built to it yet.</p>
     </div>
   </div>
 </section>

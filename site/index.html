@@ -433,7 +433,7 @@ chip   control         10101 cycles    5.042 s         2003 cycles/s    hardware
     </ol>
 
     <div class="prose note">
-      <p>From here, <a href="manual.html">the manual</a>: what a run says, every flag, the prompt and its commands, the terminal, the Chaosnet server, the two-machine lashup, and how the three engines work underneath.</p>
+      <p>From here, <a href="manual.html">the manual</a>: what a run says, every flag, the prompt and its commands, the terminal, the Chaosnet, the two-machine lashup, and how the three engines work underneath.</p>
     </div>
   </div>
 </section>
@@ -477,6 +477,14 @@ chip   control         10101 cycles    5.042 s         2003 cycles/s    hardware
       <div>
         <dt>LM-3</dt>
         <dd><a href="https://tumbleweed.nu/lm-3/">The Lisp Machine system software releases</a>.</dd>
+      </div>
+      <div>
+        <dt>ozd</dt>
+        <dd><a href="https://github.com/metebalci/ozd">The OZ daemon</a>: the file and time host a band calls, which muir is not &mdash; a CADR had no such server in it. One host serves however many machines are on the cable.</dd>
+      </div>
+      <div>
+        <dt>muir-fpga</dt>
+        <dd><a href="https://github.com/metebalci/muir-fpga">The CADR in programmable logic</a>, on a Zynq board with Linux on the Arm cores beside it. <code>--debug-cable-connect 0x&lt;address&gt;</code> is muir debugging that machine over the CADR debug cable, the cable&rsquo;s wires being a window of registers there.</dd>
       </div>
       <div>
         <dt>cbridge</dt>
