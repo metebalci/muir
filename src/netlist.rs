@@ -184,21 +184,41 @@ fn find(up: &mut [NetId], mut x: NetId) -> NetId {
 
 /// Parses the netlist.  Lines outside a `part`/`(`/`)` block are comments or
 /// page markers.  This is the board as the model runs it: [`parse_wired`]
-/// with the series resistors joined and the wires MIT added by hand after
-/// wrapping, `Netlist::HAND_JUMPERS`.
+/// with the series resistors joined, the wires MIT added by hand after
+/// wrapping (`Netlist::HAND_JUMPERS`), and then
+/// `Netlist::ONE_BOARD_JUMPERS` --- so a disk controller parsed this way
+/// is the one-drive version, and one meant to sit beside a DISK
+/// MULTIPLEXOR is [`parse_with_multiplexor`] instead.
 pub fn parse(text: &str) -> Result<Netlist, String> {
-    let mut n = parse_with_multiplexor(text)?;
+    let mut n = as_built(text)?;
     n.apply_one_board_jumpers();
     Ok(n)
 }
 
-/// The netlist of a disk controller that has a DISK MULTIPLEXOR beside it:
-/// [`parse`] without `cadrdc/disk.hand`'s six one-board jumpers, whose own
-/// heading is "not to be installed if this DC is associated with a DM
-/// board". The six nets are then the multiplexor's to drive, and on any
-/// other board this is [`parse`] exactly, there being no `DCEDGE` page for
-/// the jumpers to land on.
+/// The netlist of a disk controller **built as the multiplexor version**.
+/// `cadrdc/dc.eco` makes two changes for one, and both are here:
+///
+/// 1. its section ii, the six one-board jumpers, "not to be installed if
+///    this DC is associated with a DM board" --- [`parse`] adds them and
+///    this leaves them off, so that those six nets are the multiplexor's
+///    to drive;
+/// 2. its section iii, "When stuffing multiplexor version DC board, leave
+///    out DIPs in A7 A8 A9 A10 B7 B8" --- [`Netlist::MULTIPLEXOR_DIPS`],
+///    the whole of the controller's own single drive port and its own
+///    block counters, which the multiplexor supplies instead.
+///
+/// On any other board this is [`parse`] exactly: there is no `DCEDGE` page
+/// for the jumpers to land on and none for the DIPs to be left out of.
 pub fn parse_with_multiplexor(text: &str) -> Result<Netlist, String> {
+    let mut n = as_built(text)?;
+    n.leave_out_multiplexor_dips();
+    Ok(n)
+}
+
+/// The board as it comes back from wire-wrapping, before either stuffing
+/// variant: [`parse_wired`] with the series resistors joined and the wires
+/// MIT added by hand, `Netlist::HAND_JUMPERS`.
+fn as_built(text: &str) -> Result<Netlist, String> {
     let mut n = parse_wired(text)?;
     n.merge_series_resistors();
     n.apply_hand_jumpers();
@@ -578,6 +598,41 @@ impl Netlist {
         ("GND", "UNIT0"),                           // EP2 : ER2
     ];
 
+    /// The board locations `cadrdc/dc.eco` section iii leaves empty on a
+    /// controller built to sit beside a DISK MULTIPLEXOR: "When stuffing
+    /// multiplexor version DC board, leave out DIPs in A7 A8 A9 A10 B7 B8".
+    ///
+    /// They are the whole of the controller's own single drive port and
+    /// its own block counters --- the `DCTRID` page, MIT's own title for
+    /// which is SINGLE TRIDENT, and the three inverter sections of the
+    /// same package drawn on `DCTRSG`:
+    ///
+    /// - `A7`, a 74LS14, drives `BLOCK.CLK^` and `NO SELECT` and inverts
+    ///   the port's sector, selected and attention lines;
+    /// - `A8`, a 75110, is the write-data driver to that port;
+    /// - `A9` is the port's own connector and the RC network of the
+    ///   block-counter clear one-shot at `B9`, which stays;
+    /// - `A10`, a 75107, receives that port's data and clock pairs and
+    ///   drives `READ DATA` and `DISK.CLK^`, with the capacitor MIT
+    ///   stuffs beside it at `A10@02` going with the location;
+    /// - `B7` and `B8`, two 74LS569s, are the block counter and drive
+    ///   `BLOCK.CTR<7:0>`.
+    ///
+    /// **Every one of those nets is a post on the cable and the
+    /// multiplexor drives it too**, so a board stuffed at those locations
+    /// fights the multiplexor on `BLOCK.CLK^`, `READ DATA`, `DISK.CLK^`,
+    /// `NO SELECT` and the eight `BLOCK.CTR` wires, and holds `UNIT 0
+    /// ATTENTION` down through an open collector whose port has no drive
+    /// on it. That is the second reading of section iii and it needs one:
+    /// `cadrdc/disk.hand` is a second copy of the ECO's jumpers and does
+    /// not carry its DIPs, so the contentions are what stand behind this
+    /// list rather than a file read twice
+    /// (`the_multiplexor_dips_are_the_nets_both_boards_would_drive`).
+    ///
+    /// MIT writes the locations `A7`; the netlist writes them `0A07`.
+    pub const MULTIPLEXOR_DIPS: &'static [&'static str] =
+        &["0A07", "0A08", "0A09", "0A10", "0B07", "0B08"];
+
     pub const HAND_JUMPERS: &'static [(&'static str, &'static [(&'static str, &'static str)])] =
         &[(
             "DCEDGE",
@@ -645,6 +700,18 @@ impl Netlist {
             };
             self.join(keep, gone);
         }
+    }
+
+    /// Leaves [`Netlist::MULTIPLEXOR_DIPS`] out, as `cadrdc/dc.eco`
+    /// section iii has a multiplexor-version controller stuffed. Gated on
+    /// the `DCEDGE` page, which is the disk controller's edge connector
+    /// and no other board's: the locations are board locations and
+    /// another board's `0B07` is its own part.
+    fn leave_out_multiplexor_dips(&mut self) {
+        if !self.pages.iter().any(|p| p == "DCEDGE") {
+            return;
+        }
+        self.parts.retain(|p| !Self::MULTIPLEXOR_DIPS.contains(&p.reference.as_str()));
     }
 
     fn apply_hand_jumpers(&mut self) {
