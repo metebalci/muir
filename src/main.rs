@@ -646,74 +646,48 @@ A simulator of the MIT CADR Lisp Machine.
                                in octal, 3050, or subnet:host with each in
                                octal, 6:50 --- the same number, subnet in
                                the high byte. Giving it also puts the cable
-                               on the network, as --chaos-udp does, since
-                               an address is what a run reaches a file and
-                               time host by. Which address a run wants is
-                               its band's own: System 100's host table has
-                               this machine at 3050 and its file and time
-                               host at 3060, System 304's at 4401 and 4403.
-                               muir is not that host --- a CADR had no file
-                               or time server in it --- so the host is
-                               another program on the network, ozd
-                               (https://github.com/metebalci/ozd) for one,
+                               on the network, as --chaos-udp does. Which
+                               address to give is the band's own: 3050 on
+                               System 100 and 4401 on System 304, whose file
+                               and time hosts are 3060 and 4403 --- not
+                               muir, but another program on the network,
                                named with --chaos-udp-peer. [default:
-                               177001, on subnet 376, the Chaosnet's
-                               private range and no band's, and the cable
-                               off the network]
-  --chaos-trace                every Chaosnet packet and frame on the
-                               cable, to stderr. What to reach for when a
-                               lashup goes quiet: it shows whether the
-                               machine is still talking.
+                               177001, on subnet 376 and no band's, with the
+                               cable off the network]
+  --chaos-trace                every Chaosnet packet and frame on the cable,
+                               to stderr. [default: off]
   --chaos-udp [<endpoint>]     where the Chaosnet cable is on the network:
-                               Chaosnet over UDP, which cbridge, usim,
-                               klh10, ozd and the live Chaosnet hosts
-                               speak. Nothing, a port, an address or
-                               address:port; a bare port is on the
-                               loopback, which is where a server nobody
-                               authenticates belongs, so reaching another
-                               host means naming an address to listen on.
-                               Two muirs on one host are two peers on the
-                               loopback and want no other transport
-                               between them. muir is a leaf and not a
-                               router: a packet for another host is
-                               dropped, never forwarded, and a cbridge
-                               beside muir is what routes. [default:
-                               127.0.0.1:42042, the protocol's own port,
-                               when --chaos-address is given; off with
-                               neither flag]
+                               Chaosnet over UDP, which cbridge, usim, klh10
+                               and ozd speak. Nothing, a port, an address or
+                               address:port; a bare port is on the loopback,
+                               so reaching another host means naming an
+                               address to listen on. muir is a leaf: a
+                               packet for another host is dropped, not
+                               forwarded. [default: 127.0.0.1:42042, the
+                               protocol's own port, when --chaos-address is
+                               given; off with neither flag]
   --chaos-udp-dynamic          learn where a peer is from the packets it
-                               sends, so that a host --chaos-udp-peer
-                               never named can still be answered. Off by
-                               default: with it on, whatever can reach the
-                               port puts itself in the address table under
-                               whatever Chaosnet address it claims. An
-                               endpoint --chaos-udp-peer named is not
-                               moved by a packet. It needs the link, so
-                               --chaos-address or --chaos-udp.
+                               sends, so that a host --chaos-udp-peer never
+                               named can still be answered: whatever can
+                               reach the port goes in the address table
+                               under whatever address it claims. An endpoint
+                               --chaos-udp-peer named is not moved by a
+                               packet. It needs the link, so --chaos-address
+                               or --chaos-udp. [default: off]
   --chaos-udp-peer <address>@<host>:<port>
-                               a Chaosnet host reached over UDP and where
-                               it lives: 3060@127.0.0.1:42043, the address
-                               in octal or subnet:host and the host a name
-                               or an address, resolved once here. This is
-                               how a run names its band's file and time
-                               host. The port may be left off for 42042.
-                               Once per peer, and the address may not be
-                               this machine's own. It needs the link, so
-                               --chaos-address or --chaos-udp.
+                               a Chaosnet host reached over UDP and where it
+                               lives: 3060@127.0.0.1:42043, the address in
+                               octal or subnet:host and the host a name or
+                               an address, resolved once here. The port may
+                               be left off for 42042. Once per peer, and the
+                               address may not be this machine's own. It
+                               needs the link, so --chaos-address or
+                               --chaos-udp.
   --checkpoint <file>          write the machine's whole state to <file>
                                when the run stops, for --resume to start
-                               from: the engine, the processor's memories
-                               and registers, main memory, the display, the
-                               I/O board, and the drive with every block
-                               written to its pack. On chip it is the
-                               boards themselves --- every net, every cell
-                               and every timer of the processor, the bus
-                               interface, the memory, the I/O board and the
-                               display --- taken at the first microcycle
-                               from the stop with no bus cycle in flight,
-                               with the drives on a netlist controller's
-                               cable and the multiplexor between them where
-                               each stood. The prompt's
+                               from. On chip it is the boards themselves,
+                               taken at the first microcycle from the stop
+                               with no bus cycle in flight. The prompt's
                                checkpoint writes one as the run goes, and
                                the run goes on.
   -c, --config <file>          the file of flags to read before the command
@@ -724,23 +698,17 @@ A simulator of the MIT CADR Lisp Machine.
                                not all of them. MUIR_RC names a file in
                                place of the two that are looked for.
   --debug-cable-connect [<endpoint>|0x<address>]
-                               rtl: this machine is the debugger, its
-                               DBGOUT connected to a debuggee listening at
-                               the endpoint --- a port, an address or
-                               address:port. Either end may be another
-                               program that speaks the cable's frames.
-                               An argument beginning 0x is no endpoint but
-                               a physical address, where the muir-fpga
-                               project's CADR presents its DBGIN as a
-                               window of registers, which muir reaches
-                               through /dev/mem; it is that project's
-                               window and nothing else's, and muir refuses
-                               one that does not say so rather than store
-                               into it. The debugger is then muir on the
-                               board's own processor under Linux, and the
-                               two machines run free of each other. Where
-                               the window sits is the bitstream's to say,
-                               so there is no default for it.
+                               rtl: this machine is the debugger: its DBGOUT
+                               connects to a debuggee listening at the
+                               endpoint, a port, an address or address:port.
+                               Either end may be another program that speaks
+                               the cable's frames. An argument beginning 0x
+                               is no endpoint but a physical address, where
+                               the muir-fpga project's CADR presents its
+                               DBGIN as a register window, reached through
+                               /dev/mem. It is that project's window and no
+                               other: one that does not say so is refused,
+                               and there is no default for where it sits.
                                [default: 127.0.0.1:7661]
   --debug-cable-listen [<endpoint>]
                                rtl, chip: this machine is the debuggee at
@@ -749,236 +717,169 @@ A simulator of the MIT CADR Lisp Machine.
                                connect, and then the two run in step. On
                                chip it is the board's own connector, run an
                                event at a time. [default: 127.0.0.1:7661]
-  --debug-in-process           rtl: the two-machine lashup in one process.
-                               A second machine runs beside this one with
-                               both debug cables between them, each
-                               machine's DBGOUT to the other's DBGIN, so
-                               that CC here debugs the other --- or the
-                               other this one --- as MIT ran two CADRs.
-                               The other boots the same PROM with no pack
-                               unless one is named, and its console is
-                               CC's alone. The window and the stops are
-                               this machine's; with --terminal both
-                               machines get a terminal, the other's one
-                               port above.
+  --debug-in-process           rtl: the two-machine lashup in one process. A
+                               second machine runs beside this one with both
+                               debug cables between them, each machine's
+                               DBGOUT to the other's DBGIN, so that CC here
+                               debugs the other, or the other this one. The
+                               other boots the same PROM with no pack unless
+                               one is named, and its console is CC's alone.
+                               The stops are this machine's, and
+                               --stop-after counts its microcycles. Both
+                               machines get a terminal, the other's one port
+                               above.
   --debuggee-chaos-address <address>
-                               rtl: the other machine's Chaosnet address,
-                               as --chaos-address is this machine's. The
-                               other machine has a cable of its own, since
-                               muir's cable carries one machine: the two
-                               cannot hear each other over it, and the only
-                               wire between them is the debug cable. It has
-                               no link of its own either, so the address is
-                               all it has. [default: the same address as
-                               this machine's, which collides with nothing,
+                               rtl: the other machine's Chaosnet address, as
+                               --chaos-address is this machine's. The other
+                               machine has a cable of its own with no link
+                               on it, so the address is all it has.
+                               [default: the same address as this machine's,
                                the two cables never meeting]
   --debuggee-disk-pack <image>[,<unit>][,ro]
                                rtl: the other machine's pack, as
                                --disk-pack.
   --debuggee-terminal [<endpoint>]
-                               rtl: the other machine's terminal --- its
-                               display, keyboard and mouse over RFB, as
-                               --terminal is this machine's. In the lashup
-                               both machines are served a terminal, the
-                               other machine's the display above this
-                               one's; this puts it elsewhere, a port, an
+                               rtl: the other machine's terminal, as
+                               --terminal is this machine's, somewhere other
+                               than the display above this one's: a port, an
                                address or address:port. [default: the
-                               display above this machine's,
-                               127.0.0.1:5901 when it is at :0]
+                               display above this machine's, 127.0.0.1:5901
+                               when it is at :0]
   --disk-controller netlist|model
                                chip: the disk controller. [default: model]
   --disk-multiplexor           chip: a DISK MULTIPLEXOR on the netlist
                                controller's cable, which is what gives it
-                               eight drive ports instead of one. Without
-                               it the board cannot drive UNIT<2:0> at all
-                               --- they are inputs and nothing on the
-                               controller answers them --- so the six
-                               one-board jumpers ground them, and the one
-                               port is unit 0. So a second --disk-pack, or
-                               one past unit 0, is refused without this:
-                               the board it needs is a board somebody
-                               chose to have, and muir says so rather than
-                               fitting one nobody asked for. The model
-                               controller needs no board at all and has
-                               always had eight units. It takes no
-                               netlist-or-model, as the other board flags
-                               do: MIT drew one multiplexor and there is
-                               nothing to model it against. [default: off
-                               with one pack in unit 0, and the jumpers
-                               on; the start says when it is fitted]
+                               eight drive ports instead of one. Without it
+                               the one port is unit 0, so a second
+                               --disk-pack, or one past unit 0, is refused.
+                               It needs --disk-controller netlist; the model
+                               controller wants no board. [default: off,
+                               with one pack in unit 0; the start says when
+                               it is fitted]
   --disk-pack <image>[,<unit>][,ro]
                                the pack in a drive: its blocks end to end.
-                               The file is only ever read; a block the
-                               machine writes is kept in memory for the
-                               run, and goes into a checkpoint, so the
-                               image stays as fetched. After the image, in
-                               either order: the unit, and ro for the
-                               drive's read-only switch --- the status word
-                               says so, and a write faults. The flag can
-                               come more than once, a pack a unit, up to
-                               the eight the controller addresses.
-                               [default: unit 0; no pack unless one is
-                               named, which is a drive with no pack in it
-                               and a boot that waits on it for ever]
+                               The image is opened read-write, as a drive
+                               writes its pack. After the image, in either
+                               order: the unit, and ro for the drive's
+                               read-only switch --- the status word says so,
+                               a write faults, and the image is opened
+                               read-only, so a written block reaches a
+                               checkpoint rather than the file. Once for
+                               each pack, one to a unit, up to the eight the
+                               controller addresses. [default: unit 0; no
+                               pack unless one is named, which is a drive
+                               with no pack in it and a boot that waits on
+                               it for ever]
   --io-board netlist|model     chip: the I/O board. [default: netlist]
   --keyboard-mapping <file>    what a viewer's keysyms mean on the Lisp
                                Machine keyboard: `key <keysym> <key>` a
                                line, and `prefix <keysym> <keysym> <key>`
                                for a key reached by pressing one and then
-                               another. It goes over muir's built-in
-                               mapping rather than replacing it, so a file
-                               naming one key leaves the rest as they were,
-                               and the prompt's `keys` prints what is in
-                               force. MUIR_KEYS names a file in place of
-                               the two looked for. The keyboard itself is
-                               MIT's and is not a choice: the mapping is
-                               what this names. [default: .muirkeys in
-                               the directory muir was run from, else in the
-                               home directory; without one the built-in
-                               mapping stands]
+                               another. It goes over the built-in mapping
+                               rather than replacing it, and the prompt's
+                               `keys` prints what is in force. MUIR_KEYS
+                               names a file in place of the two looked for.
+                               [default: .muirkeys, looked for where .muirrc
+                               is; without one the built-in mapping stands]
   --keyboard-mapping-dump      write the mapping this run would use to
                                stdout, in the format --keyboard-mapping
-                               reads, and stop --- before a terminal is
-                               bound or a machine is built, so stdout
-                               carries the mapping and nothing else. Fed
-                               back in unedited it changes nothing, so it
-                               is a copy to edit rather than a report:
+                               reads, and stop before a machine is built.
+                               Fed back in unedited it changes nothing, so
+                               it is a copy to edit rather than a report:
                                `muir --keyboard-mapping-dump > my.keys`,
                                edit it, `muir --keyboard-mapping my.keys`.
   --keyboard-mapping-trace     every keysym a viewer sends and what it
-                               became, on stderr, alongside the run. The
-                               other half of the same job: the dump says
-                               what a keysym means here, this says which
-                               keysym arrived, and a key that will not type
-                               needs both. A viewer chooses which X11
-                               keysym to send for a physical key, so muir
-                               is the only authority on what it received:
-                               `xev` reports what the host's X server
-                               thinks, which is not the same thing and
-                               differs most on the modifiers. Each line
-                               names the keysym by name and number, whether
-                               it went down or up, and the key it became
-                               --- spelled as --keyboard-mapping-dump
-                               spells it, so the line can be pasted into a
-                               mapping file --- or `no binding` where the
-                               mapping has nothing for it. A keysym held as
-                               a prefix says so rather than printing
-                               nothing. [default: off]
-  --main-memory netlist|model  chip: main memory as MIT's board or as
-                               rtl's model of it. [default: netlist]
+                               became, on stderr, alongside the run: the
+                               keysym by name and number, whether it went
+                               down or up, and the key it became, spelled as
+                               --keyboard-mapping-dump spells it so that the
+                               line can be pasted into a mapping file.
+                               [default: off]
+  --main-memory netlist|model  chip: main memory as MIT's board or as rtl's
+                               model of it. [default: netlist]
   --main-memory-boards <n>     how many 64K-word boards, 1 to 60: main
                                memory on every engine, and on chip the
                                boards on the backplane. [default: 32, the
                                two million words]
-  --no-auto-boot               leave the boot button unpressed, as a CADR
-                               is when the power comes on: RUN is
-                               clear, the machine is halted, and nothing
-                               runs. The run starts held at the prompt, so
-                               that the machine can be looked at as it came
-                               up; boot there presses the button, and the
-                               machine runs from that. Nothing else starts
-                               it: continue and step say so. [default: muir
-                               presses the button for you]
+  --no-auto-boot               leave the boot button unpressed, as a CADR is
+                               when the power comes on: RUN clear and
+                               nothing running. The run starts held at the
+                               prompt, and boot there presses the button;
+                               nothing else starts it, and continue and step
+                               say so. [default: muir presses the button for
+                               you]
   --prom <file>                the boot PROM to run, an MCR microcode file
-                               as MIT's own sys/ubin/promh.mcr is: the 512
-                               words the machine fetches before it turns
-                               the PROM off. A program longer than that, or
-                               assembled somewhere other than address 0, or
-                               setting the statistics bit IR<46>, which a
-                               burned word has nowhere to hold, is refused
-                               rather than run. The start says how the file
-                               stands to MIT's own, which matters: recovered
-                               copies of the boot PROM are not all the same
-                               program. [default: MIT's own, built in ---
-                               System 100's sys/ubin/promh.mcr, version 9]
-  --resume <file>              start from a checkpoint instead of cold:
-                               the engine that wrote it, the same pack
-                               under it, the Chaosnet plugged in afresh,
-                               and as many memory boards as it had, which
-                               --main-memory-boards may not gainsay. On
-                               chip the boards on the backplane have to be
-                               the checkpoint's too, and the button is not
-                               pressed: what it would set is what the
-                               checkpoint replaces. The stops count from
-                               here.
-  --serial <endpoint>          where the serial port at J9 is reached: a
-                               TCP port, or address:port. Attach with `nc
-                               <host> <port>` or telnet. A connection is
-                               the device on the null-modem cable
-                               plugging in, which asserts DSR, DCD and
-                               CTS, and hanging up drops them. One device
-                               at a time, and a second connection is
-                               closed as it arrives.
-                               The rate and the frame are whatever the
-                               machine has programmed into the 2651 ---
-                               MIT's driver defaults to 300 baud, seven
-                               data bits and even parity --- so nothing
-                               here sets one, and a far end that assumes
-                               another gets garbage rather than an error.
-                               The port is off unless this is given: it
-                               costs something to have one, since on chip
-                               a port the machine has opened counts the
-                               baud-rate crystal and the I/O board stops
-                               idling. Not the lashup's: one machine has
-                               the endpoint, so it is refused with
+                               as MIT's own sys/ubin/promh.mcr is: at most
+                               the 512 words the machine fetches before it
+                               turns the PROM off, assembled at address 0,
+                               with the statistics bit IR<46> nowhere set.
+                               Anything else is refused rather than run. The
+                               start says how the file stands to MIT's own.
+                               [default: MIT's own, built in --- System
+                               100's sys/ubin/promh.mcr, version 9]
+  --resume <file>              start from a checkpoint instead of cold: the
+                               engine that wrote it, the same pack under it,
+                               the Chaosnet plugged in afresh, and as many
+                               memory boards as it had, which
+                               --main-memory-boards may not gainsay. On chip
+                               the boards on the backplane have to be the
+                               checkpoint's too. The button is not pressed,
+                               and the stops count from here.
+  --serial <endpoint>          where the serial port at J9 is reached: a TCP
+                               port, or address:port. Attach with `nc <host>
+                               <port>` or telnet. A connection is the device
+                               on the null-modem cable plugging in: it
+                               asserts DSR, DCD and CTS, and hanging up
+                               drops them. One device at a time, and a
+                               second connection is closed as it arrives.
+                               The rate and the frame are the machine's to
+                               program into the 2651 --- MIT's driver
+                               defaults to 300 baud, seven data bits and
+                               even parity --- and nothing here sets them.
+                               One machine's port, so it is refused with
                                --debug-in-process and the cable flags.
                                [default: off, and J9 empty]
-  --stop-after <microcycles>   how many to run, then stop. [default:
-                               none; the run goes on until a --stop-at, a
-                               halt or ^C]
+  --stop-after <microcycles>   how many to run, then stop. [default: none;
+                               the run goes on until a --stop-at, a halt or
+                               ^C]
   --stop-at <pc>               stop when the PC reaches this address with
                                the boot PROM disabled: in microcode loaded
-                               into the control store. Octal, as MIT
-                               writes it.
-  --stop-at-prom <pc>          the same with the PROM enabled: an address
-                               in the boot PROM, below 1000.
-                               With --stop-after, whichever comes first.
+                               into the control store. Octal, as MIT writes
+                               it.
+  --stop-at-prom <pc>          the same with the PROM enabled: an address in
+                               the boot PROM, below 1000. With --stop-after,
+                               whichever comes first.
   --terminal [<endpoint>]      where the display, keyboard and mouse are
-                               served over RFB, RFC 6143, for any VNC
-                               viewer to connect to: a port, an address or
-                               address:port. Every run serves a terminal,
-                               asked for or not --- the machine has no
-                               other way to be worked --- and this says
-                               where instead. A named port is bound as it
-                               stands, and the run stops if it cannot be;
-                               an unnamed one is where the first free
-                               display is looked for. An address other
-                               than the loopback lets another machine in
-                               --- RFB's None security is the only type
-                               offered, so a viewer needs no password.
-                               Without a Chaosnet the boot stops in the
-                               debugger: Super-B, the date and y finish
-                               it. On any engine the band's cold boot
-                               leaves the vertical interrupt off, so
-                               (si:setup-cpt) at the listener is what
-                               turns the mouse on. [default:
-                               127.0.0.1:5900, VNC's display
-                               :0, or the first free display above it]
+                               served over RFB, RFC 6143, for any VNC viewer
+                               to connect to: a port, an address or
+                               address:port. Every run serves one, asked for
+                               or not; this says where instead, and the
+                               start says where it went. A named port is
+                               bound as it stands, and the run stops if it
+                               cannot be; an unnamed one is where the first
+                               free display is looked for. An address other
+                               than the loopback lets another machine in,
+                               RFB's None security being the only type
+                               offered. [default: 127.0.0.1:5900, VNC's
+                               display :0, or the first free display above
+                               it]
   --tv netlist|model           chip: the display. [default: netlist]
   --tv-board simple-tv|lispm-tv
                                chip: which display board. [default:
                                simple-tv]
   --tv-capture <gif>           record the display to <gif> as the run goes,
-                               an animated GIF: each frame the rectangle
-                               that changed since the last, over the one
-                               before it, two colours and LZW, timed by the
-                               machine's own clock so it plays at the
-                               machine's speed. It stays small while the
-                               screen stays still. There is no default path;
-                               one must be given. In the lashup it is both
-                               machines on one canvas, the debugger's screen
-                               at the left and the debuggee's at the right
-                               with a rule between them, so that a frame is
-                               one instant on both: the two machines are one
-                               clock there, which two files could not keep.
-                               Not over the debug cable, where they are
-                               two.
+                               an animated GIF timed by the machine's own
+                               clock so that it plays at the machine's
+                               speed. There is no default path; one must be
+                               given. In the lashup it is both machines on
+                               one canvas, the debugger at the left and the
+                               debuggee at the right; not over the debug
+                               cable, where they are two clocks.
   --tv-capture-no-time         leave the clocks off the recording. By
-                               default a line below the screen, hiding no
-                               part of the display, shows the machine's
-                               simulated time at the left and the wall
-                               clock, the local time of day, at the right,
-                               each hh:mm:ss; this drops that line.
+                               default a line below the screen, hiding none
+                               of it, shows the machine's simulated time at
+                               the left and the local time of day at the
+                               right, each hh:mm:ss.
   --watch <from>[-<to>]:<net>,<net>,...
                                chip: record the named nets over microcycles
                                <from> to <to>, or from <from> to the end of
@@ -986,20 +887,15 @@ A simulator of the MIT CADR Lisp Machine.
                                counts them. Each net as the prompt's `net`
                                names one --- `disk:NEW CCW`, `PC/14` for a
                                bus --- and the nets comma separated. The
-                               boards are sampled at every instant they
-                               move, a clock transition, a delay-line tap
-                               or an oscillator edge, and not once a
-                               microcycle, so a pulse shorter than one is
-                               seen: `CCW CLK` is 50 ns. One line on
-                               stderr, prefixed `watch:`, with the time in
-                               nanoseconds, the microcycle and every value
-                               --- a bus in octal, Z while any bit is
-                               undriven --- as the range begins and then at
-                               every change, and nothing while nothing
-                               changes. Outside the range the run pays
-                               nothing. The prompt's watch records the next
-                               n microcycles the same way, without a
-                               restart. [default: off]
+                               boards are sampled at every instant they move
+                               and not once a microcycle, so a pulse shorter
+                               than one is seen. One line on stderr,
+                               prefixed `watch:`, with the time in
+                               nanoseconds, the microcycle and every value,
+                               as the range begins and then at every change.
+                               The prompt's watch records the next n
+                               microcycles the same way, without a restart.
+                               [default: off]
   -h, --help                   this.
   -V, --version                what this build calls itself: the version,
                                the commit it was built from --- with -dirty

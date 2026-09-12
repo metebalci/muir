@@ -85,6 +85,13 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
+        <dt>--chaos-trace</dt>
+        <dd>
+        <p>Every Chaosnet packet and frame on the cable, to stderr. What to reach for when a lashup goes quiet: it shows whether the machine is still talking.</p>
+        <p>Default: off.</p>
+        </dd>
+      </div>
+      <div>
         <dt>--chaos-udp [&lt;endpoint&gt;]</dt>
         <dd>
         <p>Where the Chaosnet cable is on the network: <b>Chaosnet over UDP</b>, the encapsulation <code>cbridge</code>, <code>usim</code>, <code>klh10</code>, <code>ozd</code> and the live Chaosnet hosts speak. Ordinary UDP, so it needs no privileges and it crosses a NAT.</p>
@@ -111,8 +118,9 @@ stop: after 2000000 microcycles
       <div>
         <dt>--checkpoint &lt;file&gt;</dt>
         <dd>
-        <p><b>micro, rtl:</b> write the machine&rsquo;s whole state to the file when the run stops, for <code>--resume</code> to start from: the engine, the processor&rsquo;s memories and registers, main memory, the display, the I/O board, and the drive with every block written to its pack.</p>
-        <p>Home in the terminal writes one as the run goes, as <code>muir-yyyymmdd-hhmmss.chk</code> in the current directory, and the run goes on.</p>
+        <p>Write the machine&rsquo;s whole state to the file when the run stops, for <code>--resume</code> to start from: the engine, the processor&rsquo;s memories and registers, main memory, the display, the I/O board, and the drive with every block written to its pack.</p>
+        <p>On <code>chip</code> it is the boards themselves &mdash; every net, every cell and every timer of the processor, the bus interface, the memory, the I/O board and the display &mdash; taken at the first microcycle from the stop with no bus cycle in flight, with the drives on a netlist controller&rsquo;s cable and the multiplexor between them where each stood.</p>
+        <p>The prompt&rsquo;s <code>checkpoint</code>, and Home in the terminal, write one as the run goes, as <code>muir-yyyymmdd-hhmmss.chk</code> in the current directory, and the run goes on.</p>
         </dd>
       </div>
       <div>
@@ -171,11 +179,21 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
+        <dt>--disk-multiplexor</dt>
+        <dd>
+        <p><b>chip:</b> a DISK MULTIPLEXOR on the netlist controller&rsquo;s cable, which is what gives it eight drive ports instead of one. It hangs off that board, so it wants <code>--disk-controller netlist</code>.</p>
+        <p><b>Not because the unit number is forced to 0.</b> <code>UNIT&lt;2:0&gt;</code> reach one 74LS244&rsquo;s inputs on the controller and nothing else &mdash; <code>cadrdc/dc.wlr</code> gives a direction per pin and none of the three has a <code>TO</code> &mdash; so the board has no driver for them at all, and the six one-board jumpers ground them to stop three inputs floating. Unit 0 is the consequence. The multiplexor is what supplies the driver, so a second <code>--disk-pack</code>, or one past unit 0, is refused without it: the board it needs is a board somebody chose to have, and muir names the flag rather than fitting one nobody asked for.</p>
+        <p>The model controller is refused nothing, because it wants no board: it is behavioural and has addressed eight units all along. And this flag takes no <code>netlist</code>-or-<code>model</code>, as the other board flags do &mdash; MIT drew one multiplexor and there is nothing to model it against.</p>
+        <p>Default: off, with one pack in unit 0 and the jumpers on. The start says when it is fitted.</p>
+        </dd>
+      </div>
+      <div>
         <dt>--disk-pack &lt;image&gt;[,&lt;unit&gt;][,ro]</dt>
         <dd>
-        <p>The pack in a drive: its blocks end to end. The file is only ever read; a block the machine writes is kept in memory for the run, and goes into a checkpoint, so the image stays as fetched.</p>
-        <p>After the image, in either order: the unit, only 0 until the disk multiplexor is modelled, and <code>ro</code> for the drive&rsquo;s read-only switch &mdash; the status word says so, and a write faults.</p>
+        <p>The pack in a drive: its blocks end to end.</p>
+        <p>After the image, in either order: the unit, and <code>ro</code> for the drive&rsquo;s read-only switch &mdash; the status word says so, and a write faults. <code>rw</code> spells the switch off, which is where it stands without either.</p>
         <p>Without <code>ro</code> the image is opened read-write and a written block goes into the file, as a drive writes its pack. With it the file is opened read-only and a written block stays in the run, so it reaches a checkpoint but not the image.</p>
+        <p>The flag can come more than once, one pack to a unit, up to the eight the controller addresses. On the netlist disk controller a second pack, or one past unit 0, wants <code>--disk-multiplexor</code>.</p>
         <p>Default: unit 0; no pack unless one is named, which is a drive with no pack in it and a boot that waits on it for ever.</p>
         </dd>
       </div>
@@ -184,6 +202,32 @@ stop: after 2000000 microcycles
         <dd>
         <p><b>chip:</b> the I/O board.</p>
         <p>Default: <code>netlist</code>.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--keyboard-mapping &lt;file&gt;</dt>
+        <dd>
+        <p>What a viewer&rsquo;s keysyms mean on the Lisp Machine keyboard: <code>key &lt;keysym&gt; &lt;key&gt;</code> a line, and <code>prefix &lt;keysym&gt; &lt;keysym&gt; &lt;key&gt;</code> for a key reached by pressing one and then another, there being more keys on this keyboard than a host has spare.</p>
+        <p>It goes over muir&rsquo;s built-in mapping rather than replacing it, so a file naming one key leaves the rest as they were, and the prompt&rsquo;s <code>keys</code> prints what is in force.</p>
+        <p>The keyboard itself is MIT&rsquo;s and is not a choice &mdash; its key positions are MIT&rsquo;s own tables &mdash; and the mapping is what this names.</p>
+        <p>Default: <code>.muirkeys</code> in the directory muir was run from, else <code>.muirkeys</code> in the home directory, as <code>.muirrc</code> is looked for; <code>MUIR_KEYS</code> in the environment names a file in place of the two. Without one the built-in mapping stands.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--keyboard-mapping-dump</dt>
+        <dd>
+        <p>Write the mapping this run would use to stdout, in the format <code>--keyboard-mapping</code> reads, and stop &mdash; before a terminal is bound or a machine is built, so stdout carries the mapping and nothing else. Fed back in unedited it changes nothing, so it is a copy to edit rather than a report.</p>
+<pre class="cmd">muir --keyboard-mapping-dump &gt; my.keys
+<b># edit my.keys</b>
+muir --keyboard-mapping my.keys</pre>
+        </dd>
+      </div>
+      <div>
+        <dt>--keyboard-mapping-trace</dt>
+        <dd>
+        <p>Every keysym a viewer sends and what it became, on stderr, alongside the run. The other half of the same job: the dump says what a keysym means here, this says which keysym arrived, and a key that will not type needs both. A viewer chooses which X11 keysym to send for a physical key, so muir is the only authority on what it received &mdash; <code>xev</code> reports what the host&rsquo;s X server thinks, which is not the same thing and differs most on the modifiers.</p>
+        <p>Each line names the keysym by name and number, whether it went down or up, and the key it became &mdash; spelled as <code>--keyboard-mapping-dump</code> spells it, so the line can be pasted into a mapping file &mdash; or <code>no binding</code> where the mapping has nothing for it. A keysym held as a prefix says so rather than printing nothing, a prefix&rsquo;s press producing no key by design.</p>
+        <p>Default: off.</p>
         </dd>
       </div>
       <div>
@@ -209,9 +253,18 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
+        <dt>--prom &lt;file&gt;</dt>
+        <dd>
+        <p>The boot PROM to run, an MCR microcode file as MIT&rsquo;s own <code>sys/ubin/promh.mcr</code> is: the 512 words the machine fetches before it turns the PROM off. A program longer than that, or assembled somewhere other than address 0, or setting the statistics bit <code>IR&lt;46&gt;</code>, which a burned word has nowhere to hold, is refused rather than run.</p>
+        <p>The start says how the file stands to MIT&rsquo;s own, word for word or how many words apart, and that matters: <b>recovered copies of the boot PROM are not all the same program.</b> Two builds of &ldquo;version 9&rdquo; exist that differ in 214 of their 454 words, and nothing about a copy announces which it is.</p>
+        <p>Default: MIT&rsquo;s own, built in &mdash; System 100&rsquo;s <code>sys/ubin/promh.mcr</code>, version 9.</p>
+        </dd>
+      </div>
+      <div>
         <dt>--resume &lt;file&gt;</dt>
         <dd>
-        <p><b>micro, rtl:</b> start from a checkpoint instead of cold: the engine that wrote it, the same pack under it, the Chaosnet plugged in afresh, and as many memory boards as it had, which <code>--main-memory-boards</code> may not gainsay. The stops count from here.</p>
+        <p>Start from a checkpoint instead of cold: the engine that wrote it, the same pack under it, the Chaosnet plugged in afresh, and as many memory boards as it had, which <code>--main-memory-boards</code> may not gainsay. On <code>chip</code> the boards on the backplane have to be the checkpoint&rsquo;s too.</p>
+        <p>The boot button is not pressed: what it would set is what the checkpoint replaces. The stops count from here.</p>
         </dd>
       </div>
       <div>
@@ -295,7 +348,7 @@ watch: 118613110 ns, microcycle 539144: disk:NEW CCW=High disk:CCW CLK=Low disk:
       <div>
         <dt>-V, --version</dt>
         <dd>
-        <p>What this build calls itself, on stdout: the name, the version, and whether it was built with optimisations off &mdash; <code>muir 0.1.0-release</code> or <code>muir 0.1.0-dev</code>. Every run says the same line first, so a report of a run says which muir made it.</p>
+        <p>What this build calls itself, on stdout: the name, the version, the commit it was built from &mdash; with <code>-dirty</code> after it where the tree had uncommitted work, since the commit alone would name something that was never built &mdash; and whether it was built with optimisations off: <code>muir 0.1.0-e4d8aeb-release</code>. The commit is stamped in at build time, so a built muir never runs git; built where there is no repository, a source archive or a machine without git, there is no commit to name and the version is the crate&rsquo;s and the build&rsquo;s alone. Every run says the same line first, so a report of a run says which muir made it.</p>
         </dd>
       </div>
       <div>
@@ -462,7 +515,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
   <div class="band">
     <h2>What a run can write</h2>
     <div class="prose">
-      <p><b>Checkpoints.</b> <code>--checkpoint &lt;file&gt;</code> writes the machine&rsquo;s whole state when the run stops and <code>--resume &lt;file&gt;</code> starts from it instead of booting: the engine that wrote it, with the same pack under it. The prompt&rsquo;s <code>checkpoint</code> and Home in the terminal write one as the run goes. A pack is only ever read &mdash; a block the machine writes is kept in memory and goes into the checkpoint &mdash; so the image stays as fetched and a checkpoint can be resumed from any number of times. <code>micro</code> and <code>rtl</code> for now.</p>
+      <p><b>Checkpoints.</b> <code>--checkpoint &lt;file&gt;</code> writes the machine&rsquo;s whole state when the run stops and <code>--resume &lt;file&gt;</code> starts from it instead of booting: the engine that wrote it, with the same pack under it. The prompt&rsquo;s <code>checkpoint</code> and Home in the terminal write one as the run goes. It works on all three engines; on <code>chip</code> what goes in the file is the boards themselves, net by net and cell by cell. A pack given <code>ro</code> is only ever read, a block the machine writes being kept in memory and going into the checkpoint instead, so that image stays as fetched and a checkpoint over it can be resumed from any number of times.</p>
       <p><b>Screenshots.</b> The prompt&rsquo;s <code>screenshot</code> writes the screen as a PNG: 768 by 963, one bit a pixel, encoded by muir itself rather than by a library.</p>
       <p><b>Recordings.</b> <code>--tv-capture &lt;gif&gt;</code> records the display for the whole run, and the prompt&rsquo;s <code>startcapture</code> and <code>endcapture</code> begin and end one as it goes. Each frame is the rectangle that changed since the last, over the one before it, two colours and LZW, timed by the machine&rsquo;s own clock so it plays at the machine&rsquo;s speed &mdash; and it stays small while the screen stays still. A line below the screen carries the machine&rsquo;s time and the wall clock unless <code>--tv-capture-no-time</code> drops it.</p>
       <p>Without a file, all three write <code>muir-yyyymmdd-hhmmss</code> with the right extension in the current directory.</p>
@@ -580,7 +633,8 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
           </tr>
           <tr>
             <td class="name">Disk multiplexor</td>
-            <td colspan="4">Not on any engine. <code>DM.netlist</code> extracts from MIT&rsquo;s drawings and is held to them, but no engine runs it, and the drive cable it switches has no second source to check a model against. One pack, as unit 0.</td>
+            <td colspan="3">Not fitted, and not wanted: the model controller has addressed eight units all along.</td>
+            <td><code>--disk-multiplexor</code>, for <code>DM.netlist</code>, which gives the netlist controller eight drive ports instead of its one; without it, unit 0 alone. Off by default. There is no model of it: the drive cable it switches has no second source to check one against.</td>
           </tr>
           <tr>
             <td class="name">Parity</td>
