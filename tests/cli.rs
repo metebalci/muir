@@ -56,6 +56,61 @@ fn the_memory_board_count_is_one_to_sixty() {
     }
 }
 
+/// **`chip` means netlist for every board, the disk controller included,
+/// and `--main-memory model` takes the disk down with it rather than
+/// being refused.**
+///
+/// The netlist controller is a second master on the Xbus and the model
+/// memory answers only the interface's own cycles, so the two cannot be
+/// combined --- and that was a refusal while the disk defaulted to its
+/// model. With the disk defaulting to its netlist the refusal would fire
+/// on a run that asked for nothing of the sort, so it now fires only when
+/// the netlist controller was asked for by name. A run that chose the
+/// model memory gets the model disk, and the start says so rather than
+/// leaving it to be guessed at.
+#[test]
+fn the_disk_controller_is_netlist_unless_the_memory_is_the_model() {
+    let start = |args: &[&str]| {
+        let out = muir().args(args).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{args:?}:\n{t}");
+        t
+    };
+    // Every board a netlist, with nothing asked for.
+    let t = start(&["--chip", "--main-memory-boards", "4", "--stop-after", "1"]);
+    assert!(t.contains("disk controller netlist"), "the disk is a netlist too:\n{t}");
+
+    // The model memory takes the disk with it, and is not refused.
+    let t = start(&[
+        "--chip",
+        "--main-memory",
+        "model",
+        "--main-memory-boards",
+        "4",
+        "--stop-after",
+        "1",
+    ]);
+    assert!(t.contains("disk controller model"), "the model memory takes the disk:\n{t}");
+
+    // Asked for by name against the model memory, it is refused.
+    refused(
+        &["--chip", "--main-memory", "model", "--disk-controller", "netlist", "--stop-after", "1"],
+        "--disk-controller netlist",
+    );
+
+    // And the model asked for by name is the model, memory or no.
+    let t = start(&[
+        "--chip",
+        "--disk-controller",
+        "model",
+        "--main-memory-boards",
+        "4",
+        "--stop-after",
+        "1",
+    ]);
+    assert!(t.contains("disk controller model"), "asked for, and given:\n{t}");
+}
+
 /// **`--debug-cable-connect` takes either a debuggee on the network or a
 /// debuggee in FPGA fabric, and `0x` is which.** One flag rather than two
 /// for one concept --- this machine is the debugger and here is the
@@ -163,9 +218,11 @@ fn a_watch_that_is_not_a_range_and_nets_is_refused() {
 #[test]
 fn a_watch_on_a_net_the_machine_has_not_got_is_refused() {
     for (spec, says) in [
-        ("0-1:NOSUCH", "no net NOSUCH on cpu, busint, memory, tv, io"),
-        ("0-1:disk:NEW CCW", "no board called disk here; this run has cpu, busint, memory, tv, io"),
+        ("0-1:NOSUCH", "no net NOSUCH on cpu, busint, memory, tv, disk, io"),
+        // A board this run has not got: the disk controller as its model
+        // has no nets, so `chip` with that has no `disk` to name.
         ("0-1:cpu:PC/15", "cpu has no PC14 --- a bus is PC0 up"),
+        ("0-1:disk:NOSUCH", "no net NOSUCH on disk"),
     ] {
         let out = muir().args(["--chip", "--watch", spec, "--stop-after", "1"]).run();
         let err = String::from_utf8_lossy(&out.stderr);
@@ -177,6 +234,19 @@ fn a_watch_on_a_net_the_machine_has_not_got_is_refused() {
         assert!(err.contains(says), "{spec}: the refusal says {says:?}:\n{err}");
         assert!(!err.contains("usage:"), "{spec}: and the usage is no help here:\n{err}");
     }
+
+    // `disk` is a board this run has because the controller is a netlist.
+    // Asked for against its model there is no such board, and the refusal
+    // names the boards there are.
+    let out = muir()
+        .args(["--chip", "--disk-controller", "model", "--watch", "0-1:disk:NEW CCW"])
+        .args(["--stop-after", "1"])
+        .run();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no board called disk here; this run has cpu, busint, memory, tv, io"),
+        "the model controller is no board:\n{err}"
+    );
 }
 
 /// **On the other two engines `--watch` is ignored, and the start says
@@ -524,10 +594,11 @@ fn a_drive_past_unit_0_wants_the_multiplexor_named() {
         assert!(said.contains(FITTED), "{extra:?} fits the board, and says so:\n{said}");
         assert!(!said.contains("usage:"), "{extra:?} is not refused:\n{said}");
     }
-    // The model controller takes the units and fits nothing --- asked on
-    // `chip`, where the start says which boards are on the buses and so
+    // The model controller takes the units and fits nothing: on `micro`,
+    // where it is the only controller there is, and on `chip` asked for
+    // by name, where the start says which boards are on the buses and so
     // can be caught saying it fitted one.
-    for engine in [&["--micro"][..], &["--chip"][..]] {
+    for engine in [&["--micro"][..], &["--chip", "--disk-controller", "model"][..]] {
         let mut args = engine.to_vec();
         args.extend(["--disk-pack", "a.img", "--disk-pack", "b.img,1", "--stop-after", "1"]);
         let said = start(&args);
@@ -540,7 +611,17 @@ fn a_drive_past_unit_0_wants_the_multiplexor_named() {
 /// one pack a drive.
 #[test]
 fn the_multiplexor_is_the_netlist_controllers_board() {
-    refused(&["--chip", "--disk-multiplexor", "--stop-after", "1"], "--disk-multiplexor");
+    // On `chip` the controller is a netlist, so the board has one to hang
+    // off and is fitted; asked for against the model controller, or on an
+    // engine that has no netlist at all, it is refused.
+    let out = muir().args(["--chip", "--disk-multiplexor", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "chip has a netlist controller to hang it off:\n{t}");
+    assert!(t.contains("with a multiplexor"), "and it is fitted:\n{t}");
+    refused(
+        &["--chip", "--disk-controller", "model", "--disk-multiplexor", "--stop-after", "1"],
+        "--disk-multiplexor",
+    );
     refused(&["--micro", "--disk-multiplexor", "--stop-after", "1"], "--disk-multiplexor");
     refused(
         &["--micro", "--disk-pack", "a.img,1", "--disk-pack", "b.img,1", "--stop-after", "1"],

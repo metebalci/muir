@@ -636,7 +636,15 @@ fn a_full_input_queue_loses_key_downs_before_key_ups() {
         burst.extend(key_event(false, 'a' as u32));
     }
     v.stream.write_all(&burst).unwrap();
-    for _ in 0..50 {
+    // **Polled until the burst has arrived, and not for a fixed time.**
+    // The queue is drained once, after everything is in, because what is
+    // being measured is what a full queue kept --- so a burst still on
+    // its way through the socket would be counted as a queue that had
+    // room. Fifty milliseconds was enough on an idle machine and not on a
+    // loaded one, where this failed; half a second is bounded by the
+    // socket's delivery and not by anything the machine does, and the run
+    // is still a fraction of a second.
+    for _ in 0..500 {
         v.terminal.poll(Frame::of(&v.tv));
         std::thread::sleep(Duration::from_millis(1));
     }

@@ -3375,7 +3375,13 @@ fn main() {
     let mut io = true;
     let mut tv = true;
     let mut tv_board = TvBoard::SimpleTv;
-    let mut disk_controller = false;
+    // **The disk controller is a netlist like every other board**, since
+    // 12 September 2026, when a boot through it was run to the end ---
+    // two and a half days of it, issue 40.  `disk_given` is whether a run
+    // said which it wanted, which decides what the model memory does to
+    // it below.
+    let mut disk_controller = true;
+    let mut disk_given = false;
     // The DISK MULTIPLEXOR on the netlist controller's cable, which is
     // what gives it eight drive ports instead of one.
     let mut use_multiplexor = false;
@@ -3544,11 +3550,14 @@ fn main() {
                 Some("lispm-tv") => tv_board = TvBoard::LispmTv,
                 _ => usage("--tv-board wants simple-tv or lispm-tv"),
             },
-            (None, "--disk-controller") => match args.next().as_deref() {
-                Some("netlist") => disk_controller = true,
-                Some("model") => disk_controller = false,
-                _ => usage("--disk-controller wants netlist or model"),
-            },
+            (None, "--disk-controller") => {
+                disk_given = true;
+                match args.next().as_deref() {
+                    Some("netlist") => disk_controller = true,
+                    Some("model") => disk_controller = false,
+                    _ => usage("--disk-controller wants netlist or model"),
+                }
+            }
             (None, "--io-board") => match args.next().as_deref() {
                 Some("netlist") => io = true,
                 Some("model") => io = false,
@@ -3836,18 +3845,31 @@ fn main() {
     }
     // The behavioural memory answers the interface's cycles and no other
     // master's; the netlist controller's DMA needs memory boards.
-    if disk_controller && main_memory_model {
-        usage(
-            "--disk-controller netlist needs --main-memory netlist: the model memory does not answer a second master",
-        );
+    // **The model memory takes the disk down with it unless the netlist
+    // controller was asked for.**  A run that chose the model memory did
+    // not ask for a netlist disk and should not be refused for the
+    // default's sake; one that asked for both asked for something the
+    // backplane cannot do, and is told so.  Either way the start says
+    // which controller the run has, so neither is silent.
+    if main_memory_model && disk_controller {
+        if disk_given {
+            usage(
+                "--disk-controller netlist needs --main-memory netlist: the model memory does not answer a second master",
+            );
+        }
+        disk_controller = false;
     }
     // The DISK MULTIPLEXOR hangs off the netlist controller's edge
-    // connector, so there has to be one for it to hang off. The model
-    // controller wants no such board: it is behavioural and has had eight
-    // units all along, `disk_controller::UNITS`.
-    if use_multiplexor && !disk_controller {
+    // connector, so there has to be one for it to hang off: the `chip`
+    // engine's, and not its model. The model controller wants no such
+    // board on any engine --- it is behavioural and has had eight units
+    // all along, `disk_controller::UNITS` --- and `micro` and `rtl` have
+    // no netlist board of any kind. The engine is named here rather than
+    // left to the controller's default, which is netlist on `chip` and
+    // means nothing on the other two.
+    if use_multiplexor && !(which == Which::Chip && disk_controller) {
         usage(
-            "--disk-multiplexor is a board on the netlist controller's cable: it needs --disk-controller netlist",
+            "--disk-multiplexor is a board on the netlist controller's cable: it needs chip, with --disk-controller netlist",
         );
     }
     // Without it the netlist controller has one drive port --- and not
@@ -3867,7 +3889,14 @@ fn main() {
     // choosing it, and which machine is being simulated is the user's to
     // say. The model controller is refused nothing: it wants no board for
     // its eight units.
-    if disk_controller && !use_multiplexor && (packs.len() > 1 || packs.iter().any(|p| p.unit != 0))
+    // The engine is named for the same reason the multiplexor's refusal
+    // names it: the controller's default is netlist on `chip` and means
+    // nothing on `micro` and `rtl`, whose behavioural controller has
+    // addressed eight units all along.
+    if which == Which::Chip
+        && disk_controller
+        && !use_multiplexor
+        && (packs.len() > 1 || packs.iter().any(|p| p.unit != 0))
     {
         usage(
             "the netlist disk controller has one drive port, unit 0: a second --disk-pack, or one past unit 0, wants --disk-multiplexor",
