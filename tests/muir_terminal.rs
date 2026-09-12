@@ -91,9 +91,9 @@ fn an_asked_for_port_that_is_taken_is_refused() {
     assert!(
         String::from_utf8_lossy(&out.stderr)
             .lines()
-            .next()
+            .find(|l| l.starts_with("muir: "))
             .is_some_and(|l| l.contains("--terminal")),
-        "the first line names --terminal:\n{t}"
+        "the refusal names --terminal:\n{t}"
     );
 }
 

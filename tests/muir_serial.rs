@@ -107,7 +107,7 @@ fn the_endpoint_must_name_a_port() {
                 .lines()
                 .find(|l| l.starts_with("muir: "))
                 .is_some_and(|l| l.contains("--serial")),
-            "the first line names --serial:\n{t}"
+            "the refusal names --serial:\n{t}"
         );
     }
 }
