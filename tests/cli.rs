@@ -73,7 +73,7 @@ fn the_memory_board_count_is_one_to_sixty() {
 /// **The last case is the platform.** The mapping is `/dev/mem`, which
 /// only Linux has; muir is developed on macOS, where the flag is refused
 /// by name rather than failing to build. Either way the run stops and the
-/// first line names the flag.
+/// refusal names the flag.
 #[test]
 fn a_window_address_is_rtls_and_the_debuggers_and_a_multiple_of_four() {
     for engine in ["--micro", "--chip"] {
