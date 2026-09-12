@@ -85,8 +85,11 @@ fn a_port_that_is_taken_is_refused() {
     let t = text(&out);
     assert_eq!(out.status.code(), Some(2), "a usage error:\n{t}");
     assert!(
-        String::from_utf8_lossy(&out.stderr).lines().next().is_some_and(|l| l.contains("--serial")),
-        "the first line names --serial:\n{t}"
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .find(|l| l.starts_with("muir: "))
+            .is_some_and(|l| l.contains("--serial")),
+        "the refusal names --serial:\n{t}"
     );
 }
 
@@ -102,7 +105,7 @@ fn the_endpoint_must_name_a_port() {
         assert!(
             String::from_utf8_lossy(&out.stderr)
                 .lines()
-                .next()
+                .find(|l| l.starts_with("muir: "))
                 .is_some_and(|l| l.contains("--serial")),
             "the first line names --serial:\n{t}"
         );
