@@ -304,10 +304,12 @@ together.
 
 `--checkpoint <file>` writes the machine's whole state when the run stops,
 and `--resume <file>` starts from it instead of booting: the engine that
-wrote it, with the same pack under it. A pack is only ever read: a block
-the machine writes is kept in memory for the run and goes into the
-checkpoint, so the image stays as fetched and a checkpoint can be resumed
-from any number of times. `micro` and `rtl` for now.
+wrote it, with the same pack under it. A pack is opened read-write and a
+written block goes to the file, as it goes to the pack in a real drive;
+`ro` on `--disk-pack` is the drive's read-only switch, and there a written
+block is kept in memory for the run and goes into the checkpoint instead,
+so the image stays as fetched. Every engine writes one and resumes from
+one.
 
 Flags that every run should have go in a file, one to a line: the flag,
 then after a space whatever it takes, which is the rest of the line --- so
