@@ -681,7 +681,20 @@ impl Pci {
                             self.shifting = Some((next, done + frame));
                         }
                         Some(_) => {}
-                        None => self.tx_empty = true,
+                        // `TxEMT` is a condition of an enabled transmitter.
+                        // The sheet, on the command register: "If the
+                        // transmitter is disabled, it will complete the
+                        // transmission of the character in the transmit
+                        // shift register (if any) prior to terminating
+                        // operation. The TxD output will then remain in the
+                        // marking state (High) while TxRDY and TxEMT will go
+                        // High (inactive)." So the character above went out,
+                        // and a drain that follows a disable leaves the flag
+                        // down --- where a flag raised here would be masked
+                        // by `status` until the next enable and then stand
+                        // with the holding register empty, which is what
+                        // MIT's `serial.lisp` cannot get past (issue 99).
+                        None => self.tx_empty = self.tx_on(),
                     }
                 }
                 Some(_) => break,

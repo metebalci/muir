@@ -506,3 +506,65 @@ fn the_board_names_the_chaosnet_before_the_serial_port_before_the_keyboard() {
     assert_eq!(ioboard::SERIAL_VECTOR, 0o264, "serial.lisp's GET-UNIBUS-CHANNEL 264");
     assert_eq!(muir::chaos::board::VECTOR, 0o270);
 }
+
+/// **A drain that follows a disable leaves `TxEMT` down, and the next
+/// enable does not present it.** The sheet, on the command register: "If
+/// the transmitter is disabled, it will complete the transmission of the
+/// character in the transmit shift register (if any) prior to terminating
+/// operation. The TxD output will then remain in the marking state (High)
+/// while TxRDY and TxEMT will go High (inactive)." High is inactive on
+/// both. This is what lets MIT's `serial.lisp` transmit twice: its output
+/// channel ends every burst by clearing `CR0` while the last character is
+/// still shifting, and its `RANDOM` channel, first in the interrupt walk,
+/// matches on `SR2` --- so a `TxEMT` left standing from that drain would be
+/// absorbed by `RANDOM` at the next burst's first interrupt for ever, and
+/// the holding register never loaded again. Issue 99.
+#[test]
+fn a_drain_after_a_disable_leaves_tx_empty_down() {
+    let on = (command::TX_ENABLE | command::RX_ENABLE | command::DTR | command::RTS) as u16;
+    let mut b = plugged();
+    set_up(&mut b, 14, 0);
+    let frame = b.serial.framing().frame_ns(14);
+    let t0: u64 = 1_000_000;
+    // The plug's DSCHG, read away, as RANDOM's first service does: SR2 is
+    // TxEMT or DSCHG, and what is asserted below is TxEMT.
+    assert_eq!(low(b.read(STATUS, t0)) & status::TX_EMPTY_OR_DSCHG, status::TX_EMPTY_OR_DSCHG);
+    assert_eq!(low(b.read(STATUS, t0)) & status::TX_EMPTY_OR_DSCHG, 0, "and it is gone");
+    b.write(DATA, b'A' as u16, t0);
+    // Disabled mid-character, as INTR-OUTDEV's turnoff lands.
+    b.write(COMMAND, on & !(command::TX_ENABLE as u16), t0 + frame / 2);
+    b.advance(t0 + 4 * frame);
+    assert!(b.serial.cable.take().is_some(), "the character in the shift register completes");
+    // The next burst's turn-on: TxRDY up, TxEMT down, nothing transmitted
+    // since the enable.
+    b.write(COMMAND, on, t0 + 4 * frame);
+    let s = low(b.read(STATUS, t0 + 4 * frame));
+    assert_eq!(s & status::TX_EMPTY_OR_DSCHG, 0, "TxEMT at the enable: {s:o}");
+    assert_eq!(s & status::TX_READY, status::TX_READY, "TxRDY at the enable: {s:o}");
+}
+
+/// **The other half of the same sentence**: `TxEMT` up with the
+/// transmitter on, then the disable finds it standing and takes it down,
+/// and the enable that follows does not bring it back. Which half a burst
+/// needs depends only on where the driver's handler lands in the frame.
+#[test]
+fn a_disable_after_the_drain_takes_tx_empty_down_and_the_enable_leaves_it() {
+    let on = (command::TX_ENABLE | command::RX_ENABLE | command::DTR | command::RTS) as u16;
+    let mut b = plugged();
+    set_up(&mut b, 14, 0);
+    let frame = b.serial.framing().frame_ns(14);
+    let t0: u64 = 1_000_000;
+    // The plug's DSCHG read away first, so that SR2 below is TxEMT.
+    b.read(STATUS, t0);
+    assert_eq!(low(b.read(STATUS, t0)) & status::TX_EMPTY_OR_DSCHG, 0, "nothing sent yet");
+    b.write(DATA, b'A' as u16, t0);
+    let t = t0 + 3 * frame;
+    let s = low(b.read(STATUS, t));
+    assert_eq!(s & status::TX_EMPTY_OR_DSCHG, status::TX_EMPTY_OR_DSCHG, "drained, on: {s:o}");
+    b.write(COMMAND, on & !(command::TX_ENABLE as u16), t);
+    assert_eq!(low(b.read(STATUS, t)) & status::TX_EMPTY_OR_DSCHG, 0, "disabled");
+    b.write(COMMAND, on, t);
+    let s = low(b.read(STATUS, t));
+    assert_eq!(s & status::TX_EMPTY_OR_DSCHG, 0, "TxEMT at the enable: {s:o}");
+    assert_eq!(s & status::TX_READY, status::TX_READY, "TxRDY at the enable: {s:o}");
+}
