@@ -258,12 +258,6 @@ fn help_lists_the_commands_and_the_end_of_stdin_ends_nothing() {
     assert!(t.contains("ran out at 20000000"), "the window ended the run:\n{t}");
 }
 
-/// `kill -INT`, what ^C sends.
-fn interrupt(child: &Child) {
-    let status = Command::new("kill").args(["-INT", &child.id().to_string()]).status().unwrap();
-    assert!(status.success(), "kill -INT");
-}
-
 /// How many times the machine has said where it is: the answer to `pc`,
 /// and to a hold.
 fn pc_lines(t: &str) -> usize {
@@ -291,14 +285,14 @@ fn control_c_holds_at_the_prompt_and_again_quits() {
     let said = child.stdout();
     writeln!(stdin, "pc").unwrap();
     said.wait_until(|t| pc_lines(t) >= 1, "pc answered, so the run has begun");
-    interrupt(&child);
+    child.interrupt();
     // The hold says where the machine is: the second PC line.
     said.wait_until(|t| t.contains("held at ^C") && pc_lines(t) >= 2, "held at the first ^C");
     writeln!(stdin, "continue\npc").unwrap();
     said.wait_until(|t| pc_lines(t) >= 3, "continue ran the machine on, and pc answered");
-    interrupt(&child);
+    child.interrupt();
     said.wait_until(|t| t.matches("held at ^C").count() >= 2, "held at the second ^C");
-    interrupt(&child);
+    child.interrupt();
     let out = child.wait();
     drop(stdin);
     let t = text(&out);
@@ -401,7 +395,7 @@ fn control_c_with_no_prompt_quits() {
     writeln!(stdin, "pc").unwrap();
     drop(stdin);
     child.stdout().wait_until(|t| pc_lines(t) >= 1, "pc answered, so the run has begun");
-    interrupt(&child);
+    child.interrupt();
     let out = child.wait();
     let t = text(&out);
     assert!(out.status.success(), "{t}");

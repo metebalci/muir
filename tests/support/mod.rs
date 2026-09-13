@@ -882,6 +882,13 @@ impl Child {
         self.child.id()
     }
 
+    /// `kill -INT`, what ^C sends: to this child alone, by its pid.
+    pub fn interrupt(&self) {
+        let pid = self.id().to_string();
+        let status = std::process::Command::new("kill").args(["-INT", &pid]).status().unwrap();
+        assert!(status.success(), "kill -INT {pid}");
+    }
+
     /// What the child has written on stdout so far.
     pub fn stdout(&self) -> &Gathered {
         self.stdout.as_ref().unwrap()

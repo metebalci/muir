@@ -553,22 +553,39 @@ fn terminal_line(terminal: &Option<Terminal>, why: &Option<String>, at: SocketAd
     }
 }
 
-/// Serves the screen as it was left, while anyone is still looking.
-fn serve_last_screen(terminal: &mut Terminal, tv: &muir::simpletv::SimpleTv) {
-    serve_last_screens(&mut [(terminal, tv)]);
+/// Serves the screen as it was left, while anyone is still looking and
+/// until ^C; `seen` is the run's own count of the ^Cs it has acted on.
+fn serve_last_screen(terminal: &mut Terminal, tv: &muir::simpletv::SimpleTv, seen: &mut u32) {
+    serve_last_screens(&mut [(terminal, tv)], seen);
 }
 
 /// Serves each screen as it was left, while anyone is still looking at
-/// any of them.
-fn serve_last_screens(screens: &mut [(&mut Terminal, &muir::simpletv::SimpleTv)]) {
+/// any of them and until ^C.
+///
+/// **^C ends this by returning, not by ending the process.** The run's
+/// handler is still on `SIGINT` --- [`catch_interrupts`] leaves it there
+/// for the rest of the process --- so a ^C here is counted as one during
+/// the run is, and [`interrupted`] against `seen`, the run's own count of
+/// the ones it has acted on, is what stops the serving. The run function
+/// then returns as it does from any other stop, and what it holds is
+/// dropped on the way out: the cable's socket, the fabric's window.
+/// Before this the count was read by nobody once the run had stopped, so
+/// the line below was false on every run function but [`time_engine`],
+/// which put `SIGINT`'s default back first --- and that ended the process
+/// with nothing dropped, as `kill -KILL`, the way out on the other five,
+/// does. Issue 103 met it on the fabric's run.
+fn serve_last_screens(screens: &mut [(&mut Terminal, &muir::simpletv::SimpleTv)], seen: &mut u32) {
     let looking = |screens: &[(&mut Terminal, &muir::simpletv::SimpleTv)]| {
         screens.iter().any(|(t, _)| t.viewers() > 0)
     };
-    if !looking(screens) {
+    // A ^C since the run last looked at the count --- while the checkpoint
+    // was written, say --- is the stop it asked for, and is not to be
+    // asked for twice.
+    if !looking(screens) || interrupted(seen) {
         return;
     }
     eprintln!("terminal: serving the last screen while a viewer is on it; ^C to stop");
-    while looking(screens) {
+    while looking(screens) && !interrupted(seen) {
         for (terminal, tv) in screens.iter_mut() {
             terminal.poll(Frame::of(tv));
         }
@@ -1753,7 +1770,7 @@ fn time_lashup(
     if let Some(term) = debuggee_terminal {
         screens.push((term, &lashup.debuggee.machine().simpletv));
     }
-    serve_last_screens(&mut screens);
+    serve_last_screens(&mut screens, &mut interrupts_seen);
 }
 
 /// One end of the cable over TCP: this machine, debugger or debuggee, run
@@ -1824,7 +1841,7 @@ fn time_remote(name: &str, mut remote: Remote<Rtl>, stop: Stop, terminal: Option
         eprintln!("muir: the debug cable at the end: {e}");
     }
     if let Some(term) = terminal {
-        serve_last_screen(term, &remote.machine.machine().simpletv);
+        serve_last_screen(term, &remote.machine.machine().simpletv, &mut interrupts_seen);
     }
 }
 
@@ -1900,7 +1917,7 @@ fn time_fabric(
         ),
     }
     if let Some(term) = terminal {
-        serve_last_screen(term, &run.debugger.machine().simpletv);
+        serve_last_screen(term, &run.debugger.machine().simpletv, &mut interrupts_seen);
     }
 }
 
@@ -2204,9 +2221,8 @@ fn time_engine<E: Engine>(
     if let Some(path) = &checkpoint {
         write_checkpoint(name, &e, path);
     }
-    release_interrupts();
     if !quit && let Some(term) = terminal {
-        serve_last_screen(term, &e.machine().simpletv);
+        serve_last_screen(term, &e.machine().simpletv, &mut interrupts_seen);
     }
 }
 
@@ -2234,23 +2250,26 @@ extern "C" fn on_dump(_signal: std::ffi::c_int) {
 }
 
 /// `SIGINT`, 2 on every Unix; `SIGUSR1`, 30 on macOS and the BSDs and 10
-/// on Linux; and `SIG_DFL`, 0.
+/// on Linux.
 const SIGINT: std::ffi::c_int = 2;
 #[cfg(target_os = "linux")]
 const SIGUSR1: std::ffi::c_int = 10;
 #[cfg(not(target_os = "linux"))]
 const SIGUSR1: std::ffi::c_int = 30;
-const SIG_DFL: usize = 0;
 
 // POSIX `signal`, declared here as `localtime_r` is: the handler is a
-// function's address, or `SIG_DFL`. The C libraries this builds against,
-// macOS's and glibc, keep a handler installed after a signal, so one call
-// serves the run.
+// function's address. The C libraries this builds against, macOS's and
+// glibc, keep a handler installed after a signal, so one call serves the
+// run.
 unsafe extern "C" {
     fn signal(sig: std::ffi::c_int, handler: usize) -> usize;
 }
 
-/// Takes ^C for the run: counted, not fatal, until [`release_interrupts`].
+/// Takes ^C for the rest of the process: counted, not fatal. The run loop
+/// acts on the count between two microcycles and [`serve_last_screens`]
+/// after the stop, and nothing after that waits on anything, so the
+/// default is never put back: a ^C that ended the process would skip
+/// every `Drop`.
 fn catch_interrupts() {
     // SAFETY: installing a handler that does nothing but an atomic add,
     // which is safe to do in a signal handler.
@@ -2291,13 +2310,6 @@ fn interrupted(seen: &mut u32) -> bool {
     let asked = now > *seen;
     *seen = now;
     asked
-}
-
-/// Gives ^C back its meaning: the run is over, and what comes after it,
-/// serving the last screen, ends the old way.
-fn release_interrupts() {
-    // SAFETY: putting the default back.
-    unsafe { signal(SIGINT, SIG_DFL) };
 }
 
 /// The prompt's answer to `pc`, and to `hold` and `step`: where the
@@ -3422,7 +3434,7 @@ fn time_chip(
         }
     }
     if let Some(term) = terminal {
-        serve_last_screen(term, &far.buses.machine.simpletv);
+        serve_last_screen(term, &far.buses.machine.simpletv, &mut interrupts_seen);
     }
 }
 
@@ -3482,7 +3494,7 @@ fn time_chip_debuggee(
         eprintln!("muir: the debug cable at the end: {e}");
     }
     if let Some(term) = terminal {
-        serve_last_screen(term, &remote.machine.far.buses.machine.simpletv);
+        serve_last_screen(term, &remote.machine.far.buses.machine.simpletv, &mut interrupts_seen);
     }
 }
 
