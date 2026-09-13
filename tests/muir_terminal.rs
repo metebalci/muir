@@ -10,6 +10,7 @@ mod support;
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use support::{Child, Run, muir, text};
@@ -168,4 +169,43 @@ fn a_run_says_when_its_terminal_loses_typing() {
     let wrote = run.stderr().so_far();
     let line = wrote.lines().find(|l| l.starts_with("terminal: the input queue")).unwrap();
     assert!(line.ends_with("--keyboard-mapping-trace says as more go"), "{line}");
+}
+
+/// **^C ends the serving of the last screen, and the run ends as its stop
+/// would have.** A run whose viewer is still looking when it stops keeps
+/// serving the screen and says `^C to stop`, and that has to be so on
+/// every run function: the ^C returns from the serving, so the run comes
+/// back the way it does from any stop and what it holds is dropped ---
+/// the process is not ended under it, which a `kill -KILL`, the way out
+/// before this, would do. Held on `micro`, `time_engine`, and on `chip`,
+/// `time_chip`, which was one of the five run functions that reached the
+/// serving with ^C still only counted (issue 103).
+///
+/// The run starts held with the button unpressed, so that the viewer is
+/// on the terminal before the machine runs its ten microcycles and stops;
+/// `boot` down stdin runs it. The viewer stays until the run has ended,
+/// so that it is the ^C and not its leaving that ends the serving.
+#[test]
+fn control_c_ends_the_serving_of_the_last_screen() {
+    for engine in [&["--micro"][..], &["--chip", "--main-memory-boards", "1"][..]] {
+        let mut run = muir()
+            .args(engine)
+            .args(["--no-auto-boot", "--stop-after", "10", "--terminal", "127.0.0.1:0"])
+            .stdin(Stdio::piped())
+            .start();
+        let at = served_at(&run, "terminal: ");
+        let v = viewer(at);
+        let mut stdin = run.stdin();
+        writeln!(stdin, "boot").unwrap();
+        let serving =
+            |t: &str| t.contains("serving the last screen while a viewer is on it; ^C to stop");
+        run.stderr().wait_until(serving, "the run stopped with the viewer on its terminal");
+        run.interrupt();
+        let out = run.wait();
+        drop(v);
+        drop(stdin);
+        let t = text(&out);
+        assert!(out.status.success(), "{engine:?}: the ^C ended the run as its stop does:\n{t}");
+        assert!(t.contains("ran out at 10"), "{engine:?}: and the stop was the run's own:\n{t}");
+    }
 }
