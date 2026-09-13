@@ -533,6 +533,8 @@ Chaosnet server of their own on the modelled cable, in process. It lives in
     tools/     fetching, and one script per board to re-extract a netlist
     site/      the front page and the manual, published by
                .github/workflows/pages.yml
+    docs/      findings about the machine read from mit/, each claim cited
+               to its file and held by a test where one can. docs/README.md
     vendor/    fetched material, never committed
 
 ## On the source material
