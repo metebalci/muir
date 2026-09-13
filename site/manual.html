@@ -44,8 +44,8 @@
 engine: rtl
 memory: 32 boards, 2 MW
 pack: vendor/run/disk-sys-100-0.img in unit 0
-chaosnet: 3050, on the network over UDP
-chaosnet udp: listening at 127.0.0.1:42042, 3060 at 127.0.0.1:42043
+chaosnet: 3050
+chaosnet over udp: 127.0.0.1:42042, 3060 at 127.0.0.1:42043
 terminal: vnc://127.0.0.1:5900 --- RFB, no password
 stop: after 2000000 microcycles
 ^C holds the machine at the prompt; help lists muir&rsquo;s commands</pre>
@@ -80,9 +80,9 @@ stop: after 2000000 microcycles
         <dt>--chaos-address &lt;address&gt;</dt>
         <dd>
         <p>This machine&rsquo;s Chaosnet address: the sixteen address switches on the I/O board, the bits in octal, <code>3050</code>, or subnet:host with each in octal, <code>6:50</code> &mdash; the same number, subnet in the high byte.</p>
-        <p>Giving it also puts the cable on the network, as <code>--chaos-udp</code> does, since an address is what a run has to reach a file and time host by.</p>
+        <p><b>The switches are set whether or not anything is plugged in.</b> This is the address alone: <code>--chaos-udp</code> is the cable, and a machine without it sends nothing however its switches read.</p>
         <p>Which address a run wants is its band&rsquo;s own, out of its host table: System 100&rsquo;s puts this machine at <code>3050</code> and its file and time host at <code>3060</code>, System 304&rsquo;s at <code>4401</code> and <code>4403</code>. muir is not that host &mdash; a CADR had no file or time server in it &mdash; so the host is another program on the network, named with <code>--chaos-udp-peer</code>. A host answering anywhere else is one the band never calls, and the machine then boots but stops to ask for the date and reaches no files.</p>
-        <p>Default: <code>177001</code>, on subnet 376 &mdash; the Chaosnet&rsquo;s private, non-routable range &mdash; and so no band&rsquo;s, with the cable off the network. muir models the CADR and not one distribution of it, and a default out of one band&rsquo;s host table would be the wrong default for every other; a default in the private range cannot collide with an address a real Chaosnet allocated. A run that wants its band to reach a host names the band&rsquo;s address: <code>--chaos-address 3050</code> for the System 100 pack, <code>4401</code> for System 304&rsquo;s.</p>
+        <p>Default: <code>177001</code>, on subnet 376 &mdash; the Chaosnet&rsquo;s private, non-routable range &mdash; and so no band&rsquo;s. muir models the CADR and not one distribution of it, and a default out of one band&rsquo;s host table would be the wrong default for every other; a default in the private range cannot collide with an address a real Chaosnet allocated. A run that wants its band to reach a host names the band&rsquo;s address: <code>--chaos-address 3050</code> for the System 100 pack, <code>4401</code> for System 304&rsquo;s.</p>
         </dd>
       </div>
       <div>
@@ -106,14 +106,14 @@ stop: after 2000000 microcycles
         <dd>
         <p>Learn where a peer is from the packets it sends, so that a host <code>--chaos-udp-peer</code> never named can still be answered.</p>
         <p>Off by default: with it on, whatever can reach the port puts itself in the address table under whatever Chaosnet address it claims. An endpoint <code>--chaos-udp-peer</code> named is not moved by a packet.</p>
-        <p>It needs the link, so <code>--chaos-address</code> or <code>--chaos-udp</code>.</p>
+        <p>It needs the cable, <code>--chaos-udp</code>.</p>
         </dd>
       </div>
       <div>
         <dt>--chaos-udp-peer &lt;address&gt;@&lt;host&gt;:&lt;port&gt;</dt>
         <dd>
         <p>A Chaosnet host reached over UDP and where it lives: <code>3060@127.0.0.1:42043</code>, the address in octal or subnet:host and the host a name or an address, resolved once at the start. The port may be left off for <code>42042</code>. This is how a run names its band&rsquo;s file and time host.</p>
-        <p>Once per peer, and the address may not be this machine&rsquo;s own. It needs the link, so <code>--chaos-address</code> or <code>--chaos-udp</code>.</p>
+        <p>Once per peer, and the address may not be this machine&rsquo;s own. It needs the cable, <code>--chaos-udp</code>.</p>
         </dd>
       </div>
       <div>
@@ -549,7 +549,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
 
     <div class="prose">
       <p><code>FILE</code> is what makes the acceptance test possible: CC is not in the band, so <code>sys/cc/*.qfasl</code> has to come over the network, the way it would have on a real machine.</p>
-      <p><b>How a run reaches it.</b> <code>--chaos-address</code> gives this machine its own address and, with it, puts the cable on the network as <b>Chaosnet over UDP</b>; <code>--chaos-udp</code> says where it listens if the protocol&rsquo;s own port will not do. Every host <code>--chaos-udp-peer</code> names is then a station on the same modelled cable, taking its turn on it like any other, and a packet from one goes on with that host&rsquo;s own address in the hardware source. The numbers are the band&rsquo;s own: System 100&rsquo;s <code>sys/site/hosts.text</code> puts <code>MIT-LISPM-1</code> at <code>3050</code> and <code>MIT-OZ</code> at <code>3060</code>, so that band is run with <code>--chaos-address 3050 --chaos-udp-peer 3060@&lt;where ozd is&gt;</code>. muir stays a leaf: a packet for another host is dropped rather than forwarded, and a <code>cbridge</code> beside it is what routes. <code>--chaos-udp-dynamic</code> lets a host muir was never told about be answered where its packets came from.</p>
+      <p><b>How a run reaches it.</b> <code>--chaos-address</code> sets the sixteen address switches on the I/O board and nothing else; <code>--chaos-udp</code> is the cable, which puts those switches on a network as <b>Chaosnet over UDP</b>, at the protocol&rsquo;s own port unless it says where. Without the cable muir sends nothing, as a machine with none talks to nobody. Every host <code>--chaos-udp-peer</code> names is then a station on the same modelled cable, taking its turn on it like any other, and a packet from one goes on with that host&rsquo;s own address in the hardware source. The numbers are the band&rsquo;s own: System 100&rsquo;s <code>sys/site/hosts.text</code> puts <code>MIT-LISPM-1</code> at <code>3050</code> and <code>MIT-OZ</code> at <code>3060</code>, so that band is run with <code>--chaos-address 3050 --chaos-udp --chaos-udp-peer 3060@&lt;where ozd is&gt;</code>. muir stays a leaf: a packet for another host is dropped rather than forwarded, and a <code>cbridge</code> beside it is what routes. <code>--chaos-udp-dynamic</code> lets a host muir was never told about be answered where its packets came from.</p>
       <p>muir&rsquo;s own tests do not want a daemon running beside them, so they put a Chaosnet server of their own on the modelled cable, in process. It lives in <code>tests/support/</code> and is no part of the simulator.</p>
     </div>
   </div>

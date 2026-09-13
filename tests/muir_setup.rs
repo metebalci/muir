@@ -23,10 +23,12 @@ fn the_start_says_what_the_run_is() {
         "memory: 4 boards, 256 KW",
         // The Chaosnet is the machine's and not the engine's, so `micro`
         // has one too: `tests/micro_chaos.rs` boots the band over it.
-        // With no --chaos-address this is the default, on the private
-        // subnet 376 and no band's, and the cable is off the network; a
-        // run that boots a band names its own address and its host.
-        "chaosnet: 177001, alone on its cable",
+        // Two lines, because they are two things on the board: the
+        // switches, 177001 with no --chaos-address, on the private subnet
+        // 376 and no band's; and the cable, which is --chaos-udp and is
+        // not plugged in here.
+        "chaosnet: 177001",
+        "chaosnet over udp: disabled",
         "terminal: vnc://127.0.0.1:59",
         "stop: after 10 microcycles",
         "^C holds the machine at the prompt",
@@ -40,7 +42,7 @@ fn the_start_says_what_the_run_is() {
     for line in [
         "engine: rtl",
         "memory: 32 boards, 2 MW",
-        "chaosnet: 177001, alone on its cable",
+        "chaosnet: 177001",
         "stop: after 10 microcycles, at PC 23731",
     ] {
         assert!(t.contains(line), "{line}:\n{t}");

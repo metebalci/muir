@@ -779,8 +779,9 @@ fn the_start_says_what_the_link_is() {
         .run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
-    let line = t.lines().find(|l| l.starts_with("chaosnet udp:")).unwrap_or_else(|| panic!("{t}"));
-    assert!(line.contains("listening at 127.0.0.1:"), "where it listens: {line}");
+    let line =
+        t.lines().find(|l| l.starts_with("chaosnet over udp:")).unwrap_or_else(|| panic!("{t}"));
+    assert!(line.contains("127.0.0.1:"), "where it listens: {line}");
     assert!(line.contains("3060 at 127.0.0.1:42043"), "and who is on it: {line}");
     assert!(line.contains("learning where others are"), "and that it learns: {line}");
     // A link with no peer named is a run that reaches no file or time
@@ -788,11 +789,14 @@ fn the_start_says_what_the_link_is() {
     // at the cold-load debugger.
     let out = muir().args(["--micro", "--stop-after", "1", "--chaos-udp", "127.0.0.1:0"]).run();
     let t = text(&out);
-    let line = t.lines().find(|l| l.starts_with("chaosnet udp:")).unwrap_or_else(|| panic!("{t}"));
+    let line =
+        t.lines().find(|l| l.starts_with("chaosnet over udp:")).unwrap_or_else(|| panic!("{t}"));
     assert!(line.contains("no peer named, so no file or time host"), "{line}");
-    // And with no link there is no line at all.
+    // And with no cable the line says the cable is not there, since a
+    // missing line says nothing about which of the two is missing.
     let out = muir().args(["--micro", "--stop-after", "1"]).run();
-    assert!(!text(&out).contains("chaosnet udp:"), "{}", text(&out));
+    let t = text(&out);
+    assert!(t.contains("chaosnet over udp: disabled"), "{t}");
 }
 
 /// **The flags of the Chaosnet server muir used to carry are refused, and
@@ -842,55 +846,51 @@ fn the_chaos_address_is_one_address() {
             .run();
         let t = text(&out);
         assert!(out.status.success(), "{arg}:\n{t}");
-        assert!(t.contains("chaosnet: 3050,"), "{arg}: the same number either way:\n{t}");
+        assert!(t.contains("chaosnet: 3050"), "{arg}: the same number either way:\n{t}");
     }
 }
 
-/// **`--chaos-address` starts Chaosnet over UDP, and a run without it
-/// opens no socket.**
+/// **`--chaos-udp` is the cable, and without it muir sends nothing.**
 ///
-/// An address is a run saying which machine on which network this is, and
-/// a network it cannot reach is no network: the file and time host a band
-/// calls is another program, so the link is what the address is for. It
-/// goes on the protocol's own port, 42042, unless `--chaos-udp` says
-/// where.
-///
-/// And a plain `muir` binds nothing. That is what lets many runs go at
-/// once --- this file alone starts dozens --- and a port bound by every
-/// run of a simulator that mostly does not want one would be a port nobody
-/// asked for.
-///
-/// **The default-port half skips when something else holds 42042**, and
-/// says so. It is the protocol's own port, so a Chaosnet daemon on the
-/// same machine --- `ozd`, a `cbridge` --- has it, and a suite that failed
-/// for that would be failing about the machine it runs on rather than
-/// about muir.
+/// The two are different things on the board and are different flags
+/// here. `--chaos-address` is the sixteen address switches on the I/O
+/// board, which a machine has set whether or not anything is plugged
+/// into it; `--chaos-udp` is the cable, and a machine with no cable
+/// talks to nobody however its switches are set. So an address alone
+/// opens no socket, which also lets many runs go at once --- this file
+/// starts dozens.
 #[test]
-fn an_address_starts_the_link_and_nothing_else_does() {
-    let out = muir().args(["--micro", "--stop-after", "1", "--chaos-address", "3050"]).run();
-    let t = text(&out);
-    if !out.status.success() && t.contains("--chaos-udp 127.0.0.1:42042") {
-        eprintln!("skipped: something on this machine already holds port 42042");
-    } else {
-        assert!(out.status.success(), "{t}");
+fn the_cable_is_chaos_udp_and_an_address_alone_is_no_cable() {
+    let line = |args: &[&str]| {
+        let out = muir().args(args).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{args:?}:\n{t}");
+        t
+    };
+    // The switches, and no cable.
+    for args in [
+        &["--micro", "--stop-after", "1"][..],
+        &["--micro", "--stop-after", "1", "--chaos-address", "3050"][..],
+    ] {
+        let t = line(args);
         assert!(
-            t.contains("chaosnet udp: listening at 127.0.0.1:42042"),
-            "the protocol's own port:\n{t}"
+            t.contains("chaosnet over udp: disabled"),
+            "{args:?} binds nothing, and says so:\n{t}"
         );
+        assert!(t.contains("--chaos-udp is the cable"), "{args:?} names the flag:\n{t}");
     }
-    // --chaos-udp says where instead, and is still usable on its own.
-    let out = muir()
-        .args(["--micro", "--stop-after", "1", "--chaos-address", "3050"])
-        .args(["--chaos-udp", "127.0.0.1:0"])
-        .run();
-    let t = text(&out);
-    assert!(out.status.success(), "{t}");
-    assert!(t.contains("chaosnet udp: listening at 127.0.0.1:"), "{t}");
-    assert!(!t.contains(":42042"), "the flag had the last word:\n{t}");
-    // With no address there is no socket at all.
-    let out = muir().args(["--micro", "--stop-after", "1"]).run();
-    let t = text(&out);
-    assert!(out.status.success(), "{t}");
-    assert!(!t.contains("chaosnet udp:"), "no link:\n{t}");
-    assert!(t.contains("--chaos-address puts it on a network"), "and the line says so:\n{t}");
+    // The switches are still the switches.
+    let t = line(&["--micro", "--stop-after", "1", "--chaos-address", "3050"]);
+    assert!(t.contains("chaosnet: 3050"), "the address is the run's:\n{t}");
+
+    // The cable, plugged in where it is told.
+    let t = line(&["--micro", "--stop-after", "1", "--chaos-udp", "127.0.0.1:0"]);
+    assert!(t.contains("chaosnet over udp: 127.0.0.1:"), "{t}");
+
+    // And the flags that describe what is on the cable want the cable.
+    for extra in [&["--chaos-udp-peer", "3060@127.0.0.1:42043"][..], &["--chaos-udp-dynamic"][..]] {
+        let mut args = vec!["--micro", "--stop-after", "1"];
+        args.extend_from_slice(extra);
+        refused(&args, "--chaos-udp");
+    }
 }
