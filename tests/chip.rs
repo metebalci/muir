@@ -448,7 +448,7 @@ fn skipping_work_matches_doing_all_of_it() {
     use muir::part::Level;
     let n = netlist::parse(NETLIST).unwrap();
     let image: Vec<u64> = muir::prom::boot_prom_image();
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    let boot = n.by_name_id("-BOOT2").unwrap();
     let start = |n: &netlist::Netlist| {
         let mut c = Chip::new(n);
         c.power_on();
@@ -525,7 +525,7 @@ fn a_checkpoint_restores_the_machine_exactly() {
     for _ in 0..20 {
         c.tick(&mut clk);
     }
-    c.set_net(n.by_name_id("-BOOT1").unwrap(), Level::High);
+    c.set_net(n.by_name_id("-BOOT2").unwrap(), Level::High);
     for _ in 0..300 {
         c.tick(&mut clk);
     }
@@ -540,9 +540,9 @@ fn a_checkpoint_restores_the_machine_exactly() {
     // right one: its only reader is on the clock generator page, which the
     // behavioural clock stands in for, so forcing it marks nothing --- and
     // the stale marks a full settle leaves behind hide that, which is what
-    // `Chip::mark_every_gate` keeps honest. `-BOOT1` is read by the 74LS14
-    // at OLORD2 1A20.
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    // `Chip::mark_every_gate` keeps honest. `-BOOT2`, the light panel's
+    // button, is read by the 74LS14 at OLORD2 1A20.
+    let boot = n.by_name_id("-BOOT2").unwrap();
     let flipped = if c.net(boot) == Level::Low { Level::High } else { Level::Low };
     c.set_net(boot, flipped);
 
@@ -747,7 +747,7 @@ fn chip_boots_the_prom() {
             .fold(0u32, |w, (b, &id)| w | ((c.net(id) == Level::High) as u32) << b)
     };
     let machrun = n.by_name_id("MACHRUN").unwrap();
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    let boot = n.by_name_id("-BOOT2").unwrap();
 
     assert_eq!(c.net(machrun), Level::Low, "should come up halted");
 
@@ -1084,7 +1084,7 @@ fn chip_agrees_with_rtl() {
     c.load_prom(&n, &image);
     c.settle();
     let mut clk = Behavioural::new();
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    let boot = n.by_name_id("-BOOT2").unwrap();
     // The far end of the cables, so that `chip` can finish a memory cycle at
     // all: nothing on this board drives `-MEMACK`. It is the bus interface
     // board, a netlist too, with the Xbus and the Unibus behind it answered
@@ -1762,7 +1762,7 @@ fn chip_and_rtl_agree_on_the_spy_flags() {
     c.load_prom(&n, &image);
     c.settle();
     let mut clk = Behavioural::new();
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    let boot = n.by_name_id("-BOOT2").unwrap();
     c.set_net(boot, Level::Low);
     c.settle();
     for _ in 0..20 {
@@ -1907,7 +1907,7 @@ fn chip_and_rtl_hold_the_same_memories() {
     c.load_prom(&n, &image);
     c.settle();
     let mut clk = Behavioural::new();
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    let boot = n.by_name_id("-BOOT2").unwrap();
     // Only main memory and the devices: the control store is on the board.
     let mut far = far_end(&n, pack);
     far.join(&mut c, clk.time_ns());
@@ -2065,7 +2065,7 @@ fn same_program_on(
     }
     c.settle();
     let mut clk = Behavioural::new();
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    let boot = n.by_name_id("-BOOT2").unwrap();
     c.set_net(boot, Level::Low);
     c.settle();
     for _ in 0..20 {
@@ -4552,7 +4552,7 @@ fn no_transition_runs_out_of_rounds() {
     // far end needs no pack.
     let mut far = far_end(&n, muir::machine::Machine::new());
     far.join(&mut c, muir::clock::Clock::time_ns(&clk));
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    let boot = n.by_name_id("-BOOT2").unwrap();
     c.set_net(boot, Level::Low);
     c.settle();
     for _ in 0..20 {

@@ -26,9 +26,14 @@ use crate::part::Level;
 /// arbiter, drives into it, and the other grant levels pass the board by
 /// on jumpers. Read off `data/busint-connectors.txt` and the board's
 /// wire list, `cadrio/iob.wlr`, whose connector column names the
-/// backplane pins. `-BOOT*`, the keyboard's boot key, is not here: it
-/// runs to the processor board's `-BOOT` past the interface, which has no
-/// net for it (see `Cables::new`), and nothing presses the key.
+/// backplane pins. `-BOOT*`, the keyboard's boot key, is not here. The
+/// I/O board puts it on backplane pin `CP1`; the interface takes `-LM
+/// BOOT` on `CR1` and passes it, with no part on it and so no net (see
+/// `Cables::new`), to the processor's `-BOOT1`. That `CP1` and `CR1` are
+/// one backplane wire is **unverified** --- every other shared wire is on
+/// the same pin in both lists, and no file describes the cage ---
+/// `tests/unibus_backplane_pins.rs` holds what the lists say, and
+/// `docs/keyboard-boot.md` the rest. Nothing presses the key.
 pub fn wire_pairs() -> Vec<(String, String)> {
     let mut w: Vec<(String, String)> =
         (1..18).map(|b| (format!("-UB ADR{b}"), format!("-A{b}*"))).collect();
