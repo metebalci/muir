@@ -835,6 +835,9 @@ pub struct Keyboard {
     /// `--keyboard-mapping-trace`: say what every keysym arrived as and
     /// what it became.
     trace: bool,
+    /// Keystrokes the queue had no room for, over the run: what
+    /// [`Keyboard::refused`] hands back.
+    refused: usize,
 }
 
 /// **What a keysym became**, which is what `--keyboard-mapping-trace`
@@ -864,6 +867,13 @@ enum Went {
     /// terminal had to work the shift around it rather than the viewer's
     /// own shift already giving that plane.
     Sent { p: u8, shifted: bool, tapped: bool },
+    /// Found on a key and refused there: the queue was full, [`BACKLOG`]
+    /// words the machine has not read, and the press was refused whole.
+    /// **Said, and not folded into [`Went::Sent`]**: a keystroke refused
+    /// here is a character that does not type, and a trace that called
+    /// it sent would be asserting the opposite of what happened to the
+    /// one person reading it for exactly this.
+    Refused { p: u8, shifted: bool },
     /// Nothing went down the cable, and why. Every one of these is by
     /// design rather than a mapping that is short of a line.
     Nothing(&'static str),
@@ -887,6 +897,11 @@ impl std::fmt::Display for Went {
             Went::Sent { p, shifted, tapped: true } => {
                 write!(f, "{}, tapped with the shift worked around it", key_written(p, shifted))
             }
+            Went::Refused { p, shifted } => write!(
+                f,
+                "{} refused: the queue is full, {BACKLOG} words the machine has not read",
+                key_written(p, shifted)
+            ),
             Went::Nothing(why) => write!(f, "nothing: {why}"),
         }
     }
@@ -924,12 +939,20 @@ impl Keyboard {
     /// `position` down, if it is up and the queue has room.  A press the
     /// queue has no room for is refused whole, and the key stays up here
     /// too, so that no release is owed for it.
-    fn press(&mut self, position: u8) {
-        if self.queue.len() >= BACKLOG || self.down.contains(&position) {
-            return;
+    ///
+    /// Whether the key is down for the machine after this: so, too, for a
+    /// key the viewer already had down, since the machine has that press
+    /// or will; not so only for the press the queue refused.
+    fn press(&mut self, position: u8) -> bool {
+        if self.down.contains(&position) {
+            return true;
+        }
+        if self.queue.len() >= BACKLOG {
+            return false;
         }
         self.down.push(position);
         self.queue.push_back(up_down(position, false));
+        true
     }
 
     /// `position` up, if it is down.  Always queued: the machine has read
@@ -947,10 +970,10 @@ impl Keyboard {
     ///
     /// The machine sees shift, key, and shift back, which is what a
     /// typist would have done. Refused whole beyond the backlog, as a
-    /// plain press is, so that it leaves nothing down.
-    fn tap(&mut self, position: u8, wants_shift: bool) {
+    /// plain press is, so that it leaves nothing down; whether it went.
+    fn tap(&mut self, position: u8, wants_shift: bool) -> bool {
         if self.queue.len() >= BACKLOG {
-            return;
+            return false;
         }
         let shift = shifting(Shift::Shift)[0];
         let holding = self.holding(Shift::Shift);
@@ -975,17 +998,23 @@ impl Keyboard {
             self.queue.push_back(up_down(position, false));
             self.queue.push_back(up_down(position, true));
         }
+        true
     }
 
     /// A key the mapping named behind a prefix, or under a latched
     /// shifting key: a shifting key is held for the one key that follows
-    /// it, anything else is tapped.
-    fn behind_prefix(&mut self, position: u8, wants_shift: bool) {
+    /// it, anything else is tapped. Whether it went: a shifting key the
+    /// queue refused is not latched either, there being nothing down to
+    /// hold for the key after it.
+    fn behind_prefix(&mut self, position: u8, wants_shift: bool) -> bool {
         if let Key::Shift(_) = TABLE[position as usize] {
-            self.press(position);
-            self.latched.push(position);
+            let went = self.press(position);
+            if went {
+                self.latched.push(position);
+            }
+            went
         } else {
-            self.tap(position, wants_shift);
+            self.tap(position, wants_shift)
         }
     }
 
@@ -1020,7 +1049,33 @@ impl Keyboard {
             self.key_traced(keysym, down);
             return;
         }
-        self.resolve(keysym, down);
+        let went = self.resolve(keysym, down);
+        self.count(&went);
+    }
+
+    /// A refusal counted, and **the first of a run said without the
+    /// trace**: a run that has lost typing is one thing to say, and a
+    /// keystroke lost in silence is a character that does not type with
+    /// nothing to tell it from a key that has no binding. Under the trace
+    /// every refused keystroke is a line of its own already, so this says
+    /// nothing there.
+    fn count(&mut self, went: &Went) {
+        if let Went::Refused { .. } = went {
+            self.refused += 1;
+            if self.refused == 1 && !self.trace {
+                eprintln!(
+                    "keyboard: the queue was full and a keystroke was refused; \
+                     --keyboard-mapping-trace says each one"
+                );
+            }
+        }
+    }
+
+    /// Keystrokes the queue had no room for, over the run. Each was a
+    /// character that did not type, and each was refused whole, leaving
+    /// nothing down: [`BACKLOG`] says why the queue is bounded.
+    pub fn refused(&self) -> usize {
+        self.refused
     }
 
     /// [`Keyboard::key`], and the line `--keyboard-mapping-trace` writes
@@ -1034,6 +1089,7 @@ impl Keyboard {
     /// handed back.
     pub fn key_traced(&mut self, keysym: u32, down: bool) -> String {
         let went = self.resolve(keysym, down);
+        self.count(&went);
         let line = format!(
             "keysym {keysym:#x} {} {}, {went}",
             keysym_name(keysym),
@@ -1071,8 +1127,10 @@ impl Keyboard {
             self.prefix = None;
             self.tapped.push(keysym);
             let behind = self.map.after_prefix(first, keysym);
-            if let Some((p, wants)) = behind {
-                self.behind_prefix(p, wants);
+            if let Some((p, wants)) = behind
+                && !self.behind_prefix(p, wants)
+            {
+                return Went::Refused { p, shifted: wants };
             }
             return Went::Behind(first, behind);
         }
@@ -1088,10 +1146,11 @@ impl Keyboard {
             let Some(p) = at.get(side).or(at.first()).copied() else {
                 return Went::Nothing("the shifting key it names is on no position");
             };
-            if down {
-                self.press(p)
-            } else {
-                self.release(p)
+            if down && !self.press(p) {
+                return Went::Refused { p, shifted: false };
+            }
+            if !down {
+                self.release(p);
             }
             return Went::Sent { p, shifted: false, tapped: false };
         }
@@ -1110,18 +1169,22 @@ impl Keyboard {
             let (p, wants) =
                 found.iter().find(|&&(_, w)| w == shifted).copied().unwrap_or(found[0]);
             self.tapped.push(keysym);
-            self.tap(p, wants);
+            let went = self.tap(p, wants);
             for q in std::mem::take(&mut self.latched) {
                 self.release(q);
+            }
+            if !went {
+                return Went::Refused { p, shifted: wants };
             }
             return Went::Sent { p, shifted: wants, tapped: true };
         }
         // The position whose plane the viewer's own shift already gives.
         if let Some(&(p, _)) = found.iter().find(|&&(_, wants)| wants == shifted) {
-            if down {
-                self.press(p)
-            } else {
-                self.release(p)
+            if down && !self.press(p) {
+                return Went::Refused { p, shifted };
+            }
+            if !down {
+                self.release(p);
             }
             return Went::Sent { p, shifted, tapped: false };
         }
@@ -1131,7 +1194,9 @@ impl Keyboard {
             self.release(p);
             return Went::Sent { p, shifted: wants, tapped: false };
         }
-        self.tap(p, wants);
+        if !self.tap(p, wants) {
+            return Went::Refused { p, shifted: wants };
+        }
         Went::Sent { p, shifted: wants, tapped: true }
     }
 
