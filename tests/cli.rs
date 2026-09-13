@@ -926,3 +926,27 @@ fn the_cable_is_chaos_udp_and_an_address_alone_is_no_cable() {
         refused(&args, "--chaos-udp");
     }
 }
+
+/// **`--keyboard-boot` takes the keys the boot sequence needs in four
+/// spellings, says which in the setup, and refuses the rest by naming
+/// the four.**
+#[test]
+fn keyboard_boot_takes_four_spellings_and_names_them_to_the_rest() {
+    let out = muir()
+        .args(["--micro", "--keyboard-boot", "meta,meta,ctrl,ctrl", "--stop-after", "10"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(
+        t.contains("boot sequence ctrl,ctrl,meta,meta with Rubout or Return"),
+        "the setup says what the run's boot sequence needs, spelled its own way:\n{t}"
+    );
+    let out = muir().args(["--micro", "--stop-after", "10"]).run();
+    let t = text(&out);
+    assert!(t.contains("boot sequence ctrl,meta with Rubout or Return"), "the default:\n{t}");
+    for bad in ["ctrl,alt,delete", "ctrl", "ctrl,ctrl,ctrl,meta", "control,meta"] {
+        refused_saying(&["--keyboard-boot", bad], "ctrl,ctrl,meta,meta");
+        refused(&["--keyboard-boot", bad], "--keyboard-boot");
+    }
+    refused(&["--keyboard-boot"], "--keyboard-boot");
+}

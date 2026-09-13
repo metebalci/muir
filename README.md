@@ -274,6 +274,13 @@ them. The prompt's `keys` prints the mapping in force, and
     $EDITOR my.keys
     muir --keyboard-mapping my.keys
 
+The keyboard boots the machine too, as a CADR's does: Control, Meta and
+Rubout held together cold-boot it, and with Return instead warm-boot it, on
+every engine --- the keyboard's firmware sends a boot word and the I/O
+board pulls the processor's boot line. The CADR keyboard's own sequence is
+both Controls and both Metas, and `--keyboard-boot` says which the run
+needs, `ctrl,meta` by default.
+
 `--debug-in-process` is the two-machine lashup, both machines in one process.
 A second machine runs beside the one you started, both debug cables between
 them, each machine's DBGOUT on the other's DBGIN, as MIT ran two CADRs. The

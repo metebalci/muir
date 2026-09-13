@@ -419,6 +419,45 @@ pub fn register(uaddr: u32) -> Option<u32> {
     answers(uaddr, false)
 }
 
+/// **Whether a keyboard word is the boot word, as the board decodes it**:
+/// ones in bits 13-10 over zeros in bits 9-6, and nothing else looked at.
+///
+/// Page IOBCSR of `data/CADRIO.netlist`, the 25LS2521 comparator at 0A20:
+/// `A0`-`A3` (pins 2, 4, 6, 8) on ground against `B0`-`B3` (pins 3, 5, 7,
+/// 9) on `SR7`, `SR8`, `SR9`, `SR10`, and `A4`-`A7` (pins 11, 13, 15, 17)
+/// on the pull-up `HI4` against `B4`-`B7` (pins 12, 14, 16, 18) on `SR14`,
+/// `SR13`, `SR12`, `SR11`.  `SR<n>` is bit `n-1` of the word: the 74LS374
+/// at IOBKBD 0C30 puts `SR1` on `UBO0` for the read of [`KBD_LOW`], the
+/// start marker riding at `SR0`.  Its `-EQUAL` (pin 19) is `-BOOT`, the
+/// 74S04 at 0E13 makes `BOOT` of it, and the 74S38 at 0F15 --- `BOOT` on
+/// pin 4, `HI4` on pin 5 --- makes `-BOOT*` at pin 6, open collector,
+/// onto backplane pin `CP1`.  So the board looks at bits 13-6 and no
+/// other, which is `ukbd.lisp`'s "bits 10-13 = 1, bits 6-9 = 0" exactly.
+///
+/// The comparator's enable, `-ENB` on pin 1, is `EOC.KBD^`, the 74LS10
+/// at IOBKBD 0C28 making `NAND(SR0, -CHAR TO MOUSE, -KB CLK^)`: low while
+/// `KB CLK^` is low with the start marker at `SR0`, the half clock before
+/// the rising edge that latches the word into the 74LS374s and sets `KBD
+/// READY`.  So `-BOOT*` is a pulse of that width, 4 us, ending on the
+/// edge that sets `KBD READY` --- measured in `tests/keyboard_boot.rs`
+/// --- and not a level held while the word sits in the register; the
+/// model hands the match out once.
+///
+/// **Bit 16 is not in the comparator.** `ukbd.lisp`'s "bit 16 = 1 (bit 16
+/// may or may not be looked at depending on remote mouse enable)" is
+/// `-CHAR TO MOUSE`: `CHAR FROM MOUSE` is `SR17`, bit 16, inverted by the
+/// 74LS14 at 0A27, ANDed with `REMOTE MOUSE ENABLE` by the 74LS08 at
+/// 0D26 and inverted again by the 74LS14 at 0D20.  Under `REMOTE MOUSE
+/// ENABLE` a word with bit 16 clear is the mouse's --- it makes
+/// `EOC.MOUSE^` instead, and neither `KBD READY` nor this decode sees it
+/// --- and with the enable clear bit 16 is not looked at.  The boot word
+/// has bit 16 set, source `001`, so it is the keyboard's either way.
+/// [`IoBoard::press`] takes every word as the keyboard's; the mouse's
+/// route under the enable is not modelled here.
+pub fn boot_word(word: u32) -> bool {
+    (word >> 6) & 0o377 == 0o360
+}
+
 /// What the board's decoder makes of Unibus address `uaddr` for a read
 /// (`write` false) or a write: the register the cycle reaches, by its own
 /// address, or none --- no `-SSYN`, and the master times out.  Page
@@ -480,6 +519,11 @@ pub struct IoBoard {
     csr: u16,
     /// The scan code the keyboard last delivered.
     scancode: u32,
+    /// `-BOOT*` pulsed: the last word was the boot word, and the engine has
+    /// not taken it yet ([`IoBoard::take_boot`]). Not in a checkpoint: it
+    /// is taken in the same turn as the word is delivered, and no
+    /// checkpoint is written inside one.
+    boot: bool,
     /// The microsecond clock, latched when the low half is read.
     usec: u32,
     /// What the interval timer was last loaded with, in units of 16 us.
@@ -530,10 +574,25 @@ impl IoBoard {
     /// A word came in off the keyboard.  Sets `KBD READY`, which is what
     /// microcode 323 tests at `(LOC 6)` to decide between a warm and a cold
     /// boot; a word landing on one not yet read replaces it, as the three
-    /// 74LS164s at IOBKBD shift the next word in over the last.
+    /// 74LS164s at IOBKBD shift the next word in over the last.  The boot
+    /// word, [`boot_word`], also raises the boot request for
+    /// [`IoBoard::take_boot`], and stays in the register like any other:
+    /// `(LOC 6)` reads it to choose cold from warm.
     pub fn press(&mut self, scancode: u32) {
         self.scancode = scancode;
         self.csr |= csr::KBD_READY;
+        if boot_word(scancode) {
+            self.boot = true;
+        }
+    }
+
+    /// Whether the keyboard's boot word has come in since this was last
+    /// asked --- `-BOOT*` pulsed, handed out once, as the button is
+    /// pressed once.  The engine takes it and presses its boot
+    /// ([`crate::engine::Engine::keyboard_boot`]), which is the wire from
+    /// the board's `-BOOT*` to the processor's `-BOOT1`.
+    pub fn take_boot(&mut self) -> bool {
+        std::mem::take(&mut self.boot)
     }
 
     pub fn keyboard_ready(&self) -> bool {
@@ -804,6 +863,7 @@ impl IoBoard {
         let IoBoard {
             csr,
             scancode,
+            boot: _,
             usec,
             interval,
             interval_loaded_at,

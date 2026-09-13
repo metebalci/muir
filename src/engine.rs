@@ -19,6 +19,26 @@ pub trait Engine {
     /// instead.
     fn boot(&mut self);
 
+    /// **The keyboard's boot sequence**: `-BOOT1`, the boot line the
+    /// keyboard reaches by way of the I/O board and the Unibus, pressed as
+    /// the button presses `-BOOT2` --- on the board the two meet at the
+    /// 74S02 at OLORD2 1A07 that makes `-BOOT`, and the processor cannot
+    /// tell them apart.  The behavioural I/O board latches its decode of
+    /// the boot word ([`crate::ioboard::IoBoard::take_boot`]); this takes
+    /// it and presses, and says whether it did.  It leaves the word in the
+    /// board's register with `KBD READY` up, as `boot` touches no board:
+    /// microcode 323 reads it at `(LOC 6)` to choose cold from warm.  On
+    /// `chip` the wire runs from the netlist board's `-BOOT*` instead
+    /// ([`crate::cable::FarEnd::join`]).
+    fn keyboard_boot(&mut self) -> bool {
+        if self.machine_mut().ioboard.take_boot() {
+            self.boot();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Runs one microcycle.
     fn step(&mut self) -> Result<(), Halt>;
 

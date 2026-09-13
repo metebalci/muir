@@ -87,7 +87,8 @@ pub struct Cables {
 impl Cables {
     /// Joins the two boards by `data/cables.txt`. A wire that touches no
     /// part on one board --- `-LM BOOT`, which the bus interface only passes
-    /// through --- is left out.
+    /// through --- is left out here, and carried from the I/O board straight
+    /// to the processor by [`FarEnd::join`].
     pub fn new(cpu: &Netlist, busint: &Netlist) -> Cables {
         let find = |n: &Netlist, anchor: &str| -> Option<NetId> {
             let mut f = anchor.split_whitespace();
@@ -389,6 +390,9 @@ pub struct FarEnd {
     pub unibus: Option<Unibus>,
     /// `INT BUSY`: high while the interface has a cycle in flight.
     int_busy: NetId,
+    /// The processor's `-BOOT1`, the keyboard's boot line, which
+    /// [`FarEnd::boot_line`] drives from the I/O board's `-BOOT*`.
+    boot1: Option<NetId>,
     /// Whether [`FarEnd::join`] has run: the first join replays what the
     /// boards owe from before it.
     joined: bool,
@@ -500,8 +504,48 @@ impl FarEnd {
             xbus,
             unibus,
             int_busy: busint.by_name_id("'INT BUSY'").expect("INT BUSY"),
+            boot1: cpu.by_name_id("-BOOT1"),
             joined: false,
         }
+    }
+
+    /// **The keyboard's boot line, from the I/O board straight to the
+    /// processor.** The board's `-BOOT*` --- IOBCSR, the 74S38 at 0F15,
+    /// open collector, pulled up in [`Unibus::new`] --- leaves on
+    /// backplane pin `CP1`. The bus interface takes `-LM BOOT` on `CR1`
+    /// and passes it, with no part on it and so no net in its netlist, to
+    /// cable header `J08-12`, which `data/cables.txt` pairs with the
+    /// processor's `1AJ1-12`: `-BOOT1`, `cadrwd/icmem3.wlr`, page MBCPIN.
+    /// So the wire here runs from `-BOOT*` to `-BOOT1` in one hop, driven
+    /// low while the board holds `-BOOT*` low and released otherwise ---
+    /// an undriven TTL input reads high on this engine, and MIT's
+    /// `cadr/busint.erface` says of `-BOOT1` "It has a pullup".
+    ///
+    /// **Unverified**: that the backplane joins the I/O board's `CP1` to
+    /// the bus interface's `CR1`. The two are different pins where every
+    /// other wire the boards share is on the same one, and no file in
+    /// `mit/` describes the cage's wiring; `tests/unibus_backplane_pins.rs`
+    /// holds the two pins as the lists give them, and
+    /// `docs/keyboard-boot.md` has the rest. This wire models what
+    /// `cadrio/iob.eco` ECO#3 says happened --- keyboards did reboot
+    /// machines --- and not a wire any file shows. What would settle it: a
+    /// backplane wire list, or a photograph of a cage.
+    ///
+    /// Whether the processor's end moved. Compared against what the
+    /// processor is being driven with rather than remembered, so a resume
+    /// needs nothing saved for it.
+    fn boot_line(&self, cpu: &mut Chip) -> bool {
+        let (Some(u), Some(boot1)) = (self.unibus.as_ref(), self.boot1) else { return false };
+        let low = u.boot_low();
+        if low == (cpu.external_on(boot1) == Some(Level::Low)) {
+            return false;
+        }
+        if low {
+            cpu.drive(boot1, Level::Low);
+        } else {
+            cpu.release(boot1);
+        }
+        true
     }
 
     /// Puts `node` on the I/O board's Chaosnet cable, beside the CHUDP
@@ -548,6 +592,9 @@ impl FarEnd {
             let mut moved = self.cables.exchange(cpu, &mut self.board);
             let backplane = self.xbus.exchange(&mut self.board, &self.buses);
             let unibus = self.unibus.as_mut().is_some_and(|u| u.exchange(&mut self.board));
+            // The keyboard's boot line, the one wire that bypasses the
+            // interface: the board's `-BOOT*` to the processor's `-BOOT1`.
+            moved |= self.boot_line(cpu);
             if moved
                 || (backplane && self.xbus.interface_changed())
                 || (unibus && self.unibus.as_ref().unwrap().interface_changed())

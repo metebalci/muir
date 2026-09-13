@@ -582,3 +582,43 @@ fn a_shifting_key_refused_behind_a_prefix_is_not_latched() {
     assert_eq!(k.take(), Some(up_down(0o123, false)), "a's own key-down");
     assert_eq!(k.take(), None, "and nothing of Greek's");
 }
+
+/// **The trace says when the boot sequence sent the boot word, cold or
+/// warm, and when a key-up was held back for it.** A held-back key-up is
+/// not said to be sent, as a refused key-down is not: the line is the one
+/// instrument for a key that did nothing, and a key released after the
+/// boot sequence did nothing by design.
+#[test]
+fn the_trace_says_when_the_boot_sequence_went_and_when_a_key_up_was_held_back() {
+    let mut k = Keyboard::new();
+    assert_eq!(k.key_traced(keysym::CONTROL_L, true), "keysym 0xffe3 Control_L down, Left Control");
+    assert_eq!(k.key_traced(keysym::ALT_L, true), "keysym 0xffe9 Alt_L down, Left Meta");
+    assert_eq!(
+        k.key_traced(keysym::BACKSPACE, true),
+        "keysym 0xff08 BackSpace down, Rubout, and the boot sequence is complete: \
+         the cold boot word goes after it"
+    );
+    assert_eq!(
+        k.key_traced(keysym::BACKSPACE, false),
+        "keysym 0xff08 BackSpace up, Rubout held back: no key-up goes until the next \
+         key-down, so that the machine reads the boot word first"
+    );
+    assert_eq!(
+        k.key_traced(keysym::ALT_L, false),
+        "keysym 0xffe9 Alt_L up, Left Meta held back: no key-up goes until the next \
+         key-down, so that the machine reads the boot word first"
+    );
+    // A key-down ends the hold, and says nothing of it.
+    assert_eq!(k.key_traced('a' as u32, true), "keysym 0x61 a down, a");
+    assert_eq!(k.key_traced('a' as u32, false), "keysym 0x61 a up, a");
+    assert_eq!(k.key_traced(keysym::CONTROL_L, false), "keysym 0xffe3 Control_L up, Left Control");
+    // Warm, with Return; and the key that completes it need not be the
+    // last of the sequence.
+    k.key(keysym::RETURN, true);
+    k.key(keysym::ALT_L, true);
+    assert_eq!(
+        k.key_traced(keysym::CONTROL_L, true),
+        "keysym 0xffe3 Control_L down, Left Control, and the boot sequence is complete: \
+         the warm boot word goes after it"
+    );
+}
