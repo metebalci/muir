@@ -847,10 +847,13 @@ fn the_keyboard_holds_a_bounded_backlog_and_never_drops_a_key_up() {
     }
     let full = k.pending();
     assert!((keyboard::BACKLOG..=keyboard::BACKLOG + 2).contains(&full), "{full} words waiting");
+    let refused = k.refused();
     k.key('c' as u32, true);
     assert_eq!(k.pending(), full, "a press beyond the backlog is refused");
+    assert_eq!(k.refused(), refused + 1, "and counted, each being a character that did not type");
     k.key('c' as u32, false);
     assert_eq!(k.pending(), full, "and leaves nothing to release");
+    assert_eq!(k.refused(), refused + 1, "a release is never a refusal");
     k.key('b' as u32, false);
     assert_eq!(k.pending(), full + 1, "a release always goes");
 

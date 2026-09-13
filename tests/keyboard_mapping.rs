@@ -509,3 +509,76 @@ fn the_trace_says_which_keysym_arrived_and_what_it_became() {
     let dump = k.mapping().dump();
     assert!(dump.contains("key F2 position 132\n"), "the dump spells it the same way\n{dump}");
 }
+
+/// **A keystroke the keyboard's queue refused is said to be refused, not
+/// sent.** The queue holds [`keyboard::BACKLOG`] words the machine has not
+/// read, and a press beyond that is refused whole and leaves nothing down,
+/// which is right; what was wrong is that the trace then called it sent,
+/// so the one instrument a person reaches for when a key will not type
+/// asserted the opposite of what had happened. A shifted character is the
+/// most exposed, a tap needing three slots where a letter needs one ---
+/// which is how `(` and `)` go missing on a machine that is slow to read
+/// its keyboard. A release is never refused, the machine having seen the
+/// key go down.
+#[test]
+fn a_refused_keystroke_is_said_to_be_refused_and_not_sent() {
+    let mut k = Keyboard::new();
+    // The viewer's own shift held, as a typist reaching `(` holds it, and
+    // a key held from before the queue filled, whose release is owed.
+    k.key(keysym::SHIFT_L, true);
+    assert_eq!(k.key_traced('B' as u32, true), "keysym 0x42 B down, B");
+    // `A` down and up under the held shift is two words and nothing left
+    // down: the queue at exactly its bound, and nothing refused for it.
+    for _ in 0..(keyboard::BACKLOG - 2) / 2 {
+        k.key('A' as u32, true);
+        k.key('A' as u32, false);
+    }
+    assert_eq!(k.pending(), keyboard::BACKLOG, "the queue is full and nothing has been refused");
+    assert_eq!(k.refused(), 0);
+
+    // `(` is on the plane the held shift gives, so it is a press; `x` is
+    // not, so it is a tap with the shift worked around it. Refused both.
+    assert_eq!(
+        k.key_traced('(' as u32, true),
+        "keysym 0x28 ( down, ( refused: the queue is full, 256 words the machine has not read"
+    );
+    assert_eq!(
+        k.key_traced('x' as u32, true),
+        "keysym 0x78 x down, x refused: the queue is full, 256 words the machine has not read"
+    );
+    assert_eq!(k.pending(), keyboard::BACKLOG, "nothing went");
+    assert_eq!(k.refused(), 2, "and both are counted");
+
+    // A release always goes, and is never a refusal.
+    assert_eq!(k.key_traced('B' as u32, false), "keysym 0x42 B up, B");
+    assert_eq!(k.pending(), keyboard::BACKLOG + 1, "B's key-up went");
+    assert_eq!(k.refused(), 2);
+}
+
+/// **A shifting key refused behind a prefix is not latched.** A prefix
+/// naming a shifting key holds it for the one key that follows; a press
+/// the queue refused put nothing down, so there is nothing to hold, and
+/// latching it anyway would tap the next key under a shift the machine
+/// never saw.
+#[test]
+fn a_shifting_key_refused_behind_a_prefix_is_not_latched() {
+    let mut k =
+        Keyboard::with_mapping(Mapping::parse("prefix Scroll_Lock g Greek\n").expect("a mapping"));
+    let scroll_lock = 0xff14u32;
+    for _ in 0..keyboard::BACKLOG / 2 {
+        k.key('a' as u32, true);
+        k.key('a' as u32, false);
+    }
+    assert_eq!(k.pending(), keyboard::BACKLOG);
+    k.key(scroll_lock, true);
+    assert_eq!(
+        k.key_traced('g' as u32, true),
+        "keysym 0x67 g down, Left Greek refused: the queue is full, 256 words the machine has not read"
+    );
+    assert_eq!(k.refused(), 1);
+    // The queue read, the next key is itself and not tapped under Greek.
+    while k.take().is_some() {}
+    assert_eq!(k.key_traced('a' as u32, true), "keysym 0x61 a down, a");
+    assert_eq!(k.take(), Some(up_down(0o123, false)), "a's own key-down");
+    assert_eq!(k.take(), None, "and nothing of Greek's");
+}
