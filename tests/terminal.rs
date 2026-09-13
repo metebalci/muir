@@ -357,12 +357,19 @@ fn keys_and_the_pointer_come_off_the_wire() {
     typed.extend_from_slice(&100u16.to_be_bytes());
     typed.extend_from_slice(&200u16.to_be_bytes());
     v.stream.write_all(&typed).unwrap();
-    // Nothing is expected back, so poll until the events have arrived.
-    for _ in 0..100 {
+    // Nothing is expected back, so it is polled until the events have
+    // arrived --- and for as long as that takes rather than a hundred
+    // times, a hundred polls of an idle terminal being over in less time
+    // than a keystroke takes to cross the loopback.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut keys, mut pointers) = (Vec::new(), Vec::new());
+    while (keys.len() < 2 || pointers.is_empty()) && Instant::now() < deadline {
         v.terminal.poll(Frame::of(&v.tv));
+        keys.extend(v.terminal.take_keys());
+        pointers.extend(v.terminal.take_pointers());
     }
-    assert_eq!(v.terminal.take_keys(), vec![(0x41, true), (0x41, false)], "the key, down then up");
-    assert_eq!(v.terminal.take_pointers(), vec![(1, 100, 200)], "the pointer");
+    assert_eq!(keys, vec![(0x41, true), (0x41, false)], "the key, down then up");
+    assert_eq!(pointers, vec![(1, 100, 200)], "the pointer");
     assert!(v.terminal.take_keys().is_empty(), "each event is handed out once");
 }
 
@@ -460,6 +467,14 @@ fn cut_text_is_skipped_as_it_arrives() {
 fn key_event(down: bool, keysym: u32) -> Vec<u8> {
     let mut b = vec![4u8, down as u8, 0, 0];
     b.extend_from_slice(&keysym.to_be_bytes());
+    b
+}
+
+/// A `PointerEvent`, RFC 6143 section 7.5.5.
+fn pointer_event(buttons: u8, x: u16, y: u16) -> Vec<u8> {
+    let mut b = vec![5u8, buttons];
+    b.extend_from_slice(&x.to_be_bytes());
+    b.extend_from_slice(&y.to_be_bytes());
     b
 }
 
@@ -620,13 +635,14 @@ fn a_full_input_queue_loses_key_downs_before_key_ups() {
     use muir::terminal::keyboard::keysym::CONTROL_L;
     let (mut v, _) = Viewer::connect();
     v.stream.write_all(&key_event(true, CONTROL_L)).unwrap();
+    // Polled until it arrives and not a fixed number of times: a hundred
+    // polls of an idle terminal are over in less time than a keystroke
+    // takes to cross the loopback.
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut got = Vec::new();
-    for _ in 0..100 {
+    while got.is_empty() && Instant::now() < deadline {
         v.terminal.poll(Frame::of(&v.tv));
         got.extend(v.terminal.take_keys());
-        if !got.is_empty() {
-            break;
-        }
     }
     assert_eq!(got, [(CONTROL_L, true)], "the machine saw control go down");
 
@@ -640,19 +656,177 @@ fn a_full_input_queue_loses_key_downs_before_key_ups() {
     // The queue is drained once, after everything is in, because what is
     // being measured is what a full queue kept --- so a burst still on
     // its way through the socket would be counted as a queue that had
-    // room. Fifty milliseconds was enough on an idle machine and not on a
-    // loaded one, where this failed; half a second is bounded by the
-    // socket's delivery and not by anything the machine does, and the run
-    // is still a fraction of a second.
-    for _ in 0..500 {
-        v.terminal.poll(Frame::of(&v.tv));
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    // room. A viewer's messages are read in the order it sent them, so an
+    // update asked for after the burst is answered only once the whole
+    // burst has been read off the socket: a pixel of the screen coming
+    // back is the burst all in, which is delivery saying so rather than a
+    // wait guessing at it. A wait is what this did before, and fifty
+    // milliseconds of it was enough on an idle machine and not on a
+    // loaded one, where it failed.
+    v.update_rect(false, (0, 0, 1, 1), 4);
     let keys = v.terminal.take_keys();
     assert!(keys.len() <= INPUT_BACKLOG, "{} kept", keys.len());
     assert!(keys.contains(&(CONTROL_L, false)), "control's key-up is kept");
     let downs = keys.iter().filter(|k| k.1).count();
     assert!(downs < keys.len() - downs, "key-downs went before key-ups: {downs} of {}", keys.len());
+}
+
+impl Viewer {
+    /// Sends `n` key-downs beyond what the input queue holds and polls
+    /// until every one of them has been read off the socket.
+    ///
+    /// **Bounded by delivery and not by a wait.** A burst of nothing but
+    /// key-downs leaves the queue standing at [`muir::terminal::INPUT_BACKLOG`]
+    /// from its first loss on --- one event goes for each that arrives ---
+    /// so the terminal's own count of what it lost says how much of the
+    /// burst has arrived, and nothing has to be drained to ask. The ten
+    /// seconds is the socket's outside bound, not a guess at how long it
+    /// takes.
+    fn lose_key_downs(&mut self, n: usize) {
+        use muir::terminal::INPUT_BACKLOG;
+        let was = self.terminal.keys_lost();
+        // The queue has to be filled before anything can go, and it is
+        // still full from the last time if anything has.
+        let fill = if was == 0 { INPUT_BACKLOG } else { 0 };
+        let mut burst = Vec::new();
+        for _ in 0..fill + n {
+            burst.extend(key_event(true, 'a' as u32));
+        }
+        self.stream.write_all(&burst).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while self.terminal.keys_lost() < was + n && Instant::now() < deadline {
+            self.terminal.poll(Frame::of(&self.tv));
+        }
+        assert_eq!(self.terminal.keys_lost(), was + n, "the burst arrived and {n} of it went");
+    }
+}
+
+/// **A terminal that loses nothing says nothing.** The count and the line
+/// are for the run that misbehaves; nearly every run loses nothing, and a
+/// run that loses nothing is told nothing.
+#[test]
+fn a_terminal_that_loses_nothing_says_nothing() {
+    let (mut v, _) = Viewer::connect();
+    let mut typed = key_event(true, 'a' as u32);
+    typed.extend(key_event(false, 'a' as u32));
+    typed.extend(pointer_event(1, 100, 200));
+    v.stream.write_all(&typed).unwrap();
+    // Until all three have arrived, rather than until the keys have: what
+    // is being asked is what a terminal that lost nothing says, and a
+    // pointer event still in the socket is a question not yet put.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut keys, mut pointers) = (Vec::new(), Vec::new());
+    while (keys.len() < 2 || pointers.is_empty()) && Instant::now() < deadline {
+        v.terminal.poll(Frame::of(&v.tv));
+        keys.extend(v.terminal.take_keys());
+        pointers.extend(v.terminal.take_pointers());
+    }
+    assert_eq!(keys, [('a' as u32, true), ('a' as u32, false)], "the key went through");
+    assert_eq!(pointers, [(1, 100, 200)], "and the pointer");
+    assert_eq!(v.terminal.keys_lost(), 0, "nothing was lost");
+    assert_eq!(v.terminal.pointers_lost(), 0);
+    assert_eq!(v.terminal.lost_line(), None, "and there is nothing to say");
+}
+
+/// **A full input queue says how many key events it lost.** A keystroke
+/// that never reaches the machine is a character that does not type, and
+/// the queue's rule --- [`muir::terminal::INPUT_BACKLOG`] --- is right and
+/// stays; what was wrong is that it happened in silence, and a person
+/// looking at a key that would not type had no way to tell a lost
+/// keystroke from a mapping with nothing in it.
+///
+/// One line a run without `--keyboard-mapping-trace`: a burst under load
+/// is hundreds of events, and a run that loses typing is one thing to
+/// say, not one thing an event.
+#[test]
+fn a_full_input_queue_says_how_many_key_events_it_lost() {
+    let (mut v, _) = Viewer::connect();
+    v.lose_key_downs(20);
+    assert_eq!(v.terminal.keys_lost(), 20);
+    assert_eq!(
+        v.terminal.lost_line().as_deref(),
+        Some(
+            "terminal: the input queue was full: 20 key events lost; \
+             --keyboard-mapping-trace says as more go"
+        )
+    );
+    assert_eq!(v.terminal.lost_line(), None, "and the line is not repeated for the same loss");
+    v.lose_key_downs(5);
+    assert_eq!(v.terminal.keys_lost(), 25, "the count keeps up");
+    assert_eq!(v.terminal.lost_line(), None, "and the run has been told once");
+}
+
+/// **The keyboard trace says it every time the count changes.**
+/// `--keyboard-mapping-trace` is the flag a person reaches for when a key
+/// will not type: it says what every keysym became, and a keysym the
+/// queue lost became nothing at all. So under it the count is said as
+/// often as it changes --- the count, and not one line an event, a burst
+/// being hundreds of them.
+#[test]
+fn the_keyboard_trace_says_each_time_the_count_changes() {
+    let (mut v, _) = Viewer::connect();
+    v.terminal.trace_lost_keys = true;
+    v.lose_key_downs(1);
+    assert_eq!(
+        v.terminal.lost_line().as_deref(),
+        Some("terminal: the input queue was full: 1 key event lost, 1 in this run")
+    );
+    assert_eq!(v.terminal.lost_line(), None, "nothing until more go");
+    v.lose_key_downs(11);
+    assert_eq!(
+        v.terminal.lost_line().as_deref(),
+        Some("terminal: the input queue was full: 11 key events lost, 12 in this run"),
+        "what went this time, and what the run has lost"
+    );
+}
+
+/// **A run says what its terminal lost without being asked for it.**
+/// [`Terminal::trace`] is on for every run muir serves --- it is what
+/// prints a viewer coming and going --- and a run that has quietly lost a
+/// hundred keystrokes is a run whose behaviour is unexplained. So
+/// [`Terminal::poll`] says the line itself, and there is nothing left for
+/// a caller to ask for afterwards.
+#[test]
+fn a_run_says_what_its_terminal_lost_without_being_asked() {
+    let (mut v, _) = Viewer::connect();
+    v.terminal.trace = true;
+    v.lose_key_downs(3);
+    assert_eq!(v.terminal.keys_lost(), 3, "three went");
+    assert_eq!(v.terminal.lost_line(), None, "and the poll that lost them said so");
+}
+
+/// **A full pointer queue is counted and not said.** The pointer is an
+/// absolute position and the mouse hands the machine the difference from
+/// the last one it saw, so the position a lost event carried is not lost
+/// with it: the newest is always kept, and the pointer ends where the
+/// viewer put it. Nothing is printed for it --- a line about the mouse
+/// under a keyboard flag would say that typing had gone astray when it had
+/// not --- and the count is there to be asked for.
+#[test]
+fn a_full_pointer_queue_is_counted_and_not_said() {
+    use muir::terminal::INPUT_BACKLOG;
+    let (mut v, _) = Viewer::connect();
+    let over = 3;
+    let sent = INPUT_BACKLOG + over;
+    let mut burst = Vec::new();
+    for i in 0..sent {
+        burst.extend(pointer_event(0, i as u16, 7));
+    }
+    v.stream.write_all(&burst).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while v.terminal.pointers_lost() < over && Instant::now() < deadline {
+        v.terminal.poll(Frame::of(&v.tv));
+    }
+    assert_eq!(v.terminal.pointers_lost(), over, "the oldest three went");
+    let pointers = v.terminal.take_pointers();
+    assert_eq!(pointers.len() + over, sent, "every event sent is one kept or one lost");
+    assert_eq!(
+        pointers.last(),
+        Some(&(0, sent as u16 - 1, 7)),
+        "and where the pointer ended is kept"
+    );
+    assert_eq!(v.terminal.keys_lost(), 0, "no key event went");
+    assert_eq!(v.terminal.lost_line(), None, "and a lost position is not worth a line");
 }
 
 /// **The keyboard holds a bounded backlog, and never drops a key-up.**

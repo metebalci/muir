@@ -231,7 +231,11 @@ muir --keyboard-mapping my.keys</pre>
         <dd>
         <p>Every keysym a viewer sends and what it became, on stderr, alongside the run. The other half of the same job: the dump says what a keysym means here, this says which keysym arrived, and a key that will not type needs both. A viewer chooses which X11 keysym to send for a physical key, so muir is the only authority on what it received &mdash; <code>xev</code> reports what the host&rsquo;s X server thinks, which is not the same thing and differs most on the modifiers.</p>
         <p>Each line names the keysym by name and number, whether it went down or up, and the key it became &mdash; spelled as <code>--keyboard-mapping-dump</code> spells it, so the line can be pasted into a mapping file &mdash; or <code>no binding</code> where the mapping has nothing for it. A keysym held as a prefix says so rather than printing nothing, a prefix&rsquo;s press producing no key by design.</p>
-        <p>Default: off.</p>
+        <p><b>And what the terminal lost.</b> What a viewer types waits for the machine&rsquo;s next look, 256 events of it, and beyond that the oldest keystroke goes whole rather than the queue growing for the length of the run. A keystroke that goes there never becomes a keysym line at all, so a character that failed to type looks exactly like a key with no binding &mdash; which is why the count is said here as well:</p>
+<pre class="cmd">terminal: the input queue was full: 20 key events lost, 37 in this run</pre>
+        <p>The count and not one line an event, a queue that fills under load losing hundreds of them. <b>A run says the first loss with or without this flag</b>, one line, naming the flag for the rest; under the flag it says each time the count changes.</p>
+        <p>The pointer&rsquo;s queue loses its oldest the same way and nothing is printed for it. A viewer sends where the pointer is rather than how far it moved and the mouse hands the machine the difference from the position it last saw, so the newest event is the one that matters and that one is always kept.</p>
+        <p>Default: off &mdash; and the first loss is said anyway.</p>
         </dd>
       </div>
       <div>
