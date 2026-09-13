@@ -102,11 +102,12 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
-        <dt>--chaos-udp-dynamic</dt>
+        <dt>--chaos-udp-default-peer &lt;host&gt;[:&lt;port&gt;]</dt>
         <dd>
-        <p>Learn where a peer is from the packets it sends, so that a host <code>--chaos-udp-peer</code> never named can still be answered.</p>
-        <p>Off by default: with it on, whatever can reach the port puts itself in the address table under whatever Chaosnet address it claims. An endpoint <code>--chaos-udp-peer</code> named is not moved by a packet.</p>
-        <p>It needs the cable, <code>--chaos-udp</code>.</p>
+        <p>Where a frame goes whose destination no <code>--chaos-udp-peer</code> named: the route of last resort, and what lets a <code>cbridge</code> beside muir carry the traffic on to the wider Chaosnet. Naming that bridge as a peer does not do it &mdash; <code>--chaos-udp-peer 3040@bridge</code> says that 3040 lives there, and a frame for any other address is still dropped.</p>
+        <p><b>An endpoint and no Chaosnet address</b>, which is what tells it from <code>--chaos-udp-peer</code>: the CHUDP frame carries the real destination in its hardware trailer and the bridge routes on that. A port, an address or address:port, a name resolved once at the start, and <code>42042</code> if no port is given.</p>
+        <p><b>A broadcast does not go here.</b> It goes to the named peers alone, who are stations on this machine&rsquo;s own cable; handing a broadcast to a bridge would invite it into a wider network than it was meant for. Decided, and not an oversight. muir stays a leaf either way: a frame goes out only when a station of this process put it on the cable, so what arrives from one peer is never sent to another.</p>
+        <p>It needs the cable, <code>--chaos-udp</code>. Default: off, and a frame no peer entry names is dropped.</p>
         </dd>
       </div>
       <div>
@@ -549,7 +550,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
 
     <div class="prose">
       <p><code>FILE</code> is what makes the acceptance test possible: CC is not in the band, so <code>sys/cc/*.qfasl</code> has to come over the network, the way it would have on a real machine.</p>
-      <p><b>How a run reaches it.</b> <code>--chaos-address</code> sets the sixteen address switches on the I/O board and nothing else; <code>--chaos-udp</code> is the cable, which puts those switches on a network as <b>Chaosnet over UDP</b>, at the protocol&rsquo;s own port unless it says where. Without the cable muir sends nothing, as a machine with none talks to nobody. Every host <code>--chaos-udp-peer</code> names is then a station on the same modelled cable, taking its turn on it like any other, and a packet from one goes on with that host&rsquo;s own address in the hardware source. The numbers are the band&rsquo;s own: System 100&rsquo;s <code>sys/site/hosts.text</code> puts <code>MIT-LISPM-1</code> at <code>3050</code> and <code>MIT-OZ</code> at <code>3060</code>, so that band is run with <code>--chaos-address 3050 --chaos-udp --chaos-udp-peer 3060@&lt;where ozd is&gt;</code>. muir stays a leaf: a packet for another host is dropped rather than forwarded, and a <code>cbridge</code> beside it is what routes. <code>--chaos-udp-dynamic</code> lets a host muir was never told about be answered where its packets came from.</p>
+      <p><b>How a run reaches it.</b> <code>--chaos-address</code> sets the sixteen address switches on the I/O board and nothing else; <code>--chaos-udp</code> is the cable, which puts those switches on a network as <b>Chaosnet over UDP</b>, at the protocol&rsquo;s own port unless it says where. Without the cable muir sends nothing, as a machine with none talks to nobody. Every host <code>--chaos-udp-peer</code> names is then a station on the same modelled cable, taking its turn on it like any other, and a packet from one goes on with that host&rsquo;s own address in the hardware source. The numbers are the band&rsquo;s own: System 100&rsquo;s <code>sys/site/hosts.text</code> puts <code>MIT-LISPM-1</code> at <code>3050</code> and <code>MIT-OZ</code> at <code>3060</code>, so that band is run with <code>--chaos-address 3050 --chaos-udp --chaos-udp-peer 3060@&lt;where ozd is&gt;</code>. muir stays a leaf: a packet for another host is dropped rather than forwarded, and a <code>cbridge</code> beside it is what routes. <code>--chaos-udp-default-peer</code> is where that bridge is: a frame whose destination no <code>--chaos-udp-peer</code> named goes there rather than nowhere, which is how a run reaches the wider Chaosnet. A broadcast is not handed to it, the named peers being stations on this machine&rsquo;s own cable.</p>
       <p>muir&rsquo;s own tests do not want a daemon running beside them, so they put a Chaosnet server of their own on the modelled cable, in process. It lives in <code>tests/support/</code> and is no part of the simulator.</p>
     </div>
   </div>

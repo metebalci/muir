@@ -689,12 +689,40 @@ fn a_running_chip_says_where_it_is_when_asked() {
 
 /// **The CHUDP flags describe a link that has to be there.** With neither
 /// `--chaos-address` nor `--chaos-udp` nothing is listening, so a peer and
-/// a request to learn where one is are each a statement about a link that
-/// does not exist.
+/// a route of last resort for the rest are each a statement about a link
+/// that does not exist.
 #[test]
 fn the_chudp_flags_need_the_link() {
     refused(&["--chaos-udp-peer", "3040@127.0.0.1:42043", "--stop-after", "1"], "--chaos-udp-peer");
-    refused(&["--chaos-udp-dynamic", "--stop-after", "1"], "--chaos-udp-dynamic");
+    refused(
+        &["--chaos-udp-default-peer", "127.0.0.1:42043", "--stop-after", "1"],
+        "--chaos-udp-default-peer",
+    );
+}
+
+/// **The default peer is an endpoint and no Chaosnet address.** It is
+/// not a host at an address, which is what `--chaos-udp-peer` names; it
+/// is where a frame goes whose destination no peer entry names, and the
+/// CHUDP frame carries the real destination in its trailer for the
+/// bridge there to route on. So it takes a port, an address, or
+/// address:port, the port left off taking the protocol's own, and
+/// `<address>@<host>` is refused rather than read as either.
+#[test]
+fn the_default_peer_is_an_endpoint_and_no_address() {
+    let link = ["--chaos-udp", "127.0.0.1:0"];
+    let out = muir()
+        .args(link)
+        .args(["--chaos-udp-default-peer", "127.0.0.1"])
+        .args(["--micro", "--stop-after", "1"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("anything else to 127.0.0.1:42042"), "the protocol's own port: {t}");
+    for bad in ["3060@127.0.0.1:42043", "127.0.0.1:not-a-port"] {
+        let args =
+            [link.as_slice(), &["--chaos-udp-default-peer", bad], &["--stop-after", "1"]].concat();
+        refused(&args, "--chaos-udp-default-peer");
+    }
 }
 
 /// **A peer is one endpoint, and not this machine's own address.** Two
@@ -775,7 +803,8 @@ fn a_peer_is_an_address_and_where_it_lives() {
 fn the_start_says_what_the_link_is() {
     let out = muir()
         .args(["--micro", "--stop-after", "1", "--chaos-udp", "127.0.0.1:0"])
-        .args(["--chaos-udp-peer", "3060@127.0.0.1:42043", "--chaos-udp-dynamic"])
+        .args(["--chaos-udp-peer", "3060@127.0.0.1:42043"])
+        .args(["--chaos-udp-default-peer", "127.0.0.1:42044"])
         .run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
@@ -783,7 +812,7 @@ fn the_start_says_what_the_link_is() {
         t.lines().find(|l| l.starts_with("chaosnet over udp:")).unwrap_or_else(|| panic!("{t}"));
     assert!(line.contains("127.0.0.1:"), "where it listens: {line}");
     assert!(line.contains("3060 at 127.0.0.1:42043"), "and who is on it: {line}");
-    assert!(line.contains("learning where others are"), "and that it learns: {line}");
+    assert!(line.contains("anything else to 127.0.0.1:42044"), "and where the rest go: {line}");
     // A link with no peer named is a run that reaches no file or time
     // host, and the line says so rather than leaving it to be found out
     // at the cold-load debugger.
@@ -888,7 +917,10 @@ fn the_cable_is_chaos_udp_and_an_address_alone_is_no_cable() {
     assert!(t.contains("chaosnet over udp: 127.0.0.1:"), "{t}");
 
     // And the flags that describe what is on the cable want the cable.
-    for extra in [&["--chaos-udp-peer", "3060@127.0.0.1:42043"][..], &["--chaos-udp-dynamic"][..]] {
+    for extra in [
+        &["--chaos-udp-peer", "3060@127.0.0.1:42043"][..],
+        &["--chaos-udp-default-peer", "127.0.0.1:42043"][..],
+    ] {
         let mut args = vec!["--micro", "--stop-after", "1"];
         args.extend_from_slice(extra);
         refused(&args, "--chaos-udp");

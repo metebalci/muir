@@ -14,6 +14,16 @@
 //! destination is neither an address on this machine's cable nor the
 //! broadcast address is dropped rather than forwarded; AIM-628 chapter
 //! 6's routing is a bridge's job and `cbridge` is beside muir to do it.
+//! A frame goes out over UDP only when a station of this process put it
+//! on the cable ([`Chudp::receive`]), so what arrives from one peer is
+//! never sent to another.
+//!
+//! **The bridge is reached as the default peer.** A peer entry says
+//! that one Chaosnet address lives at one endpoint, so naming a bridge
+//! as a peer does not let muir talk *through* it: a frame for any other
+//! address has nowhere to go. [`Link::default_peer`] is where such a
+//! frame goes instead, which is the route of last resort and the whole
+//! of muir's routing --- nothing here reads a routing packet.
 //!
 //! **The link is a [`super::ether::Node`] and nothing else.** It waits
 //! its turn on the modelled cable as any other station does, so the board
@@ -76,7 +86,7 @@
 
 use super::ether::Node;
 use super::packet::{Framed, MAX_DATA, Packet, check_word};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 
@@ -281,9 +291,11 @@ pub struct Link {
     pub at: SocketAddr,
     /// The peers a flag named: a Chaos address and where it lives.
     pub peers: Vec<(u16, SocketAddr)>,
-    /// Whether an endpoint is learned from packets that arrive from an
-    /// address no flag named.
-    pub dynamic: bool,
+    /// Where a directed frame goes whose destination is in no peer
+    /// entry: the route of last resort, and an endpoint rather than a
+    /// host at an address. `--chaos-udp-default-peer`. None, and such a
+    /// frame is dropped.
+    pub default_peer: Option<SocketAddr>,
     socket: Arc<UdpSocket>,
 }
 
@@ -292,24 +304,23 @@ impl Link {
     pub fn bind(
         at: SocketAddr,
         peers: Vec<(u16, SocketAddr)>,
-        dynamic: bool,
+        default_peer: Option<SocketAddr>,
     ) -> std::io::Result<Link> {
         let socket = UdpSocket::bind(at)?;
         socket.set_nonblocking(true)?;
         let at = socket.local_addr().unwrap_or(at);
-        Ok(Link { at, peers, dynamic, socket: Arc::new(socket) })
+        Ok(Link { at, peers, default_peer, socket: Arc::new(socket) })
     }
 
     /// The node this link puts on a cable. `local` are the addresses
     /// already on that cable --- this machine's, and whatever else this
-    /// process put there --- which are never learned, never sent out, and
-    /// never spoken for.
+    /// process put there --- which are never sent out, never spoken for,
+    /// and the only sources whose frames leave over UDP.
     pub fn node(&self, local: &[u16], trace: bool) -> Chudp {
         Chudp {
             socket: self.socket.clone(),
             peers: self.peers.iter().copied().collect(),
-            named: self.peers.iter().map(|&(a, _)| a).collect(),
-            dynamic: self.dynamic,
+            default_peer: self.default_peer,
             local: local.to_vec(),
             out: VecDeque::new(),
             source: 0,
@@ -330,16 +341,14 @@ impl Link {
 /// node from hearing its own frame.
 pub struct Chudp {
     socket: Arc<UdpSocket>,
-    /// Where each peer lives: the ones a flag named, and the ones
-    /// learned.
+    /// Where each peer lives, as the flags named them. **A packet does
+    /// not move one and never adds one**: an endpoint typed on the
+    /// command line is a statement, and a table learned from packets
+    /// would put the naming in the hands of whoever can reach the port
+    /// and leave a run with state nobody wrote down.
     peers: BTreeMap<u16, SocketAddr>,
-    /// The ones a flag named. **A packet does not move these**: an
-    /// endpoint typed on the command line is a statement, and letting a
-    /// packet redirect it would put the naming back in the hands of
-    /// whoever can reach the port, which is what `--chaos-udp-dynamic`
-    /// is off by default to avoid.
-    named: BTreeSet<u16>,
-    dynamic: bool,
+    /// Where a frame goes that no entry above names. [`Link::default_peer`].
+    default_peer: Option<SocketAddr>,
     /// The addresses that are on this cable in this process.
     local: Vec<u16>,
     /// Frames waiting for a turn on the cable: whose each is, and the
@@ -383,20 +392,6 @@ impl Chudp {
             }
             return;
         };
-        // Reachability, which is not authorisation: this says where a
-        // peer can be reached and nothing about what it may ask for.
-        // The address learned is the packet's own source, since that is
-        // where an answer would be addressed.
-        if self.dynamic
-            && p.source != 0
-            && !self.local.contains(&p.source)
-            && !self.named.contains(&p.source)
-        {
-            let moved = self.peers.insert(p.source, from) != Some(from);
-            if moved && self.trace {
-                eprintln!("chudp {now:>6}: {:o} is at {from}", p.source);
-            }
-        }
         // A station on this cable is in this process, so a datagram
         // claiming to be from one would put a frame on the cable that
         // the board takes for its own --- Transmit Done and all.
@@ -425,13 +420,27 @@ impl Chudp {
         self.out.push_back((f.source, f.buffer));
     }
 
-    /// Where a frame off the cable goes: the peer it is addressed to, or
-    /// every peer if it is a broadcast, since they are stations on this
-    /// cable.
+    /// Where a frame off the cable goes: the peer it is addressed to,
+    /// the default peer if no entry names its destination, or every
+    /// peer if it is a broadcast.
+    ///
+    /// **A broadcast does not go to the default peer.** The named peers
+    /// are stations on this machine's cable and a broadcast is theirs;
+    /// the default peer is the way out to a wider network, and handing
+    /// it a broadcast would put this cable's on a network the broadcast
+    /// was never meant to reach. Decided, and not an oversight.
+    ///
+    /// A destination already on this cable goes nowhere: a station of
+    /// this process is reached on the cable, not over UDP, and it is
+    /// not the bridge's business either.
     fn addressed(&self, dest: u16) -> Vec<SocketAddr> {
         match dest {
             0 => self.peers.values().copied().collect(),
-            d => self.peers.get(&d).copied().into_iter().collect(),
+            d if self.local.contains(&d) => Vec::new(),
+            d => match self.peers.get(&d) {
+                Some(&at) => vec![at],
+                None => self.default_peer.into_iter().collect(),
+            },
         }
     }
 }
@@ -447,9 +456,13 @@ impl Node for Chudp {
         if !packet.check_ok {
             return;
         }
-        // A frame this node put on the cable itself, come back around
-        // while it was speaking for another peer.
-        if self.peers.contains_key(&packet.source) {
+        // **muir is a leaf.** Only a frame a station of this process put
+        // on the cable goes out over UDP; one this node laid there for a
+        // peer stops at the cable, so what came from one peer is never
+        // sent to another. Said of the source rather than of the peer
+        // table because the default peer relays for addresses no entry
+        // names, and those are not to be carried on either.
+        if !self.local.contains(&packet.source) {
             return;
         }
         let Some(&dest) = packet.buffer.last() else { return };

@@ -39,6 +39,9 @@ const SERVER: u16 = 0o3060;
 /// A peer over UDP, and one this machine was never told about.
 const PEER: u16 = 0o3040;
 const STRANGER: u16 = 0o3041;
+/// A host beyond the bridge: no peer entry names it, so a frame for it
+/// goes to the default peer and its packets arrive from there.
+const BEYOND: u16 = 0o3042;
 
 // --- the frame ----------------------------------------------------------
 
@@ -294,9 +297,9 @@ fn peer_socket() -> (UdpSocket, SocketAddr) {
 }
 
 /// A link bound on the loopback at a port the host chooses, with these
-/// peers.
-fn link(peers: Vec<(u16, SocketAddr)>, dynamic: bool) -> Link {
-    Link::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)), peers, dynamic).expect("a link")
+/// peers and this default peer.
+fn link(peers: Vec<(u16, SocketAddr)>, default_peer: Option<SocketAddr>) -> Link {
+    Link::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)), peers, default_peer).expect("a link")
 }
 
 /// One datagram from `from` to `to`, carrying `p` addressed on the cable
@@ -322,7 +325,7 @@ fn send_packet(from: &UdpSocket, to: SocketAddr, p: &Packet, cable_dest: u16, ha
 #[test]
 fn a_peers_packet_reaches_the_cable_at_its_turn() {
     let (peer, peer_at) = peer_socket();
-    let l = link(vec![(PEER, peer_at)], false);
+    let l = link(vec![(PEER, peer_at)], None);
     let mut e = Ether::new();
     e.keep_log(true);
     let (machine, heard) = host(ME, vec![]);
@@ -351,7 +354,7 @@ fn a_peers_packet_reaches_the_cable_at_its_turn() {
 #[test]
 fn a_frame_for_a_peer_goes_out_as_a_datagram() {
     let (peer, peer_at) = peer_socket();
-    let l = link(vec![(PEER, peer_at)], false);
+    let l = link(vec![(PEER, peer_at)], None);
     let mut e = Ether::new();
     e.keep_log(true);
     let p = Packet { source: ME, dest: PEER, ..status_rfc() };
@@ -368,6 +371,98 @@ fn a_frame_for_a_peer_goes_out_as_a_datagram() {
     assert_eq!(Packet::from_buffer(&f.buffer).expect("a packet"), (p, PEER));
 }
 
+/// **A frame for an address no peer entry names goes to the default
+/// peer, and with no default peer it is dropped.** `--chaos-udp-peer`
+/// says that an address lives at an endpoint, so a frame for any other
+/// address has nowhere to go; `--chaos-udp-default-peer` is the route
+/// of last resort, which is what lets a `cbridge` beside muir carry the
+/// traffic on. The frame carries the real destination in its hardware
+/// trailer and the bridge routes on that, which is why the flag takes
+/// an endpoint and no Chaosnet address.
+#[test]
+fn a_frame_for_an_address_no_entry_names_goes_to_the_default_peer() {
+    for default_peer in [false, true] {
+        let (bridge, bridge_at) = peer_socket();
+        let l = link(Vec::new(), default_peer.then_some(bridge_at));
+        let mut e = Ether::new();
+        e.keep_log(true);
+        let p = Packet { source: ME, dest: BEYOND, ..status_rfc() };
+        let (machine, _) = host(ME, vec![p.to_buffer(BEYOND)]);
+        e.attach(machine);
+        e.attach(Box::new(l.node(&[ME, SERVER], false)));
+        assert!(run_until(&mut e, |e| !sent(e).is_empty()), "the machine's frame went");
+        let mut buf = [0u8; 1024];
+        let got = bridge.recv_from(&mut buf);
+        assert_eq!(
+            got.is_ok(),
+            default_peer,
+            "the frame goes out only when there is a default peer: {default_peer}"
+        );
+        if let Ok((n, _)) = got {
+            let f = udp::unwrap(&buf[..n]).expect("it reads");
+            assert_eq!(f.source, ME, "the hardware source the cable carried");
+            assert_eq!(
+                Packet::from_buffer(&f.buffer).expect("a packet"),
+                (p, BEYOND),
+                "and the destination is in the frame, for the bridge to route on"
+            );
+        }
+    }
+}
+
+/// **A frame for an address a peer entry names goes to that peer and
+/// not to the default.** The default peer is where what is not named
+/// goes, not a route that stands in front of the names: an endpoint a
+/// flag gave is where that address is reached, bridge or no bridge.
+#[test]
+fn a_frame_for_a_named_peer_does_not_go_to_the_default() {
+    let (peer, peer_at) = peer_socket();
+    let (bridge, bridge_at) = peer_socket();
+    let l = link(vec![(PEER, peer_at)], Some(bridge_at));
+    let mut e = Ether::new();
+    e.keep_log(true);
+    let p = Packet { source: ME, dest: PEER, ..status_rfc() };
+    let (machine, _) = host(ME, vec![p.to_buffer(PEER)]);
+    e.attach(machine);
+    e.attach(Box::new(l.node(&[ME, SERVER], false)));
+    assert!(run_until(&mut e, |e| !sent(e).is_empty()), "the machine's frame went");
+    let mut buf = [0u8; 1024];
+    let (n, _) = peer.recv_from(&mut buf).expect("the datagram goes where the flag said");
+    let f = udp::unwrap(&buf[..n]).expect("it reads");
+    assert_eq!(Packet::from_buffer(&f.buffer).expect("a packet"), (p, PEER));
+    assert!(bridge.recv_from(&mut buf).is_err(), "and not to the default peer as well");
+}
+
+/// **A broadcast goes to every named peer and not to the default
+/// peer.** The peers are stations on this machine's cable, so a
+/// broadcast is as much theirs as the board's; the default peer is the
+/// way out to a wider network, and handing it a broadcast would put
+/// this cable's on a network the broadcast was never meant to reach.
+/// Decided, and not an oversight.
+#[test]
+fn a_broadcast_goes_to_the_named_peers_and_not_the_default() {
+    let (one, one_at) = peer_socket();
+    let (two, two_at) = peer_socket();
+    let (bridge, bridge_at) = peer_socket();
+    let l = link(vec![(PEER, one_at), (STRANGER, two_at)], Some(bridge_at));
+    let mut e = Ether::new();
+    e.keep_log(true);
+    // A broadcast is destination 0 on the cable, AIM-628 §2.2.
+    let p = Packet { source: ME, dest: 0, ..status_rfc() };
+    let (machine, _) = host(ME, vec![p.to_buffer(0)]);
+    e.attach(machine);
+    e.attach(Box::new(l.node(&[ME, SERVER], false)));
+    assert!(run_until(&mut e, |e| !sent(e).is_empty()), "the machine's frame went");
+    let mut buf = [0u8; 1024];
+    for (who, station) in [(PEER, &one), (STRANGER, &two)] {
+        let (n, _) =
+            station.recv_from(&mut buf).unwrap_or_else(|e| panic!("{who:o} hears it: {e}"));
+        let f = udp::unwrap(&buf[..n]).expect("it reads");
+        assert_eq!(Packet::from_buffer(&f.buffer).expect("a packet"), (p.clone(), 0), "{who:o}");
+    }
+    assert!(bridge.recv_from(&mut buf).is_err(), "and the bridge is not given a broadcast");
+}
+
 /// **muir is a leaf: a packet for a third party is dropped, not
 /// forwarded.** AIM-628 chapter 6's routing is a bridge's job; a
 /// `cbridge` beside muir does it. Nothing addressed to 3041 reaches this
@@ -375,7 +470,7 @@ fn a_frame_for_a_peer_goes_out_as_a_datagram() {
 #[test]
 fn a_packet_for_a_third_party_is_dropped() {
     let (peer, peer_at) = peer_socket();
-    let l = link(vec![(PEER, peer_at), (STRANGER, peer_at)], false);
+    let l = link(vec![(PEER, peer_at), (STRANGER, peer_at)], None);
     let mut e = Ether::new();
     e.keep_log(true);
     let (machine, heard) = host(ME, vec![]);
@@ -394,6 +489,40 @@ fn a_packet_for_a_third_party_is_dropped() {
     assert!(peer.recv_from(&mut [0u8; 1024]).is_err(), "and nothing was forwarded back out");
 }
 
+/// **muir is a leaf with a default peer too: what one peer put on the
+/// cable is never sent to another.** A frame goes out over UDP only
+/// when a station of this process put it on the cable, so a frame the
+/// node itself laid there --- for a named peer, or relayed by the
+/// default peer from an address no entry names --- stops at the cable.
+/// The default peer widens where a frame may go, not which frames go:
+/// routing is `cbridge`'s job, AIM-628 chapter 6's.
+#[test]
+fn what_a_peer_put_on_the_cable_is_never_sent_to_another() {
+    let (peer, peer_at) = peer_socket();
+    let (other, other_at) = peer_socket();
+    let (bridge, bridge_at) = peer_socket();
+    let l = link(vec![(PEER, peer_at), (STRANGER, other_at)], Some(bridge_at));
+    let mut node = l.node(&[ME, SERVER], false);
+    // One from a named peer and one from an address no entry names ---
+    // which is what the default peer relays --- each addressed to the
+    // other named peer, which is the frame a router would carry on.
+    for from in [PEER, BEYOND] {
+        let p = Packet { source: from, dest: STRANGER, ..status_rfc() };
+        node.receive(100, &arriving(&p, STRANGER));
+    }
+    // And one this machine put there after them, so the test waits on
+    // something rather than on nothing happening.
+    let mine = Packet { source: ME, dest: STRANGER, ..status_rfc() };
+    node.receive(100, &arriving(&mine, STRANGER));
+    let mut buf = [0u8; 1024];
+    let (n, _) = other.recv_from(&mut buf).expect("the machine's own frame went");
+    let f = udp::unwrap(&buf[..n]).expect("it reads");
+    assert_eq!(f.source, ME, "and it is the one the machine put on the cable");
+    assert!(other.recv_from(&mut buf).is_err(), "the peers' frames were not carried on");
+    assert!(peer.recv_from(&mut buf).is_err(), "nor sent back where they came from");
+    assert!(bridge.recv_from(&mut buf).is_err(), "nor handed to the default peer");
+}
+
 /// **A datagram claiming an address this cable already carries is
 /// dropped.** A frame whose hardware source is this machine's own
 /// address is a frame the interface takes for its own --- Transmit Done
@@ -402,7 +531,7 @@ fn a_packet_for_a_third_party_is_dropped() {
 #[test]
 fn a_datagram_from_this_cables_own_address_is_dropped() {
     let (peer, peer_at) = peer_socket();
-    let l = link(vec![(PEER, peer_at)], false);
+    let l = link(vec![(PEER, peer_at)], None);
     let mut e = Ether::new();
     e.keep_log(true);
     let (machine, heard) = host(ME, vec![]);
@@ -431,31 +560,43 @@ fn answering_host(to: u16) -> (Box<Host>, Log) {
     (h, heard)
 }
 
-/// **An endpoint is learned only when the run asked for it.** A packet
-/// from a host no `--chaos-udp-peer` named is heard either way --- the
-/// cable hears everything --- but the answer to it goes out only when
-/// `--chaos-udp-dynamic` said to learn where the host is. Off is the
-/// default because otherwise whatever can reach the port installs itself
-/// in the address table under whatever Chaosnet address it claims.
+/// **An answer goes out only when the node knows where to send it.** A
+/// packet from a host no `--chaos-udp-peer` named is heard either way
+/// --- the cable hears everything --- but the answer to it goes out
+/// only when there is somewhere to send it, which is that host's own
+/// peer entry or `--chaos-udp-default-peer`; with neither it is
+/// dropped.
+///
+/// **The endpoint the packet came from is not somewhere to send it.**
+/// Nothing here learns where a host lives: an address table nobody
+/// wrote down is state a run cannot be read back from, and it would put
+/// the naming in the hands of whoever can reach the port.
 #[test]
-fn an_endpoint_is_learned_only_when_the_run_asked_for_it() {
-    for dynamic in [false, true] {
-        let (stranger, _) = peer_socket();
-        let l = link(Vec::new(), dynamic);
+fn an_answer_goes_out_only_when_the_node_knows_where_to_send_it() {
+    for default_peer in [false, true] {
+        let (beyond, _) = peer_socket();
+        let (bridge, bridge_at) = peer_socket();
+        let l = link(Vec::new(), default_peer.then_some(bridge_at));
         let mut e = Ether::new();
         e.keep_log(true);
-        let (machine, heard) = answering_host(STRANGER);
+        let (machine, heard) = answering_host(BEYOND);
         e.attach(machine);
         e.attach(Box::new(l.node(&[ME, SERVER], false)));
-        let p = Packet { source: STRANGER, ..status_rfc() };
-        send_packet(&stranger, l.at, &p, ME, STRANGER);
-        assert!(run_until(&mut e, |e| sent(e).len() >= 2), "both frames went, dynamic {dynamic}");
+        let p = Packet { source: BEYOND, ..status_rfc() };
+        send_packet(&beyond, l.at, &p, ME, BEYOND);
+        assert!(
+            run_until(&mut e, |e| sent(e).len() >= 2),
+            "both frames went, default peer {default_peer}"
+        );
         assert_eq!(heard.lock().unwrap().len(), 1, "the machine heard it either way");
-        let answer = stranger.recv_from(&mut [0u8; 1024]);
         assert_eq!(
-            answer.is_ok(),
-            dynamic,
-            "the answer goes out only when the endpoint was learned: dynamic {dynamic}"
+            bridge.recv_from(&mut [0u8; 1024]).is_ok(),
+            default_peer,
+            "the answer goes out only when there is somewhere to send it: {default_peer}"
+        );
+        assert!(
+            beyond.recv_from(&mut [0u8; 1024]).is_err(),
+            "and never back where the packet came from: nothing is learned"
         );
     }
 }
@@ -463,13 +604,14 @@ fn an_endpoint_is_learned_only_when_the_run_asked_for_it() {
 /// **A packet does not move an endpoint a flag named.** An endpoint
 /// typed on the command line is a statement about where a host is;
 /// letting a packet redirect it would put the naming back in the hands
-/// of whoever can reach the port, which is what leaving learning off by
-/// default is for.
+/// of whoever can reach the port. Nothing moves an entry because
+/// nothing writes one: the table is what the flags said and nothing
+/// else.
 #[test]
 fn a_packet_does_not_move_an_endpoint_a_flag_named() {
     let (named, named_at) = peer_socket();
     let (impostor, _) = peer_socket();
-    let l = link(vec![(PEER, named_at)], true);
+    let l = link(vec![(PEER, named_at)], None);
     let mut e = Ether::new();
     e.keep_log(true);
     let (machine, _) = answering_host(PEER);
@@ -589,10 +731,10 @@ fn answer_to(server: &ChaosServer, from: u16) -> u8 {
 ///
 /// The service reads, writes, renames and deletes a real directory under
 /// containment rules written for a cable with one trusted machine on it.
-/// A CHUDP peer that a packet arrived from is answerable --- that is what
-/// `--chaos-udp-dynamic` decides --- and being answerable is not being
-/// allowed at the files. TIME, UPTIME and STATUS answer anyone; they give
-/// nothing away.
+/// A host at the other end of the cable is answerable --- a peer a flag
+/// named, or anything the default peer carries --- and being answerable
+/// is not being allowed at the files. TIME, UPTIME and STATUS answer
+/// anyone; they give nothing away.
 ///
 /// Who a *run* of muir lets at its files is no longer a question muir
 /// answers: the file host is another program on the network, and the
