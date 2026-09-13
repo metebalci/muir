@@ -505,9 +505,9 @@ unless it says where. **Without the cable muir sends nothing**, as a machine
 with none talks to nobody however its switches read. Every host
 `--chaos-udp-peer 3060@host:port` names is then a station on the same
 modelled cable, taking its turn on it like any other, and that is how a run
-names its band's file and time host. muir stays a leaf: a packet for another
-host is dropped rather than forwarded, and a `cbridge` beside it is what
-routes. `--chaos-udp-default-peer <host>[:<port>]` is where that bridge is: a
+names its band's file and time host. muir stays a leaf: a frame goes out only when
+this machine put it on the cable, so one host's is never carried on to
+another, and a `cbridge` beside it is what routes. `--chaos-udp-default-peer <host>[:<port>]` is where that bridge is: a
 frame whose destination no `--chaos-udp-peer` named goes there rather than
 nowhere, which is how a run reaches the wider Chaosnet. Naming the bridge as
 a peer would not do it --- a peer entry places one address --- and a
