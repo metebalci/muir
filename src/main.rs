@@ -9,7 +9,8 @@
 //! taps: 145 ns at normal speed, so 6.9 M microcycles/s.
 //!
 //!     muir [--micro|--rtl|--chip] [--chaos-address <address>]
-//!          [--chaos-udp [<endpoint>]] [--chaos-udp-dynamic]
+//!          [--chaos-udp [<endpoint>]]
+//!          [--chaos-udp-default-peer <host>[:<port>]]
 //!          [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
 //!          [--debug-cable-connect [<endpoint>|0x<address>]]
 //!          [--debug-cable-listen [<endpoint>]] [--debug-in-process]
@@ -105,12 +106,16 @@
 //! `--chaos-udp-peer 3060@<where the host is>` for the System 100 pack,
 //! `4401` with `4403@...` for System 304's. Every engine has a Chaosnet.
 //! muir stays a leaf: a packet for somewhere else is dropped rather than
-//! forwarded, and a `cbridge` beside it is what routes;
-//! `--chaos-udp-dynamic` lets a host muir was never told about be answered
-//! where its packets came from. A machine that reaches no host --- no
-//! `--chaos-address`, or one at a number its band does not call --- stops
-//! in the debugger at the initialization that wants a host: `Super-B`
-//! there, then the date and time it asks for and `y`, finish it.
+//! forwarded, and a `cbridge` beside it is what routes.
+//! `--chaos-udp-default-peer` is where that bridge is: a frame whose
+//! destination no `--chaos-udp-peer` named goes there rather than
+//! nowhere, which is the route of last resort and the whole of muir's
+//! routing. Naming the bridge as a peer would not do it --- a peer entry
+//! places one address --- and a broadcast is not handed to it. A machine
+//! that reaches no host --- no `--chaos-address`, or one at a number its
+//! band does not call --- stops in the debugger at the initialization
+//! that wants a host: `Super-B` there, then the date and time it asks
+//! for and `y`, finish it.
 //!
 //! The machine's other way out is the serial port at J9, the 2651 at
 //! IOBSER 0A12, and `--serial <endpoint>` is where it is reached: a TCP
@@ -422,17 +427,35 @@ fn pack_spec(arg: &str) -> Result<Pack, String> {
 /// **The name is resolved here**, once, before a machine is built, so
 /// that a name with no address is a refusal at the start rather than a
 /// peer that is never reached. A name that moves afterwards is not
-/// followed; naming the address instead, or `--chaos-udp-dynamic`, is
-/// what covers that.
+/// followed; naming the address instead is what covers that.
 fn peer_spec(arg: &str) -> Result<(u16, SocketAddr), String> {
     let (address, lives) = arg.split_once('@').ok_or("wants <address>@<host>:<port>")?;
     let a = muir::chaos::parse_address(address)
         .ok_or_else(|| format!("{address} is not an address in octal or subnet:host"))?;
-    let first = |s: String| s.to_socket_addrs().ok().and_then(|mut a| a.next());
-    let at = first(lives.to_string())
-        .or_else(|| first(format!("{lives}:{}", muir::chaos::udp::PORT)))
-        .ok_or_else(|| format!("{lives} has no address this host can reach"))?;
+    let at =
+        resolved(lives).ok_or_else(|| format!("{lives} has no address this host can reach"))?;
     Ok((a, at))
+}
+
+/// A `<host>[:<port>]` as the one endpoint it names, the port left off
+/// taking CHUDP's own. The lookup happens here and not again.
+fn resolved(lives: &str) -> Option<SocketAddr> {
+    let first = |s: String| s.to_socket_addrs().ok().and_then(|mut a| a.next());
+    first(lives.to_string()).or_else(|| first(format!("{lives}:{}", muir::chaos::udp::PORT)))
+}
+
+/// `--chaos-udp-default-peer`'s argument, `<host>[:<port>]`: where a
+/// directed frame goes whose destination no `--chaos-udp-peer` named.
+///
+/// **It takes no Chaosnet address**, which is what tells it from
+/// `--chaos-udp-peer <address>@<host>`. It is not a host at an address;
+/// it is where what is not named goes, and the CHUDP frame carries the
+/// real destination in its hardware trailer for the bridge there to
+/// route on. So it is an endpoint as the other endpoint flags take one
+/// --- a bare port on the loopback, an address at the protocol's own
+/// port, or address:port --- or a name, resolved here as a peer's is.
+fn default_peer_spec(arg: &str) -> Option<SocketAddr> {
+    endpoint(Some(arg), muir::chaos::udp::PORT).or_else(|| resolved(arg))
 }
 
 /// A pack flag's argument parsed, or the usage. Which units a run can
@@ -630,7 +653,8 @@ fn report(name: &str, cycles: u64, secs: f64) {
 }
 
 const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <address>]
-            [--chaos-trace] [--chaos-udp [<endpoint>]] [--chaos-udp-dynamic]
+            [--chaos-trace] [--chaos-udp [<endpoint>]]
+            [--chaos-udp-default-peer <host>[:<port>]]
             [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
             [-c|--config <file>]
             [--debug-cable-connect [<endpoint>|0x<address>]]
@@ -687,14 +711,23 @@ A simulator of the MIT CADR Lisp Machine.
                                forwarded. [default: off, the cable
                                unplugged; 127.0.0.1:42042, the protocol's
                                own port, when the flag is given bare]
-  --chaos-udp-dynamic          learn where a peer is from the packets it
-                               sends, so that a host --chaos-udp-peer never
-                               named can still be answered: whatever can
-                               reach the port goes in the address table
-                               under whatever address it claims. An endpoint
-                               --chaos-udp-peer named is not moved by a
-                               packet. It needs the cable, --chaos-udp.
-                               [default: off]
+  --chaos-udp-default-peer <host>[:<port>]
+                               where a frame goes whose destination no
+                               --chaos-udp-peer named: the route of last
+                               resort, which is what lets a cbridge beside
+                               muir carry the traffic on to the wider
+                               Chaosnet. Naming that bridge as a peer does
+                               not do it --- a peer entry places one
+                               address --- so this takes an endpoint and no
+                               Chaosnet address, the frame carrying the
+                               destination in its trailer for the bridge to
+                               route on: a port, an address or address:port,
+                               a name resolved once here, and 42042 if no
+                               port is given. A broadcast is not sent here,
+                               going to the named peers alone, who are
+                               stations on this machine's cable. It needs
+                               the cable, --chaos-udp. [default: off, and a
+                               frame no peer entry names is dropped]
   --chaos-udp-peer <address>@<host>:<port>
                                a Chaosnet host reached over UDP and where it
                                lives: 3060@127.0.0.1:42043, the address in
@@ -3381,12 +3414,12 @@ fn main() {
     let mut packs: Vec<Pack> = Vec::new();
     let mut chaos = muir::chaos::Config::default();
     // The CHUDP link: where it listens, the peers named for it, and
-    // whether it learns where an unnamed one lives. The socket is bound
+    // where a frame goes that none of them names. The socket is bound
     // after the flags are read, so that what is refused is refused before
     // anything is bound.
     let mut udp_at: Option<SocketAddr> = None;
     let mut udp_peers: Vec<(u16, SocketAddr)> = Vec::new();
-    let mut udp_dynamic = false;
+    let mut udp_default_peer: Option<SocketAddr> = None;
     let mut cycles: Option<u64> = None;
     let mut auto_boot = true;
     let mut checkpoint: Option<PathBuf> = None;
@@ -3539,7 +3572,16 @@ fn main() {
                     None => usage("--chaos-udp wants nothing, a port, an address or address:port"),
                 }
             }
-            (None, "--chaos-udp-dynamic") => udp_dynamic = true,
+            (None, "--chaos-udp-default-peer") => {
+                let want = "wants <host>[:<port>]: a port, an address, address:port, or a name this host can reach --- and no Chaosnet address, which is what --chaos-udp-peer takes";
+                let arg = args
+                    .next()
+                    .unwrap_or_else(|| usage(&format!("--chaos-udp-default-peer {want}")));
+                match default_peer_spec(&arg) {
+                    Some(at) => udp_default_peer = Some(at),
+                    None => usage(&format!("--chaos-udp-default-peer {arg}: {want}")),
+                }
+            }
             (None, "--chaos-udp-peer") => {
                 let want = "--chaos-udp-peer wants <address>@<host>:<port>, the address in octal or subnet:host";
                 let arg = args.next().unwrap_or_else(|| usage(want));
@@ -3769,9 +3811,10 @@ fn main() {
     // The two flags that describe a CHUDP link describe one that has to
     // be there: without a link nothing is listening and the cable carries
     // this machine alone.
-    for (flag, given_it) in
-        [("--chaos-udp-peer", !udp_peers.is_empty()), ("--chaos-udp-dynamic", udp_dynamic)]
-    {
+    for (flag, given_it) in [
+        ("--chaos-udp-peer", !udp_peers.is_empty()),
+        ("--chaos-udp-default-peer", udp_default_peer.is_some()),
+    ] {
         if given_it && udp_at.is_none() {
             usage(&format!(
                 "{flag} is part of the CHUDP link: it needs --chaos-udp, which is the cable"
@@ -3972,7 +4015,7 @@ fn main() {
     // The CHUDP link, bound here so that a port that cannot be had stops
     // the run rather than leaving a machine that quietly reaches nobody.
     chaos.udp = udp_at.map(|at| {
-        muir::chaos::udp::Link::bind(at, udp_peers, udp_dynamic)
+        muir::chaos::udp::Link::bind(at, udp_peers, udp_default_peer)
             .unwrap_or_else(|e| usage(&format!("--chaos-udp {at}: {e}")))
     });
     // The other machine's Chaosnet: a cable of its own, since muir's cable
@@ -4069,6 +4112,9 @@ fn main() {
             }
             Some(link) => {
                 let peers = match link.peers.as_slice() {
+                    // With a default peer there is a way to a host all
+                    // the same, so the line does not say there is none.
+                    [] if link.default_peer.is_some() => "no peer named".to_string(),
                     [] => "no peer named, so no file or time host".to_string(),
                     p => p
                         .iter()
@@ -4076,8 +4122,11 @@ fn main() {
                         .collect::<Vec<_>>()
                         .join(", "),
                 };
-                let learning = if link.dynamic { ", learning where others are" } else { "" };
-                writeln!(s, "chaosnet over udp: {}, {peers}{learning}", link.at).unwrap();
+                let rest = match link.default_peer {
+                    Some(at) => format!(", anything else to {at}"),
+                    None => String::new(),
+                };
+                writeln!(s, "chaosnet over udp: {}, {peers}{rest}", link.at).unwrap();
             }
         }
         writeln!(s, "terminal: {}", terminal_line(&terminal, &no_terminal, listen.addr)).unwrap();

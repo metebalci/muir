@@ -507,8 +507,12 @@ with none talks to nobody however its switches read. Every host
 modelled cable, taking its turn on it like any other, and that is how a run
 names its band's file and time host. muir stays a leaf: a packet for another
 host is dropped rather than forwarded, and a `cbridge` beside it is what
-routes. `--chaos-udp-dynamic` lets a host muir was never told about be
-answered where its packets came from.
+routes. `--chaos-udp-default-peer <host>[:<port>]` is where that bridge is: a
+frame whose destination no `--chaos-udp-peer` named goes there rather than
+nowhere, which is how a run reaches the wider Chaosnet. Naming the bridge as
+a peer would not do it --- a peer entry places one address --- and a
+broadcast is not handed to it, the named peers being stations on this
+machine's own cable.
 
 muir's own tests do not want a daemon running beside them, so they put a
 Chaosnet server of their own on the modelled cable, in process. It lives in

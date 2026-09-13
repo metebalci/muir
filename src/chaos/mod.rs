@@ -98,8 +98,9 @@ pub mod wire;
 /// On `muir`: `--chaos-address <address>` is the switches and nothing
 /// else, and `--chaos-udp` is the cable --- without it muir sends
 /// nothing, as a machine with no cable talks to nobody however its
-/// switches read. `--chaos-udp-peer` and `--chaos-udp-dynamic` say who
-/// is on that cable, and `--chaos-trace` prints every packet.
+/// switches read. `--chaos-udp-peer` says who is on that cable and
+/// `--chaos-udp-default-peer` where a frame goes that names none of
+/// them, and `--chaos-trace` prints every packet.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// The sixteen address switches on the I/O board.
@@ -110,7 +111,7 @@ pub struct Config {
     /// other Chaosnet hosts over, and the peers on it. None, and the cable
     /// carries this machine and whatever else this process put on it, and
     /// nothing from beyond the host. `--chaos-udp`, `--chaos-udp-peer`,
-    /// `--chaos-udp-dynamic`.
+    /// `--chaos-udp-default-peer`.
     pub udp: Option<udp::Link>,
 }
 
