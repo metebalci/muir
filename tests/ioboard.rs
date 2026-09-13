@@ -522,3 +522,49 @@ fn a_run_of_clicks_is_reported_as_one_beep() {
     }
     assert!(!b.take_beep(), "no audible tone breaks into two beeps");
 }
+
+/// **The board decodes the boot word off bits 13-6 of the word and
+/// nothing else, and the word stays for the microcode.** IOBCSR: the
+/// 25LS2521 at 0A20 compares `SR7..SR10` with ground and `SR11..SR14`
+/// with the pull-up `HI4`, `SR<n>` being bit `n-1` of the word (the
+/// 74LS374 at IOBKBD 0C30 puts `SR1` on `UBO0`), so its `-EQUAL` is
+/// `-BOOT` for ones in 13-10 over zeros in 9-6; through the 74S04 at 0E13
+/// and the 74S38 at 0F15 that is `-BOOT*`. Bit 16 is not among its
+/// inputs. The model latches the match for the engine to take once, as
+/// the button is pressed once, and leaves the word in the register with
+/// `KBD READY` up, which is what microcode 323 reads at `(LOC 6)` to
+/// choose cold or warm.
+#[test]
+fn the_boot_word_is_decoded_off_bits_13_to_6_and_stays_for_the_microcode() {
+    use muir::terminal::keyboard::{self, RUBOUT, all_keys_up, up_down};
+    let mut b = IoBoard::default();
+    assert!(!b.take_boot(), "nothing typed");
+    for (word, what) in [(keyboard::boot(true), "cold"), (keyboard::boot(false), "warm")] {
+        b.press(word);
+        assert!(b.take_boot(), "{what}: the boot word raises the request");
+        assert!(!b.take_boot(), "{what}: handed out once");
+        assert!(b.keyboard_ready(), "{what}: the word is still there, KBD READY up");
+        assert_eq!(b.read(ioboard::KBD_LOW, 0) & 0o77, word as u16 & 0o77, "{what}: reads back");
+        assert!(!b.keyboard_ready());
+    }
+    for (word, what) in [
+        (up_down(RUBOUT, false), "Rubout down"),
+        (up_down(0o20, true), "Control up"),
+        (all_keys_up(1 << 4 | 1 << 5), "all keys up, Control and Meta still down"),
+        (all_keys_up(0), "all keys up"),
+    ] {
+        b.press(word);
+        assert!(!b.take_boot(), "{what}: not the boot word");
+        assert!(b.keyboard_ready(), "{what}: taken as a key all the same");
+        let _ = b.read(ioboard::KBD_LOW, 0);
+    }
+    // The comparator's eight bits and no other.
+    let ones = 0o17 << 10;
+    assert!(ioboard::boot_word(ones));
+    assert!(ioboard::boot_word(ones | 0o77 | (0o777 << 14)), "the rest of the word is free");
+    assert!(!ioboard::boot_word(ones & !(1 << 10)), "bit 10 clear");
+    assert!(!ioboard::boot_word(ones & !(1 << 13)), "bit 13 clear");
+    assert!(!ioboard::boot_word(ones | (1 << 6)), "bit 6 set");
+    assert!(!ioboard::boot_word(ones | (1 << 9)), "bit 9 set");
+    assert!(ioboard::boot_word(keyboard::boot(true) & !(1 << 16)), "bit 16 is not looked at");
+}

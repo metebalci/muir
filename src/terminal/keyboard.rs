@@ -4,7 +4,7 @@
 //! The keyboard on the I/O board's cable: MIT's "new keyboard" of November
 //! 1980, the one with the 24-bit shift register.
 //!
-//! Two things are modelled and both are MIT's own. **The character on the
+//! Three things are modelled and all are MIT's own. **The character on the
 //! cable**, from the "Protocol documentation" section at the end of
 //! `sys/io1/ukbd.lisp` in the System 100 release --- the 8748 firmware of
 //! the keyboard itself: 24 bits, low-order first, a start bit that is low,
@@ -16,8 +16,13 @@
 //! positions `ukbd.lisp` names in passing, every one of which agrees:
 //! mode lock 3, super 5 and 65, alt lock 15, control 20 and 26, rubout 23,
 //! shift 24 and 25, greek 44 and 35, meta 45. `tests/keyboard.rs` holds
-//! the table to those ten. This is **not** the Knight keyboard, which is
-//! source ID `111` with a different word and is not modelled.
+//! the table to those ten. **The boot sequence**, from the same
+//! firmware's `check-boot` and `bootflag`: Controls and Metas held with
+//! Rubout or Return send the boot word after the key-down, and no key-up
+//! goes until the next key-down (`Keyboard::check_boot`); which Controls
+//! and Metas it needs is the one setting in it, [`BootKeys`]. This is
+//! **not** the Knight keyboard, which is source ID `111` with a different
+//! word and is not modelled.
 //!
 //! **The keyboard sends positions and the machine does the shifting.**
 //! `ukbd.lisp`: "All key-encoding, including hacking of shifts, will be
@@ -78,6 +83,88 @@ pub fn all_keys_up(shifts: u16) -> u32 {
 /// "bits 10-13 = 1, bits 6-9 = 0, and bit 16 = 1" --- and pulls `-BOOT*`.
 pub fn boot(cold: bool) -> u32 {
     FRAME | 0o77 << 10 | if cold { 0o46 } else { 0o62 }
+}
+
+/// The two keys the boot sequence ends on, by position: Rubout for a cold
+/// boot, Return for a warm one. `ukbd.lisp`'s `check-boot` gives them as
+/// "rubout 23, return 136", and [`TABLE`] has them at the same positions;
+/// `tests/keyboard.rs` holds the two to each other.
+pub const RUBOUT: u8 = 0o23;
+pub const RETURN: u8 = 0o136;
+
+/// **The keys the boot sequence needs**, `--keyboard-boot`: how many
+/// Controls and how many Metas have to be held with Rubout or Return.
+///
+/// The CADR keyboard's own sequence is both Controls and both Metas ---
+/// `check-boot` in `ukbd.lisp` tests all four --- and a host keyboard
+/// rarely has two of each free to map, so this is a setting, spelled as
+/// the keys to hold: `ctrl,meta`, the default, is either Control and
+/// either Meta, as Ctrl-Alt-Del is pressed; `ctrl,ctrl,meta,meta` is the
+/// keyboard's own. `ctrl` is MIT's Control key and `meta` its Meta.
+/// Rubout and Return are never in it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BootKeys {
+    controls: u8,
+    metas: u8,
+}
+
+impl Default for BootKeys {
+    /// `ctrl,meta`.
+    fn default() -> BootKeys {
+        BootKeys { controls: 1, metas: 1 }
+    }
+}
+
+impl BootKeys {
+    /// The four spellings, which are the only four settings there are.
+    pub const SPELLINGS: [&str; 4] =
+        ["ctrl,meta", "ctrl,ctrl,meta", "ctrl,meta,meta", "ctrl,ctrl,meta,meta"];
+
+    /// Reads a spelling: `ctrl` and `meta`, comma-separated, and nothing
+    /// else, counted --- one of a word is either key of its pair, two is
+    /// both --- in any order. Anything else is refused with the four
+    /// named.
+    pub fn parse(s: &str) -> Result<BootKeys, String> {
+        let refused = || {
+            let four: Vec<String> = Self::SPELLINGS.iter().map(|one| format!("`{one}`")).collect();
+            format!(
+                "{s:?} is not the keys the boot sequence needs: {}, {}, {} or {}",
+                four[0], four[1], four[2], four[3]
+            )
+        };
+        let (mut controls, mut metas) = (0u8, 0u8);
+        for word in s.split(',') {
+            match word.trim().to_ascii_lowercase().as_str() {
+                "ctrl" => controls += 1,
+                "meta" => metas += 1,
+                _ => return Err(refused()),
+            }
+        }
+        if !(1..=2).contains(&controls) || !(1..=2).contains(&metas) {
+            return Err(refused());
+        }
+        Ok(BootKeys { controls, metas })
+    }
+
+    /// How many Controls have to be held: one is either, two is both.
+    pub fn controls(&self) -> usize {
+        self.controls as usize
+    }
+
+    /// How many Metas, likewise.
+    pub fn metas(&self) -> usize {
+        self.metas as usize
+    }
+}
+
+/// The spelling [`BootKeys::parse`] reads, Controls first.
+impl std::fmt::Display for BootKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let words: Vec<&str> = std::iter::repeat_n("ctrl", self.controls())
+            .chain(std::iter::repeat_n("meta", self.metas()))
+            .collect();
+        write!(f, "{}", words.join(","))
+    }
 }
 
 /// The shifting keys, as the bit each holds in the all-keys-up word and
@@ -838,6 +925,17 @@ pub struct Keyboard {
     /// Keystrokes the queue had no room for, over the run: what
     /// [`Keyboard::refused`] hands back.
     refused: usize,
+    /// The keys the boot sequence needs, `--keyboard-boot`.
+    boot_keys: BootKeys,
+    /// The firmware's `bootflag`: the boot word has gone, and no key-up
+    /// goes until the next key-down. **Not a fourth piece of
+    /// [`Keyboard::resolve`]'s state**: `resolve` never reads it. It is
+    /// the firmware's, under the mapping, read and written in the two
+    /// places a word is queued --- [`Keyboard::queue_down`] and
+    /// [`Keyboard::queue_up`] --- which is where the firmware keeps it.
+    hold_back: bool,
+    /// What the firmware's part did with the last key, for the trace.
+    firmware: Option<Firmware>,
 }
 
 /// **What a keysym became**, which is what `--keyboard-mapping-trace`
@@ -907,6 +1005,38 @@ impl std::fmt::Display for Went {
     }
 }
 
+/// **What the keyboard's own firmware did with a key, over and above
+/// the mapping**: `check-boot` and `bootflag` in `ukbd.lisp`, which act
+/// on the words after the mapping has chosen them. Said on the trace's
+/// line after [`Went`], because a key-up held back did nothing by design
+/// and a line calling it sent would be asserting the opposite.
+enum Firmware {
+    /// The boot sequence was complete after this key-down, and the boot
+    /// word went after its own: cold with Rubout, warm with Return.
+    Boot { cold: bool },
+    /// The key-up was held back: `bootflag` is set, and no key-up goes
+    /// until the next key-down, so that the machine reads the boot word
+    /// before anything else.
+    HeldBack,
+}
+
+impl std::fmt::Display for Firmware {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Firmware::Boot { cold } => write!(
+                f,
+                ", and the boot sequence is complete: the {} boot word goes after it",
+                if cold { "cold" } else { "warm" }
+            ),
+            Firmware::HeldBack => write!(
+                f,
+                " held back: no key-up goes until the next key-down, so that the machine \
+                 reads the boot word first"
+            ),
+        }
+    }
+}
+
 impl Keyboard {
     /// A keyboard on the built-in mapping.
     pub fn new() -> Keyboard {
@@ -931,9 +1061,72 @@ impl Keyboard {
         self.trace = on;
     }
 
+    /// The keys the boot sequence needs.
+    pub fn boot_keys(&self) -> BootKeys {
+        self.boot_keys
+    }
+
+    /// `--keyboard-boot`: the keys the boot sequence needs from now on.
+    pub fn set_boot_keys(&mut self, keys: BootKeys) {
+        self.boot_keys = keys;
+    }
+
     /// Whether a shifting key is down, at either of its positions.
     fn holding(&self, s: Shift) -> bool {
         shifting(s).iter().any(|p| self.down.contains(p))
+    }
+
+    /// A key-down's code onto the queue. Every one clears the firmware's
+    /// `bootflag` --- `check-boot`'s `not-boot` path does, after every
+    /// key-down --- and [`Keyboard::check_boot`] sets it again from
+    /// [`Keyboard::press`] when the key completes the sequence.
+    fn queue_down(&mut self, position: u8) {
+        self.queue.push_back(up_down(position, false));
+        self.hold_back = false;
+    }
+
+    /// A key-up's code onto the queue, unless the firmware's `bootflag`
+    /// holds it back: `ukbd.lisp`, "If booting, don't send key-up codes".
+    fn queue_up(&mut self, position: u8) {
+        if self.hold_back {
+            self.firmware = Some(Firmware::HeldBack);
+            return;
+        }
+        self.queue.push_back(up_down(position, true));
+    }
+
+    /// **The firmware's `check-boot`**, run after every key-down that is
+    /// held: with the Controls and Metas the setting asks for down,
+    /// Rubout down sends the cold boot word and Return down the warm
+    /// one, Rubout tested first as the firmware tests it; then `bootflag`
+    /// is set, and no key-up goes until the next key-down --- "This gives
+    /// the machine time to load microcode and read the character to see
+    /// whether it is a warm or cold boot, before sending any other
+    /// characters, such as up-codes."
+    ///
+    /// Held keys only: a key tapped rather than held --- behind a prefix,
+    /// or with the shift worked around it --- is not down here and does
+    /// not complete the sequence. The firmware compares whole bytes of
+    /// its bit map, so on the keyboard itself another key down in the
+    /// same byte as one of the four --- a Shift, at 24 or 25 beside the
+    /// Controls --- defeats the sequence; here only the keys named count.
+    fn check_boot(&mut self) {
+        let held = |s: Shift| shifting(s).iter().filter(|p| self.down.contains(p)).count();
+        if held(Shift::Control) < self.boot_keys.controls()
+            || held(Shift::Meta) < self.boot_keys.metas()
+        {
+            return;
+        }
+        let cold = if self.down.contains(&RUBOUT) {
+            true
+        } else if self.down.contains(&RETURN) {
+            false
+        } else {
+            return;
+        };
+        self.queue.push_back(boot(cold));
+        self.hold_back = true;
+        self.firmware = Some(Firmware::Boot { cold });
     }
 
     /// `position` down, if it is up and the queue has room.  A press the
@@ -951,16 +1144,18 @@ impl Keyboard {
             return false;
         }
         self.down.push(position);
-        self.queue.push_back(up_down(position, false));
+        self.queue_down(position);
+        self.check_boot();
         true
     }
 
-    /// `position` up, if it is down.  Always queued: the machine has read
-    /// the key going down, or will.
+    /// `position` up, if it is down.  Always queued, unless the boot
+    /// sequence holds it back: the machine has read the key going down,
+    /// or will.
     fn release(&mut self, position: u8) {
         if let Some(k) = self.down.iter().position(|&p| p == position) {
             self.down.remove(k);
-            self.queue.push_back(up_down(position, true));
+            self.queue_up(position);
         }
     }
 
@@ -978,25 +1173,25 @@ impl Keyboard {
         let shift = shifting(Shift::Shift)[0];
         let holding = self.holding(Shift::Shift);
         if wants_shift && !holding {
-            self.queue.push_back(up_down(shift, false));
-            self.queue.push_back(up_down(position, false));
-            self.queue.push_back(up_down(position, true));
-            self.queue.push_back(up_down(shift, true));
+            self.queue_down(shift);
+            self.queue_down(position);
+            self.queue_up(position);
+            self.queue_up(shift);
         } else if !wants_shift && holding {
             // Every shift the viewer holds comes up around the key.
             let held: Vec<u8> =
                 shifting(Shift::Shift).into_iter().filter(|q| self.down.contains(q)).collect();
             for &q in &held {
-                self.queue.push_back(up_down(q, true));
+                self.queue_up(q);
             }
-            self.queue.push_back(up_down(position, false));
-            self.queue.push_back(up_down(position, true));
+            self.queue_down(position);
+            self.queue_up(position);
             for &q in &held {
-                self.queue.push_back(up_down(q, false));
+                self.queue_down(q);
             }
         } else {
-            self.queue.push_back(up_down(position, false));
-            self.queue.push_back(up_down(position, true));
+            self.queue_down(position);
+            self.queue_up(position);
         }
         true
     }
@@ -1044,12 +1239,19 @@ impl Keyboard {
     /// fourth would be the one that is hard to reason about, so if this
     /// grows again, make the machine explicit, a table of state and keysym
     /// to action, rather than adding another branch.
+    ///
+    /// **The boot sequence is not that fourth.** It is the firmware's
+    /// work rather than the mapping's --- `check-boot` after a key-down,
+    /// `bootflag` at a key-up --- and it sits under `resolve` in the two
+    /// places a word is queued, `queue_down` and `queue_up`, where
+    /// `resolve`'s branches never see it.
     pub fn key(&mut self, keysym: u32, down: bool) {
         if self.trace {
             self.key_traced(keysym, down);
             return;
         }
         let went = self.resolve(keysym, down);
+        self.firmware = None;
         self.count(&went);
     }
 
@@ -1081,7 +1283,9 @@ impl Keyboard {
     /// [`Keyboard::key`], and the line `--keyboard-mapping-trace` writes
     /// for it: the keysym by name **and** number --- the name is what goes
     /// in a mapping file, the number is what to write when there is none
-    /// --- whether it went down or up, and what it became.
+    /// --- whether it went down or up, what it became, and what the
+    /// firmware's part then did with it, when it did anything
+    /// (`Firmware`).
     ///
     /// Returned as well as printed so that `tests/keyboard_mapping.rs` can
     /// hold the wording, and the key's spelling, without capturing a
@@ -1089,11 +1293,13 @@ impl Keyboard {
     /// handed back.
     pub fn key_traced(&mut self, keysym: u32, down: bool) -> String {
         let went = self.resolve(keysym, down);
+        let firmware = self.firmware.take();
         self.count(&went);
         let line = format!(
-            "keysym {keysym:#x} {} {}, {went}",
+            "keysym {keysym:#x} {} {}, {went}{}",
             keysym_name(keysym),
-            if down { "down" } else { "up" }
+            if down { "down" } else { "up" },
+            firmware.map(|f| f.to_string()).unwrap_or_default()
         );
         if self.trace {
             eprintln!("{line}");

@@ -91,9 +91,12 @@ fn every_shared_unibus_wire_is_on_the_same_backplane_pin_on_both_boards() {
 /// old keyboard rebooting the machine accidentally" --- so the path was
 /// live; the pin is what is not established.
 ///
-/// muir carries neither the wire nor the boot word (`docs/keyboard-boot.md`).
-/// This test is here so that a corrected list, or a cage document, is
-/// noticed: if the two pins ever agree, the sentence above is wrong.
+/// muir carries the wire all the same, from the board's `-BOOT*` straight
+/// to the processor's `-BOOT1`, `FarEnd::boot_line`, as what ECO#3 says
+/// happened rather than what a file shows (`docs/keyboard-boot.md`;
+/// `tests/keyboard_boot.rs` holds the wire). This test is here so that a
+/// corrected list, or a cage document, is noticed: if the two pins ever
+/// agree, the sentence above is wrong.
 #[test]
 fn the_boot_line_is_the_one_wire_the_two_boards_put_on_different_pins() {
     let (busint, io) = the_two_lists();

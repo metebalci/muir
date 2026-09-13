@@ -6,7 +6,9 @@
 //! keysyms need to become positions.
 
 use muir::ioboard::{self, IoBoard, csr};
-use muir::terminal::keyboard::{self, Key, Keyboard, Shift, keysym, named, shifting};
+use muir::terminal::keyboard::{
+    self, BootKeys, Key, Keyboard, RETURN, RUBOUT, Shift, boot, keysym, named, shifting, up_down,
+};
 
 mod support;
 use support::release;
@@ -248,4 +250,160 @@ fn the_keyboard_interrupt_is_taken_with_its_vector() {
     m.bus_write(phys(0o766042), 0);
     assert!(!m.interrupt(), "dismissed");
     assert_eq!(m.bus_read(phys(0o766040)) as u16 & UB_INT, 0);
+}
+
+/// **The boot sequence's keys are the ones the firmware tests.**
+/// `check-boot` in `sys/io1/ukbd.lisp` names the positions it looks at,
+/// in octal --- "meta 45 / 165, control 20 / 26, rubout 23, return 136"
+/// --- and the keyboard model finds them on MIT's table through
+/// `shifting` and `named`, which is the half of this that needs no
+/// release. The firmware's own numbers are read out of the file and
+/// compared; without the release that half says it was skipped.
+#[test]
+fn the_boot_sequences_keys_are_the_ones_the_firmware_tests() {
+    assert_eq!(shifting(Shift::Control), [0o20, 0o26]);
+    assert_eq!(shifting(Shift::Meta), [0o45, 0o165]);
+    assert_eq!(named("Rubout"), Some(RUBOUT));
+    assert_eq!(named("Return"), Some(RETURN));
+    assert_eq!((RUBOUT, RETURN), (0o23, 0o136));
+    let Some(ukbd) = release("io1/ukbd.lisp") else { return };
+    // The comment above `check-boot` --- "Is request to boot machine if
+    // both controls and both metas are held down" --- then `;  meta\t\t45
+    // / 165` and three lines like it, up to the one about the locking
+    // keys. The shift block near the top of the file names meta too, so
+    // the sentence is found first.
+    let sentence = ukbd.find("Is request to boot machine").expect("check-boot's own sentence");
+    let block = &ukbd[sentence..];
+    let start = block.find(";  meta\t").expect("the block names meta first");
+    let mut found = std::collections::BTreeMap::new();
+    for line in block[start..].lines().take_while(|l| !l.contains("locking keys")) {
+        let line = line.strip_prefix(';').expect("a comment line").trim();
+        let (name, positions) = line.split_once('\t').expect("a key and its positions");
+        let positions: Vec<u8> =
+            positions.split('/').map(|p| u8::from_str_radix(p.trim(), 8).unwrap()).collect();
+        found.insert(name.trim().to_string(), positions);
+    }
+    assert_eq!(found.len(), 4, "meta, control, rubout and return: {found:?}");
+    assert_eq!(found["meta"], shifting(Shift::Meta));
+    assert_eq!(found["control"], shifting(Shift::Control));
+    assert_eq!(found["rubout"], [RUBOUT]);
+    assert_eq!(found["return"], [RETURN]);
+}
+
+/// The words a keyboard holds, taken.
+fn words(k: &mut Keyboard) -> Vec<u32> {
+    let mut out = Vec::new();
+    while let Some(w) = k.take() {
+        out.push(w);
+    }
+    out
+}
+
+/// **The boot sequence sends the boot word after the key-down that
+/// completes it, then holds every key-up back until the next key-down.**
+/// `ukbd.lisp`: `check-boot` runs after every key-down's code has gone,
+/// sends the cold boot code with Rubout down and the warm one with
+/// Return, and sets `bootflag`, under which no key-up code goes --- "This
+/// gives the machine time to load microcode and read the character to see
+/// whether it is a warm or cold boot, before sending any other
+/// characters, such as up-codes" --- until the next key-down clears it.
+/// The keys released meanwhile are up on the keyboard all the same. With
+/// the default keys: one Control and one Meta.
+#[test]
+fn the_boot_sequence_sends_the_boot_word_and_holds_the_key_ups_back() {
+    let mut k = Keyboard::new();
+    assert_eq!(k.boot_keys(), BootKeys::default(), "ctrl,meta unless told otherwise");
+    k.key(keysym::CONTROL_L, true);
+    k.key(keysym::ALT_L, true);
+    k.key(keysym::BACKSPACE, true);
+    assert_eq!(
+        words(&mut k),
+        [up_down(0o20, false), up_down(0o45, false), up_down(RUBOUT, false), boot(true)],
+        "Control, Meta and Rubout down, and the cold boot word after them"
+    );
+    k.key(keysym::BACKSPACE, false);
+    k.key(keysym::ALT_L, false);
+    k.key(keysym::CONTROL_L, false);
+    assert_eq!(k.pending(), 0, "no key-up goes");
+    // The next key-down ends it; it and its own key-up go.
+    k.key('a' as u32, true);
+    k.key('a' as u32, false);
+    assert_eq!(words(&mut k), [up_down(0o123, false), up_down(0o123, true)]);
+    // Return warm-boots, with either Control and either Meta.
+    k.key(keysym::CONTROL_R, true);
+    k.key(keysym::ALT_R, true);
+    k.key(keysym::RETURN, true);
+    assert_eq!(
+        words(&mut k),
+        [up_down(0o26, false), up_down(0o165, false), up_down(RETURN, false), boot(false)]
+    );
+    // Rubout added with Return still down: the firmware tests Rubout
+    // first, so cold. A key pressed again while down is no key-down.
+    k.key(keysym::BACKSPACE, true);
+    assert_eq!(words(&mut k), [up_down(RUBOUT, false), boot(true)]);
+    k.key(keysym::BACKSPACE, true);
+    assert_eq!(k.pending(), 0);
+}
+
+/// **The keys the boot sequence needs are a setting**, `--keyboard-boot`,
+/// spelled as the Controls and Metas to hold: one of a word is either key
+/// of its pair, two is both, the order does not matter, and anything else
+/// is refused with the four spellings named. Rubout and Return are not in
+/// it. Each setting holds out for its keys, and a key-up before the
+/// sequence is complete goes as any key-up does.
+#[test]
+fn the_keys_the_boot_sequence_needs_are_a_setting() {
+    for (spelling, controls, metas) in [
+        ("ctrl,meta", 1, 1),
+        ("ctrl,ctrl,meta", 2, 1),
+        ("ctrl,meta,meta", 1, 2),
+        ("ctrl,ctrl,meta,meta", 2, 2),
+    ] {
+        let keys = BootKeys::parse(spelling).unwrap_or_else(|e| panic!("{spelling}: {e}"));
+        assert_eq!((keys.controls(), keys.metas()), (controls, metas), "{spelling}");
+        assert_eq!(keys.to_string(), spelling, "and spelled back the same");
+    }
+    assert_eq!(
+        BootKeys::SPELLINGS,
+        ["ctrl,meta", "ctrl,ctrl,meta", "ctrl,meta,meta", "ctrl,ctrl,meta,meta"]
+    );
+    assert_eq!(BootKeys::parse("meta,ctrl").unwrap(), BootKeys::parse("ctrl,meta").unwrap());
+    assert_eq!(BootKeys::parse(" meta , ctrl,ctrl ").unwrap().to_string(), "ctrl,ctrl,meta");
+    for bad in [
+        "",
+        "ctrl",
+        "meta",
+        "ctrl,ctrl",
+        "ctrl,ctrl,ctrl,meta",
+        "ctrl,meta,rubout",
+        "control,meta",
+        "ctrl,,meta",
+    ] {
+        let e = BootKeys::parse(bad).expect_err(bad);
+        for one in BootKeys::SPELLINGS {
+            assert!(e.contains(one), "{bad:?}: the refusal names {one}:\n{e}");
+        }
+    }
+    // Both Controls wanted: one is not enough, and the key-ups go.
+    let mut k = Keyboard::new();
+    k.set_boot_keys(BootKeys::parse("ctrl,ctrl,meta").unwrap());
+    k.key(keysym::CONTROL_L, true);
+    k.key(keysym::ALT_L, true);
+    k.key(keysym::BACKSPACE, true);
+    assert_eq!(words(&mut k), [up_down(0o20, false), up_down(0o45, false), up_down(RUBOUT, false)]);
+    k.key(keysym::BACKSPACE, false);
+    assert_eq!(words(&mut k), [up_down(RUBOUT, true)], "not held back: no boot word went");
+    // The other Control completes it, whichever key comes last.
+    k.key(keysym::BACKSPACE, true);
+    k.key(keysym::CONTROL_R, true);
+    assert_eq!(words(&mut k), [up_down(RUBOUT, false), up_down(0o26, false), boot(true)]);
+    // Both Metas wanted likewise.
+    let mut k = Keyboard::new();
+    k.set_boot_keys(BootKeys::parse("ctrl,meta,meta").unwrap());
+    k.key(keysym::CONTROL_L, true);
+    k.key(keysym::ALT_L, true);
+    k.key(keysym::RETURN, true);
+    assert_eq!(k.pending(), 3, "one Meta: no boot word");
+    k.key(keysym::ALT_R, true);
+    assert_eq!(words(&mut k).last(), Some(&boot(false)));
 }

@@ -236,7 +236,7 @@ use muir::part::Level;
 use muir::prompt::{Command, Memory, NetName};
 use muir::rtl::Rtl;
 use muir::serial::Endpoint;
-use muir::terminal::keyboard::{Keyboard, Mapping};
+use muir::terminal::keyboard::{BootKeys, Keyboard, Mapping};
 use muir::terminal::mouse::Mouse;
 use muir::terminal::{Frame, Terminal};
 
@@ -577,15 +577,18 @@ fn serve_last_screens(screens: &mut [(&mut Terminal, &muir::simpletv::SimpleTv)]
 }
 
 /// One turn of a machine's terminal: the screen out and the keys and the
-/// pointer in when it is time to poll, and whatever the keyboard and mouse
-/// hold delivered to the I/O board as it takes them.
-fn attend(
+/// pointer in when it is time to poll, whatever the keyboard and mouse
+/// hold delivered to the I/O board as it takes them, and the boot
+/// sequence's word, once the board has decoded it, pressing the engine's
+/// boot.
+fn attend<E: Engine>(
     terminal: Option<&mut Terminal>,
     poll: bool,
-    m: &mut Machine,
+    e: &mut E,
     keyboard: &mut Keyboard,
     mouse: &mut Mouse,
 ) {
+    let m = e.machine_mut();
     if poll && let Some(term) = terminal {
         term.poll(Frame::of(&m.simpletv));
         for (keysym, down) in term.take_keys() {
@@ -605,6 +608,7 @@ fn attend(
     if mouse.pending(board.mouse_buttons_held()) {
         mouse.deliver(board);
     }
+    e.keyboard_boot();
 }
 
 const NETLIST: &str = include_str!("../data/CADR.netlist");
@@ -682,7 +686,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--debuggee-terminal [<endpoint>]]
             [--disk-controller netlist|model] [--disk-multiplexor]
             [--disk-pack <image>[,<unit>][,ro]]
-            [--io-board netlist|model]
+            [--io-board netlist|model] [--keyboard-boot <keys>]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
             [--keyboard-mapping-trace]
             [--main-memory netlist|model]
@@ -850,6 +854,19 @@ A simulator of the MIT CADR Lisp Machine.
                                with no pack in it and a boot that waits on
                                it for ever]
   --io-board netlist|model     chip: the I/O board. [default: netlist]
+  --keyboard-boot <keys>       the keys the boot sequence needs: held
+                               with Rubout they cold-boot the machine,
+                               with Return they warm-boot it, from the
+                               keyboard, as on a CADR. ctrl is MIT's
+                               Control key and meta its Meta; one of a
+                               word is either key of its pair, two is
+                               both. ctrl,meta is either Control and
+                               either Meta, as Ctrl-Alt-Del is pressed;
+                               ctrl,ctrl,meta both Controls and either
+                               Meta; ctrl,meta,meta either Control and
+                               both Metas; ctrl,ctrl,meta,meta both of
+                               each, the CADR keyboard's own sequence.
+                               [default: ctrl,meta]
   --keyboard-mapping <file>    what a viewer's keysyms mean on the Lisp
                                Machine keyboard: `key <keysym> <key>` a
                                line, and `prefix <keysym> <keysym> <key>`
@@ -1082,6 +1099,10 @@ static KEYS_IN_FORCE: std::sync::OnceLock<Mapping> = std::sync::OnceLock::new();
 /// and not the other's would say less than it appears to.
 static KEYS_TRACED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// `--keyboard-boot`: the keys the boot sequence needs, for every keyboard
+/// this run builds, the lashup's second included.
+static BOOT_KEYS: std::sync::OnceLock<BootKeys> = std::sync::OnceLock::new();
+
 /// The keyboard mapping in force, as the prompt's `keys` prints it: what
 /// each of a viewer's keysyms means, and where the mapping came from.
 fn keys_in_force() -> String {
@@ -1093,10 +1114,12 @@ fn keys_in_force() -> String {
     format!("keyboard mapping: {from}\n{}", m.show())
 }
 
-/// A keyboard on the mapping this run settled on.
+/// A keyboard on the mapping this run settled on, needing the keys the
+/// run's boot sequence needs.
 fn a_keyboard() -> Keyboard {
     let mut k = Keyboard::with_mapping(KEYS_IN_FORCE.get().cloned().unwrap_or_default());
     k.traced(KEYS_TRACED.load(std::sync::atomic::Ordering::Relaxed));
+    k.set_boot_keys(BOOT_KEYS.get().copied().unwrap_or_default());
     k
 }
 
@@ -1693,10 +1716,10 @@ fn time_lashup(
                 );
             }
             let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
-            let m = lashup.debugger.machine_mut();
-            attend(terminal.as_deref_mut(), poll, m, &mut keyboard, &mut mouse);
-            let m = lashup.debuggee.machine_mut();
-            attend(debuggee_terminal.as_deref_mut(), poll, m, &mut b_keyboard, &mut b_mouse);
+            let e = &mut lashup.debugger;
+            attend(terminal.as_deref_mut(), poll, e, &mut keyboard, &mut mouse);
+            let e = &mut lashup.debuggee;
+            attend(debuggee_terminal.as_deref_mut(), poll, e, &mut b_keyboard, &mut b_mouse);
             if poll {
                 last_poll = Instant::now();
             }
@@ -1790,6 +1813,7 @@ fn time_remote(name: &str, mut remote: Remote<Rtl>, stop: Stop, terminal: Option
             if mouse.pending(board.mouse_buttons_held()) {
                 mouse.deliver(board);
             }
+            e.keyboard_boot();
         }
     }
     report(name, ran, t.elapsed().as_secs_f64());
@@ -1856,7 +1880,7 @@ fn time_fabric(
         if ran % TERMINAL_CHECK == 0 {
             let e = &mut run.debugger;
             let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
-            attend(terminal.as_deref_mut(), poll, e.machine_mut(), &mut keyboard, &mut mouse);
+            attend(terminal.as_deref_mut(), poll, e, &mut keyboard, &mut mouse);
             if poll {
                 last_poll = Instant::now();
             }
@@ -1971,7 +1995,8 @@ fn time_engine<E: Engine>(
         }
         // The keyboard hands the board one word at a time, as the board
         // takes them; a glance every check is far more often than the
-        // machine reads it. The mouse's counts go in whole.
+        // machine reads it. The mouse's counts go in whole. The boot
+        // sequence's word, once the board has decoded it, presses the boot.
         if check {
             let board = &mut e.machine_mut().ioboard;
             if keyboard.pending() > 0 {
@@ -1980,6 +2005,7 @@ fn time_engine<E: Engine>(
             if mouse.pending(board.mouse_buttons_held()) {
                 mouse.deliver(board);
             }
+            e.keyboard_boot();
         }
         // The serial port's endpoint, when `--serial` opened one: what the
         // port has finished sending goes to the socket, and what was typed
@@ -2795,6 +2821,10 @@ struct ChipMachine {
     /// command.
     rams: Vec<muir::chip::Ram>,
     promdisable: netlist::NetId,
+    /// `-BOOT1`, the keyboard's boot line, for the boot sequence under
+    /// `--io-board model`: with no netlist board to drive it, the model
+    /// board's decode presses it here as the button presses `-BOOT2`.
+    boot1: netlist::NetId,
     /// `SRUN`, `-ERRHALT` and `-STATHALT`: three of the six inputs of the
     /// 9S42 at OLORD1 1A15 that makes `MACHRUN`, which the drawing has as
     /// `MACHRUN = (SSTEP AND -SSDONE) OR (SRUN AND -ERRHALT AND -WAIT AND
@@ -2855,6 +2885,7 @@ fn chip_machine(
     // The mode register's bit, as `Machine::mode` has it on the other
     // engines.
     let promdisable = n.by_name_id("PROMDISABLE").unwrap();
+    let boot1 = n.by_name_id("-BOOT1").unwrap();
     let srun = n.by_name_id("SRUN").unwrap();
     let errhalt = n.by_name_id("-ERRHALT").unwrap();
     let stathalt = n.by_name_id("-STATHALT").unwrap();
@@ -2872,6 +2903,7 @@ fn chip_machine(
         ir_nets,
         rams,
         promdisable,
+        boot1,
         srun,
         errhalt,
         stathalt,
@@ -2885,7 +2917,10 @@ fn chip_machine(
 /// presses this and nothing else, as it does on the other two engines.
 /// `-BOOT1`, the Unibus boot line, and `PROG.BOOT` from the debug cable
 /// reach the same 74S02 at OLORD2 1A07 that makes `-BOOT`; the board
-/// cannot tell which was pressed.
+/// cannot tell which was pressed.  Under `--io-board model` the keyboard's
+/// boot sequence presses `-BOOT1` through this same hold, there being no
+/// netlist board to pulse it; with the netlist board the far end carries
+/// its `-BOOT*` to `-BOOT1` itself.
 fn press_boot(c: &mut Chip, clk: &mut Behavioural, boot: netlist::NetId) {
     c.set_net(boot, Level::Low);
     c.settle();
@@ -2897,14 +2932,17 @@ fn press_boot(c: &mut Chip, clk: &mut Behavioural, boot: netlist::NetId) {
 
 /// One turn of the terminal for a netlist machine: the screen out and the
 /// keys and the pointer in when it is time to poll, and both delivered as
-/// the I/O board takes them.
+/// the I/O board takes them.  Whether the model I/O board, under
+/// `--io-board model`, decoded the boot sequence's word this turn, for the
+/// caller to press `-BOOT1`; the netlist board drives its own `-BOOT*`,
+/// which the far end carries, and this says nothing for it.
 fn attend_chip(
     far: &mut FarEnd,
     terminal: Option<&mut Terminal>,
     poll: bool,
     keyboard: &mut Keyboard,
     mouse: &mut Mouse,
-) {
+) -> bool {
     if poll && let Some(term) = terminal {
         term.poll(Frame::of(&far.buses.machine.simpletv));
         for (keysym, down) in term.take_keys() {
@@ -2957,6 +2995,7 @@ fn attend_chip(
             }
         }
     }
+    far.unibus.is_none() && far.buses.machine.ioboard.take_boot()
 }
 
 /// One turn of the serial endpoint for a netlist machine.
@@ -3003,6 +3042,7 @@ fn time_chip(
         ir_nets,
         rams,
         promdisable,
+        boot1,
         srun,
         errhalt,
         stathalt,
@@ -3148,7 +3188,9 @@ fn time_chip(
         }
         let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
         if poll || !held {
-            attend_chip(&mut far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse);
+            if attend_chip(&mut far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse) {
+                press_boot(&mut cpu, &mut clk, boot1);
+            }
             if poll {
                 last_poll = Instant::now();
             }
@@ -3393,6 +3435,7 @@ fn time_chip_debuggee(
     stop: Stop,
     pc_nets: Vec<netlist::NetId>,
     promdisable: netlist::NetId,
+    boot1: netlist::NetId,
     terminal: Option<&mut Terminal>,
 ) {
     let t = Instant::now();
@@ -3422,7 +3465,9 @@ fn time_chip_debuggee(
             checked = ran / TERMINAL_CHECK;
             let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
             let m = &mut remote.machine;
-            attend_chip(&mut m.far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse);
+            if attend_chip(&mut m.far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse) {
+                press_boot(&mut m.cpu, &mut m.clk, boot1);
+            }
             if poll {
                 last_poll = Instant::now();
             }
@@ -3459,6 +3504,7 @@ fn main() {
     let mut keyboard_file: Option<PathBuf> = None;
     let mut keyboard_dump = false;
     let mut keyboard_trace = false;
+    let mut boot_keys = BootKeys::default();
     let mut resume: Option<PathBuf> = None;
     let mut stop_at: Option<u16> = None;
     let mut stop_at_prom: Option<u16> = None;
@@ -3752,6 +3798,16 @@ fn main() {
             (None, "-c" | "--config") => {
                 args.next();
             }
+            (None, "--keyboard-boot") => match args.next() {
+                Some(keys) => match BootKeys::parse(&keys) {
+                    Ok(k) => boot_keys = k,
+                    Err(e) => usage(&format!("--keyboard-boot {e}")),
+                },
+                None => usage(&format!(
+                    "--keyboard-boot wants the keys the boot sequence needs: {}",
+                    BootKeys::SPELLINGS.join(", ")
+                )),
+            },
             (None, "--keyboard-mapping") => match args.next() {
                 Some(path) => keyboard_file = Some(PathBuf::from(path)),
                 None => usage("--keyboard-mapping wants a file of key bindings"),
@@ -4069,6 +4125,7 @@ fn main() {
     let (keyboard_map, keyboard_said) = keyboard_mapping(keyboard_file.as_deref());
     let _ = KEYS_IN_FORCE.set(keyboard_map);
     KEYS_TRACED.store(keyboard_trace, std::sync::atomic::Ordering::Relaxed);
+    let _ = BOOT_KEYS.set(boot_keys);
     // The trace is the flag for a key that will not type, and a key the
     // terminal's input queue lost is one of the answers: under it the
     // count is said every time it changes, and without it the first loss
@@ -4170,7 +4227,8 @@ fn main() {
             }
         }
         writeln!(s, "terminal: {}", terminal_line(&terminal, &no_terminal, listen.addr)).unwrap();
-        writeln!(s, "keyboard: {keyboard_said}").unwrap();
+        writeln!(s, "keyboard: {keyboard_said}; boot sequence {boot_keys} with Rubout or Return")
+            .unwrap();
         if let Some(end) = &serial {
             let at = end.addr().unwrap_or_else(|_| serial_at.expect("the endpoint was asked for"));
             writeln!(s, "serial: tcp://{at} --- the device on the null-modem cable at J9").unwrap();
@@ -4420,14 +4478,14 @@ fn main() {
                 // The debuggee's stops are the debugger's to notice over
                 // the cable, which is what CC is for, so the self-halt
                 // check `time_chip` makes is not made here.
-                let ChipMachine { cpu, clk, far, bus, pc_nets, promdisable, .. } =
+                let ChipMachine { cpu, clk, far, bus, pc_nets, promdisable, boot1, .. } =
                     // The debuggee's button is the debugger's to press over
                     // the cable, so this end always boots itself.
                     chip_machine(&image, packs, on_the_buses, boards, chaos, true);
                 let (reader, stream) = accept_debugger(&listener, addr);
                 let end = DebugIn::new(&bus, cpu, clk, far);
                 let remote = Remote::debuggee(end, reader, stream);
-                time_chip_debuggee(remote, stop, pc_nets, promdisable, terminal.as_mut());
+                time_chip_debuggee(remote, stop, pc_nets, promdisable, boot1, terminal.as_mut());
             } else {
                 let run = Run {
                     stop,

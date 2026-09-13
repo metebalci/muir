@@ -209,6 +209,15 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
+        <dt>--keyboard-boot &lt;keys&gt;</dt>
+        <dd>
+        <p>The keys the boot sequence needs. On a CADR, holding both Control keys and both Meta keys and pressing Rubout cold-boots the machine, and with Return instead warm-boots it: the keyboard&rsquo;s own firmware sees the keys down, sends a boot word after the key-down, and the I/O board decodes it and pulls the processor&rsquo;s boot line, as the button does. muir does the same from the terminal&rsquo;s keyboard, on every engine.</p>
+        <p>A host keyboard rarely has two Controls and two Metas free to map, so which of them the sequence needs is this setting. <code>ctrl</code> is MIT&rsquo;s Control key and <code>meta</code> its Meta; one of a word is either key of its pair, two is both, and the order does not matter. <code>ctrl,meta</code> is either Control and either Meta, as Ctrl-Alt-Del is pressed; <code>ctrl,ctrl,meta</code> both Controls and either Meta; <code>ctrl,meta,meta</code> either Control and both Metas; <code>ctrl,ctrl,meta,meta</code> both of each, the CADR keyboard&rsquo;s own sequence. Rubout and Return are never in it, and anything else is refused with the four named.</p>
+        <p>After the boot word the keyboard sends no key-up until the next key-down, as the firmware does, so that the machine reads the boot word before anything else; <code>--keyboard-mapping-trace</code> says so on each line it holds back. The word stays in the I/O board&rsquo;s register for the microcode, which reads it as it starts to choose cold from warm.</p>
+        <p>Default: <code>ctrl,meta</code>.</p>
+        </dd>
+      </div>
+      <div>
         <dt>--keyboard-mapping &lt;file&gt;</dt>
         <dd>
         <p>What a viewer&rsquo;s keysyms mean on the Lisp Machine keyboard: <code>key &lt;keysym&gt; &lt;key&gt;</code> a line, and <code>prefix &lt;keysym&gt; &lt;keysym&gt; &lt;key&gt;</code> for a key reached by pressing one and then another, there being more keys on this keyboard than a host has spare.</p>

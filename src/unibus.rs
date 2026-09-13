@@ -26,14 +26,16 @@ use crate::part::Level;
 /// arbiter, drives into it, and the other grant levels pass the board by
 /// on jumpers. Read off `data/busint-connectors.txt` and the board's
 /// wire list, `cadrio/iob.wlr`, whose connector column names the
-/// backplane pins. `-BOOT*`, the keyboard's boot key, is not here. The
-/// I/O board puts it on backplane pin `CP1`; the interface takes `-LM
+/// backplane pins. `-BOOT*`, the keyboard's boot sequence, is not here.
+/// The I/O board puts it on backplane pin `CP1`; the interface takes `-LM
 /// BOOT` on `CR1` and passes it, with no part on it and so no net (see
 /// `Cables::new`), to the processor's `-BOOT1`. That `CP1` and `CR1` are
 /// one backplane wire is **unverified** --- every other shared wire is on
 /// the same pin in both lists, and no file describes the cage ---
 /// `tests/unibus_backplane_pins.rs` holds what the lists say, and
-/// `docs/keyboard-boot.md` the rest. Nothing presses the key.
+/// `docs/keyboard-boot.md` the rest. The far end carries it from the
+/// board's `-BOOT*` ([`Unibus::boot_low`]) straight to the processor's
+/// `-BOOT1`, `crate::cable::FarEnd::join`.
 pub fn wire_pairs() -> Vec<(String, String)> {
     let mut w: Vec<(String, String)> =
         (1..18).map(|b| (format!("-UB ADR{b}"), format!("-A{b}*"))).collect();
@@ -181,6 +183,10 @@ pub struct Unibus {
     wires: Vec<Wire>,
     /// The I/O board.
     pub board: Chip,
+    /// The board's `-BOOT*`, the keyboard's boot sequence decoded: open
+    /// collector off the 74S38 at IOBCSR 0F15, pulled up here, and read
+    /// by the far end ([`Unibus::boot_low`]) for the processor's `-BOOT1`.
+    boot: NetId,
     /// What each end was last given, per wire: the interface first.
     given: Vec<[Option<Level>; 2]>,
     changed: [bool; 2],
@@ -248,8 +254,9 @@ impl Unibus {
         for w in &wires {
             board.pull_up(w.board);
         }
-        // The boot line, terminated on the bus and pressed by nobody.
-        board.pull_up(find(io, "-BOOT*").expect("the I/O board has no -BOOT*"));
+        // The boot line, terminated on the bus; the far end reads it.
+        let boot = find(io, "-BOOT*").expect("the I/O board has no -BOOT*");
+        board.pull_up(boot);
         for &(name, level) in IDLE_CHAOSNET.iter().chain(IDLE_KEYBOARD) {
             board.drive(
                 find(io, name).unwrap_or_else(|| panic!("the I/O board has no {name}")),
@@ -289,6 +296,7 @@ impl Unibus {
         Unibus {
             wires,
             board,
+            boot,
             given,
             changed: [false; 2],
             transitions: 0,
@@ -502,6 +510,14 @@ impl Unibus {
 
     pub fn interface_changed(&self) -> bool {
         self.changed[0]
+    }
+
+    /// Whether the board is holding `-BOOT*` low: the keyboard's boot word
+    /// has just come in, decoded on IOBCSR ([`crate::ioboard::boot_word`]
+    /// reads the same gates), for the half keyboard clock the comparator
+    /// is enabled.
+    pub fn boot_low(&self) -> bool {
+        self.board.net(self.boot) == Level::Low
     }
 
     /// Lets the board settle if the last exchange changed a net on it.
