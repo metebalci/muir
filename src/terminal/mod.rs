@@ -361,12 +361,7 @@ impl Viewer {
     }
 
     /// Works through everything that has arrived, and answers it.
-    fn step(
-        &mut self,
-        frame: Frame,
-        keys: &mut VecDeque<(u32, bool)>,
-        pointers: &mut VecDeque<(u8, u16, u16)>,
-    ) -> Result<(), String> {
+    fn step(&mut self, frame: Frame, input: &mut Input) -> Result<(), String> {
         loop {
             match self.stage {
                 Stage::Version => {
@@ -453,8 +448,8 @@ impl Viewer {
                     let rect = Rect { x: x as usize, y: y as usize, w: w as usize, h: h as usize };
                     self.request = Some(Request { incremental, rect });
                 }
-                ClientMessage::Key { down, keysym } => push_key(keys, (keysym, down)),
-                ClientMessage::Pointer { buttons, x, y } => push_pointer(pointers, (buttons, x, y)),
+                ClientMessage::Key { down, keysym } => input.key((keysym, down)),
+                ClientMessage::Pointer { buttons, x, y } => input.pointer((buttons, x, y)),
             }
         }
     }
@@ -554,6 +549,12 @@ impl Viewer {
 /// queued does a key-down arriving go instead, and a key-up arriving
 /// displace the oldest.  Of the pointer, the oldest goes: the newest
 /// position is the one that matters.
+///
+/// **What goes is counted**, [`Terminal::keys_lost`] and
+/// [`Terminal::pointers_lost`], and a run says so: a keystroke that
+/// never reaches the machine is a character that does not type, and
+/// losing one in silence leaves a person no way to tell it from a
+/// mapping with nothing in it.
 pub const INPUT_BACKLOG: usize = 256;
 
 /// How many viewers the terminal serves at once; the next connection is
@@ -581,51 +582,101 @@ pub const MAX_VIEWERS: usize = 8;
 /// which is longer.
 const FULL_UPDATE_INTERVAL: Duration = Duration::from_nanos(simpletv::FRAME_NS);
 
-/// A key event onto the queue, as [`INPUT_BACKLOG`] says.
-fn push_key(q: &mut VecDeque<(u32, bool)>, item: (u32, bool)) {
-    if q.len() >= INPUT_BACKLOG {
-        match q.iter().position(|&(_, down)| down) {
-            // The oldest keystroke goes whole: its key-down, and its
-            // key-up if that is queued too.
-            Some(k) => {
-                if let Some((sym, _)) = q.remove(k)
-                    && let Some(j) = q.iter().skip(k).position(|&(s, down)| s == sym && !down)
-                {
-                    q.remove(k + j);
-                }
-            }
-            // Nothing but key-ups, each owed to a key the machine saw go
-            // down: a key-down arriving is the one to lose, and only a
-            // key-up displaces the oldest.
-            None if item.1 => return,
-            None => {
-                q.pop_front();
-            }
-        }
-    }
-    q.push_back(item);
+/// What the viewers have typed and pointed at, waiting for the engine's
+/// next look, and what there was no room for.
+///
+/// The two queues and the two counts are one thing because the counts are
+/// made where the events go: a count kept anywhere else would be a second
+/// account of the same events, to be kept in step with this one.
+#[derive(Default)]
+struct Input {
+    keys: VecDeque<(u32, bool)>,
+    pointers: VecDeque<(u8, u16, u16)>,
+    /// Key events the queue had no room for, over the run.
+    lost_keys: usize,
+    /// Pointer events the queue had no room for, over the run.
+    lost_pointers: usize,
+    /// What [`Terminal::lost_line`] has already spoken for, so that a
+    /// burst of hundreds is said once and a count that has not moved is
+    /// not said again.
+    said_keys: usize,
 }
 
-/// A pointer event onto the queue: full, the oldest goes.
-fn push_pointer(q: &mut VecDeque<(u8, u16, u16)>, item: (u8, u16, u16)) {
-    if q.len() >= INPUT_BACKLOG {
-        q.pop_front();
+impl Input {
+    /// A key event onto the queue, as [`INPUT_BACKLOG`] says, counting
+    /// what goes.
+    fn key(&mut self, item: (u32, bool)) {
+        let q = &mut self.keys;
+        let mut lost = 0;
+        // Whether the event arriving is itself the one to lose, which is
+        // so of a key-down alone.
+        let mut refused = false;
+        if q.len() >= INPUT_BACKLOG {
+            match q.iter().position(|&(_, down)| down) {
+                // The oldest keystroke goes whole: its key-down, and its
+                // key-up if that is queued too.
+                Some(k) => {
+                    lost += 1;
+                    if let Some((sym, _)) = q.remove(k)
+                        && let Some(j) = q.iter().skip(k).position(|&(s, down)| s == sym && !down)
+                    {
+                        q.remove(k + j);
+                        lost += 1;
+                    }
+                }
+                // Nothing but key-ups, each owed to a key the machine saw
+                // go down: a key-down arriving is the one to lose, and
+                // only a key-up displaces the oldest.
+                None if item.1 => {
+                    lost += 1;
+                    refused = true;
+                }
+                None => {
+                    q.pop_front();
+                    lost += 1;
+                }
+            }
+        }
+        if !refused {
+            q.push_back(item);
+        }
+        self.lost_keys += lost;
     }
-    q.push_back(item);
+
+    /// A pointer event onto the queue: full, the oldest goes.  Counted as
+    /// a key event is, though nothing prints it:
+    /// [`Terminal::pointers_lost`] says why.
+    fn pointer(&mut self, item: (u8, u16, u16)) {
+        if self.pointers.len() >= INPUT_BACKLOG {
+            self.pointers.pop_front();
+            self.lost_pointers += 1;
+        }
+        self.pointers.push_back(item);
+    }
 }
 
 /// The socket, and the viewers on it.
 pub struct Terminal {
     listener: TcpListener,
     viewers: Vec<Viewer>,
-    keys: VecDeque<(u32, bool)>,
-    pointers: VecDeque<(u8, u16, u16)>,
+    input: Input,
     /// A `Bell` to send every viewer on the next poll.  One flag and not a
     /// count: a viewer told twice that the machine beeped, when the polls
     /// are further apart than the beeps, is worse off than one told once.
     bell: bool,
-    /// Every viewer coming and going, printed as it happens.
+    /// What happens on this terminal, printed as it happens: every viewer
+    /// coming and going, and what the input queues lost.  `muir` has it on
+    /// for every run it serves.
     pub trace: bool,
+    /// `--keyboard-mapping-trace`: what the input queues lost said every
+    /// time the count changes, rather than the first time alone.
+    ///
+    /// It is a keyboard flag and this is the terminal, but it is the flag
+    /// a person reaches for when a key will not type, and a key the queue
+    /// lost is one of the answers to that --- the one the flag's own lines
+    /// cannot give, since they say what became of a keysym that arrived
+    /// here and a lost one never did.
+    pub trace_lost_keys: bool,
     /// How long a viewer has, from connecting, to finish the opening
     /// exchange before it is dropped: ten seconds unless set otherwise.  A
     /// connection that says nothing would otherwise hold a place among the
@@ -644,10 +695,10 @@ impl Terminal {
         Ok(Terminal {
             listener,
             viewers: Vec::new(),
-            keys: VecDeque::new(),
-            pointers: VecDeque::new(),
+            input: Input::default(),
             bell: false,
             trace: false,
+            trace_lost_keys: false,
             handshake_timeout: Duration::from_secs(10),
         })
     }
@@ -668,13 +719,78 @@ impl Terminal {
     /// to [`keyboard::Keyboard`] after each poll, which finds each one's
     /// position on MIT's keyboard and sends it down the cable.
     pub fn take_keys(&mut self) -> Vec<(u32, bool)> {
-        self.keys.drain(..).collect()
+        self.input.keys.drain(..).collect()
     }
 
     /// The same for the mouse: the button mask and where the viewer put
     /// the pointer, in screen pixels.
     pub fn take_pointers(&mut self) -> Vec<(u8, u16, u16)> {
-        self.pointers.drain(..).collect()
+        self.input.pointers.drain(..).collect()
+    }
+
+    /// Key events the input queue had no room for, over the run:
+    /// [`INPUT_BACKLOG`] says which ones go.
+    ///
+    /// **Counted because the machine never sees them.** A keystroke that
+    /// goes here is a character that does not type, and nothing further
+    /// down says so: `--keyboard-mapping-trace` prints what became of
+    /// every keysym that reaches [`keyboard::Keyboard`], and one lost here
+    /// never reaches it.
+    pub fn keys_lost(&self) -> usize {
+        self.input.lost_keys
+    }
+
+    /// The same for the pointer, which nothing prints.
+    ///
+    /// A viewer sends where the pointer is, and [`mouse::Mouse`] hands the
+    /// machine the difference from the position it last saw, so a lost
+    /// event's position is not lost with it: the newest is always the one
+    /// kept and the pointer ends up where the viewer put it. What a lost
+    /// event can carry off is a button that went down and came up inside
+    /// one full queue, which is a click made and unmade while the engine
+    /// looked away for [`INPUT_BACKLOG`] events. The count is here to be
+    /// asked for; it is not worth a line of its own beside a lost
+    /// keystroke.
+    pub fn pointers_lost(&self) -> usize {
+        self.input.lost_pointers
+    }
+
+    /// What the run is told about the key events the queue lost, and
+    /// `None` when there is nothing new to say.
+    ///
+    /// One line a burst and not one an event: a queue that fills under
+    /// load loses hundreds, and a run buried in them would say less than
+    /// one that says how many. Without [`Terminal::trace_lost_keys`] it is
+    /// the first loss of the run alone --- a run that has lost typing is
+    /// one thing to say, in muir's one line a thing --- and it names the
+    /// flag that says the rest.
+    ///
+    /// [`Terminal::poll`] asks this and prints what comes back whenever
+    /// [`Terminal::trace`] is on, which is every run muir serves. It is
+    /// handed back as well so that `tests/terminal.rs` can hold the
+    /// wording without capturing a stream, as
+    /// [`keyboard::Keyboard::key_traced`] hands its line back.
+    pub fn lost_line(&mut self) -> Option<String> {
+        let total = self.input.lost_keys;
+        let went = total - self.input.said_keys;
+        if went == 0 {
+            return None;
+        }
+        let first = self.input.said_keys == 0;
+        self.input.said_keys = total;
+        if !first && !self.trace_lost_keys {
+            return None;
+        }
+        let events = if went == 1 { "key event" } else { "key events" };
+        Some(match self.trace_lost_keys {
+            true => format!(
+                "terminal: the input queue was full: {went} {events} lost, {total} in this run"
+            ),
+            false => format!(
+                "terminal: the input queue was full: {went} {events} lost; \
+                 --keyboard-mapping-trace says as more go"
+            ),
+        })
     }
 
     /// The machine beeped: every viewer gets RFC 6143's `Bell` on the next
@@ -722,7 +838,7 @@ impl Terminal {
                 }
             }
         }
-        let (keys, pointers, trace) = (&mut self.keys, &mut self.pointers, self.trace);
+        let (input, trace) = (&mut self.input, self.trace);
         // Rung or not, it is spent on this poll: a viewer still in the
         // opening exchange has no message stream to put it in, and holding
         // it would tell whoever connects next about a beep they missed.
@@ -741,7 +857,7 @@ impl Terminal {
                 if !open {
                     return Ok(false);
                 }
-                v.step(frame, keys, pointers)?;
+                v.step(frame, input)?;
                 v.answer(frame);
                 // Behind the frame, so a beep never delays what it is
                 // about: `Viewer::answer` queues nothing while anything is
@@ -770,5 +886,13 @@ impl Terminal {
                 }
             }
         });
+        // What the queues had no room for, said as it happens: a run that
+        // has quietly lost a hundred keystrokes is a run whose behaviour
+        // is unexplained.
+        if self.trace
+            && let Some(line) = self.lost_line()
+        {
+            eprintln!("{line}");
+        }
     }
 }

@@ -36,8 +36,19 @@ fn served_at(child: &Child, prefix: &str) -> SocketAddr {
 /// RFB server and not merely a bound port. The viewer says the version
 /// back, so that the run sees an ordinary viewer come and go.
 fn rfb_version(at: SocketAddr) -> String {
+    let mut s = dial(at);
+    let mut version = [0u8; 12];
+    s.read_exact(&mut version).unwrap_or_else(|e| panic!("{at}: the version offered: {e}"));
+    s.write_all(&version).unwrap();
+    String::from_utf8_lossy(&version).into_owned()
+}
+
+/// A connection to a run's terminal, waited for: the port is bound before
+/// the run says where it is, but a run that has not got there yet is
+/// still starting.
+fn dial(at: SocketAddr) -> TcpStream {
     let deadline = Instant::now() + Duration::from_secs(30);
-    let mut s = loop {
+    let s = loop {
         match TcpStream::connect(at) {
             Ok(s) => break s,
             Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
@@ -45,10 +56,31 @@ fn rfb_version(at: SocketAddr) -> String {
         }
     };
     s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    s
+}
+
+/// A viewer through RFC 6143's opening exchange as 3.8, so that what it
+/// sends after it is read as messages: the version, `None` of the
+/// security types offered, `ClientInit`, and `ServerInit` read back.
+fn viewer(at: SocketAddr) -> TcpStream {
+    let mut s = dial(at);
     let mut version = [0u8; 12];
-    s.read_exact(&mut version).unwrap_or_else(|e| panic!("{at}: the version offered: {e}"));
+    s.read_exact(&mut version).unwrap();
     s.write_all(&version).unwrap();
-    String::from_utf8_lossy(&version).into_owned()
+    let mut types = [0u8; 2];
+    s.read_exact(&mut types).unwrap();
+    assert_eq!(types, [1, 1], "one security type on offer, and it is None");
+    s.write_all(&[1]).unwrap();
+    let mut result = [0u8; 4];
+    s.read_exact(&mut result).unwrap();
+    assert_eq!(result, [0, 0, 0, 0], "SecurityResult, and it is ok");
+    // ClientInit's shared flag, then ServerInit: 24 bytes and a name.
+    s.write_all(&[1]).unwrap();
+    let mut head = [0u8; 24];
+    s.read_exact(&mut head).unwrap();
+    let name = u32::from_be_bytes(head[20..24].try_into().unwrap()) as usize;
+    s.read_exact(&mut vec![0u8; name]).unwrap();
+    s
 }
 
 /// **Every run serves a terminal**, asked for or not: the machine has no
@@ -104,4 +136,36 @@ fn the_flag_says_where_the_terminal_is() {
     let run = running(&["--micro", "--terminal", "127.0.0.1:0"]);
     let at = served_at(&run, "terminal: ");
     assert_eq!(rfb_version(at), "RFB 003.008\n", "an RFB server at {at}");
+}
+
+/// **A run says when its terminal loses typing, without being asked to.**
+/// What a viewer types waits for the machine's next look ---
+/// [`muir::terminal::INPUT_BACKLOG`] events of it, and the run looks every
+/// 33 ms --- and beyond that the oldest keystroke goes. A character that
+/// did not type looks exactly like a key with no binding, so the run says
+/// so rather than leaving the loss to be guessed at; one line, and
+/// `--keyboard-mapping-trace` says it again as more go.
+#[test]
+fn a_run_says_when_its_terminal_loses_typing() {
+    let run = running(&["--micro", "--terminal", "127.0.0.1:0"]);
+    let at = served_at(&run, "terminal: ");
+    let mut v = viewer(at);
+    // Four thousand key-downs in one write, which crosses the loopback
+    // inside one of the run's polls: a burst smaller than the queue, or
+    // one spread over several polls, is a queue the run kept up with and
+    // nothing is lost.
+    let mut burst = Vec::new();
+    for _ in 0..4000 {
+        burst.extend_from_slice(&[4u8, 1, 0, 0]);
+        burst.extend_from_slice(&('a' as u32).to_be_bytes());
+    }
+    v.write_all(&burst).unwrap();
+    let said = |t: &str| t.lines().any(|l| l.starts_with("terminal: the input queue was full: "));
+    run.stderr().wait_until(said, "the run says what its terminal lost");
+    // That there is one such line a run, and what the trace makes of the
+    // count after it, is `tests/terminal.rs`'s to hold; what this holds is
+    // that a run prints it at all, and names the flag that says the rest.
+    let wrote = run.stderr().so_far();
+    let line = wrote.lines().find(|l| l.starts_with("terminal: the input queue")).unwrap();
+    assert!(line.ends_with("--keyboard-mapping-trace says as more go"), "{line}");
 }

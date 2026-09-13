@@ -91,6 +91,19 @@
 //! display above this machine's, and `--debuggee-terminal` puts that
 //! elsewhere.
 //!
+//! **What a viewer types waits for the machine's next look, and a queue
+//! that fills loses the oldest keystroke** ---
+//! [`muir::terminal::INPUT_BACKLOG`] events of it --- so that a machine
+//! that has stopped reading its keyboard cannot grow a queue for the
+//! length of the run. **A run says what went**: once, from the first
+//! keystroke it loses, and every time the count changes under
+//! `--keyboard-mapping-trace`, which is the flag for a key that will not
+//! type. A keystroke lost in silence is a character that does not type
+//! with nothing to tell it from a mapping that has no binding for the key.
+//! The pointer's queue loses its oldest too and nothing is said: a viewer
+//! sends where the pointer is rather than how far it moved, so the newest
+//! is the one that matters and that one is always kept.
+//!
 //! **A band wants a file and time host, and muir is not one**: a CADR had
 //! no such server in it, and neither has this. The host is another program
 //! on the network --- `ozd`, `https://github.com/metebalci/ozd`, is one
@@ -855,8 +868,12 @@ A simulator of the MIT CADR Lisp Machine.
                                keysym by name and number, whether it went
                                down or up, and the key it became, spelled as
                                --keyboard-mapping-dump spells it so that the
-                               line can be pasted into a mapping file.
-                               [default: off]
+                               line can be pasted into a mapping file. And
+                               how many key events the terminal's input
+                               queue had no room for, every time that count
+                               changes: a keystroke lost there never became
+                               a keysym line at all. A run says the first of
+                               them without this flag. [default: off]
   --main-memory netlist|model  chip: main memory as MIT's board or as rtl's
                                model of it. model takes the disk controller
                                down with it, the netlist controller being a
@@ -4039,6 +4056,14 @@ fn main() {
     let (keyboard_map, keyboard_said) = keyboard_mapping(keyboard_file.as_deref());
     let _ = KEYS_IN_FORCE.set(keyboard_map);
     KEYS_TRACED.store(keyboard_trace, std::sync::atomic::Ordering::Relaxed);
+    // The trace is the flag for a key that will not type, and a key the
+    // terminal's input queue lost is one of the answers: under it the
+    // count is said every time it changes, and without it the first loss
+    // of the run alone. Both terminals, as the trace itself is both
+    // machines' keyboards.
+    for t in [terminal.as_mut(), debuggee_terminal.as_mut()].into_iter().flatten() {
+        t.trace_lost_keys = keyboard_trace;
+    }
 
     // What this run is: said once here, and again by the prompt's `info`.
     let setup = {
