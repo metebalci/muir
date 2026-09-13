@@ -436,7 +436,7 @@ pub fn boot_chip(
     c.load_prom(n, &image);
     c.settle();
     far.join(c, clk.time_ns());
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    let boot = n.by_name_id("-BOOT2").unwrap();
     c.set_net(boot, Level::Low);
     c.settle();
     for _ in 0..20 {

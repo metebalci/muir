@@ -2805,7 +2805,11 @@ struct ChipMachine {
     srun: netlist::NetId,
     errhalt: netlist::NetId,
     stathalt: netlist::NetId,
-    /// `-BOOT1`, the button, for the prompt's `boot` to press again.
+    /// `-BOOT2`, the light panel's boot button --- the MBCPIN drawing marks
+    /// connector 1AJ2 "TO LIGHT PANEL" --- for the prompt's `boot` to press
+    /// again. `-BOOT1` is the other input, the Unibus boot line the keyboard
+    /// comes in on through the bus interface's `-LM BOOT`, and nothing
+    /// presses it here: `docs/keyboard-boot.md`.
     boot: netlist::NetId,
 }
 
@@ -2834,7 +2838,7 @@ fn chip_machine(
     // The button, then the few start-up microcycles before the PC moves.
     // `--no-auto-boot` leaves it unpressed, as a CADR is when the power
     // comes on, for the prompt's `boot` to press.
-    let boot = n.by_name_id("-BOOT1").unwrap();
+    let boot = n.by_name_id("-BOOT2").unwrap();
     if auto_boot {
         press_boot(&mut c, &mut clk, boot);
     }
@@ -2875,10 +2879,13 @@ fn chip_machine(
     }
 }
 
-/// **The boot button on a netlist machine**: `-BOOT1` held down, the
+/// **The boot button on a netlist machine**: `-BOOT2` held down, the
 /// board settled with it down, and twenty master clock cycles before it
 /// comes back up.  It is all that starts a CADR, so the prompt's `boot`
 /// presses this and nothing else, as it does on the other two engines.
+/// `-BOOT1`, the Unibus boot line, and `PROG.BOOT` from the debug cable
+/// reach the same 74S02 at OLORD2 1A07 that makes `-BOOT`; the board
+/// cannot tell which was pressed.
 fn press_boot(c: &mut Chip, clk: &mut Behavioural, boot: netlist::NetId) {
     c.set_net(boot, Level::Low);
     c.settle();
