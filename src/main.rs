@@ -105,8 +105,9 @@
 //! `--chaos-address 3050 --chaos-udp` with
 //! `--chaos-udp-peer 3060@<where the host is>` for the System 100 pack,
 //! `4401` with `4403@...` for System 304's. Every engine has a Chaosnet.
-//! muir stays a leaf: a packet for somewhere else is dropped rather than
-//! forwarded, and a `cbridge` beside it is what routes.
+//! muir stays a leaf: a frame goes out only when this machine put it on
+//! the cable, so one peer's is never carried on to another, and a
+//! `cbridge` beside it is what routes.
 //! `--chaos-udp-default-peer` is where that bridge is: a frame whose
 //! destination no `--chaos-udp-peer` named goes there rather than
 //! nowhere, which is the route of last resort and the whole of muir's
@@ -707,8 +708,9 @@ A simulator of the MIT CADR Lisp Machine.
                                address:port; a bare port is on the loopback,
                                so reaching another host means naming an
                                address to listen on. muir is a leaf: a
-                               packet for another host is dropped, not
-                               forwarded. [default: off, the cable
+                               frame goes out only when this machine put
+                               it on the cable, so one peer's is never
+                               carried on to another. [default: off, the cable
                                unplugged; 127.0.0.1:42042, the protocol's
                                own port, when the flag is given bare]
   --chaos-udp-default-peer <host>[:<port>]

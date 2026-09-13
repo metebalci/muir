@@ -315,11 +315,27 @@ fn a_character_is_on_the_cable_one_frame_after_it_is_written() {
     let t0 = start;
     let s = low(b.read(STATUS, t0 + 3 * frame));
     assert_eq!(s & status::TX_EMPTY_OR_DSCHG, status::TX_EMPTY_OR_DSCHG, "empty: {s:o}");
+    // **Read again, and it is still set.** SR2 is `TxEMT OR DSCHG` and
+    // the two are cleared by different things: DSCHG by a status read,
+    // TxEMT only by loading the holding register or disabling the
+    // transmitter. The datasheet makes that the documented way to tell
+    // them apart --- "if the status register is read twice and SR2 = 1
+    // while SR6 and SR7 remain unchanged, then a TxEMT condition
+    // exists" --- and the pin description says the same from the other
+    // side: reading the status register releases `-TxEMT/DSCHG` only if
+    // TxEMT is not the cause.
+    //
+    // So this asks twice. Asking once proves only that the transmitter
+    // drained, which the line above already has, and a model that
+    // cleared TxEMT on a read would pass it: the value returned is
+    // computed before the clearing.
+    let again = low(b.read(STATUS, t0 + 3 * frame));
     assert_eq!(
-        s & status::TX_EMPTY_OR_DSCHG,
+        again & status::TX_EMPTY_OR_DSCHG,
         status::TX_EMPTY_OR_DSCHG,
-        "and a status read does not clear TxEMT"
+        "a status read does not clear TxEMT: {again:o}"
     );
+    assert_eq!(again & (status::DSR | status::DCD), s & (status::DSR | status::DCD), "SR6, SR7");
     b.write(DATA, b'C' as u16, t0 + 3 * frame);
     assert_eq!(
         low(b.read(STATUS, t0 + 3 * frame)) & status::TX_EMPTY_OR_DSCHG,
