@@ -198,7 +198,7 @@ fn the_debuggee_has_a_chaosnet_of_its_own() {
     assert!(out.status.success(), "{t}");
     assert!(t.contains("debuggee chaosnet: 3051, alone on a cable of its own"), "{t}");
     assert!(
-        t.contains("chaosnet: 177001,"),
+        t.contains("chaosnet: 177001"),
         "this machine's is its own, and here its default:\n{t}"
     );
 

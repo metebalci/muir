@@ -37,7 +37,7 @@ program of its own on the network, [ozd](https://github.com/metebalci/ozd),
 reached over Chaosnet-over-UDP.
 
     target/release/muir --disk-pack vendor/run/disk-sys-100-0.img \
-        --chaos-address 3050 --chaos-udp-peer 3060@127.0.0.1:42043
+        --chaos-address 3050 --chaos-udp --chaos-udp-peer 3060@127.0.0.1:42043
 
 It prints where its terminal is, and boots. Point any VNC viewer at that
 address --- `vnc://127.0.0.1:5900` unless it says otherwise --- and you
@@ -191,12 +191,13 @@ band is `MIT-LISPM-1`, whose host table puts it at 3050 with `MIT-OZ` at
 at 4403. Neither address is what `--chaos-address` defaults to --- that is
 177001, on subnet 376, the Chaosnet's private range, which is no band's on
 purpose --- so a run that wants its band to reach a host names the band's
-own address, and names the host with `--chaos-udp-peer`:
+own address, plugs the cable in with `--chaos-udp`, and names the host with
+`--chaos-udp-peer`:
 
     muir --disk-pack vendor/run/disk-sys-100-0.img \
-        --chaos-address 3050 --chaos-udp-peer 3060@127.0.0.1:42043
+        --chaos-address 3050 --chaos-udp --chaos-udp-peer 3060@127.0.0.1:42043
     muir --disk-pack vendor/run/disk-sys-304-0.img \
-        --chaos-address 4401 --chaos-udp-peer 4403@127.0.0.1:42043
+        --chaos-address 4401 --chaos-udp --chaos-udp-peer 4403@127.0.0.1:42043
 
 ## Running it
 
@@ -496,10 +497,12 @@ commoner case than one. It answers the four contact names a band asks for.
 `sys/cc/*.qfasl` has to come over the network, the way it would have on a real
 machine.
 
-`--chaos-address` gives this machine its own address and, with it, puts the
-cable on the network as **Chaosnet over UDP** --- the encapsulation
-`cbridge`, `usim`, `klh10`, `ozd` and the live Chaosnet hosts speak --- at
-the protocol's own port unless `--chaos-udp` says where. Every host
+`--chaos-address` sets the sixteen address switches on the I/O board and
+nothing else. `--chaos-udp` is the cable, which puts the board on a network
+as **Chaosnet over UDP** --- the encapsulation `cbridge`, `usim`, `klh10`,
+`ozd` and the live Chaosnet hosts speak --- at the protocol's own port
+unless it says where. **Without the cable muir sends nothing**, as a machine
+with none talks to nobody however its switches read. Every host
 `--chaos-udp-peer 3060@host:port` names is then a station on the same
 modelled cable, taking its turn on it like any other, and that is how a run
 names its band's file and time host. muir stays a leaf: a packet for another

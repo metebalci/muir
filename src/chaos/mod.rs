@@ -95,10 +95,11 @@ pub mod wire;
 /// **unverified**: what is here is the release's trimmed table and not
 /// MIT's network-wide one, and a copy of that table would settle it.
 ///
-/// On `muir`: `--chaos-address <address>`, which is also what starts
-/// Chaosnet over UDP; `--chaos-udp`, `--chaos-udp-peer` and
-/// `--chaos-udp-dynamic` for the link and who is on it; `--chaos-trace`
-/// prints every packet.
+/// On `muir`: `--chaos-address <address>` is the switches and nothing
+/// else, and `--chaos-udp` is the cable --- without it muir sends
+/// nothing, as a machine with no cable talks to nobody however its
+/// switches read. `--chaos-udp-peer` and `--chaos-udp-dynamic` say who
+/// is on that cable, and `--chaos-trace` prints every packet.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// The sixteen address switches on the I/O board.

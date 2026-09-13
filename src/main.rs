@@ -93,12 +93,15 @@
 //! **A band wants a file and time host, and muir is not one**: a CADR had
 //! no such server in it, and neither has this. The host is another program
 //! on the network --- `ozd`, `https://github.com/metebalci/ozd`, is one
-//! that boots a band --- and `--chaos-address` is what reaches it, this
-//! machine's own sixteen address switches and, with them, Chaosnet over
-//! UDP: the cable goes on the network at port 42042 unless `--chaos-udp`
-//! says otherwise, and every host `--chaos-udp-peer` names is then a
-//! station on the same modelled cable, taking its turn on it. Which
-//! numbers a run wants are its band's: `--chaos-address 3050` with
+//! that boots a band. Two flags reach it, because they are two things on
+//! the board: `--chaos-address` is this machine's own sixteen address
+//! switches, which are set whether or not anything is plugged in, and
+//! `--chaos-udp` is the cable, Chaosnet over UDP at port 42042 unless it
+//! says otherwise. **Without the cable muir sends nothing**, as a machine
+//! with none talks to nobody however its switches read. Every host
+//! `--chaos-udp-peer` names is then a station on that cable, taking its
+//! turn on it. Which numbers a run wants are its band's:
+//! `--chaos-address 3050 --chaos-udp` with
 //! `--chaos-udp-peer 3060@<where the host is>` for the System 100 pack,
 //! `4401` with `4403@...` for System 304's. Every engine has a Chaosnet.
 //! muir stays a leaf: a packet for somewhere else is dropped rather than
@@ -660,35 +663,38 @@ A simulator of the MIT CADR Lisp Machine.
                                address switches on the I/O board, the bits
                                in octal, 3050, or subnet:host with each in
                                octal, 6:50 --- the same number, subnet in
-                               the high byte. Giving it also puts the cable
-                               on the network, as --chaos-udp does. Which
+                               the high byte. The switches are set whether
+                               or not anything is plugged in: --chaos-udp
+                               is the cable. Which
                                address to give is the band's own: 3050 on
                                System 100 and 4401 on System 304, whose file
                                and time hosts are 3060 and 4403 --- not
                                muir, but another program on the network,
                                named with --chaos-udp-peer. [default:
-                               177001, on subnet 376 and no band's, with the
-                               cable off the network]
+                               177001, on subnet 376 and no band's]
   --chaos-trace                every Chaosnet packet and frame on the cable,
                                to stderr. [default: off]
-  --chaos-udp [<endpoint>]     where the Chaosnet cable is on the network:
-                               Chaosnet over UDP, which cbridge, usim, klh10
-                               and ozd speak. Nothing, a port, an address or
+  --chaos-udp [<endpoint>]     the Chaosnet cable, plugged in: Chaosnet over
+                               UDP, which cbridge, usim, klh10 and ozd
+                               speak. **Without this muir sends nothing**,
+                               whatever --chaos-address has set the switches
+                               to, as a machine with no cable talks to
+                               nobody. Nothing, a port, an address or
                                address:port; a bare port is on the loopback,
                                so reaching another host means naming an
                                address to listen on. muir is a leaf: a
                                packet for another host is dropped, not
-                               forwarded. [default: 127.0.0.1:42042, the
-                               protocol's own port, when --chaos-address is
-                               given; off with neither flag]
+                               forwarded. [default: off, the cable
+                               unplugged; 127.0.0.1:42042, the protocol's
+                               own port, when the flag is given bare]
   --chaos-udp-dynamic          learn where a peer is from the packets it
                                sends, so that a host --chaos-udp-peer never
                                named can still be answered: whatever can
                                reach the port goes in the address table
                                under whatever address it claims. An endpoint
                                --chaos-udp-peer named is not moved by a
-                               packet. It needs the link, so --chaos-address
-                               or --chaos-udp. [default: off]
+                               packet. It needs the cable, --chaos-udp.
+                               [default: off]
   --chaos-udp-peer <address>@<host>:<port>
                                a Chaosnet host reached over UDP and where it
                                lives: 3060@127.0.0.1:42043, the address in
@@ -696,8 +702,7 @@ A simulator of the MIT CADR Lisp Machine.
                                an address, resolved once here. The port may
                                be left off for 42042. Once per peer, and the
                                address may not be this machine's own. It
-                               needs the link, so --chaos-address or
-                               --chaos-udp.
+                               needs the cable, --chaos-udp.
   --checkpoint <file>          write the machine's whole state to <file>
                                when the run stops, for --resume to start
                                from. On chip it is the boards themselves,
@@ -3375,10 +3380,6 @@ fn main() {
     let mut which: Option<Which> = None;
     let mut packs: Vec<Pack> = Vec::new();
     let mut chaos = muir::chaos::Config::default();
-    // Whether `--chaos-address` was given, which is also what asks for
-    // the CHUDP link: an address is a run saying which machine on which
-    // network this is, and a network it cannot reach is no network.
-    let mut address_given = false;
     // The CHUDP link: where it listens, the peers named for it, and
     // whether it learns where an unnamed one lives. The socket is bound
     // after the flags are read, so that what is refused is refused before
@@ -3517,7 +3518,6 @@ fn main() {
                     Some(a) => chaos.address = a,
                     None => usage(want),
                 }
-                address_given = true;
             }
             (None, "--chaos-trace") => chaos.trace = true,
             // The flags of the Chaosnet server muir used to carry. muir
@@ -3766,14 +3766,6 @@ fn main() {
     if serial_at.is_some() && cabled == 1 {
         usage("--serial is one machine's serial port, and the lashup runs two");
     }
-    // `--chaos-address` is a run saying which machine on which network
-    // this is, so it puts the cable on the network too: the link at the
-    // protocol's own port unless `--chaos-udp` said where. A run that
-    // gives neither opens no socket at all, which is what most runs
-    // want and what lets many of them go at once.
-    if address_given && udp_at.is_none() {
-        udp_at = endpoint(None, muir::chaos::udp::PORT);
-    }
     // The two flags that describe a CHUDP link describe one that has to
     // be there: without a link nothing is listening and the cable carries
     // this machine alone.
@@ -3782,7 +3774,7 @@ fn main() {
     {
         if given_it && udp_at.is_none() {
             usage(&format!(
-                "{flag} is part of the CHUDP link: it needs --chaos-address or --chaos-udp"
+                "{flag} is part of the CHUDP link: it needs --chaos-udp, which is the cable"
             ));
         }
     }
@@ -4066,18 +4058,27 @@ fn main() {
             )
             .unwrap();
         }
-        let reaches = match &chaos.udp {
-            Some(_) => "on the network over UDP".to_string(),
-            None => "alone on its cable; --chaos-address puts it on a network".to_string(),
-        };
-        writeln!(s, "chaosnet: {:o}, {reaches}", chaos.address).unwrap();
-        if let Some(link) = &chaos.udp {
-            let peers = match link.peers.as_slice() {
-                [] => "no peer named, so no file or time host".to_string(),
-                p => p.iter().map(|(a, e)| format!("{a:o} at {e}")).collect::<Vec<_>>().join(", "),
-            };
-            let learning = if link.dynamic { ", learning where others are" } else { "" };
-            writeln!(s, "chaosnet udp: listening at {}, {peers}{learning}", link.at).unwrap();
+        // **The switches, then the cable.**  They are two things on the
+        // board and two lines here: a machine has its address set whether
+        // or not anything is plugged into it, and one with no cable talks
+        // to nobody however its switches read.
+        writeln!(s, "chaosnet: {:o}", chaos.address).unwrap();
+        match &chaos.udp {
+            None => {
+                writeln!(s, "chaosnet over udp: disabled; --chaos-udp is the cable").unwrap();
+            }
+            Some(link) => {
+                let peers = match link.peers.as_slice() {
+                    [] => "no peer named, so no file or time host".to_string(),
+                    p => p
+                        .iter()
+                        .map(|(a, e)| format!("{a:o} at {e}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                };
+                let learning = if link.dynamic { ", learning where others are" } else { "" };
+                writeln!(s, "chaosnet over udp: {}, {peers}{learning}", link.at).unwrap();
+            }
         }
         writeln!(s, "terminal: {}", terminal_line(&terminal, &no_terminal, listen.addr)).unwrap();
         writeln!(s, "keyboard: {keyboard_said}").unwrap();

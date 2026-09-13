@@ -520,15 +520,14 @@ fn a_datagram_reaches_a_running_muirs_cable() {
         .args(["--chaos-udp-peer", &format!("{PEER:o}@{peer_at}")])
         .args(["--chaos-trace"])
         .start();
-    child.stderr().wait_until(
-        |t| t.contains("chaosnet udp: listening at"),
-        "muir says where it is listening",
-    );
+    child
+        .stderr()
+        .wait_until(|t| t.contains("chaosnet over udp: 127."), "muir says where it is listening");
     let banner = child.stderr().so_far();
-    let line = banner.lines().find(|l| l.starts_with("chaosnet udp:")).expect("the line");
+    let line = banner.lines().find(|l| l.starts_with("chaosnet over udp:")).expect("the line");
     let at: SocketAddr = line
         .split_whitespace()
-        .nth(4)
+        .nth(3)
         .and_then(|w| w.trim_end_matches(',').parse().ok())
         .unwrap_or_else(|| panic!("an endpoint in {line:?}"));
     // An RFC for STATUS from this test to the machine, resent until the
