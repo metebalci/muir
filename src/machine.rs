@@ -168,7 +168,8 @@ pub struct Machine {
     /// The Chaosnet: this machine's address, and the link its cable
     /// reaches the rest of the network over.
     pub chaos: crate::chaos::Config,
-    /// The standard black-and-white display.
+    /// The display board, whichever of the two `--tv-board` named:
+    /// [`crate::tv::Board`].
     pub tv: Tv,
     /// The keyboard, the mouse and the clocks.
     pub ioboard: IoBoard,

@@ -1288,3 +1288,90 @@ fn the_sync_bits_the_mode_register_reads_are_the_programs() {
     );
     assert_eq!(clr_rises[0] - clr_falls[0], 500, "for one instruction");
 }
+
+/// **Mode bit 7 reads zero on this board whatever the sync enable is
+/// doing**, read back through bus cycles as the software would read it.
+///
+/// [`the_read_only_mode_bits_come_off_a_buffer`] has the pin: NXBCTL 0F11
+/// pin 8 is `GND` by ECO 2 of `cadrtv/lmtv.eco`, where the drawing has
+/// `SYNC PROM ENB`. This takes the other end of it --- a write of register
+/// 3 with bit 7 set, which is what selects the sync RAM over MIT's PROM,
+/// and then a read of the mode register --- because that is the difference
+/// between the two boards' interfaces: on the LISPM TV the same bit reads
+/// the enable back (`tests/lispmtv_netlist.rs`), and `src/tv.rs` answers
+/// for both.
+#[test]
+fn the_prom_mode_bit_reads_zero_whatever_the_sync_enable_is() {
+    use muir::tv::{CONTROL, mode};
+    use muir::xbus::XbusMaster;
+
+    let n = simpletv();
+    let mut b = XbusMaster::new(&n, 0);
+    let (_, word) = b.cycle(CONTROL, None);
+    assert_eq!(word & mode::SYNC_PROM_ENABLE, 0, "the PROM is selected at power-on");
+
+    b.cycle(CONTROL + 3, Some(0o200));
+    assert_eq!(b.level("SYNC PROM ENB"), muir::part::Level::Low, "the 2141s are selected");
+    let (_, word) = b.cycle(CONTROL, None);
+    assert_eq!(word & mode::SYNC_PROM_ENABLE, 0, "and the bit still reads zero");
+
+    b.cycle(CONTROL + 3, Some(0));
+    let (_, word) = b.cycle(CONTROL, None);
+    assert_eq!(word & mode::SYNC_PROM_ENABLE, 0, "as it does with the PROM back in");
+}
+
+/// **This board has the colour map's write port too, and it is the same
+/// circuit the LISPM TV's is.**
+///
+/// `lmtv.stf`, MIT's own page list of 28 May 1979, titles `RAMCOL.DRW`
+/// "SIMPLE TV / COLOR MAP", and the May 1980 revision carries it forward
+/// as `nracol`, which is in this netlist. Part for part it is the LISPM
+/// TV's `COLOR` page: the 74LS244 at 0D13 puts `XDI0..7` on `COLOR 0..7`
+/// while `-LOAD COLOR` is low, the 74S241 at 0E09 puts `XDI8..15` on
+/// `COLOR VALUE 0..7`, and the 74S139 at 0E10, enabled through the 74S32
+/// at 0E11 when `-ACK WRITE` comes, decodes `XDI6` and `XDI7` into
+/// `-LOAD COLOR 0`, `1` and `2`, its fourth output unconnected. The two
+/// differ in the 74S257's select --- `CLK0 64B SR` here against the LISPM
+/// TV's `8B SR LOAD`, which is the video path and not the write --- and in
+/// the name of the pull-up rail on the 241's second enable, `HI` here and
+/// `HI3` there.
+///
+/// So **register 4 is not what tells the boards apart**: the mode
+/// register's bit 7 is, and `src/tv.rs` writes the colour map on either
+/// board because either board strobes it. `lmtv.order` describes one
+/// programming interface for both, and this is the rest of it.
+#[test]
+fn the_colour_register_strobes_one_map_here_as_well() {
+    use muir::xbus::XbusMaster;
+
+    let n = simpletv();
+    let dec = at(&n, "NRACOL", "0E10", "74S139");
+    assert_eq!(on(&n, dec, 14), "XDI6", "the channel's low bit");
+    assert_eq!(on(&n, dec, 13), "XDI7", "and its high bit");
+    for (channel, pin) in [(0, 12), (1, 11), (2, 10)] {
+        assert_eq!(on(&n, dec, pin), format!("-LOAD COLOR {channel}"));
+    }
+    assert!(on(&n, dec, 9).starts_with("NC#"), "the fourth channel goes nowhere");
+    let buf = at(&n, "NRACOL", "0D13", "74LS244");
+    assert_eq!(on(&n, buf, 1), "-LOAD COLOR", "the colour buffer turns on for the write");
+    assert_eq!(on(&n, buf, 2), "XDI0", "and puts the written bits on COLOR");
+    assert_eq!(on(&n, buf, 18), "COLOR 0");
+
+    let mut b = XbusMaster::new(&n, 0);
+    // (DPB value 1010 (DPB channel 0602 colour)), as `WRITE-COLOR-MAP` writes.
+    for (value, channel, colour) in [(0o252u32, 0u32, 5u32), (0o123, 1, 0o17), (0o077, 2, 0)] {
+        let (low, sampled) = support::colour_write(&mut b, value << 8 | channel << 6 | colour);
+        let (on_colour, on_value) = sampled
+            .unwrap_or_else(|| panic!("channel {channel}: no -LOAD COLOR n fell during the cycle"));
+        eprintln!(
+            "value {value:o} channel {channel} colour {colour:o}: \
+             -LOAD COLOR {low:?} low, COLOR {on_colour:o}, COLOR VALUE {on_value:o}"
+        );
+        assert_eq!(low, vec![channel as usize], "one map's strobe, and one only");
+        assert_eq!(on_colour & 0o17, colour as u64, "the colour is XDI3..0 on COLOR 3..0");
+        assert_eq!(on_colour >> 6 & 3, channel as u64, "and the channel rides out on COLOR 7..6");
+        assert_eq!(on_value, value as u64, "the value is XDI15..8 on COLOR VALUE 7..0");
+    }
+    let (low, _) = support::colour_write(&mut b, 0o377 << 8 | 3 << 6 | 5);
+    assert!(low.is_empty(), "channel 3 decodes to the 74S139's unconnected output: {low:?}");
+}

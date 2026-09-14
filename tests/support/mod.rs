@@ -196,6 +196,59 @@ pub fn no_net_has_two_push_pull_drivers(n: &Netlist) {
     assert!(conflicts.is_empty(), "{} nets have two push-pull drivers", conflicts.len());
 }
 
+/// One write of the display board's colour register, `lmtv.order`'s
+/// `173777x4`, watched all the way through: which of `-LOAD COLOR 0`, `1`
+/// and `2` went low during the cycle, and what `COLOR 0..7` and
+/// `COLOR VALUE 0..7` read while one was.
+///
+/// Both display boards have the page --- `COLOR` on the LISPM TV and
+/// `NRACOL`, titled "COLOR MAP", on the SIMPLE TV --- so both are measured
+/// with this, and `tests/tv.rs` holds the model to what they do.
+///
+/// It is [`muir::xbus::XbusMaster::cycle`] taken apart, because the strobe
+/// is one 16 MHz period wide and is gone by the time the cycle ends: the
+/// bus is watched every 5 ns from the request to the end of the settle, as
+/// `cycle` itself watches for the acknowledgement.
+pub fn colour_write(b: &mut muir::xbus::XbusMaster, word: u32) -> (Vec<usize>, Option<(u64, u64)>) {
+    use muir::xbus::XbusMaster;
+
+    let strobes: Vec<u32> = (0..3).map(|k| b.net(&format!("-LOAD COLOR {k}"))).collect();
+    let colour: Vec<u32> = (0..8).map(|k| b.net(&format!("COLOR {k}"))).collect();
+    let value: Vec<u32> = (0..8).map(|k| b.net(&format!("COLOR VALUE {k}"))).collect();
+
+    let (mut low, mut sampled) = (Vec::new(), None);
+    let watch = |b: &XbusMaster, low: &mut Vec<usize>, sampled: &mut Option<(u64, u64)>| {
+        for (k, &s) in strobes.iter().enumerate() {
+            if b.chip.net(s) == Level::Low {
+                if !low.contains(&k) {
+                    low.push(k);
+                }
+                *sampled = Some((b.chip.read(&colour), b.chip.read(&value)));
+            }
+        }
+    };
+
+    let t0 = b.now;
+    b.request(muir::tv::CONTROL + 4, Some(word));
+    while !b.acked() {
+        assert!(b.now < t0 + 40_000, "the board never acknowledged");
+        b.run(b.now + 5);
+        watch(b, &mut low, &mut sampled);
+    }
+    let until = b.now + XbusMaster::RELEASE_NS;
+    while b.now < until {
+        b.run(b.now + 5);
+        watch(b, &mut low, &mut sampled);
+    }
+    b.release();
+    let until = b.now + 600;
+    while b.now < until {
+        b.run(b.now + 5);
+        watch(b, &mut low, &mut sampled);
+    }
+    (low, sampled)
+}
+
 /// What `src/part.rs` makes of the kinds a board uses, each kind once and
 /// sorted: the kinds with no pinout, the kinds with a pinout and no
 /// behaviour, and the kinds whose behaviour computes nothing --- no gate

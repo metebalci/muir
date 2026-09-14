@@ -181,3 +181,39 @@ fn chip_checkpoints_at_its_stop_and_another_resumes_from_it() {
     assert!(!out.status.success());
     assert!(text(&out).contains("--tv-board"), "{}", text(&out));
 }
+
+/// **An engine's checkpoint carries the display board too**, and a resume
+/// onto the other board is refused by the flag's name, as a `chip`
+/// checkpoint's header refuses one.  The board is not in the header here
+/// --- it is in the body, what `Tv::save` writes --- so the refusal comes
+/// after the file has been read rather than before, and says the same
+/// thing.
+#[test]
+fn a_resume_has_the_checkpoint_s_display_board() {
+    let dir = scratch("checkpoint-tv-board");
+    let chk = dir.join("lispm.chk");
+    let out = muir()
+        .args(["--micro", "--tv-board", "lispm-tv", "--stop-after", "100", "--checkpoint"])
+        .arg(&chk)
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "the first run failed:\n{t}");
+    assert!(chk.exists(), "the checkpoint was written:\n{t}");
+
+    // The board it was written with, and the run resumes.
+    let out = muir()
+        .args(["--micro", "--tv-board", "lispm-tv", "--stop-after", "10", "--resume"])
+        .arg(&chk)
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "the resumed run failed:\n{t}");
+    assert!(t.contains("100 microcycles"), "{t}");
+    assert!(t.contains("tv: model lispm-tv"), "the resumed run has the board:\n{t}");
+
+    // Without the flag it is the SIMPLE TV, which is another machine.
+    let out = muir().args(["--micro", "--stop-after", "10", "--resume"]).arg(&chk).run();
+    let t = text(&out);
+    assert!(!out.status.success(), "a board apart resumed anyway:\n{t}");
+    assert!(t.contains("--tv-board"), "the refusal names the flag:\n{t}");
+    assert!(t.contains("lispm-tv"), "and the board the checkpoint has:\n{t}");
+}

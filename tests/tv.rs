@@ -3,6 +3,11 @@
 
 //! The black-and-white display, checked against MIT's own window system.
 //!
+//! Both boards are here: one model serves the SIMPLE TV and the LISPM TV,
+//! and what `--tv-board` changes is mode bit 7. What the boards do is read
+//! off them in `tests/simpletv_netlist.rs` and `tests/lispmtv_netlist.rs`;
+//! this holds the model to it.
+//!
 //! The constants in `src/tv.rs` are not asserted against themselves here:
 //! `the_geometry_is_mits_own` reads `sys/window/shwarm.lisp` out of the
 //! System 100 release and fails if we have drifted from it. Without the
@@ -10,7 +15,7 @@
 
 use muir::busint::{self, Responder};
 use muir::machine::{MAIN_WORDS, Machine, bus_error};
-use muir::tv::{self, Tv, mode};
+use muir::tv::{self, Board, Tv, mode};
 
 mod support;
 use support::release;
@@ -101,8 +106,8 @@ fn black_on_white_is_one_bit_read_modify_written() {
 }
 
 /// Writing the mode register must not invent sync signals: bits 5 and 6
-/// are the sync program's, read where it has them clear, and bit 7 is
-/// grounded on this board.
+/// are the sync program's, read where it has them clear, and bit 7 is the
+/// sync enable read back, grounded on the SIMPLE TV this `Tv` is.
 #[test]
 fn the_read_only_bits_never_stick() {
     let mut tv = Tv::default();
@@ -313,7 +318,10 @@ fn the_mode_bits_are_mits_own() {
     // XDO 7 through the read buffer, and ECO 2 of `lmtv.eco` grounds that
     // buffer input on this board, "on old TV boards the check if TV is in
     // PROM mode (extant only on new TV boards) reads an unused input". So
-    // it reads zero either way, which is what `src/tv.rs` gives.
+    // on the SIMPLE TV it reads zero whatever the sync enable is doing,
+    // which is what `src/tv.rs` gives; the LISPM TV reads the enable back
+    // there, and `the_prom_mode_bit_reads_the_sync_enable_on_the_lispm_tv_alone`
+    // is the pair of boards.
     assert!(block.contains("31-7  Garbage"), "everything above bit 6");
     assert_eq!(mode::SYNC_PROM_ENABLE, 0o200);
     let mut tv = Tv::default();
@@ -355,4 +363,136 @@ fn an_xbus_init_clears_the_vertical_flag_and_nothing_else() {
     assert!(!tv.vert_flag(11 + FRAME_NS), "a RAM with no program in it makes no frame");
     tv.write_control(3, 0o5, 12);
     assert!(tv.vert_flag(12 + 16_000), "the PROM program's TVMA CLR presets the flop again");
+}
+
+/// **Mode bit 7 is the one bit of the interface the two boards differ in.**
+///
+/// On the LISPM TV the read buffer's fourth input, XBCTL 0F11 pin 8, is
+/// the net `-SYNC PROM ENB`, which the 74LS273 at TVINC 0A07 drives from
+/// `XDI7` --- register 3's bit 7, the sync enable --- so the bit reads back
+/// the enable: one while the sync RAM is selected, zero while MIT's PROM
+/// is. On the SIMPLE TV that same pin is `GND`, ECO 2 of `cadrtv/lmtv.eco`
+/// grounding it, so it reads zero whatever the enable says.
+///
+/// `tests/lispmtv_netlist.rs` and `tests/simpletv_netlist.rs` read both
+/// boards back through a bus cycle; this is the model beside them.
+#[test]
+fn the_prom_mode_bit_reads_the_sync_enable_on_the_lispm_tv_alone() {
+    for (board, selected) in [(Board::SimpleTv, 0), (Board::LispmTv, mode::SYNC_PROM_ENABLE)] {
+        let mut tv = Tv::default();
+        tv.set_board(board);
+        assert_eq!(tv.board(), board);
+        assert_eq!(
+            tv.read_control(0, 0) & mode::SYNC_PROM_ENABLE,
+            0,
+            "{}: the PROM is selected at power-on",
+            board.name()
+        );
+
+        // Register 3 bit 7 up: the RAM is in, and the PROM out.
+        tv.write_control(3, 0o200, 10);
+        assert!(tv.sync.enabled());
+        assert_eq!(
+            tv.read_control(0, 20) & mode::SYNC_PROM_ENABLE,
+            selected,
+            "{}: with the sync RAM selected",
+            board.name()
+        );
+
+        // And back to the PROM.
+        tv.write_control(3, 0, 30);
+        assert_eq!(
+            tv.read_control(0, 40) & mode::SYNC_PROM_ENABLE,
+            0,
+            "{}: with the PROM selected again",
+            board.name()
+        );
+        assert_eq!(tv.mode() & mode::SYNC_PROM_ENABLE, 0, "the bit is in no register");
+    }
+}
+
+/// **Register 4 is the colour map's write port, on either board.**
+///
+/// `lmtv.order`: "173777x4 Color (write only) 15-8 Value to write into
+/// color map, 7-6 Select which color map (up to 4 channels), 3-0 Color
+/// (i.e. address into color map)", and `WRITE-COLOR-MAP` in
+/// `sys/window/color.lisp` writes exactly that --- `(DPB R 1010 LOC)`,
+/// then the same with `(DPB 1 0602 LOC)` and `(DPB 2 0602 LOC)`, so
+/// channel 0 is red, 1 green and 2 blue, each stored as `377 - value`.
+/// The fourth channel the field can name is not wired: the 74S139 at
+/// COLOR 0E10 decodes `XDI7`, `XDI6` into `-LOAD COLOR 0`, `1` and `2`,
+/// and its fourth output is NC.
+///
+/// **Both boards do this.** The page is `COLOR` on the LISPM TV and
+/// `NRACOL` --- `lmtv.stf`'s "SIMPLE TV / COLOR MAP" --- on the SIMPLE TV,
+/// the same parts wired the same way, and each board is measured strobing
+/// the map in its own netlist test. So the colour register is not what
+/// tells the two apart; mode bit 7 is.
+#[test]
+fn the_colour_register_writes_the_map_on_either_board() {
+    // (DPB value 1010 (DPB channel 0602 colour)), as MIT's own writes are.
+    let write = |value: u32, channel: u32, colour: u32| value << 8 | channel << 6 | colour;
+
+    for board in [Board::SimpleTv, Board::LispmTv] {
+        let mut tv = Tv::default();
+        tv.set_board(board);
+        assert_eq!(tv.color_map(), &[[0; 3]; tv::COLORS], "nothing is written at power-on");
+
+        tv.write_control(4, write(0o252, 0, 5), 0);
+        tv.write_control(4, write(0o123, 1, 5), 0);
+        tv.write_control(4, write(0o077, 2, 5), 0);
+        assert_eq!(
+            tv.color_map()[5],
+            [0o252, 0o123, 0o077],
+            "{}: red, green and blue of colour 5",
+            board.name()
+        );
+
+        // The fourth channel decodes to the 74S139's unconnected output.
+        tv.write_control(4, write(0o377, 3, 5), 0);
+        assert_eq!(tv.color_map()[5], [0o252, 0o123, 0o077], "channel 3 strobes nothing");
+        for (colour, entry) in tv.color_map().iter().enumerate() {
+            assert!(colour == 5 || entry == &[0; 3], "colour {colour} was not written");
+        }
+
+        // Sixteen colours, `(LOGAND LOC 17)` in MIT's own write.
+        tv.write_control(4, write(0o11, 0, 0o17), 0);
+        assert_eq!(tv.color_map()[0o17][0], 0o11, "the last colour");
+
+        // Write only: `lmtv.order` gives the register no read, and
+        // `color.lisp` keeps `HARDWARE-COLOR-MAP` in the band because "the
+        // hardware does not allow reading back of the color map".
+        assert_eq!(tv.read_control(4, 0), 0);
+    }
+}
+
+/// **A checkpoint carries the board and its colour map**, so that a
+/// resumed run is the machine that was stopped and not another one with
+/// the same buffer in it.
+#[test]
+fn the_board_and_its_colour_map_go_through_a_checkpoint() {
+    use muir::checkpoint::{Reader, Writer};
+
+    let mut tv = Tv::default();
+    tv.set_board(Board::LispmTv);
+    tv.write_control(4, 0o252 << 8 | 5, 0);
+    tv.write_control(3, 0o200, 0);
+    let mut w = Writer::new();
+    tv.save(&mut w);
+    let body = w.finish();
+
+    let mut back = Tv::default();
+    let mut r = Reader::new(&body);
+    back.load(&mut r).unwrap();
+    r.done().unwrap();
+    assert_eq!(back.board(), Board::LispmTv);
+    assert_eq!(back.color_map()[5], [0o252, 0, 0]);
+    assert_eq!(back.read_control(0, 0) & mode::SYNC_PROM_ENABLE, mode::SYNC_PROM_ENABLE);
+
+    // There are two boards, so a third is a corrupt checkpoint and is
+    // refused rather than taken for one of them.
+    let mut wrong = body.clone();
+    wrong[0] = 2;
+    let err = Tv::default().load(&mut Reader::new(&wrong)).unwrap_err().to_string();
+    assert!(err.contains("display board 2"), "{err}");
 }
