@@ -160,11 +160,16 @@
 //! still off.
 //!
 //! The prompt is muir's own line on stdin while a machine runs on its
-//! own: `boot`, `hold`, `continue`, `step`, `pc`, `reg`, `amem`, `mmem`,
-//! `dmem`, `pdl`, `spc`, `screenshot`, `startcapture`, `endcapture`,
-//! `info`, `checkpoint`, `quit` and `help`,
+//! own, or at either end of the debug cable to another program or to
+//! the fabric: `boot`, `hold`, `continue`, `step`, `pc`, `reg`, `amem`,
+//! `mmem`, `dmem`, `pdl`, `spc`, `screenshot`, `startcapture`,
+//! `endcapture`, `info`, `checkpoint`, `quit` and `help`,
 //! [`muir::prompt`], read from a pipe or from a terminal muir is in the
-//! foreground of, and acted on between two microcycles. `muir: ` is
+//! foreground of, and acted on between two microcycles. An end of the
+//! cable refuses `checkpoint` and the capture commands, saying why, as
+//! the command line refuses `--checkpoint` and `--tv-capture` there; the
+//! lashup in one process and the netlist debuggee have no prompt, and
+//! their start says so. `muir: ` is
 //! written while the machine is held, to a terminal and not to a pipe;
 //! a line typed while it runs is acted on all the same. ^C holds the
 //! machine at the prompt; ^C while held, or with no prompt to go on
@@ -228,7 +233,7 @@ use muir::clock::{Behavioural, Clock};
 use muir::disk_unit::{Geometry, Unit};
 use muir::engine::Engine;
 use muir::isa::Insn;
-use muir::lashup::{FreeRunning, Lashup, Remote};
+use muir::lashup::{FreeRunning, Lashup, Remote, Side};
 use muir::machine::Machine;
 use muir::micro::Micro;
 use muir::netlist;
@@ -802,14 +807,19 @@ A simulator of the MIT CADR Lisp Machine.
                                /dev/mem. It is that project's window and no
                                other: one that does not say so is refused,
                                and there is no default for where it sits.
-                               [default: 127.0.0.1:7661]
+                               Either way this machine has the prompt, as
+                               one alone has, less checkpoint and the
+                               capture commands. [default: 127.0.0.1:7661]
   --debug-cable-listen [<endpoint>]
                                rtl, chip: this machine is the debuggee at
                                the end of a debug cable over TCP: its DBGIN
                                waits at the endpoint for the debugger to
                                connect, and then the two run in step. On
-                               chip it is the board's own connector, run an
-                               event at a time. [default: 127.0.0.1:7661]
+                               rtl this machine has the prompt, as one alone
+                               has, less checkpoint and the capture
+                               commands. On chip it is the board's own
+                               connector, run an event at a time, and there
+                               is no prompt. [default: 127.0.0.1:7661]
   --debug-in-process           rtl: the two-machine lashup in one process. A
                                second machine runs beside this one with both
                                debug cables between them, each machine's
@@ -820,7 +830,7 @@ A simulator of the MIT CADR Lisp Machine.
                                The stops are this machine's, and
                                --stop-after counts its microcycles. Both
                                machines get a terminal, the other's one port
-                               above.
+                               above; neither has the prompt.
   --debuggee-chaos-address <address>
                                rtl: the other machine's Chaosnet address, as
                                --chaos-address is this machine's. The other
@@ -1774,9 +1784,28 @@ fn time_lashup(
 }
 
 /// One end of the cable over TCP: this machine, debugger or debuggee, run
-/// in step with the other program by [`Remote::step`], with the terminal
-/// and the stops as for a machine alone; at the end the two agree to stop.
-fn time_remote(name: &str, mut remote: Remote<Rtl>, stop: Stop, terminal: Option<&mut Terminal>) {
+/// in step with the other program by [`Remote::step`], with the terminal,
+/// the stops and the prompt as for a machine alone; at the end the two
+/// agree to stop.
+///
+/// **A hold here is felt at the other end.** Each end steps only as far
+/// as the other has promised and waits for a message otherwise
+/// ([`Remote`]), so a held debugger holds the debuggee once it has run to
+/// the debugger's last promise, and a held debuggee holds the debugger at
+/// its next request, whose acknowledgement it then waits for --- the
+/// other process sits in [`Remote::step`]'s wait, its terminal and its
+/// own prompt unattended, until this end runs on.  A slow debuggee does
+/// the same to its debugger, the netlist one above all, and the cable is
+/// built for it: `continue` puts both back as they were.  A debuggee that
+/// stopped itself is not held for it, though: a halted debuggee is what
+/// CC reads through the cable, and a held one would answer nothing.
+fn time_remote(
+    name: &str,
+    mut remote: Remote<Rtl>,
+    stop: Stop,
+    terminal: Option<&mut Terminal>,
+    setup: &str,
+) {
     let t = Instant::now();
     let mut halt = None;
     let mut terminal = terminal;
@@ -1784,78 +1813,99 @@ fn time_remote(name: &str, mut remote: Remote<Rtl>, stop: Stop, terminal: Option
     let mut mouse = Mouse::new();
     let mut last_poll = Instant::now();
     let mut ran = 0;
+    let mut hold = Hold::open(false);
     catch_interrupts();
-    let mut interrupts_seen = 0;
-    loop {
-        let e = &remote.machine;
-        if ran >= stop.after || stop.reached(e.pc(), !e.machine().mode.prom_disable) {
-            break;
-        }
-        if interrupted(&mut interrupts_seen) {
-            break;
-        }
-        match remote.step() {
-            Ok(true) => ran += 1,
-            Ok(false) => continue,
-            Err(muir::lashup::Error::Halt(h)) => {
-                halt = Some(h);
-                break;
-            }
-            Err(e) => {
-                eprintln!("muir: the debug cable: {e}");
-                break;
-            }
-        }
-        if ran % TERMINAL_CHECK == 0 {
-            let e = &mut remote.machine;
-            if last_poll.elapsed() >= TERMINAL_INTERVAL
-                && let Some(term) = terminal.as_deref_mut()
-            {
-                term.poll(Frame::of(&e.machine().simpletv));
-                for (keysym, down) in term.take_keys() {
-                    keyboard.key(keysym, down);
+    while !hold.quit
+        && ran < stop.after
+        && !stop.reached(remote.machine.pc(), !remote.machine.machine().mode.prom_disable)
+    {
+        if hold.on {
+            std::thread::sleep(TERMINAL_INTERVAL / 4);
+        } else {
+            match remote.step() {
+                Ok(true) => {
+                    ran += 1;
+                    hold.stepped(&remote.machine, ran);
                 }
-                for (buttons, x, y) in term.take_pointers() {
-                    mouse.pointer(buttons, x, y);
+                Ok(false) => continue,
+                Err(muir::lashup::Error::Halt(h)) => {
+                    halt = Some(h);
+                    break;
                 }
-                if e.machine_mut().ioboard.take_beep() {
-                    term.ring();
+                Err(e) => {
+                    eprintln!("muir: the debug cable: {e}");
+                    break;
                 }
-                last_poll = Instant::now();
             }
-            let board = &mut e.machine_mut().ioboard;
-            if keyboard.pending() > 0 {
-                keyboard.deliver(board);
-            }
-            if mouse.pending(board.mouse_buttons_held()) {
-                mouse.deliver(board);
-            }
-            e.keyboard_boot();
         }
+        if !hold.check(ran) {
+            continue;
+        }
+        let e = &mut remote.machine;
+        if last_poll.elapsed() >= TERMINAL_INTERVAL
+            && let Some(term) = terminal.as_deref_mut()
+        {
+            term.poll(Frame::of(&e.machine().simpletv));
+            for (keysym, down) in term.take_keys() {
+                keyboard.key(keysym, down);
+            }
+            for (buttons, x, y) in term.take_pointers() {
+                mouse.pointer(buttons, x, y);
+            }
+            if e.machine_mut().ioboard.take_beep() {
+                term.ring();
+            }
+            last_poll = Instant::now();
+        }
+        let board = &mut e.machine_mut().ioboard;
+        if keyboard.pending() > 0 {
+            keyboard.deliver(board);
+        }
+        if mouse.pending(board.mouse_buttons_held()) {
+            mouse.deliver(board);
+        }
+        e.keyboard_boot();
+        if remote.side() == Side::Debugger {
+            hold.self_halt(&remote.machine, ran);
+        }
+        hold.interrupts(&remote.machine, ran);
+        hold.lines(&mut remote.machine, ran, setup, &mut Writes::CableEnd);
     }
+    hold.done();
     report(name, ran, t.elapsed().as_secs_f64());
-    let e = &remote.machine;
-    stop.conclude(ran, e.pc(), !e.machine().mode.prom_disable, halt);
+    hold.conclude(&remote.machine, &stop, ran, halt);
     println!("       {} debug cycles on the cable", remote.machine.debug_cycles());
     if let Err(e) = remote.finish() {
         eprintln!("muir: the debug cable at the end: {e}");
     }
-    if let Some(term) = terminal {
-        serve_last_screen(term, &remote.machine.machine().simpletv, &mut interrupts_seen);
+    if !hold.quit
+        && let Some(term) = terminal
+    {
+        serve_last_screen(term, &remote.machine.machine().simpletv, &mut hold.interrupts_seen);
     }
 }
 
 /// The debugger's end of the cable to a debuggee in FPGA fabric: this
 /// machine stepped and the window polled beside it by
-/// [`FreeRunning::step`], with the terminal and the stops as for a machine
-/// alone. Nothing is promised either way and there is nothing at the far
-/// end to agree with about stopping: the run ends where this machine's
-/// own stops say, with any request left at the window lifted as the window
-/// goes.
+/// [`FreeRunning::step`], with the terminal, the stops and the prompt as
+/// for a machine alone. Nothing is promised either way and there is
+/// nothing at the far end to agree with about stopping: the run ends
+/// where this machine's own stops say, or at the prompt's `quit`, with
+/// any request left at the window lifted as the window goes.
+///
+/// **A hold here leaves the window as it stands.** The debuggee runs on
+/// its own crystal and is not held with the debugger.  A request standing
+/// at the window when the hold comes on stands through it, and holds
+/// `-DB NEED UB` down on the debuggee and its Unibus with it, until the
+/// adapter's watchdog lifts it ([`muir::fabric::FAULT_WATCHDOG`]); the
+/// debugger's own timeout on that cycle is in its clock, which the hold
+/// stops, so the cycle is costed when the debugger runs on, as one the
+/// adapter dropped is.
 fn time_fabric(
     mut run: FreeRunning<muir::fabric::Fabric<muir::fabric::Mapped>>,
     stop: Stop,
     terminal: Option<&mut Terminal>,
+    setup: &str,
 ) {
     let t = Instant::now();
     let mut halt = None;
@@ -1863,49 +1913,56 @@ fn time_fabric(
     let (mut keyboard, mut mouse) = (a_keyboard(), Mouse::new());
     let mut last_poll = Instant::now();
     let mut ran = 0;
+    let mut hold = Hold::open(false);
     catch_interrupts();
-    let mut interrupts_seen = 0;
-    loop {
-        let e = &run.debugger;
-        if ran >= stop.after || stop.reached(e.pc(), !e.machine().mode.prom_disable) {
-            break;
-        }
-        if interrupted(&mut interrupts_seen) {
-            break;
-        }
-        match run.step() {
-            Ok(()) => ran += 1,
-            Err(muir::lashup::Error::Halt(h)) => {
-                halt = Some(h);
-                break;
+    while !hold.quit
+        && ran < stop.after
+        && !stop.reached(run.debugger.pc(), !run.debugger.machine().mode.prom_disable)
+    {
+        if hold.on {
+            std::thread::sleep(TERMINAL_INTERVAL / 4);
+        } else {
+            match run.step() {
+                Ok(()) => {
+                    ran += 1;
+                    hold.stepped(&run.debugger, ran);
+                }
+                Err(muir::lashup::Error::Halt(h)) => {
+                    halt = Some(h);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("muir: the debug cable: {e}");
+                    break;
+                }
             }
-            Err(e) => {
-                eprintln!("muir: the debug cable: {e}");
-                break;
-            }
-        }
-        // A window that stops answering as the adapter is the end of the
-        // run: what it gives after that is not data. An adapter that has
-        // lost muir's request is said and not stopped on --- the cycle is
-        // one the debugger times out, and the next begins again.
-        if let Some(fault) = run.debuggee.fault() {
-            eprintln!("muir: the fabric's window: {}", fault.what);
-            if fault.fatal {
-                break;
-            }
-        }
-        if ran % TERMINAL_CHECK == 0 {
-            let e = &mut run.debugger;
-            let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
-            attend(terminal.as_deref_mut(), poll, e, &mut keyboard, &mut mouse);
-            if poll {
-                last_poll = Instant::now();
+            // A window that stops answering as the adapter is the end of
+            // the run: what it gives after that is not data. An adapter
+            // that has lost muir's request is said and not stopped on ---
+            // the cycle is one the debugger times out, and the next begins
+            // again.
+            if let Some(fault) = run.debuggee.fault() {
+                eprintln!("muir: the fabric's window: {}", fault.what);
+                if fault.fatal {
+                    break;
+                }
             }
         }
+        if !hold.check(ran) {
+            continue;
+        }
+        let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
+        attend(terminal.as_deref_mut(), poll, &mut run.debugger, &mut keyboard, &mut mouse);
+        if poll {
+            last_poll = Instant::now();
+        }
+        hold.self_halt(&run.debugger, ran);
+        hold.interrupts(&run.debugger, ran);
+        hold.lines(&mut run.debugger, ran, setup, &mut Writes::CableEnd);
     }
+    hold.done();
     report("rtl, debugger", ran, t.elapsed().as_secs_f64());
-    let e = &run.debugger;
-    stop.conclude(ran, e.pc(), !e.machine().mode.prom_disable, halt);
+    hold.conclude(&run.debugger, &stop, ran, halt);
     match run.debuggee.taken() {
         Some((count, faults)) => println!(
             "       {} debug cycles on the cable; the window took {count} requests, faults {faults:#x}",
@@ -1916,8 +1973,10 @@ fn time_fabric(
             run.debugger.debug_cycles()
         ),
     }
-    if let Some(term) = terminal {
-        serve_last_screen(term, &run.debugger.machine().simpletv, &mut interrupts_seen);
+    if !hold.quit
+        && let Some(term) = terminal
+    {
+        serve_last_screen(term, &run.debugger.machine().simpletv, &mut hold.interrupts_seen);
     }
 }
 
@@ -1938,6 +1997,278 @@ struct Run<'a> {
     clocks: bool,
 }
 
+/// The prompt's hold on a run: no microcycle runs while it is on, `step`
+/// takes it off for so many microcycles, and ^C and `quit` end the run
+/// through it.  One in each run loop that has the prompt --- a machine on
+/// its own, [`time_engine`], and the `rtl` machine at either end of the
+/// debug cable, [`time_remote`] and [`time_fabric`] --- so that a line
+/// and a ^C mean the same on each.  `chip`'s loop keeps its own, its
+/// machine being nets and not an [`Engine`].
+struct Hold {
+    prompt: Option<Prompt>,
+    /// The hold is on: no microcycle runs, and the terminal and the prompt
+    /// are attended at the terminal's pace.  `--no-auto-boot` starts the
+    /// run with it on, the machine halted and its button unpressed, before
+    /// the first microcycle.
+    on: bool,
+    /// A `step` in flight: so many microcycles still to run before the
+    /// hold comes back on.  No further line is read until they have run,
+    /// so that lines act in the order they were typed.
+    stepping: Option<u64>,
+    /// The run is over: `quit`, ^C while held, or a hold nothing can run
+    /// on.  A quit is the run's own end, so what it was to write gets
+    /// written, and the last screen is not served after one.
+    quit: bool,
+    /// The ^Cs acted on so far, against [`INTERRUPTS`].
+    interrupts_seen: u32,
+}
+
+/// What a run has behind the prompt's `checkpoint`, `startcapture` and
+/// `endcapture`.
+enum Writes<'a> {
+    /// A machine on its own: the checkpoint is written as `name`'s, and
+    /// the capture commands record the display, with the clocks below it
+    /// unless `--tv-capture-no-time`.
+    Alone { name: &'a str, capture: &'a mut Option<(PathBuf, Recorder)>, clocks: bool },
+    /// An end of the debug cable writes neither, and says why: the cable
+    /// is in the bus interface's state ([`muir::busint::Busint`] saves
+    /// whether one is attached), so its checkpoint is none `--resume`,
+    /// which takes a machine on its own, can start from; and over the
+    /// cable the two machines are two clocks, which is why `--tv-capture`
+    /// is refused there.
+    CableEnd,
+}
+
+impl Hold {
+    /// The prompt opened on stdin, if it can be, and the hold on or off
+    /// as the run starts.
+    fn open(on: bool) -> Hold {
+        Hold { prompt: Prompt::open(), on, stepping: None, quit: false, interrupts_seen: 0 }
+    }
+
+    /// Whether this turn of the loop attends the terminal and the prompt:
+    /// every turn while held, and every [`TERMINAL_CHECK`] microcycles
+    /// otherwise.
+    fn check(&self, ran: u64) -> bool {
+        self.on || ran.is_multiple_of(TERMINAL_CHECK)
+    }
+
+    /// A microcycle ran: one fewer of a step in flight, and the hold back
+    /// on when the last has, saying where the machine is.
+    fn stepped<E: Engine>(&mut self, e: &E, ran: u64) {
+        if let Some(left) = self.stepping.as_mut() {
+            *left -= 1;
+            if *left == 0 {
+                self.stepping = None;
+                self.on = true;
+                say_pc(e, ran);
+            }
+        }
+    }
+
+    /// The machine stopping itself --- `(si:%halt)`, or the statistics
+    /// counter --- looks like nothing at all from `step`, which goes on
+    /// returning `Ok` and running no microcycle.  So it is read off
+    /// `FLAG-1` here, [`machrun_low`], and held on, once, rather than spun
+    /// on: the screen has stopped, and without this the run says nothing
+    /// about why.
+    fn self_halt<E: Engine>(&mut self, e: &E, ran: u64) {
+        if !self.on
+            && let Some(why) = machrun_low(e)
+        {
+            self.on = true;
+            self.stepping = None;
+            say_machrun_low(why);
+            say_pc(e, ran);
+        }
+    }
+
+    /// ^C: with a prompt to go on from, the first holds the machine there
+    /// and one more while held quits; with none, one quits.
+    fn interrupts<E: Engine>(&mut self, e: &E, ran: u64) {
+        let seen = INTERRUPTS.load(Ordering::SeqCst);
+        while self.interrupts_seen < seen {
+            self.interrupts_seen += 1;
+            let at_prompt = self.prompt.as_ref().is_some_and(|p| !p.ended());
+            if self.on || !at_prompt {
+                self.quit = true;
+            } else {
+                self.on = true;
+                self.stepping = None;
+                if let Some(prompt) = self.prompt.as_ref() {
+                    prompt.past_interrupt();
+                }
+                println!("held at ^C; continue runs on, ^C again quits");
+                say_pc(e, ran);
+            }
+        }
+    }
+
+    /// The lines typed since the last turn, each acted on in order, and
+    /// `muir: ` shown when the machine is held and nothing is in flight.
+    /// Not while a step is: the microcycles it asked for run first, and
+    /// the prompt comes back with where they left the machine.
+    fn lines<E: Engine>(&mut self, e: &mut E, ran: u64, setup: &str, writes: &mut Writes<'_>) {
+        if self.stepping.is_some() {
+            return;
+        }
+        let Some(prompt) = self.prompt.as_ref() else { return };
+        // Read before the lines are: the reader thread sets it after the
+        // last line it will ever send, so a hold left standing when this
+        // was already true is one nothing can run on.
+        let ending = prompt.ended();
+        while let Some(line) = prompt.line() {
+            match muir::prompt::parse(&line) {
+                Ok(None) => {}
+                Ok(Some(Command::Boot)) => {
+                    // The button starts the machine: it presets RUN, and a
+                    // finger on it is all a CADR is given.  So the hold
+                    // comes off with it.
+                    e.boot();
+                    say_pc(e, ran);
+                    self.on = false;
+                }
+                Ok(Some(Command::Hold)) => {
+                    self.on = true;
+                    say_pc(e, ran);
+                }
+                Ok(Some(Command::Continue)) => {
+                    if halted(e) {
+                        say_halted();
+                    } else if let Some(why) = machrun_low(e) {
+                        say_machrun_low(why);
+                    } else {
+                        self.on = false;
+                    }
+                }
+                Ok(Some(Command::Step(n))) => {
+                    if halted(e) {
+                        say_halted();
+                    } else if let Some(why) = machrun_low(e) {
+                        say_machrun_low(why);
+                    } else {
+                        self.on = false;
+                        self.stepping = Some(n);
+                        break;
+                    }
+                }
+                Ok(Some(Command::Pc)) => say_pc(e, ran),
+                Ok(Some(Command::Registers)) => print!("{}", say_registers(e)),
+                Ok(Some(Command::Dump { memory, from, words })) => {
+                    match say_memory(e.machine(), memory, from, words) {
+                        Ok(dump) => print!("{dump}"),
+                        Err(what) => println!("prompt: {what}"),
+                    }
+                }
+                // Main memory is an array here and a physical address is
+                // an index into it; on `chip` it is the memory boards'
+                // cells and the same address picks the board.
+                Ok(Some(Command::Mem { from, words })) => {
+                    let m = e.machine();
+                    let read = |a: usize| m.main.get(a).copied();
+                    match muir::prompt::main_dump(from, words, m.main.len(), read) {
+                        Ok(dump) => print!("{dump}"),
+                        Err(what) => println!("prompt: {what}"),
+                    }
+                }
+                Ok(Some(Command::Net(_) | Command::Watch { .. })) => {
+                    println!("prompt: nets are the chip engine's --- this machine is");
+                    println!("        registers and memories and has no wires to read;");
+                    println!("        `reg` gives the registers and `pc` the PC");
+                }
+                Ok(Some(Command::Info)) => print!("{setup}"),
+                Ok(Some(Command::Keys)) => print!("{}", keys_in_force()),
+                Ok(Some(Command::Screenshot(path))) => {
+                    let path = path.unwrap_or_else(|| timestamped("png"));
+                    write_screenshot(&path, &e.machine().simpletv);
+                }
+                Ok(Some(Command::StartCapture(path))) => match writes {
+                    Writes::Alone { capture, clocks, .. } => match capture.as_ref() {
+                        Some((going, _)) => println!(
+                            "capture: one is going already, to {}; endcapture closes it",
+                            going.display()
+                        ),
+                        None => {
+                            let path = path.unwrap_or_else(|| timestamped("gif"));
+                            println!(
+                                "capture: recording the display to {}{}; endcapture writes it, and so does the stop",
+                                path.display(),
+                                if *clocks { "" } else { ", no clocks" }
+                            );
+                            **capture = Some((path, Recorder::new(*clocks)));
+                        }
+                    },
+                    Writes::CableEnd => println!("capture: {NO_CAPTURE_OVER_THE_CABLE}"),
+                },
+                Ok(Some(Command::EndCapture)) => match writes {
+                    Writes::Alone { capture, .. } => match capture.take() {
+                        Some((path, mut rec)) => {
+                            rec.sample(&e.machine().simpletv, e.machine().ns, wall_clock());
+                            write_capture(&path, &rec);
+                        }
+                        None => println!("capture: none is going; startcapture begins one"),
+                    },
+                    Writes::CableEnd => println!("capture: {NO_CAPTURE_OVER_THE_CABLE}"),
+                },
+                Ok(Some(Command::Checkpoint(path))) => match writes {
+                    Writes::Alone { name, .. } => {
+                        write_checkpoint(name, e, &path.unwrap_or_else(|| timestamped("chk")));
+                    }
+                    Writes::CableEnd => println!("checkpoint: {NO_CHECKPOINT_OVER_THE_CABLE}"),
+                },
+                Ok(Some(Command::Quit)) => {
+                    self.quit = true;
+                    break;
+                }
+                Ok(Some(Command::Help)) => print!("{}", muir::prompt::HELP),
+                Err(what) => println!("prompt: {what}"),
+            }
+        }
+        // A hold with no one left to type `continue` is a run that would
+        // never end: stdin has ended, and ^C is the only thing that could
+        // still reach it.  The run ends here instead, as a quit does, with
+        // what it was to write written.
+        if self.on && ending && !self.quit {
+            println!("held, and stdin has ended: there is nothing to run the machine on");
+            self.quit = true;
+        }
+        // The prompt is the held machine's: it is there while muir is
+        // waiting to be told what to do next, and not while the machine is
+        // running --- a line typed then is acted on all the same, there is
+        // just nothing waiting for it.
+        if self.on && !self.quit && self.stepping.is_none() {
+            prompt.show();
+        }
+    }
+
+    /// No further command will be typed: the line a `muir: ` is on is
+    /// ended, so the run's last words start on one of their own.
+    fn done(&self) {
+        if let Some(prompt) = self.prompt.as_ref() {
+            prompt.done();
+        }
+    }
+
+    /// The run's last word: that it was quit at the prompt, or how the
+    /// stop came.
+    fn conclude<E: Engine>(&self, e: &E, stop: &Stop, ran: u64, halt: Option<muir::machine::Halt>) {
+        if self.quit {
+            let prom = if e.machine().mode.prom_disable { "" } else { " in the PROM" };
+            println!("       quit at PC {:o}{prom} after {ran}", e.pc());
+        } else {
+            stop.conclude(ran, e.pc(), !e.machine().mode.prom_disable, halt);
+        }
+    }
+}
+
+/// Why an end of the debug cable writes no checkpoint: [`Writes::CableEnd`].
+const NO_CHECKPOINT_OVER_THE_CABLE: &str = "none on an end of the debug cable: the cable is in \
+     the bus interface's state, and --resume takes a machine on its own";
+
+/// Why an end of the debug cable records no capture: [`Writes::CableEnd`].
+const NO_CAPTURE_OVER_THE_CABLE: &str = "none on an end of the debug cable, where the two \
+     machines are two clocks; --tv-capture is refused there for the same reason";
+
 fn time_engine<E: Engine>(
     name: &str,
     mut e: E,
@@ -1945,7 +2276,7 @@ fn time_engine<E: Engine>(
     serial: Option<&mut Endpoint>,
     run: Run,
 ) {
-    let Run { stop, capture, checkpoint, setup, hold, clocks } = run;
+    let Run { stop, capture, checkpoint, setup, hold: held, clocks } = run;
     let t = Instant::now();
     let mut ran = 0;
     let mut halt = None;
@@ -1956,21 +2287,10 @@ fn time_engine<E: Engine>(
     let mut last_poll = Instant::now();
     let mut last_serial = Instant::now();
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
-    let prompt = Prompt::open();
-    // The prompt's hold: no microcycle runs while it is on. `step` takes it
-    // off for so many microcycles, and no further line is read until they
-    // have run, so that lines act in the order they were typed.
-    // `--no-auto-boot` starts the run with it on, the machine halted and
-    // its button unpressed, before the first microcycle.
-    let mut held = hold;
-    let mut stepping: Option<u64> = None;
-    let mut quit = false;
+    let mut hold = Hold::open(held);
     catch_interrupts();
-    let mut interrupts_seen = 0;
-    while !quit && ran < stop.after && !stop.reached(e.pc(), !e.machine().mode.prom_disable) {
-        if held {
-            // Nothing runs, and the terminal and the prompt are attended at
-            // the terminal's pace.
+    while !hold.quit && ran < stop.after && !stop.reached(e.pc(), !e.machine().mode.prom_disable) {
+        if hold.on {
             std::thread::sleep(TERMINAL_INTERVAL / 4);
         } else {
             if let Err(h) = e.step() {
@@ -1978,18 +2298,11 @@ fn time_engine<E: Engine>(
                 break;
             }
             ran += 1;
-            if let Some(left) = stepping.as_mut() {
-                *left -= 1;
-                if *left == 0 {
-                    stepping = None;
-                    held = true;
-                    say_pc(&e, ran);
-                }
-            }
+            hold.stepped(&e, ran);
         }
-        let check = held || ran % TERMINAL_CHECK == 0;
+        let check = hold.check(ran);
         if check
-            && !held
+            && !hold.on
             && let Some((_, rec)) = capture.as_mut()
         {
             rec.sample(&e.machine().simpletv, e.machine().ns, wall_clock());
@@ -2037,170 +2350,18 @@ fn time_engine<E: Engine>(
             end.poll_cable(&mut e.machine_mut().ioboard.serial.cable, now);
             last_serial = Instant::now();
         }
-        // The machine stopping itself --- `(si:%halt)`, or the statistics
-        // counter --- looks like nothing at all from `step`, which goes on
-        // returning `Ok` and running no microcycle. So it is read off
-        // `FLAG-1` here and held on, once, rather than spun on: the screen
-        // has stopped, and without this the run says nothing about why.
-        if check
-            && !held
-            && let Some(why) = machrun_low(&e)
-        {
-            held = true;
-            stepping = None;
-            say_machrun_low(why);
-            say_pc(&e, ran);
-        }
-        // ^C: with a prompt to go on from, the first holds the machine
-        // there and one more while held quits; with none, one quits. A
-        // quit is the run's own end, so what it was to write gets written.
         if check {
-            let seen = INTERRUPTS.load(Ordering::SeqCst);
-            while interrupts_seen < seen {
-                interrupts_seen += 1;
-                let at_prompt = prompt.as_ref().is_some_and(|p| !p.ended());
-                if held || !at_prompt {
-                    quit = true;
-                } else {
-                    held = true;
-                    stepping = None;
-                    if let Some(prompt) = prompt.as_ref() {
-                        prompt.past_interrupt();
-                    }
-                    println!("held at ^C; continue runs on, ^C again quits");
-                    say_pc(&e, ran);
-                }
-            }
-        }
-        if check
-            && stepping.is_none()
-            && let Some(prompt) = prompt.as_ref()
-        {
-            // Read before the lines are: the reader thread sets it after
-            // the last line it will ever send, so a hold left standing
-            // when this was already true is one nothing can run on.
-            let ending = prompt.ended();
-            while let Some(line) = prompt.line() {
-                match muir::prompt::parse(&line) {
-                    Ok(None) => {}
-                    Ok(Some(Command::Boot)) => {
-                        // The button starts the machine: it presets RUN,
-                        // and a finger on it is all a CADR is given.  So
-                        // the hold comes off with it.
-                        e.boot();
-                        say_pc(&e, ran);
-                        held = false;
-                    }
-                    Ok(Some(Command::Hold)) => {
-                        held = true;
-                        say_pc(&e, ran);
-                    }
-                    Ok(Some(Command::Continue)) => {
-                        if halted(&e) {
-                            say_halted();
-                        } else if let Some(why) = machrun_low(&e) {
-                            say_machrun_low(why);
-                        } else {
-                            held = false;
-                        }
-                    }
-                    Ok(Some(Command::Step(n))) => {
-                        if halted(&e) {
-                            say_halted();
-                        } else if let Some(why) = machrun_low(&e) {
-                            say_machrun_low(why);
-                        } else {
-                            held = false;
-                            stepping = Some(n);
-                            break;
-                        }
-                    }
-                    Ok(Some(Command::Pc)) => say_pc(&e, ran),
-                    Ok(Some(Command::Registers)) => print!("{}", say_registers(&e)),
-                    Ok(Some(Command::Dump { memory, from, words })) => {
-                        match say_memory(e.machine(), memory, from, words) {
-                            Ok(dump) => print!("{dump}"),
-                            Err(what) => println!("prompt: {what}"),
-                        }
-                    }
-                    // Main memory is an array here and a physical address
-                    // is an index into it; on `chip` it is the memory
-                    // boards' cells and the same address picks the board.
-                    Ok(Some(Command::Mem { from, words })) => {
-                        let m = e.machine();
-                        let read = |a: usize| m.main.get(a).copied();
-                        match muir::prompt::main_dump(from, words, m.main.len(), read) {
-                            Ok(dump) => print!("{dump}"),
-                            Err(what) => println!("prompt: {what}"),
-                        }
-                    }
-                    Ok(Some(Command::Net(_) | Command::Watch { .. })) => {
-                        println!("prompt: nets are the chip engine's --- this machine is");
-                        println!("        registers and memories and has no wires to read;");
-                        println!("        `reg` gives the registers and `pc` the PC");
-                    }
-                    Ok(Some(Command::Info)) => print!("{setup}"),
-                    Ok(Some(Command::Keys)) => print!("{}", keys_in_force()),
-                    Ok(Some(Command::Screenshot(path))) => {
-                        let path = path.unwrap_or_else(|| timestamped("png"));
-                        write_screenshot(&path, &e.machine().simpletv);
-                    }
-                    Ok(Some(Command::StartCapture(path))) => match capture.as_ref() {
-                        Some((going, _)) => println!(
-                            "capture: one is going already, to {}; endcapture closes it",
-                            going.display()
-                        ),
-                        None => {
-                            let path = path.unwrap_or_else(|| timestamped("gif"));
-                            println!(
-                                "capture: recording the display to {}{}; endcapture writes it, and so does the stop",
-                                path.display(),
-                                if clocks { "" } else { ", no clocks" }
-                            );
-                            capture = Some((path, Recorder::new(clocks)));
-                        }
-                    },
-                    Ok(Some(Command::EndCapture)) => match capture.take() {
-                        Some((path, mut rec)) => {
-                            rec.sample(&e.machine().simpletv, e.machine().ns, wall_clock());
-                            write_capture(&path, &rec);
-                        }
-                        None => println!("capture: none is going; startcapture begins one"),
-                    },
-                    Ok(Some(Command::Checkpoint(path))) => {
-                        write_checkpoint(name, &e, &path.unwrap_or_else(|| timestamped("chk")));
-                    }
-                    Ok(Some(Command::Quit)) => {
-                        quit = true;
-                        break;
-                    }
-                    Ok(Some(Command::Help)) => print!("{}", muir::prompt::HELP),
-                    Err(what) => println!("prompt: {what}"),
-                }
-            }
-            // A hold with no one left to type `continue` is a run that
-            // would never end: stdin has ended, and ^C is the only thing
-            // that could still reach it.  The run ends here instead, as a
-            // quit does, with what it was to write written.
-            if held && ending && !quit {
-                println!("held, and stdin has ended: there is nothing to run the machine on");
-                quit = true;
-            }
-            // The prompt is the held machine's: it is there while muir is
-            // waiting to be told what to do next, and not while the
-            // machine is running --- a line typed then is acted on all the
-            // same, there is just nothing waiting for it.  Not while a
-            // step is in flight either: the microcycles it asked for run
-            // first, and the prompt comes back with where they left the
-            // machine.
-            if held && !quit && stepping.is_none() {
-                prompt.show();
-            }
+            hold.self_halt(&e, ran);
+            hold.interrupts(&e, ran);
+            hold.lines(
+                &mut e,
+                ran,
+                setup,
+                &mut Writes::Alone { name, capture: &mut capture, clocks },
+            );
         }
     }
-    if let Some(prompt) = prompt.as_ref() {
-        prompt.done();
-    }
+    hold.done();
     // One last turn, so that what the port sent between the final poll and
     // the stop reaches whoever is attached before the socket closes.
     if let Some(end) = serial {
@@ -2208,12 +2369,7 @@ fn time_engine<E: Engine>(
         end.poll_cable(&mut e.machine_mut().ioboard.serial.cable, now);
     }
     report(name, ran, t.elapsed().as_secs_f64());
-    if quit {
-        let prom = if e.machine().mode.prom_disable { "" } else { " in the PROM" };
-        println!("       quit at PC {:o}{prom} after {ran}", e.pc());
-    } else {
-        stop.conclude(ran, e.pc(), !e.machine().mode.prom_disable, halt);
-    }
+    hold.conclude(&e, &stop, ran, halt);
     if let Some((path, rec)) = capture.as_mut() {
         rec.sample(&e.machine().simpletv, e.machine().ns, wall_clock());
         write_capture(path, rec);
@@ -2221,8 +2377,10 @@ fn time_engine<E: Engine>(
     if let Some(path) = &checkpoint {
         write_checkpoint(name, &e, path);
     }
-    if !quit && let Some(term) = terminal {
-        serve_last_screen(term, &e.machine().simpletv, &mut interrupts_seen);
+    if !hold.quit
+        && let Some(term) = terminal
+    {
+        serve_last_screen(term, &e.machine().simpletv, &mut hold.interrupts_seen);
     }
 }
 
@@ -2237,9 +2395,9 @@ extern "C" fn on_interrupt(_signal: std::ffi::c_int) {
 /// **How many `SIGUSR1`s have come**: `kill -USR1` on a run asks it where
 /// it is, and the run answers between two microcycles and carries on.
 ///
-/// A long `chip` run has no prompt --- the process has a terminal and
-/// nothing else --- so before this the only way to know where one was
-/// was to infer it from what it had touched. Issue 86 has a run whose
+/// A long `chip` run had no prompt when this was added --- the process
+/// had a terminal and nothing else --- so the only way to know where one
+/// was was to infer it from what it had touched. Issue 86 has a run whose
 /// state was read from pack mtimes, then from lit pixels, then from a
 /// block-by-block comparison, two of the three retracted, over six hours,
 /// with `pc` unanswered throughout.
@@ -2275,10 +2433,11 @@ fn catch_interrupts() {
     // which is safe to do in a signal handler.
     let handler: extern "C" fn(std::ffi::c_int) = on_interrupt;
     unsafe { signal(SIGINT, handler as *const () as usize) };
-    // `SIGUSR1` is taken by every engine and acted on by `chip`, which is
-    // the one with no prompt. Every engine, because the default action
-    // for it is to kill the process: a signal sent to the wrong run of a
-    // pair would otherwise end a run that had been going for hours.
+    // `SIGUSR1` is taken by every engine and acted on by `chip`, which
+    // had no prompt when the signal was added and keeps it now that it
+    // has one. Every engine, because the default action for it is to kill
+    // the process: a signal sent to the wrong run of a pair would
+    // otherwise end a run that had been going for hours.
     let dump: extern "C" fn(std::ffi::c_int) = on_dump;
     unsafe { signal(SIGUSR1, dump as *const () as usize) };
 }
@@ -2300,11 +2459,12 @@ fn asked_where(seen: &mut u32) -> bool {
 
 /// Whether ^C has been pressed since this was last asked.
 ///
-/// A run that has no prompt to hold the machine from --- the lashup, either
-/// end of a cable, the netlist engine --- ends on the first one, so that
+/// A run that has no prompt to hold the machine from --- the lashup in one
+/// process, and the netlist debuggee --- ends on the first one, so that
 /// what the run was to write is written: the recording, and the checkpoint.
-/// [`time_engine`] wants more than this, a first ^C holding the machine and
-/// a second quitting, and does it inline.
+/// A run with the prompt wants more than this, a first ^C holding the
+/// machine and a second quitting, which is [`Hold::interrupts`]; `chip`'s
+/// loop does the same inline.
 fn interrupted(seen: &mut u32) -> bool {
     let now = INTERRUPTS.load(Ordering::SeqCst);
     let asked = now > *seen;
@@ -2520,6 +2680,15 @@ impl Prompt {
             .ok()?;
         let terminal = std::io::stdin().is_terminal();
         Some(Prompt { lines: rx, ended, terminal, showing: std::cell::Cell::new(false) })
+    }
+
+    /// A prompt a test types at in place of stdin: what goes down the
+    /// sender comes up as lines, and stdin is never taken to have ended.
+    #[cfg(test)]
+    fn piped() -> (std::sync::mpsc::Sender<String>, Prompt) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ended = std::sync::Arc::new(AtomicBool::new(false));
+        (tx, Prompt { lines: rx, ended, terminal: false, showing: std::cell::Cell::new(false) })
     }
 
     /// Whether stdin can be read for a prompt: anything but a terminal
@@ -4303,9 +4472,9 @@ fn main() {
         } else {
             writeln!(s, "stop: {}", stops.join(", ")).unwrap();
         }
-        // `chip` is the engine with no prompt, and the one whose runs go
-        // for hours; the person watching one needs to be told this exists
-        // or it does not pay. Issue 86.
+        // `chip` is the engine whose runs go for hours, and had no prompt
+        // when this was added; the person watching one needs to be told
+        // this exists or it does not pay. Issue 86.
         if which == Which::Chip {
             writeln!(s, "where: kill -USR1 {} prints the PC and IR, and the run goes on", pid())
                 .unwrap();
@@ -4317,15 +4486,24 @@ fn main() {
             )
             .unwrap();
         }
-        if cabled == 0 && which != Which::Chip {
-            if Prompt::possible() {
-                writeln!(s, "^C holds the machine at the prompt; help lists muir's commands")
-                    .unwrap();
-            } else {
-                writeln!(s, "prompt: none; stdin is a terminal muir is in the background of")
-                    .unwrap();
-            }
+        // The prompt: every run that is one machine muir holds has it ---
+        // an engine alone, `chip` included, and the `rtl` machine at either
+        // end of the debug cable.  The lashup in one process and the
+        // netlist debuggee have none, and say so rather than nothing.
+        let no_prompt = if debuggee {
+            Some("the lashup in one process runs two machines and takes no commands for either")
+        } else if which == Which::Chip && cable_listen.is_some() {
+            Some("the netlist debuggee runs for the debugger on the cable and takes no commands")
+        } else if !Prompt::possible() {
+            Some("stdin is a terminal muir is in the background of")
+        } else {
+            None
+        };
+        match no_prompt {
+            None => writeln!(s, "^C holds the machine at the prompt; help lists muir's commands"),
+            Some(why) => writeln!(s, "prompt: none; {why}"),
         }
+        .unwrap();
         s
     };
     // **Armed before it is announced.**  The line below says `kill -USR1`
@@ -4405,6 +4583,7 @@ fn main() {
                     Remote::debuggee(e, reader, stream),
                     stop,
                     terminal.as_mut(),
+                    &setup,
                 );
             } else if let Some(Connect::Endpoint(addr)) = cable_connect {
                 // The debuggee may still be starting: try for five seconds.
@@ -4429,6 +4608,7 @@ fn main() {
                     Remote::debugger(e, reader, stream),
                     stop,
                     terminal.as_mut(),
+                    &setup,
                 );
             } else if let Some(Connect::Window(at)) = cable_connect {
                 // The identity is read before anything is stored, and a
@@ -4439,7 +4619,7 @@ fn main() {
                     std::process::exit(1);
                 });
                 eprintln!("debug cable: DBGOUT at the fabric's window at {at:#x}");
-                time_fabric(FreeRunning::new(e, window), stop, terminal.as_mut());
+                time_fabric(FreeRunning::new(e, window), stop, terminal.as_mut(), &setup);
             } else {
                 if let Some(p) = &resume {
                     resume_engine("rtl", &mut e, p);
@@ -4581,6 +4761,69 @@ mod tests {
             e.step().expect("no halt this engine raises");
         }
         assert!(machrun_low(&e).is_some(), "micro stops the same way");
+    }
+
+    /// **The prompt's hold on the fabric's debugger**, at the unit level:
+    /// a run against fabric wants `/dev/mem` on Linux and cannot be
+    /// spawned here, so this is the [`Hold`] `time_fabric` runs, on the
+    /// machine it runs it on --- [`FreeRunning`] over a
+    /// [`muir::fabric::Fabric`], on the array window --- fed lines as
+    /// stdin would feed them.  `hold` holds; `step` runs exactly so many
+    /// and holds again, with no line read until they have run;
+    /// `checkpoint` is refused and writes nothing; and ^C holds, and one
+    /// more while held quits.  What this does not hold is `time_fabric`'s
+    /// own loop calling these at its checks, which mirrors
+    /// `time_remote`'s, and that one `tests/muir_prompt.rs` holds end to
+    /// end over TCP.
+    #[test]
+    fn the_prompt_holds_the_fabrics_debugger() {
+        let mut m = Machine::new();
+        m.load_prom(&muir::prom::boot_prom());
+        let window = muir::fabric::Fabric::open(muir::fabric::Words::new()).unwrap();
+        let mut run = FreeRunning::new(Rtl::new(m), window);
+        run.debugger.boot();
+        let (typed, prompt) = Prompt::piped();
+        let mut hold = Hold {
+            prompt: Some(prompt),
+            on: false,
+            stepping: None,
+            quit: false,
+            interrupts_seen: INTERRUPTS.load(Ordering::SeqCst),
+        };
+        let chk = std::env::temp_dir().join(format!("muir-fabric-hold-{}.chk", std::process::id()));
+        let mut ran = 0;
+
+        typed.send("hold".into()).unwrap();
+        hold.lines(&mut run.debugger, ran, "", &mut Writes::CableEnd);
+        assert!(hold.on, "hold holds");
+
+        // `step 3`, and a line behind it that is not read until the three
+        // have run: the loop's turns, as `time_fabric` takes them.
+        typed.send("step 3".into()).unwrap();
+        typed.send(format!("checkpoint {}", chk.display())).unwrap();
+        hold.lines(&mut run.debugger, ran, "", &mut Writes::CableEnd);
+        assert!(!hold.on && hold.stepping == Some(3), "step takes the hold off for three");
+        while !hold.on {
+            run.step().unwrap();
+            ran += 1;
+            hold.stepped(&run.debugger, ran);
+            hold.lines(&mut run.debugger, ran, "", &mut Writes::CableEnd);
+        }
+        assert_eq!(ran, 3, "exactly three, then the hold is back on");
+        assert!(hold.stepping.is_none() && !hold.quit);
+        assert!(!chk.exists(), "checkpoint is refused on an end of the cable: nothing written");
+
+        // ^C while running holds; ^C while held quits.
+        typed.send("continue".into()).unwrap();
+        hold.lines(&mut run.debugger, ran, "", &mut Writes::CableEnd);
+        assert!(!hold.on, "continue runs on");
+        INTERRUPTS.fetch_add(1, Ordering::SeqCst);
+        hold.interrupts(&run.debugger, ran);
+        assert!(hold.on && !hold.quit, "the first ^C holds");
+        INTERRUPTS.fetch_add(1, Ordering::SeqCst);
+        hold.interrupts(&run.debugger, ran);
+        assert!(hold.quit, "and one more while held quits");
+        drop(typed);
     }
 
     /// **The wall clock reads the C library's `struct tm` where the hours,

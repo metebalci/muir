@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use muir::capture::PAIR_RULE;
 use muir::simpletv::WIDTH;
 
-use support::{Child, Run, muir, scratch, text};
+use support::{Run, listening, muir, scratch, text};
 
 /// `--debug-in-process`: two `rtl` machines in one process, the second on the
 /// first's debug cable, both run for the window and both reported.
@@ -33,18 +33,6 @@ fn a_debuggee_runs_beside_the_debugger_in_one_process() {
     // one; where they are is `the_debuggees_terminal_defaults_to_one_port_above`.
     assert!(t.contains("\nterminal: vnc://"), "the debugger's display:\n{t}");
     assert!(t.contains("\ndebuggee terminal: vnc://"), "the debuggee's display:\n{t}");
-}
-
-/// The address a debuggee's DBGIN listens on, said on its stderr once it
-/// is bound.  The debuggee is given `--debug-cable-listen 127.0.0.1:0` and
-/// the host picks the port, so there is none to guess at; and the
-/// debugger is started once the address has been said, so there is none to
-/// lose in between either.
-fn listening(debuggee: &Child) -> String {
-    const SAID: &str = "debug cable: DBGIN listening on ";
-    debuggee.stderr().wait_until(|t| t.contains(SAID), "the debuggee said where it listens");
-    let t = debuggee.stderr().so_far();
-    t.lines().find_map(|l| l.trim().strip_prefix(SAID)).unwrap().to_string()
 }
 
 /// `--debug-cable-listen` and `--debug-cable-connect`: the same two machines in two

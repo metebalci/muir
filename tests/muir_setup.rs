@@ -10,7 +10,7 @@ mod support;
 use std::io::Write;
 use std::process::Stdio;
 
-use support::{Run, Scratch, muir, text};
+use support::{Run, Scratch, listening, muir, text};
 
 /// **The start says what the run is**, one line a thing, on every engine.
 #[test]
@@ -71,7 +71,45 @@ fn the_start_says_what_the_run_is() {
     ] {
         assert!(t.contains(line), "{line}:\n{t}");
     }
-    assert!(!t.contains("^C holds"), "no prompt on chip yet:\n{t}");
+    assert!(t.contains("^C holds the machine at the prompt"), "chip has the prompt too:\n{t}");
+}
+
+/// **The start says whether the run has a prompt, on every shape of run.**
+/// One `rtl` machine at either end of the debug cable over TCP has it, as
+/// one alone does; the lashup in one process and the netlist debuggee
+/// have none and say so, with why.  Issue 102 met a cable run whose start
+/// said neither, and which had none.
+#[test]
+fn the_start_says_whether_the_run_has_a_prompt() {
+    const HAS: &str = "^C holds the machine at the prompt; help lists muir's commands";
+    let debuggee = muir()
+        .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "3000"])
+        .start();
+    let addr = listening(&debuggee);
+    let debugger =
+        muir().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "3000"]).start();
+    let (a, b) = (debugger.wait(), debuggee.wait());
+    let (ta, tb) = (text(&a), text(&b));
+    assert!(a.status.success() && b.status.success(), "{ta}\n{tb}");
+    assert!(ta.contains(HAS), "the debugger over TCP:\n{ta}");
+    assert!(tb.contains(HAS), "and the debuggee:\n{tb}");
+
+    let out = muir().args(["--rtl", "--debug-in-process", "--stop-after", "10"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(
+        t.contains("prompt: none; the lashup in one process runs two machines"),
+        "the lashup in one process says it has none, and why:\n{t}"
+    );
+
+    // The netlist debuggee says so before it waits for a debugger, which
+    // never comes: the run is ended once it has said.
+    let debuggee = muir()
+        .args(["--chip", "--main-memory-boards", "1", "--debug-cable-listen", "127.0.0.1:0"])
+        .start();
+    let said = |t: &str| t.contains("prompt: none; the netlist debuggee runs for the debugger");
+    debuggee.stderr().wait_until(said, "the netlist debuggee says it has none, and why");
+    debuggee.kill();
 }
 
 /// **A path under the directory muir was run from is written relative to
