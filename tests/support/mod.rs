@@ -717,22 +717,35 @@ pub fn type_at<E: Engine>(e: &mut E, k: &mut Keyboard, text: &str) {
 
 /// `muir` itself, the binary Cargo built for these tests, with stdin closed
 /// and no flags from the developer's own `~/.muirrc`: `MUIR_RC` names an
-/// empty file, so the run is the flags the test gives and nothing else.  A
+/// empty file, so the run is the flags the test gives and nothing else ---
+/// and no debug cable connector at the host's shared port, which the tests
+/// running beside each other would fight over and a real debugger on the
+/// host could find: `--no-debug-cable-listen`.  A test that wants the
+/// connector gives `--debug-cable-listen 127.0.0.1:0` after it, the last
+/// of the two winning; [`muir_default`] is the run as a person gets it.  A
 /// test that types at the prompt opens stdin as a pipe instead.
 pub fn muir() -> std::process::Command {
+    let mut c = muir_default();
+    c.arg("--no-debug-cable-listen");
+    c
+}
+
+/// `muir` as a person runs it: [`muir`] without the flag that leaves the
+/// debug cable connector empty, for the tests of that default.
+pub fn muir_default() -> std::process::Command {
     let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_muir"));
     c.stdin(std::process::Stdio::null());
     c.env("MUIR_RC", "/dev/null");
     c
 }
 
-/// The address a debuggee's DBGIN listens on, said on its stderr once it
-/// is bound.  The debuggee is given `--debug-cable-listen 127.0.0.1:0` and
-/// the host picks the port, so there is none to guess at; and the
-/// debugger is started once the address has been said, so there is none to
-/// lose in between either.
+/// The address a debuggee's DBGIN listens at, said in the setup on its
+/// stderr once it is bound.  The debuggee is given `--debug-cable-listen
+/// 127.0.0.1:0` and the host picks the port, so there is none to guess at;
+/// and the debugger is started once the address has been said, so there is
+/// none to lose in between either.
 pub fn listening(debuggee: &Child) -> String {
-    const SAID: &str = "debug cable: DBGIN listening on ";
+    const SAID: &str = "debug cable: DBGIN listening at ";
     debuggee.stderr().wait_until(|t| t.contains(SAID), "the debuggee said where it listens");
     let t = debuggee.stderr().so_far();
     t.lines().find_map(|l| l.trim().strip_prefix(SAID)).unwrap().to_string()

@@ -19,6 +19,7 @@
 //!          [--disk-controller netlist|model]
 //!          [--disk-pack <image>[,<unit>][,ro]] [--io-board netlist|model]
 //!          [--main-memory netlist|model] [--main-memory-boards <n>]
+//!          [--no-debug-cable-listen]
 //!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
 //!          [--stop-after <microcycles>]
 //!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
@@ -90,6 +91,25 @@
 //! stopped. In the lashup the other machine is served a terminal too, the
 //! display above this machine's, and `--debuggee-terminal` puts that
 //! elsewhere.
+//!
+//! **Every `rtl` and `chip` run listens for a debugger too**, since the
+//! bus interface's DBGIN is on every machine: it takes the Unibus as
+//! master when a debugger drives its cable, nothing in the machine enables
+//! it, and the microcode neither knows nor can refuse. The connector is
+//! at 127.0.0.1:7661, or the port above it when that one is taken by
+//! another muir, and the start says where; a debugger connecting to it ---
+//! `--debug-cable-connect` in another muir, or any program speaking the
+//! cable's frames --- is plugged in between two microcycles, and the two
+//! run in step from that instant until the debugger is done or goes away,
+//! when the machine runs on its own again and listens again. A debugger
+//! reads and writes the whole Unibus and stops the clock, so the connector
+//! stays on the loopback unless `--debug-cable-listen` names an address.
+//! `--no-debug-cable-listen` leaves it empty, as do the flags that want a
+//! machine on its own --- `--checkpoint`, `--tv-capture`, and `--watch` on
+//! `chip` --- which the start says. `micro` has no timing model and no end
+//! of the cable, and says so. The debugger's own end, `--debug-cable-connect`,
+//! runs the machine inside the cable it plugged into a debuggee, and its
+//! DBGIN is not listened at.
 //!
 //! **What a viewer types waits for the machine's next look, and a queue
 //! that fills loses the oldest keystroke** ---
@@ -233,7 +253,7 @@ use muir::clock::{Behavioural, Clock};
 use muir::disk_unit::{Geometry, Unit};
 use muir::engine::Engine;
 use muir::isa::Insn;
-use muir::lashup::{FreeRunning, Lashup, Remote, Side};
+use muir::lashup::{CableEnd, Connector, FreeRunning, Lashup, Plug, Remote, Turn};
 use muir::machine::Machine;
 use muir::micro::Micro;
 use muir::netlist;
@@ -365,6 +385,56 @@ fn bind_terminal(at: TerminalAt) -> Result<Terminal, String> {
 /// 766100. IANA leaves 7649-7662 unassigned (its registry, read 6 Sep 2026)
 /// and it is below the ranges macOS and Linux hand out to clients.
 const DEBUG_CABLE_PORT: u16 = 7661;
+
+/// How many ports from [`DEBUG_CABLE_PORT`] up a connector nobody placed
+/// may take, the port being taken --- by a second muir on the host, which
+/// is what the lashup over TCP is: 7661 and 7662, the two IANA leaves
+/// unassigned there.
+const DEBUG_CABLE_PORTS: u16 = 2;
+
+/// Where DBGIN's connector listens: the endpoint, whether its port was
+/// named --- bound as it stands, then, as `--terminal`'s is --- and whether
+/// it was asked for at all, which decides whether a port that cannot be
+/// bound stops the run or leaves it without a connector.
+#[derive(Clone, Copy)]
+struct CableAt {
+    addr: SocketAddr,
+    port_named: bool,
+    asked: bool,
+}
+
+impl CableAt {
+    /// The connector nobody placed: 7661 on the loopback, where a debugger
+    /// that reads and writes the whole Unibus and stops the clock belongs
+    /// unless someone says otherwise in as many words.
+    fn default_port() -> CableAt {
+        CableAt {
+            addr: SocketAddr::from((Ipv4Addr::LOCALHOST, DEBUG_CABLE_PORT)),
+            port_named: false,
+            asked: false,
+        }
+    }
+}
+
+/// The listener for DBGIN's connector at `at`, or why there is none: as
+/// [`bind_terminal`], a port that was named is bound as it stands, and one
+/// that was not moves up while the port is taken, [`DEBUG_CABLE_PORTS`] of
+/// them.
+fn bind_cable(at: CableAt) -> Result<std::net::TcpListener, String> {
+    let last = at.addr.port().saturating_add(DEBUG_CABLE_PORTS - 1);
+    let mut addr = at.addr;
+    loop {
+        match std::net::TcpListener::bind(addr) {
+            Ok(l) => return Ok(l),
+            Err(e) if at.port_named => return Err(format!("{addr}: {e}")),
+            Err(e) if e.kind() != std::io::ErrorKind::AddrInUse => {
+                return Err(format!("{addr}: {e}"));
+            }
+            Err(_) if addr.port() < last => addr.set_port(addr.port() + 1),
+            Err(_) => return Err(format!("{} and {last} are both taken", at.addr.port())),
+        }
+    }
+}
 
 /// Where `--debug-cable-connect` puts the debuggee: at an endpoint on the
 /// network, which is another program speaking the cable's frames, or
@@ -712,7 +782,8 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
             [--keyboard-mapping-trace]
             [--main-memory netlist|model]
-            [--main-memory-boards <n>] [--no-auto-boot] [--prom <file>]
+            [--main-memory-boards <n>] [--no-auto-boot]
+            [--no-debug-cable-listen] [--prom <file>]
             [--resume <file>] [--serial <endpoint>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
@@ -811,15 +882,23 @@ A simulator of the MIT CADR Lisp Machine.
                                one alone has, less checkpoint and the
                                capture commands. [default: 127.0.0.1:7661]
   --debug-cable-listen [<endpoint>]
-                               rtl, chip: this machine is the debuggee at
-                               the end of a debug cable over TCP: its DBGIN
-                               waits at the endpoint for the debugger to
-                               connect, and then the two run in step. On
-                               rtl this machine has the prompt, as one alone
-                               has, less checkpoint and the capture
-                               commands. On chip it is the board's own
-                               connector, run an event at a time, and there
-                               is no prompt. [default: 127.0.0.1:7661]
+                               rtl, chip: where this machine's DBGIN
+                               listens for a debugger's cable over TCP: a
+                               port, an address or address:port. Every rtl
+                               and chip run listens, as every machine's
+                               DBGIN is there; this moves the connector, or
+                               puts it back after --no-debug-cable-listen,
+                               and a port named here is bound as it stands.
+                               The machine runs on its own until a debugger
+                               connects, in step with it while one is on
+                               the cable, and on its own again when the
+                               debugger is done or goes away. It has the
+                               prompt throughout, less checkpoint and the
+                               capture commands while a debugger is on. On
+                               chip the cable meets the board's own
+                               connector, run an event at a time while a
+                               debugger is on. [default: 127.0.0.1:7661, or
+                               the port above it when that one is taken]
   --debug-in-process           rtl: the two-machine lashup in one process. A
                                second machine runs beside this one with both
                                debug cables between them, each machine's
@@ -942,6 +1021,14 @@ A simulator of the MIT CADR Lisp Machine.
                                nothing else starts it, and continue and step
                                say so. [default: muir presses the button for
                                you]
+  --no-debug-cable-listen      rtl, chip: no connector for a debugger's
+                               cable; the machine cannot be debugged from
+                               another. Of this and --debug-cable-listen
+                               the last given wins. --checkpoint,
+                               --tv-capture and chip's --watch leave the
+                               connector empty by themselves, wanting a
+                               machine on its own, and the start says so.
+                               [default: the connector is there]
   --prom <file>                the boot PROM to run, an MCR microcode file
                                as MIT's own sys/ubin/promh.mcr is: at most
                                the 512 words the machine fetches before it
@@ -1783,105 +1870,163 @@ fn time_lashup(
     serve_last_screens(&mut screens, &mut interrupts_seen);
 }
 
-/// One end of the cable over TCP: this machine, debugger or debuggee, run
-/// in step with the other program by [`Remote::step`], with the terminal,
-/// the stops and the prompt as for a machine alone; at the end the two
-/// agree to stop.
+/// What a run loop steps: a machine alone ([`Alone`]), one with DBGIN's
+/// connector at it ([`Connector`]), or the debugger's end of the cable over
+/// TCP ([`Remote`]).  One loop, [`time_engine`], for the three: what
+/// differs is the step --- a microcycle, or a wait for the other end's
+/// promise --- and what is on the cable.
+trait Stepper {
+    type E: Engine;
+    fn engine(&self) -> &Self::E;
+    fn engine_mut(&mut self) -> &mut Self::E;
+    /// One turn: whether a microcycle ran.  None ran when the other end of
+    /// the cable had not promised one yet and its next message was waited
+    /// for instead, or when the cable went.
+    fn step(&mut self) -> Result<bool, muir::lashup::Error>;
+    /// Between microcycles: the connector's listener looked at, and what
+    /// it found said.
+    fn attend(&mut self) {}
+    /// A debugger is on this machine's DBGIN, or this machine is on a
+    /// debuggee's: the prompt's `checkpoint` and the capture commands are
+    /// refused --- the cable is in the bus interface's state, and the two
+    /// machines are two clocks.
+    fn on_cable(&self) -> bool {
+        false
+    }
+    /// Whether a machine that stops itself is held here, as a machine
+    /// alone is.  Not with a debugger on its DBGIN: a halted debuggee is
+    /// what CC reads through the cable, and a held one would answer
+    /// nothing.
+    fn holds_on_self_halt(&self) -> bool {
+        true
+    }
+    /// Debug cycles over the cable, if there was ever one.
+    fn debug_cycles(&self) -> Option<u64> {
+        None
+    }
+    /// The run's end: the other end of the cable told, and waited for.
+    fn finish(&mut self) -> Result<(), muir::lashup::Error> {
+        Ok(())
+    }
+}
+
+/// A machine with no end of the cable: `micro`, which has no timing model.
+struct Alone<E: Engine>(E);
+
+impl<E: Engine> Stepper for Alone<E> {
+    type E = E;
+    fn engine(&self) -> &E {
+        &self.0
+    }
+    fn engine_mut(&mut self) -> &mut E {
+        &mut self.0
+    }
+    fn step(&mut self) -> Result<bool, muir::lashup::Error> {
+        self.0.step()?;
+        Ok(true)
+    }
+}
+
+/// A machine with DBGIN's connector at it: on its own until a debugger
+/// connects, in step with the debugger while one is on the cable, on its
+/// own again when the cable goes, and each of those said on stderr.
 ///
 /// **A hold here is felt at the other end.** Each end steps only as far
 /// as the other has promised and waits for a message otherwise
-/// ([`Remote`]), so a held debugger holds the debuggee once it has run to
-/// the debugger's last promise, and a held debuggee holds the debugger at
-/// its next request, whose acknowledgement it then waits for --- the
-/// other process sits in [`Remote::step`]'s wait, its terminal and its
-/// own prompt unattended, until this end runs on.  A slow debuggee does
-/// the same to its debugger, the netlist one above all, and the cable is
-/// built for it: `continue` puts both back as they were.  A debuggee that
-/// stopped itself is not held for it, though: a halted debuggee is what
-/// CC reads through the cable, and a held one would answer nothing.
-fn time_remote(
-    name: &str,
-    mut remote: Remote<Rtl>,
-    stop: Stop,
-    terminal: Option<&mut Terminal>,
-    setup: &str,
-) {
-    let t = Instant::now();
-    let mut halt = None;
-    let mut terminal = terminal;
-    let mut keyboard = a_keyboard();
-    let mut mouse = Mouse::new();
-    let mut last_poll = Instant::now();
-    let mut ran = 0;
-    let mut hold = Hold::open(false);
-    catch_interrupts();
-    while !hold.quit
-        && ran < stop.after
-        && !stop.reached(remote.machine.pc(), !remote.machine.machine().mode.prom_disable)
-    {
-        if hold.on {
-            std::thread::sleep(TERMINAL_INTERVAL / 4);
-        } else {
-            match remote.step() {
-                Ok(true) => {
-                    ran += 1;
-                    hold.stepped(&remote.machine, ran);
-                }
-                Ok(false) => continue,
-                Err(muir::lashup::Error::Halt(h)) => {
-                    halt = Some(h);
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("muir: the debug cable: {e}");
-                    break;
-                }
-            }
-        }
-        if !hold.check(ran) {
-            continue;
-        }
-        let e = &mut remote.machine;
-        if last_poll.elapsed() >= TERMINAL_INTERVAL
-            && let Some(term) = terminal.as_deref_mut()
-        {
-            term.poll(Frame::of(&e.machine().simpletv));
-            for (keysym, down) in term.take_keys() {
-                keyboard.key(keysym, down);
-            }
-            for (buttons, x, y) in term.take_pointers() {
-                mouse.pointer(buttons, x, y);
-            }
-            if e.machine_mut().ioboard.take_beep() {
-                term.ring();
-            }
-            last_poll = Instant::now();
-        }
-        let board = &mut e.machine_mut().ioboard;
-        if keyboard.pending() > 0 {
-            keyboard.deliver(board);
-        }
-        if mouse.pending(board.mouse_buttons_held()) {
-            mouse.deliver(board);
-        }
-        e.keyboard_boot();
-        if remote.side() == Side::Debugger {
-            hold.self_halt(&remote.machine, ran);
-        }
-        hold.interrupts(&remote.machine, ran);
-        hold.lines(&mut remote.machine, ran, setup, &mut Writes::CableEnd);
+/// ([`Remote`]), so a held debuggee holds the debugger at its next
+/// request, whose acknowledgement it then waits for --- the other process
+/// sits in [`Remote::step`]'s wait, its terminal and its own prompt
+/// unattended, until this end runs on.  A slow debuggee does the same to
+/// its debugger, the netlist one above all, and the cable is built for
+/// it: `continue` puts both back as they were.
+impl<E: Engine + CableEnd> Stepper for Connector<E> {
+    type E = E;
+    fn engine(&self) -> &E {
+        self.machine()
     }
-    hold.done();
-    report(name, ran, t.elapsed().as_secs_f64());
-    hold.conclude(&remote.machine, &stop, ran, halt);
-    println!("       {} debug cycles on the cable", remote.machine.debug_cycles());
-    if let Err(e) = remote.finish() {
-        eprintln!("muir: the debug cable at the end: {e}");
+    fn engine_mut(&mut self) -> &mut E {
+        self.machine_mut()
     }
-    if !hold.quit
-        && let Some(term) = terminal
-    {
-        serve_last_screen(term, &remote.machine.machine().simpletv, &mut hold.interrupts_seen);
+    fn step(&mut self) -> Result<bool, muir::lashup::Error> {
+        if self.debugger().is_none() {
+            self.machine_mut().step()?;
+            return Ok(true);
+        }
+        match self.step_cabled()? {
+            Turn::Stepped => Ok(true),
+            Turn::Waited => Ok(false),
+            Turn::Unplugged(why) => {
+                say_unplugged(self.addr(), &why);
+                Ok(false)
+            }
+        }
+    }
+    fn attend(&mut self) {
+        say_plugged(Connector::attend(self));
+    }
+    fn on_cable(&self) -> bool {
+        self.debugger().is_some()
+    }
+    fn holds_on_self_halt(&self) -> bool {
+        self.debugger().is_none()
+    }
+    fn debug_cycles(&self) -> Option<u64> {
+        (self.connections() > 0).then(|| Connector::debug_cycles(self))
+    }
+    fn finish(&mut self) -> Result<(), muir::lashup::Error> {
+        Connector::finish(self)
+    }
+}
+
+/// The debugger's end of the cable over TCP: this machine's DBGOUT on the
+/// stream to a debuggee in another program, the two run in step.  A hold
+/// here is felt at the other end as a debuggee's is, above: a held
+/// debugger holds the debuggee once it has run to the debugger's last
+/// promise.  A debuggee that stops itself is this machine's to notice,
+/// and this machine stopping itself is held here as a machine alone is.
+impl<E: Engine + CableEnd> Stepper for Remote<E> {
+    type E = E;
+    fn engine(&self) -> &E {
+        &self.machine
+    }
+    fn engine_mut(&mut self) -> &mut E {
+        &mut self.machine
+    }
+    fn step(&mut self) -> Result<bool, muir::lashup::Error> {
+        Remote::step(self)
+    }
+    fn on_cable(&self) -> bool {
+        true
+    }
+    fn debug_cycles(&self) -> Option<u64> {
+        Some(Remote::debug_cycles(self))
+    }
+    fn finish(&mut self) -> Result<(), muir::lashup::Error> {
+        Remote::finish(self)
+    }
+}
+
+/// What the connector found at its listener, said: a debugger plugged in,
+/// or one refused while another is on.
+fn say_plugged(plug: Option<Plug>) {
+    match plug {
+        Some(Plug::Connected(from)) => {
+            eprintln!("debug cable: the debugger connected from {from}");
+        }
+        Some(Plug::Refused(from)) => {
+            eprintln!(
+                "debug cable: a second debugger from {from} refused: one cable per connector"
+            );
+        }
+        None => {}
+    }
+}
+
+/// The cable gone, said, with where the connector listens again.
+fn say_unplugged(addr: Option<SocketAddr>, why: &str) {
+    match addr {
+        Some(a) => eprintln!("debug cable: {why}; DBGIN listening at {a}"),
+        None => eprintln!("debug cable: {why}"),
     }
 }
 
@@ -2000,9 +2145,9 @@ struct Run<'a> {
 /// The prompt's hold on a run: no microcycle runs while it is on, `step`
 /// takes it off for so many microcycles, and ^C and `quit` end the run
 /// through it.  One in each run loop that has the prompt --- a machine on
-/// its own, [`time_engine`], and the `rtl` machine at either end of the
-/// debug cable, [`time_remote`] and [`time_fabric`] --- so that a line
-/// and a ^C mean the same on each.  `chip`'s loop keeps its own, its
+/// its own or at either end of the debug cable over TCP, [`time_engine`],
+/// and the debugger of a machine in fabric, [`time_fabric`] --- so that a
+/// line and a ^C mean the same on each.  `chip`'s loop keeps its own, its
 /// machine being nets and not an [`Engine`].
 struct Hold {
     prompt: Option<Prompt>,
@@ -2269,9 +2414,13 @@ const NO_CHECKPOINT_OVER_THE_CABLE: &str = "none on an end of the debug cable: t
 const NO_CAPTURE_OVER_THE_CABLE: &str = "none on an end of the debug cable, where the two \
      machines are two clocks; --tv-capture is refused there for the same reason";
 
-fn time_engine<E: Engine>(
+/// Runs a machine muir holds: alone, with DBGIN's connector at it, or at
+/// the debugger's end of the cable ([`Stepper`]), with the terminal, the
+/// serial port, the stops and the prompt.  At the end the other end of the
+/// cable, if there is one, is told and the two agree to stop.
+fn time_engine<S: Stepper>(
     name: &str,
-    mut e: E,
+    mut s: S,
     terminal: Option<&mut Terminal>,
     serial: Option<&mut Endpoint>,
     run: Run,
@@ -2289,28 +2438,47 @@ fn time_engine<E: Engine>(
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
     let mut hold = Hold::open(held);
     catch_interrupts();
-    while !hold.quit && ran < stop.after && !stop.reached(e.pc(), !e.machine().mode.prom_disable) {
+    while !hold.quit
+        && ran < stop.after
+        && !stop.reached(s.engine().pc(), !s.engine().machine().mode.prom_disable)
+    {
         if hold.on {
             std::thread::sleep(TERMINAL_INTERVAL / 4);
         } else {
-            if let Err(h) = e.step() {
-                halt = Some(h);
-                break;
+            match s.step() {
+                Ok(true) => {
+                    ran += 1;
+                    hold.stepped(s.engine(), ran);
+                }
+                // The other end's message was waited for, or the cable
+                // went: no microcycle ran, so nothing below is due.
+                Ok(false) => continue,
+                Err(muir::lashup::Error::Halt(h)) => {
+                    halt = Some(h);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("muir: the debug cable: {e}");
+                    break;
+                }
             }
-            ran += 1;
-            hold.stepped(&e, ran);
         }
-        let check = hold.check(ran);
-        if check
-            && !hold.on
+        if !hold.check(ran) {
+            continue;
+        }
+        // The connector's listener, held or not: a debugger may come to a
+        // machine standing at the prompt.
+        s.attend();
+        if !hold.on
             && let Some((_, rec)) = capture.as_mut()
         {
-            rec.sample(&e.machine().simpletv, e.machine().ns, wall_clock());
+            let m = s.engine().machine();
+            rec.sample(&m.simpletv, m.ns, wall_clock());
         }
-        if check
-            && last_poll.elapsed() >= TERMINAL_INTERVAL
+        if last_poll.elapsed() >= TERMINAL_INTERVAL
             && let Some(term) = terminal.as_deref_mut()
         {
+            let e = s.engine_mut();
             term.poll(Frame::of(&e.machine().simpletv));
             for (keysym, down) in term.take_keys() {
                 keyboard.key(keysym, down);
@@ -2327,7 +2495,8 @@ fn time_engine<E: Engine>(
         // takes them; a glance every check is far more often than the
         // machine reads it. The mouse's counts go in whole. The boot
         // sequence's word, once the board has decoded it, presses the boot.
-        if check {
+        {
+            let e = s.engine_mut();
             let board = &mut e.machine_mut().ioboard;
             if keyboard.pending() > 0 {
                 keyboard.deliver(board);
@@ -2342,45 +2511,53 @@ fn time_engine<E: Engine>(
         // at it goes on the cable. The port takes its own frame time over
         // each character either way, so a burst read in one turn still
         // arrives one frame at a time.
-        if check
-            && let Some(end) = serial.as_deref_mut()
+        if let Some(port) = serial.as_deref_mut()
             && last_serial.elapsed() >= SERIAL_INTERVAL
         {
-            let now = e.machine().ns;
-            end.poll_cable(&mut e.machine_mut().ioboard.serial.cable, now);
+            let m = s.engine_mut().machine_mut();
+            let now = m.ns;
+            port.poll_cable(&mut m.ioboard.serial.cable, now);
             last_serial = Instant::now();
         }
-        if check {
-            hold.self_halt(&e, ran);
-            hold.interrupts(&e, ran);
-            hold.lines(
-                &mut e,
-                ran,
-                setup,
-                &mut Writes::Alone { name, capture: &mut capture, clocks },
-            );
+        if s.holds_on_self_halt() {
+            hold.self_halt(s.engine(), ran);
         }
+        hold.interrupts(s.engine(), ran);
+        let mut writes = if s.on_cable() {
+            Writes::CableEnd
+        } else {
+            Writes::Alone { name, capture: &mut capture, clocks }
+        };
+        hold.lines(s.engine_mut(), ran, setup, &mut writes);
     }
     hold.done();
     // One last turn, so that what the port sent between the final poll and
     // the stop reaches whoever is attached before the socket closes.
-    if let Some(end) = serial {
-        let now = e.machine().ns;
-        end.poll_cable(&mut e.machine_mut().ioboard.serial.cable, now);
+    if let Some(port) = serial {
+        let m = s.engine_mut().machine_mut();
+        let now = m.ns;
+        port.poll_cable(&mut m.ioboard.serial.cable, now);
     }
     report(name, ran, t.elapsed().as_secs_f64());
-    hold.conclude(&e, &stop, ran, halt);
+    hold.conclude(s.engine(), &stop, ran, halt);
+    if let Some(n) = s.debug_cycles() {
+        println!("       {n} debug cycles on the cable");
+    }
+    if let Err(e) = s.finish() {
+        eprintln!("muir: the debug cable at the end: {e}");
+    }
     if let Some((path, rec)) = capture.as_mut() {
-        rec.sample(&e.machine().simpletv, e.machine().ns, wall_clock());
+        let m = s.engine().machine();
+        rec.sample(&m.simpletv, m.ns, wall_clock());
         write_capture(path, rec);
     }
     if let Some(path) = &checkpoint {
-        write_checkpoint(name, &e, path);
+        write_checkpoint(name, s.engine(), path);
     }
     if !hold.quit
         && let Some(term) = terminal
     {
-        serve_last_screen(term, &e.machine().simpletv, &mut hold.interrupts_seen);
+        serve_last_screen(term, &s.engine().machine().simpletv, &mut hold.interrupts_seen);
     }
 }
 
@@ -2873,24 +3050,16 @@ fn resume_chip(
 /// never stopped.  That was the half of this that a busy machine could
 /// not get past: issue 89, where a run held after two and a half hours
 /// could not be banked.
-fn chip_to_quiet(
-    cpu: &mut Chip,
-    clk: &mut Behavioural,
-    far: &mut FarEnd,
-    memrq: netlist::NetId,
-) -> Result<u64, &'static str> {
-    let mut why = match chip_busy_with(cpu, far, memrq) {
+fn chip_to_quiet(m: &mut DebugIn, memrq: netlist::NetId) -> Result<u64, &'static str> {
+    let mut why = match chip_busy_with(&m.cpu, &m.far, memrq) {
         None => return Ok(0),
         Some(why) => why,
     };
     let mut ran = 0;
-    let mut last = clk.phase_ns();
     while ran < 1000 {
-        far.tick_with(cpu, clk);
-        let p = clk.phase_ns();
-        if p < last {
+        if m.tick() {
             ran += 1;
-            match chip_busy_with(cpu, far, memrq) {
+            match chip_busy_with(&m.cpu, &m.far, memrq) {
                 None => return Ok(ran),
                 // The last boundary's, so a run that never came quiet can
                 // say what the machine was doing at one rather than what
@@ -2898,7 +3067,6 @@ fn chip_to_quiet(
                 Some(w) => why = w,
             }
         }
-        last = p;
     }
     Err(why)
 }
@@ -2954,30 +3122,6 @@ fn write_capture(path: &Path, rec: &Recorder) {
         ),
         Err(e) => eprintln!("capture: could not write {}: {e}", path.display()),
     }
-}
-
-/// DBGIN's listener, for the debugger in the other program to connect to.
-fn listen_for_debugger(addr: SocketAddr) -> std::net::TcpListener {
-    let listener = match std::net::TcpListener::bind(addr) {
-        Ok(l) => l,
-        Err(err) => usage(&format!("--debug-cable-listen {addr}: {err}")),
-    };
-    eprintln!("debug cable: DBGIN listening on {}", listener.local_addr().unwrap_or(addr));
-    listener
-}
-
-/// The debugger's connection: a handle to read the cable and one to write it.
-fn accept_debugger(
-    listener: &std::net::TcpListener,
-    addr: SocketAddr,
-) -> (std::net::TcpStream, std::net::TcpStream) {
-    let (stream, from) = match listener.accept() {
-        Ok(s) => s,
-        Err(err) => usage(&format!("--debug-cable-listen {addr}: {err}")),
-    };
-    eprintln!("debug cable: the debugger connected from {from}");
-    let reader = stream.try_clone().expect("a second handle on the cable");
-    (reader, stream)
 }
 
 /// A netlist machine as `--chip` runs it: the processor with the boot PROM
@@ -3198,9 +3342,14 @@ fn attend_serial_chip(far: &mut FarEnd, end: &mut Endpoint) {
 }
 
 /// Runs a netlist machine: what the command line has to say about one,
-/// the memory board count among them, and [`Run`] for the rest.
+/// the memory board count among them, and [`Run`] for the rest.  `cable`
+/// is the listener for DBGIN's connector, if the run has one: the board's
+/// own connector answers a debugger that connects, an event at a time
+/// while one is on ([`DebugIn`] in a [`Connector`]), and the machine is
+/// `--chip` alone before and after, a transition at a time.
 #[allow(clippy::too_many_arguments)]
 fn time_chip(
+    cable: Option<std::net::TcpListener>,
     image: &[u64],
     packs: &[Pack],
     boards: Boards,
@@ -3218,7 +3367,7 @@ fn time_chip(
         mut cpu,
         mut clk,
         mut far,
-        bus: _,
+        bus,
         pc_nets,
         ir_nets,
         rams,
@@ -3255,7 +3404,12 @@ fn time_chip(
     let mut ran = 0;
     // `MEMRQ`, for the quiet point a checkpoint is taken at.
     let memrq = netlist::parse(NETLIST).unwrap().by_name_id("MEMRQ").unwrap();
-    let mut last = clk.phase_ns();
+    // The machine behind DBGIN's connector: the board's own, with the
+    // processor, its clock and the far end, whether or not a debugger ever
+    // comes.  With nobody on the cable the loop below ticks it a
+    // transition at a time, [`DebugIn::tick`], as `--chip` always has.
+    let mut end = Connector::new(DebugIn::new(&bus, cpu, clk, far), cable)
+        .unwrap_or_else(|e| fail(&format!("the debug cable's listener: {e}")));
     let prom_enabled = |c: &Chip| c.net(promdisable) != Level::High;
     // As [`machrun_low`] is on the other two engines, off the nets rather
     // than off `FLAG-1`: `Chip` is not an `Engine` and has no spy registers
@@ -3302,41 +3456,62 @@ fn time_chip(
     // carries stops the run before it starts, as the prompt's `net` would
     // answer it, rather than recording nothing for hours.
     let mut watch = watch.map(|(from, to, nets)| {
+        let m = end.machine();
         let named =
-            boards_named(&cpu, &far, &boards, net_netlists.get_or_insert_with(parse_netlists));
+            boards_named(&m.cpu, &m.far, &boards, net_netlists.get_or_insert_with(parse_netlists));
         Watch::new(from, to, &nets, &named).unwrap_or_else(|what| fail(&format!("--watch: {what}")))
     });
     let mut interrupts_seen = 0;
     let mut asks_seen = 0;
-    while !quit && ran < stop.after && !stop.reached(cpu.read(&pc_nets) as u16, prom_enabled(&cpu))
-    {
-        let mut wrapped = false;
+    while !quit && ran < stop.after && {
+        let c = &end.machine().cpu;
+        !stop.reached(c.read(&pc_nets) as u16, prom_enabled(c))
+    } {
+        // Microcycles this turn: one at most on its own, where a turn is a
+        // transition of the boards; as many as the debugger's promise
+        // allowed with one on the cable, where a turn is a quantum of the
+        // boards or a wait for the debugger's next message.
+        let mut delta = 0;
         if held {
             std::thread::sleep(TERMINAL_INTERVAL / 4);
-        } else {
-            far.tick_with(&mut cpu, &mut clk);
-            let p = clk.phase_ns();
-            if p < last {
-                ran += 1;
-                wrapped = true;
-                if let Some(left) = stepping.as_mut() {
-                    *left -= 1;
-                    if *left == 0 {
-                        stepping = None;
-                        held = true;
-                        say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
-                    }
+        } else if end.debugger().is_some() {
+            let before = end.machine().microcycles;
+            match end.step_cabled() {
+                Ok(Turn::Unplugged(why)) => say_unplugged(end.addr(), &why),
+                Ok(Turn::Stepped | Turn::Waited) => {}
+                Err(h) => {
+                    eprintln!("muir: the debug cable: the machine halted: {h:?}");
+                    break;
                 }
             }
-            last = p;
+            delta = end.machine().microcycles - before;
+        } else {
+            let m = end.machine_mut();
+            if m.tick() {
+                delta = 1;
+            }
             // The record, at every step: [`Watch`] says why a step and
             // not a microcycle. A run with no watch pays one test here,
             // and one with a range behind it drops the watch and pays the
-            // same.
+            // same.  A run with a watch has no connector, so this is the
+            // only path a watch is on.
             if let Some(w) = watch.as_mut()
-                && !w.sample(ran, clk.time_ns(), &cpu, &far)
+                && !w.sample(ran + delta, m.clk.time_ns(), &m.cpu, &m.far)
             {
                 watch = None;
+            }
+        }
+        let wrapped = delta > 0;
+        if wrapped {
+            ran += delta;
+            if let Some(left) = stepping.as_mut() {
+                *left = left.saturating_sub(delta);
+                if *left == 0 {
+                    stepping = None;
+                    held = true;
+                    let m = end.machine();
+                    say_pc_chip(&m.cpu, &pc_nets, &ir_nets, ran, prom_enabled(&m.cpu));
+                }
             }
         }
         // The capture keeps its own cadence, in microcycles.
@@ -3344,7 +3519,8 @@ fn time_chip(
             && ran % TERMINAL_CHECK == 0
             && let Some((_, rec)) = capture.as_mut()
         {
-            rec.sample(&far.buses.machine.simpletv, clk.time_ns(), wall_clock());
+            let m = end.machine();
+            rec.sample(&m.far.buses.machine.simpletv, m.clk.time_ns(), wall_clock());
         }
         // Everything else goes by the wall clock, not by a microcycle
         // count. `chip` runs about 1,800 microcycles a second, so
@@ -3358,6 +3534,14 @@ fn time_chip(
             continue;
         }
         last_check = Instant::now();
+        // The connector's listener, held or not: a debugger may come to a
+        // machine standing at the prompt.  While one is on the cable the
+        // machine's stops are the debugger's to notice, which is what CC
+        // is for, and `checkpoint` and the capture commands are refused as
+        // they are at the `rtl` end of a cable.
+        say_plugged(end.attend());
+        let on_cable = end.debugger().is_some();
+        let m = end.machine_mut();
         // **`kill -USR1` asks a run where it is**, and it answers here,
         // between two microcycles, and goes on. It does not hold the
         // machine: a reader that stopped the run would be no use for the
@@ -3365,12 +3549,12 @@ fn time_chip(
         // load against the `Instant::now` above it, which the comment
         // there already calls free at this rate. Issue 86.
         if asked_where(&mut asks_seen) {
-            say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
+            say_pc_chip(&m.cpu, &pc_nets, &ir_nets, ran, prom_enabled(&m.cpu));
         }
         let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
         if poll || !held {
-            if attend_chip(&mut far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse) {
-                press_boot(&mut cpu, &mut clk, boot1);
+            if attend_chip(&mut m.far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse) {
+                press_boot(&mut m.cpu, &mut m.clk, boot1);
             }
             if poll {
                 last_poll = Instant::now();
@@ -3379,16 +3563,19 @@ fn time_chip(
         // The serial port's endpoint, when `--serial` opened one: a check
         // is already the terminal's cadence here, which is as often as a
         // serial line needs.
-        if let Some(end) = serial.as_deref_mut() {
-            attend_serial_chip(&mut far, end);
+        if let Some(port) = serial.as_deref_mut() {
+            attend_serial_chip(&mut m.far, port);
         }
         // The machine stopping itself, held on once rather than spun on,
         // exactly as `time_engine` does it off `FLAG-1`.
-        if !held && let Some(why) = stopped_itself(&cpu) {
+        if !held
+            && !on_cable
+            && let Some(why) = stopped_itself(&m.cpu)
+        {
             held = true;
             stepping = None;
             say_machrun_low(why);
-            say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
+            say_pc_chip(&m.cpu, &pc_nets, &ir_nets, ran, prom_enabled(&m.cpu));
         }
         // ^C: the first holds the machine at the prompt, one more while
         // held quits; with no prompt to go on from, one quits.
@@ -3405,7 +3592,7 @@ fn time_chip(
                     prompt.past_interrupt();
                 }
                 println!("held at ^C; continue runs on, ^C again quits");
-                say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
+                say_pc_chip(&m.cpu, &pc_nets, &ir_nets, ran, prom_enabled(&m.cpu));
             }
         }
         if stepping.is_none()
@@ -3416,19 +3603,19 @@ fn time_chip(
                 match muir::prompt::parse(&line) {
                     Ok(None) => {}
                     Ok(Some(Command::Boot)) => {
-                        press_boot(&mut cpu, &mut clk, boot);
-                        say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
+                        press_boot(&mut m.cpu, &mut m.clk, boot);
+                        say_pc_chip(&m.cpu, &pc_nets, &ir_nets, ran, prom_enabled(&m.cpu));
                         held = false;
                     }
                     Ok(Some(Command::Hold)) => {
                         held = true;
-                        say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu));
+                        say_pc_chip(&m.cpu, &pc_nets, &ir_nets, ran, prom_enabled(&m.cpu));
                     }
-                    Ok(Some(Command::Continue)) => match stopped_itself(&cpu) {
+                    Ok(Some(Command::Continue)) => match stopped_itself(&m.cpu) {
                         Some(why) => say_machrun_low(why),
                         None => held = false,
                     },
-                    Ok(Some(Command::Step(n))) => match stopped_itself(&cpu) {
+                    Ok(Some(Command::Step(n))) => match stopped_itself(&m.cpu) {
                         Some(why) => say_machrun_low(why),
                         None => {
                             held = false;
@@ -3437,13 +3624,16 @@ fn time_chip(
                         }
                     },
                     Ok(Some(Command::Pc)) => {
-                        say_pc_chip(&cpu, &pc_nets, &ir_nets, ran, prom_enabled(&cpu))
+                        say_pc_chip(&m.cpu, &pc_nets, &ir_nets, ran, prom_enabled(&m.cpu))
                     }
                     Ok(Some(Command::Info)) => print!("{setup}"),
                     Ok(Some(Command::Keys)) => print!("{}", keys_in_force()),
                     Ok(Some(Command::Screenshot(path))) => {
                         let path = path.unwrap_or_else(|| timestamped("png"));
-                        write_screenshot(&path, &far.buses.machine.simpletv);
+                        write_screenshot(&path, &m.far.buses.machine.simpletv);
+                    }
+                    Ok(Some(Command::StartCapture(_))) if on_cable => {
+                        println!("capture: {NO_CAPTURE_OVER_THE_CABLE}")
                     }
                     Ok(Some(Command::StartCapture(path))) => match capture.as_ref() {
                         Some((going, _)) => println!(
@@ -3460,9 +3650,16 @@ fn time_chip(
                             capture = Some((path, Recorder::new(clocks)));
                         }
                     },
+                    Ok(Some(Command::EndCapture)) if on_cable => {
+                        println!("capture: {NO_CAPTURE_OVER_THE_CABLE}")
+                    }
                     Ok(Some(Command::EndCapture)) => match capture.take() {
                         Some((path, mut rec)) => {
-                            rec.sample(&far.buses.machine.simpletv, clk.time_ns(), wall_clock());
+                            rec.sample(
+                                &m.far.buses.machine.simpletv,
+                                m.clk.time_ns(),
+                                wall_clock(),
+                            );
                             write_capture(&path, &rec);
                         }
                         None => println!("capture: none is going; startcapture begins one"),
@@ -3473,7 +3670,7 @@ fn time_chip(
                     // `chip_and_rtl_hold_the_same_memories` holds to `rtl`,
                     // so this prints the same words that comparison checks.
                     Ok(Some(Command::Dump { memory, from, words })) => {
-                        match say_chip_memory(&cpu, &rams, memory, from, words) {
+                        match say_chip_memory(&m.cpu, &rams, memory, from, words) {
                             Ok(dump) => print!("{dump}"),
                             Err(what) => println!("prompt: {what}"),
                         }
@@ -3484,8 +3681,8 @@ fn time_chip(
                     // and runs no bus cycle, so this is answered while the
                     // machine runs as `net` is.
                     Ok(Some(Command::Mem { from, words })) => {
-                        let read = |a: usize| far.main_word(a as u32);
-                        match muir::prompt::main_dump(from, words, far.main_words(), read) {
+                        let read = |a: usize| m.far.main_word(a as u32);
+                        match muir::prompt::main_dump(from, words, m.far.main_words(), read) {
                             Ok(dump) => print!("{dump}"),
                             Err(what) => println!("prompt: {what}"),
                         }
@@ -3502,16 +3699,19 @@ fn time_chip(
                             "        PC and IR, and amem, mmem, dmem, pdl and spc the memories"
                         );
                     }
+                    Ok(Some(Command::Checkpoint(_))) if on_cable => {
+                        println!("checkpoint: {NO_CHECKPOINT_OVER_THE_CABLE}")
+                    }
                     Ok(Some(Command::Checkpoint(path))) => {
                         let path = path.unwrap_or_else(|| timestamped("chk"));
-                        match chip_to_quiet(&mut cpu, &mut clk, &mut far, memrq) {
+                        match chip_to_quiet(m, memrq) {
                             Ok(on) => {
                                 ran += on;
                                 write_chip_checkpoint(
                                     &path,
-                                    &cpu,
-                                    &clk,
-                                    &far,
+                                    &m.cpu,
+                                    &m.clk,
+                                    &m.far,
                                     tv_board,
                                     resumed_at + ran,
                                 );
@@ -3527,7 +3727,7 @@ fn time_chip(
                         // asked for and kept: a run that never asks pays
                         // nothing, and one that asks twice parses once.
                         let netlists = net_netlists.get_or_insert_with(parse_netlists);
-                        let on = boards_named(&cpu, &far, &boards, netlists);
+                        let on = boards_named(&m.cpu, &m.far, &boards, netlists);
                         print!("{}", say_net(&on, &want));
                     }
                     // The next `cycles` microcycles from here: the one in
@@ -3536,7 +3736,7 @@ fn time_chip(
                     // one `--watch` set for later, is replaced.
                     Ok(Some(Command::Watch { cycles, nets })) => {
                         let netlists = net_netlists.get_or_insert_with(parse_netlists);
-                        let on = boards_named(&cpu, &far, &boards, netlists);
+                        let on = boards_named(&m.cpu, &m.far, &boards, netlists);
                         let to = ran + cycles - 1;
                         match Watch::new(ran, Some(to), &nets, &on) {
                             // Not `watch: ...`, which is the record's own
@@ -3573,14 +3773,26 @@ fn time_chip(
         prompt.done();
     }
     report("chip", ran, t.elapsed().as_secs_f64());
-    if quit {
-        let prom = if prom_enabled(&cpu) { " in the PROM" } else { "" };
-        println!("       quit at PC {:o}{prom} after {ran}", cpu.read(&pc_nets) as u16);
-    } else {
-        stop.conclude(ran, cpu.read(&pc_nets) as u16, prom_enabled(&cpu), None);
+    {
+        let c = &end.machine().cpu;
+        if quit {
+            let prom = if prom_enabled(c) { " in the PROM" } else { "" };
+            println!("       quit at PC {:o}{prom} after {ran}", c.read(&pc_nets) as u16);
+        } else {
+            stop.conclude(ran, c.read(&pc_nets) as u16, prom_enabled(c), None);
+        }
     }
+    // A debugger on the cable is told the run is over and waited for, as
+    // at the `rtl` end; one that was and went is only counted.
+    if end.connections() > 0 {
+        println!("       {} debug cycles on the cable", end.debug_cycles());
+    }
+    if let Err(e) = end.finish() {
+        eprintln!("muir: the debug cable at the end: {e}");
+    }
+    let m = end.machine_mut();
     if let Some((path, rec)) = capture.as_mut() {
-        rec.sample(&far.buses.machine.simpletv, clk.time_ns(), wall_clock());
+        rec.sample(&m.far.buses.machine.simpletv, m.clk.time_ns(), wall_clock());
         write_capture(path, rec);
     }
     // The checkpoint last, and at the first quiet microcycle from here:
@@ -3588,12 +3800,19 @@ fn time_chip(
     // cycle is not a machine a checkpoint describes.  Those microcycles
     // are the run's like any other, so they are counted and said.
     if let Some(path) = &checkpoint {
-        match chip_to_quiet(&mut cpu, &mut clk, &mut far, memrq) {
+        match chip_to_quiet(m, memrq) {
             Ok(on) => {
                 if on > 0 {
                     eprintln!("checkpoint: {on} microcycles on to a quiet one");
                 }
-                write_chip_checkpoint(path, &cpu, &clk, &far, tv_board, resumed_at + ran + on);
+                write_chip_checkpoint(
+                    path,
+                    &m.cpu,
+                    &m.clk,
+                    &m.far,
+                    tv_board,
+                    resumed_at + ran + on,
+                );
             }
             Err(why) => eprintln!(
                 "checkpoint: {} not written: the machine has {why} and has not come quiet in \
@@ -3603,67 +3822,7 @@ fn time_chip(
         }
     }
     if let Some(term) = terminal {
-        serve_last_screen(term, &far.buses.machine.simpletv, &mut interrupts_seen);
-    }
-}
-
-/// The debuggee's end of the cable over TCP on the netlist: the board's
-/// DBGIN answering the debugger in the other program, run in step with it
-/// by [`Remote::step`], with the terminal and the stops as for `--chip`
-/// alone; at the end the two agree to stop.
-fn time_chip_debuggee(
-    mut remote: Remote<DebugIn>,
-    stop: Stop,
-    pc_nets: Vec<netlist::NetId>,
-    promdisable: netlist::NetId,
-    boot1: netlist::NetId,
-    terminal: Option<&mut Terminal>,
-) {
-    let t = Instant::now();
-    let prom_enabled = |c: &Chip| c.net(promdisable) != Level::High;
-    let mut terminal = terminal;
-    let (mut keyboard, mut mouse) = (a_keyboard(), Mouse::new());
-    let mut last_poll = Instant::now();
-    let mut checked = 0;
-    catch_interrupts();
-    let mut interrupts_seen = 0;
-    loop {
-        let m = &remote.machine;
-        if interrupted(&mut interrupts_seen) {
-            break;
-        }
-        if m.microcycles >= stop.after
-            || stop.reached(m.cpu.read(&pc_nets) as u16, prom_enabled(&m.cpu))
-        {
-            break;
-        }
-        if let Err(e) = remote.step() {
-            eprintln!("muir: the debug cable: {e}");
-            break;
-        }
-        let ran = remote.machine.microcycles;
-        if ran / TERMINAL_CHECK != checked {
-            checked = ran / TERMINAL_CHECK;
-            let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
-            let m = &mut remote.machine;
-            if attend_chip(&mut m.far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse) {
-                press_boot(&mut m.cpu, &mut m.clk, boot1);
-            }
-            if poll {
-                last_poll = Instant::now();
-            }
-        }
-    }
-    let m = &remote.machine;
-    let ran = m.microcycles;
-    report("chip, debuggee", ran, t.elapsed().as_secs_f64());
-    stop.conclude(ran, m.cpu.read(&pc_nets) as u16, prom_enabled(&m.cpu), None);
-    println!("       {} debug cycles on the cable", m.debug_cycles);
-    if let Err(e) = remote.finish() {
-        eprintln!("muir: the debug cable at the end: {e}");
-    }
-    if let Some(term) = terminal {
-        serve_last_screen(term, &remote.machine.far.buses.machine.simpletv, &mut interrupts_seen);
+        serve_last_screen(term, &m.far.buses.machine.simpletv, &mut interrupts_seen);
     }
 }
 
@@ -3718,7 +3877,11 @@ fn main() {
     let mut debuggee_address: Option<u16> = None;
     // Absent, or present with or without an endpoint.
     let mut debuggee_terminal: Option<Option<String>> = None;
-    let mut cable_listen: Option<SocketAddr> = None;
+    // DBGIN's connector is there unless the run says not: where it is,
+    // and whether `--debug-cable-listen` placed it; `cable_off` is
+    // `--no-debug-cable-listen`, and of the two the last given wins.
+    let mut cable_listen = CableAt::default_port();
+    let mut cable_off = false;
     let mut cable_connect: Option<Connect> = None;
     // The serial port's endpoint: nothing unless `--serial` names one.
     let mut serial_at: Option<SocketAddr> = None;
@@ -3935,11 +4098,22 @@ fn main() {
                     );
                 }
                 match endpoint(spec.as_deref(), DEBUG_CABLE_PORT) {
-                    Some(a) => cable_listen = Some(a),
+                    Some(addr) => {
+                        cable_listen = CableAt {
+                            addr,
+                            port_named: names_a_port(spec.as_deref()),
+                            asked: true,
+                        };
+                        cable_off = false;
+                    }
                     None => usage(
                         "--debug-cable-listen wants nothing, a port, an address or address:port",
                     ),
                 }
+            }
+            (None, "--no-debug-cable-listen") => {
+                cable_off = true;
+                cable_listen = CableAt::default_port();
             }
             (None, "--debug-cable-connect") => {
                 // The endpoint is optional: the next word is it unless it is a flag.
@@ -4033,7 +4207,9 @@ fn main() {
     }
 
     let which = which.unwrap_or(Which::Rtl);
-    let cabled = debuggee as u8 + cable_listen.is_some() as u8 + cable_connect.is_some() as u8;
+    // The lashups asked for in as many words; the connector nobody placed
+    // is not one, being there on every rtl and chip run.
+    let cabled = debuggee as u8 + cable_listen.asked as u8 + cable_connect.is_some() as u8;
     if cabled > 1 {
         usage(
             "one of --debug-in-process, --debug-cable-listen and --debug-cable-connect: one lashup at a time",
@@ -4042,7 +4218,7 @@ fn main() {
     if cabled == 1 {
         match which {
             Which::Micro => usage("micro has no timing model, and no end of the debug cable"),
-            Which::Chip if cable_listen.is_none() => {
+            Which::Chip if !cable_listen.asked => {
                 usage("on chip the debug cable is the board's DBGIN only: --debug-cable-listen")
             }
             _ => {}
@@ -4058,8 +4234,9 @@ fn main() {
     }
     // The debuggee on a cable is stepped by the debugger's events, in
     // `Remote::step`, and nothing there samples between them; refused
-    // rather than quietly recording nothing.
-    if which == Which::Chip && watch.is_some() && cable_listen.is_some() {
+    // rather than quietly recording nothing.  The connector nobody placed
+    // is left empty by `--watch` instead, below.
+    if which == Which::Chip && watch.is_some() && cable_listen.asked {
         usage("--watch is the run's own loop, which a debuggee on a cable does not have");
     }
     if debuggee_address.is_some() && !debuggee {
@@ -4074,8 +4251,10 @@ fn main() {
     // the run loops that step them through the debug cable reach neither
     // machine's J9, so an endpoint here would be opened for one of them
     // without saying which. Refused rather than quietly the debugger's.
-    if serial_at.is_some() && cabled == 1 {
-        usage("--serial is one machine's serial port, and the lashup runs two");
+    // An end of the cable over TCP is one machine in this process, and
+    // the port is its.
+    if serial_at.is_some() && debuggee {
+        usage("--serial is one machine's serial port, and the lashup in one process runs two");
     }
     // The two flags that describe a CHUDP link describe one that has to
     // be there: without a link nothing is listening and the cable carries
@@ -4118,7 +4297,7 @@ fn main() {
             usage("--debuggee-terminal: the same endpoint as --terminal");
         }
     }
-    if capture_tv.is_some() && (cable_listen.is_some() || cable_connect.is_some()) {
+    if capture_tv.is_some() && (cable_listen.asked || cable_connect.is_some()) {
         usage(
             "--tv-capture records a machine on its own or the lashup in one process, not an end of the debug cable to another program or to the fabric",
         );
@@ -4130,7 +4309,10 @@ fn main() {
     }
     let capture = capture_tv.map(|path| (path, capture_tv_time));
     if !auto_boot {
-        if cabled == 1 {
+        // A machine held with its connector listening is one machine on
+        // its own, and a debugger may come to it standing: the two
+        // machines powered on together.
+        if debuggee || cable_connect.is_some() {
             usage("--no-auto-boot is one machine on its own, not the lashup");
         }
         if !Prompt::possible() {
@@ -4145,8 +4327,16 @@ fn main() {
     if prom_file.is_some() && resume.is_some() {
         usage("--prom and --resume: the checkpoint carries the PROM it ran");
     }
-    if (checkpoint.is_some() || resume.is_some()) && cabled == 1 {
-        usage("--checkpoint and --resume are one machine on its own, not the lashup");
+    // A checkpoint is of a machine on its own: a debugger's cycle in the
+    // bus interface is nothing `--resume` can start from.  The connector
+    // nobody placed is left empty by `--checkpoint` instead, below.  A
+    // resume is before the run, and only the lashup in one process, which
+    // builds two machines, has no one machine to resume.
+    if checkpoint.is_some() && cabled == 1 {
+        usage("--checkpoint is one machine on its own, not the lashup");
+    }
+    if resume.is_some() && debuggee {
+        usage("--resume is one machine on its own, not the lashup in one process, which runs two");
     }
     // A checkpoint is read before the machine is built, so that the machine
     // can be built with as much memory as the checkpoint's had.
@@ -4249,6 +4439,41 @@ fn main() {
         Ok(t) => (Some(t), None),
         Err(e) if listen.asked => usage(&format!("--terminal {e}")),
         Err(e) => (None, Some(e)),
+    };
+    // DBGIN's connector: a listener for a debugger's cable on every rtl
+    // and chip run, as the bus interface's DBGIN is on every machine ---
+    // unless the run said not, or wants a machine on its own: micro has no
+    // end of the cable; --checkpoint, --tv-capture and chip's --watch are
+    // refused beside --debug-cable-listen above and leave the connector
+    // nobody placed empty here.  The lashup in one process wires both
+    // machines' connectors to each other, and the debugger's end runs its
+    // machine inside the cable it plugged into the debuggee: neither
+    // listens, and their own lines say what they are.  Bound here, before
+    // the machine is built, so that the start can say where.
+    let no_cable: Option<String> = if cable_off {
+        Some("--no-debug-cable-listen".to_string())
+    } else if which == Which::Micro {
+        Some("micro has no timing model, and no end of the debug cable".to_string())
+    } else if checkpoint.is_some() {
+        Some("--checkpoint writes a machine on its own".to_string())
+    } else if capture.is_some() {
+        Some("--tv-capture records a machine on its own".to_string())
+    } else if which == Which::Chip && watch.is_some() {
+        Some("--watch is the run's own loop".to_string())
+    } else {
+        None
+    };
+    let (cable, no_cable) = if debuggee || cable_connect.is_some() {
+        (None, None)
+    } else {
+        match no_cable {
+            Some(why) => (None, Some(why)),
+            None => match bind_cable(cable_listen) {
+                Ok(l) => (Some(l), None),
+                Err(e) if cable_listen.asked => usage(&format!("--debug-cable-listen {e}")),
+                Err(e) => (None, Some(e)),
+            },
+        }
     };
     // The other machine's display: the one above this machine's, or where
     // the flag says. In the lashup both machines are served, neither
@@ -4434,17 +4659,25 @@ fn main() {
                 )
                 .unwrap();
             }
-        } else if let Some(a) = cable_listen {
-            writeln!(s, "debug cable: this machine the debuggee, DBGIN listening at {a}").unwrap();
         } else if let Some(Connect::Endpoint(a)) = cable_connect {
-            writeln!(s, "debug cable: this machine the debugger, DBGOUT connecting to {a}")
-                .unwrap();
+            writeln!(
+                s,
+                "debug cable: this machine the debugger, DBGOUT connecting to {a}; its DBGIN not \
+                 listening"
+            )
+            .unwrap();
         } else if let Some(Connect::Window(a)) = cable_connect {
             writeln!(
                 s,
-                "debug cable: this machine the debugger, DBGOUT at the fabric's window at {a:#x}"
+                "debug cable: this machine the debugger, DBGOUT at the fabric's window at {a:#x}; \
+                 its DBGIN not listening"
             )
             .unwrap();
+        } else if let Some(l) = &cable {
+            let at = l.local_addr().map_or(cable_listen.addr.to_string(), |a| a.to_string());
+            writeln!(s, "debug cable: DBGIN listening at {at}").unwrap();
+        } else if let Some(why) = &no_cable {
+            writeln!(s, "debug cable: none --- {why}").unwrap();
         }
         let clocks = if capture_tv_time { "" } else { ", no clocks" };
         if let Some((p, _)) = &capture {
@@ -4487,13 +4720,12 @@ fn main() {
             .unwrap();
         }
         // The prompt: every run that is one machine muir holds has it ---
-        // an engine alone, `chip` included, and the `rtl` machine at either
-        // end of the debug cable.  The lashup in one process and the
-        // netlist debuggee have none, and say so rather than nothing.
+        // an engine alone, `chip` included, with or without a debugger on
+        // its connector, and the `rtl` machine at the debugger's end of
+        // the cable.  The lashup in one process has none, and says so
+        // rather than nothing.
         let no_prompt = if debuggee {
             Some("the lashup in one process runs two machines and takes no commands for either")
-        } else if which == Which::Chip && cable_listen.is_some() {
-            Some("the netlist debuggee runs for the debugger on the cable and takes no commands")
         } else if !Prompt::possible() {
             Some("stdin is a terminal muir is in the background of")
         } else {
@@ -4541,7 +4773,7 @@ fn main() {
                 hold: !auto_boot,
                 clocks: capture_tv_time,
             };
-            time_engine("micro", e, terminal.as_mut(), serial.as_mut(), run);
+            time_engine("micro", Alone(e), terminal.as_mut(), serial.as_mut(), run);
         }
         Which::Rtl => {
             let mut m = machine(&prom, packs, boards);
@@ -4575,16 +4807,6 @@ fn main() {
                     debuggee_terminal.as_mut(),
                     capture,
                 );
-            } else if let Some(addr) = cable_listen {
-                let listener = listen_for_debugger(addr);
-                let (reader, stream) = accept_debugger(&listener, addr);
-                time_remote(
-                    "rtl, debuggee",
-                    Remote::debuggee(e, reader, stream),
-                    stop,
-                    terminal.as_mut(),
-                    &setup,
-                );
             } else if let Some(Connect::Endpoint(addr)) = cable_connect {
                 // The debuggee may still be starting: try for five seconds.
                 let mut tries = 0;
@@ -4603,12 +4825,23 @@ fn main() {
                 };
                 eprintln!("debug cable: DBGOUT connected to the debuggee at {addr}");
                 let reader = stream.try_clone().expect("a second handle on the cable");
-                time_remote(
+                if let Some(p) = &resume {
+                    resume_engine("rtl", &mut e, p);
+                }
+                let run = Run {
+                    stop,
+                    capture: None,
+                    checkpoint: None,
+                    setup: &setup,
+                    hold: !auto_boot,
+                    clocks: capture_tv_time,
+                };
+                time_engine(
                     "rtl, debugger",
                     Remote::debugger(e, reader, stream),
-                    stop,
                     terminal.as_mut(),
-                    &setup,
+                    serial.as_mut(),
+                    run,
                 );
             } else if let Some(Connect::Window(at)) = cable_connect {
                 // The identity is read before anything is stored, and a
@@ -4632,7 +4865,12 @@ fn main() {
                     hold: !auto_boot,
                     clocks: capture_tv_time,
                 };
-                time_engine("rtl", e, terminal.as_mut(), serial.as_mut(), run);
+                // The machine with DBGIN's connector at it, listening or
+                // not: a debugger that connects is plugged in between two
+                // microcycles.
+                let end = Connector::new(e, cable)
+                    .unwrap_or_else(|e| fail(&format!("the debug cable's listener: {e}")));
+                time_engine("rtl", end, terminal.as_mut(), serial.as_mut(), run);
             }
         }
         Which::Chip => {
@@ -4663,44 +4901,28 @@ fn main() {
                 disk: disk_n.as_ref(),
                 multiplexor: dm_n.as_ref(),
             };
-            if let Some(addr) = cable_listen {
-                // The port first, so that the debugger's connect finds it
-                // while the netlists are built.
-                let listener = listen_for_debugger(addr);
-                // The debuggee's stops are the debugger's to notice over
-                // the cable, which is what CC is for, so the self-halt
-                // check `time_chip` makes is not made here.
-                let ChipMachine { cpu, clk, far, bus, pc_nets, promdisable, boot1, .. } =
-                    // The debuggee's button is the debugger's to press over
-                    // the cable, so this end always boots itself.
-                    chip_machine(&image, packs, on_the_buses, boards, chaos, true);
-                let (reader, stream) = accept_debugger(&listener, addr);
-                let end = DebugIn::new(&bus, cpu, clk, far);
-                let remote = Remote::debuggee(end, reader, stream);
-                time_chip_debuggee(remote, stop, pc_nets, promdisable, boot1, terminal.as_mut());
-            } else {
-                let run = Run {
-                    stop,
-                    capture,
-                    checkpoint,
-                    setup: &setup,
-                    hold: !auto_boot,
-                    clocks: capture_tv_time,
-                };
-                time_chip(
-                    &image,
-                    packs,
-                    on_the_buses,
-                    boards,
-                    chaos,
-                    terminal.as_mut(),
-                    serial.as_mut(),
-                    run,
-                    resume,
-                    tv_board,
-                    watch,
-                );
-            }
+            let run = Run {
+                stop,
+                capture,
+                checkpoint,
+                setup: &setup,
+                hold: !auto_boot,
+                clocks: capture_tv_time,
+            };
+            time_chip(
+                cable,
+                &image,
+                packs,
+                on_the_buses,
+                boards,
+                chaos,
+                terminal.as_mut(),
+                serial.as_mut(),
+                run,
+                resume,
+                tv_board,
+                watch,
+            );
         }
     }
 }

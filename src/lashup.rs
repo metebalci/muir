@@ -27,6 +27,7 @@
 //! moves.
 
 use std::io::{self, Read, Write};
+use std::net::{SocketAddr, TcpListener};
 use std::sync::mpsc;
 
 use crate::busint::{CableEvent, DebugRequest};
@@ -48,9 +49,18 @@ pub fn max_step_ns() -> u64 {
 /// lashup: `debugger`'s DBGOUT to `debuggee`'s DBGIN, and `debuggee`'s
 /// DBGOUT to `debugger`'s DBGIN, so that either may debug the other.  The
 /// names say which one CC runs on.
+///
+/// **The cables' clock starts when they are plugged in**, as over a stream
+/// ([`Remote`]): each machine has run some way on its own clock by then ---
+/// a board brought up to its first microcycle, a machine resumed --- and an
+/// instant of one machine's is carried to the other through the difference
+/// of the two clocks at [`Lashup::new`].  Two machines at zero, as they
+/// mostly are, are carried unchanged.
 pub struct Lashup {
     pub debugger: Rtl,
     pub debuggee: Rtl,
+    /// Each machine's clock when the cables were plugged in.
+    origin: (u64, u64),
     /// The standing answer on each cable has been carried to the machine
     /// that asked: the debuggee's to the debugger, the debugger's to the
     /// debuggee.
@@ -59,13 +69,20 @@ pub struct Lashup {
     pub steps: (u64, u64),
 }
 
+/// `ns` on the clock whose origin is `from`, as the clock whose origin is
+/// `to` has it; the end of time is the end of time.
+fn shift(ns: u64, from: u64, to: u64) -> u64 {
+    if ns == u64::MAX { ns } else { ns.saturating_sub(from).saturating_add(to) }
+}
+
 impl Lashup {
     /// Plugs both cables in: each machine's DBGOUT waits for the other
     /// from here on.
     pub fn new(mut debugger: Rtl, mut debuggee: Rtl) -> Lashup {
         debugger.attach_debug_cable();
         debuggee.attach_debug_cable();
-        Lashup { debugger, debuggee, carried: (true, true), steps: (0, 0) }
+        let origin = (debugger.ns(), debuggee.ns());
+        Lashup { debugger, debuggee, origin, carried: (true, true), steps: (0, 0) }
     }
 
     /// What `other` promises `this` about the cables: the earliest instant
@@ -88,24 +105,28 @@ impl Lashup {
     /// its cable carried to the other.
     pub fn step(&mut self) -> Result<(), Halt> {
         let slack = max_step_ns();
-        let to_a = Self::promise(&self.debuggee, self.carried.0);
-        let to_b = Self::promise(&self.debugger, self.carried.1);
+        let (oa, ob) = self.origin;
+        // Each machine's promise on the other's clock, and the two clocks
+        // as time since the cables were plugged in.
+        let to_a = shift(Self::promise(&self.debuggee, self.carried.0), ob, oa);
+        let to_b = shift(Self::promise(&self.debugger, self.carried.1), oa, ob);
         let (a, b) = (self.debugger.ns(), self.debuggee.ns());
+        let (a_since, b_since) = (a.saturating_sub(oa), b.saturating_sub(ob));
         // Strictly within: a step bounded at the machine's own present would
         // make no progress.
         let a_may = a.saturating_add(slack) < to_a;
         let b_may = b.saturating_add(slack) < to_b;
         // The one behind goes first, so that neither gets a step ahead of
         // the other for longer than it must.
-        if a_may && (a <= b || !b_may) {
+        if a_may && (a_since <= b_since || !b_may) {
             self.debugger.step_until(to_a.saturating_sub(slack))?;
             self.steps.0 += 1;
-            Self::carry_out(&mut self.debugger, &mut self.debuggee, &mut self.carried.0);
+            Self::carry_out(&mut self.debugger, &mut self.debuggee, &mut self.carried.0, oa, ob);
         } else if b_may {
             self.debuggee.step_until(to_b.saturating_sub(slack))?;
             self.steps.1 += 1;
-            Self::carry_out(&mut self.debuggee, &mut self.debugger, &mut self.carried.1);
-        } else if a <= b {
+            Self::carry_out(&mut self.debuggee, &mut self.debugger, &mut self.carried.1, ob, oa);
+        } else if a_since <= b_since {
             // Neither may: each holds the other's request, with its answer
             // due within a cycle of the other's, so that neither can reach
             // its own answer without passing the other's --- both cables
@@ -116,14 +137,14 @@ impl Lashup {
             // look, a generator cycle late at worst.
             self.debugger.step_until(to_a)?;
             self.steps.0 += 1;
-            Self::carry_out(&mut self.debugger, &mut self.debuggee, &mut self.carried.0);
+            Self::carry_out(&mut self.debugger, &mut self.debuggee, &mut self.carried.0, oa, ob);
         } else {
             self.debuggee.step_until(to_b)?;
             self.steps.1 += 1;
-            Self::carry_out(&mut self.debuggee, &mut self.debugger, &mut self.carried.1);
+            Self::carry_out(&mut self.debuggee, &mut self.debugger, &mut self.carried.1, ob, oa);
         }
-        Self::carry_back(&mut self.debuggee, &mut self.debugger, &mut self.carried.0);
-        Self::carry_back(&mut self.debugger, &mut self.debuggee, &mut self.carried.1);
+        Self::carry_back(&mut self.debuggee, &mut self.debugger, &mut self.carried.0, ob, oa);
+        Self::carry_back(&mut self.debugger, &mut self.debuggee, &mut self.carried.1, oa, ob);
         Ok(())
     }
 
@@ -135,24 +156,38 @@ impl Lashup {
         Ok(())
     }
 
-    /// `from`'s DBGOUT to `to`'s DBGIN: a request or a release carried.
-    fn carry_out(from: &mut Rtl, to: &mut Rtl, carried: &mut bool) {
+    /// `from`'s DBGOUT to `to`'s DBGIN: a request or a release carried, its
+    /// instant put on `to`'s clock from `from`'s by the two origins.
+    fn carry_out(
+        from: &mut Rtl,
+        to: &mut Rtl,
+        carried: &mut bool,
+        from_origin: u64,
+        to_origin: u64,
+    ) {
         if let Some(event) = from.debug_out_take() {
             match event {
                 CableEvent::Request { at, request } => {
-                    to.debug_request(at, request);
+                    to.debug_request(shift(at, from_origin, to_origin), request);
                     *carried = false;
                 }
-                CableEvent::Release { at } => to.debug_release(at),
+                CableEvent::Release { at } => to.debug_release(shift(at, from_origin, to_origin)),
             }
         }
     }
 
-    /// `from`'s acknowledgement on its DBGIN back to `to`'s DBGOUT, once.
-    fn carry_back(from: &mut Rtl, to: &mut Rtl, carried: &mut bool) {
+    /// `from`'s acknowledgement on its DBGIN back to `to`'s DBGOUT, once,
+    /// its instant on `to`'s clock likewise.
+    fn carry_back(
+        from: &mut Rtl,
+        to: &mut Rtl,
+        carried: &mut bool,
+        from_origin: u64,
+        to_origin: u64,
+    ) {
         if !*carried && let Some((ack, word)) = from.debug_ack() {
             *carried = true;
-            to.debug_out_answer(ack, word);
+            to.debug_out_answer(shift(ack, from_origin, to_origin), word);
         }
     }
 }
@@ -445,6 +480,14 @@ pub trait CableEnd {
     fn debug_in_promise(&self) -> u64 {
         unreachable!("this end of the cable is no debuggee")
     }
+    /// The cable pulled out of this end's DBGIN: `-DEBUG IN REQ` back on
+    /// its pull-up now, whatever the debugger had on the connector, and
+    /// nothing more coming down the wire.  A release now, for an end that
+    /// holds nothing else of the debugger's.
+    fn debug_unplug(&mut self) {
+        let now = self.ns();
+        let _ = self.debug_release(now);
+    }
 
     // --- DBGOUT: this end as the debugger ---
 
@@ -558,9 +601,22 @@ pub enum Side {
 /// the debuggee once took a pre-acknowledgement promise of the debugger's
 /// release, 26 microseconds off, and ran that far ahead.  Neither side ever
 /// waits on the other while the other waits on it, as in process.
+///
+/// **The cable's clock starts at the connection.**  Each end has run some
+/// way on its own clock by the time the cable is plugged in --- a debuggee
+/// that has been up an hour before its debugger comes, or a debugger
+/// started first --- and the instants on the wire are read against the
+/// reader's own clock, so each end sends its instants as time since it was
+/// plugged in and reads the other's the same way: `origin` is this end's
+/// clock at the connection, taken off every instant sent and put on every
+/// instant received.  Two ends plugged in at power-on have an origin of
+/// zero each and the frames as they always were; a promise of the end of
+/// time is one either way.
 pub struct Remote<E: CableEnd> {
     pub machine: E,
     side: Side,
+    /// This machine's clock when the cable was plugged in.
+    origin: u64,
     writer: Box<dyn Write + Send>,
     inbox: mpsc::Receiver<io::Result<Message>>,
     /// The other side's last promise, as this side knows it.
@@ -575,6 +631,8 @@ pub struct Remote<E: CableEnd> {
     sent_events: u32,
     /// The other side's such events this side has taken.
     seen_events: u32,
+    /// `DEBUG_CYCLE` requests carried, either way.
+    cycles: u64,
 }
 
 impl<E: CableEnd> Remote<E> {
@@ -619,7 +677,15 @@ impl<E: CableEnd> Remote<E> {
             .name("debug cable reader".into())
             .spawn(move || {
                 loop {
-                    let m = Message::read_from(&mut reader);
+                    // A frame that does not read whole is the stream's
+                    // end, said as that rather than as a short read.
+                    let m = Message::read_from(&mut reader).map_err(|e| {
+                        if e.kind() == io::ErrorKind::UnexpectedEof {
+                            io::Error::new(e.kind(), "the other end of the cable went away")
+                        } else {
+                            e
+                        }
+                    });
                     let stop = matches!(m, Err(_) | Ok(Message::Done));
                     if tx.send(m).is_err() || stop {
                         break;
@@ -627,9 +693,11 @@ impl<E: CableEnd> Remote<E> {
                 }
             })
             .expect("a thread for the debug cable's reader");
+        let origin = machine.ns();
         Remote {
             machine,
             side,
+            origin,
             writer: Box::new(writer),
             inbox,
             // The debuggee has nothing to say until asked; the debugger may
@@ -643,12 +711,64 @@ impl<E: CableEnd> Remote<E> {
             other_done: false,
             sent_events: 0,
             seen_events: 0,
+            cycles: 0,
         }
     }
 
     /// Which end of the cable this is.
     pub fn side(&self) -> Side {
         self.side
+    }
+
+    /// The other end has said it is done: nothing more comes down the
+    /// cable, and this end may run as it likes.
+    pub fn peer_done(&self) -> bool {
+        self.other_done
+    }
+
+    /// `DEBUG_CYCLE` requests carried over this cable, either way: the
+    /// debugger's sent, or the debuggee's taken.
+    pub fn debug_cycles(&self) -> u64 {
+        self.cycles
+    }
+
+    /// The cable pulled out at this end: the other end is told this one is
+    /// done, as [`Remote::finish`] tells it, and not waited for --- it has
+    /// gone, or said it is done and waits only for this --- and the
+    /// machine comes back with whatever the debugger had on its DBGIN
+    /// lifted ([`CableEnd::debug_unplug`]), to run on its own.
+    pub fn hang_up(mut self) -> E {
+        let _ = self.send(Message::Promise { until: u64::MAX, seen: self.seen_events });
+        let _ = self.send(Message::Done);
+        if self.side == Side::Debuggee {
+            self.machine.debug_unplug();
+        }
+        self.machine
+    }
+
+    /// `m` as it goes on the wire: its instants as time since the
+    /// connection.  The end of time is the end of time.
+    fn on_the_wire(&self, m: Message) -> Message {
+        let out = |ns: u64| if ns == u64::MAX { ns } else { ns.saturating_sub(self.origin) };
+        match m {
+            Message::Request { at, request } => Message::Request { at: out(at), request },
+            Message::Release { at } => Message::Release { at: out(at) },
+            Message::Ack { at, word } => Message::Ack { at: out(at), word },
+            Message::Promise { until, seen } => Message::Promise { until: out(until), seen },
+            Message::Done => Message::Done,
+        }
+    }
+
+    /// `m` off the wire: its instants on this machine's clock.
+    fn off_the_wire(&self, m: Message) -> Message {
+        let here = |ns: u64| ns.saturating_add(self.origin);
+        match m {
+            Message::Request { at, request } => Message::Request { at: here(at), request },
+            Message::Release { at } => Message::Release { at: here(at) },
+            Message::Ack { at, word } => Message::Ack { at: here(at), word },
+            Message::Promise { until, seen } => Message::Promise { until: here(until), seen },
+            Message::Done => Message::Done,
+        }
     }
 
     /// Runs this machine to `ns` at least, in step with the other end, and
@@ -714,7 +834,7 @@ impl<E: CableEnd> Remote<E> {
     }
 
     fn send(&mut self, m: Message) -> io::Result<()> {
-        m.write_to(&mut self.writer)
+        self.on_the_wire(m).write_to(&mut self.writer)
     }
 
     /// What this side's step put on the cable.
@@ -726,6 +846,9 @@ impl<E: CableEnd> Remote<E> {
                         CableEvent::Request { at, request } => {
                             self.send(Message::Request { at, request })?;
                             self.sent_events += 1;
+                            if request.strobe == crate::busint::DEBUG_CYCLE {
+                                self.cycles += 1;
+                            }
                             // The debuggee's acknowledgement can be no
                             // sooner than the request itself --- a strobe's
                             // is then --- and it will say when it knows.
@@ -760,7 +883,7 @@ impl<E: CableEnd> Remote<E> {
     /// wrong one is answered with an error naming what it sent.
     fn apply(&mut self, m: Message) -> io::Result<()> {
         let refused = |what: String| io::Error::new(io::ErrorKind::InvalidData, what);
-        match (self.side, m) {
+        match (self.side, self.off_the_wire(m)) {
             (Side::Debugger, Message::Ack { at, word }) => {
                 self.machine.debug_out_answer(at, word);
                 self.seen_events += 1;
@@ -770,6 +893,9 @@ impl<E: CableEnd> Remote<E> {
                 self.machine.debug_request(at, request).map_err(refused)?;
                 self.seen_events += 1;
                 self.carried = false;
+                if request.strobe == crate::busint::DEBUG_CYCLE {
+                    self.cycles += 1;
+                }
             }
             (Side::Debuggee, Message::Release { at }) => {
                 self.machine.debug_release(at).map_err(refused)?;
@@ -807,6 +933,224 @@ impl<E: CableEnd> Remote<E> {
                 io::ErrorKind::UnexpectedEof,
                 "the other end of the cable went away",
             )),
+        }
+    }
+}
+
+// --- DBGIN's connector, with the debugger's cable meeting it over TCP ---------
+
+/// DBGIN's connector with a debugger's cable meeting it over TCP: the
+/// machine behind it, running on its own until a debugger connects, in
+/// step with the debugger ([`Remote`]) while one is on the cable, and on
+/// its own again when the cable goes.  The bus interface's DBGIN is always
+/// there --- it takes the Unibus as master when a debugger drives it, and
+/// nothing in the machine enables it --- so a machine has one of these
+/// whether or not a debugger ever comes, with a listener at the endpoint
+/// the run gave it or none at all, which is the machine alone.
+///
+/// The listener is looked at between microcycles ([`Connector::attend`]),
+/// as the terminal is, and a debugger connecting is plugged in then: the
+/// cable's clock starts at that instant ([`Remote`]).  One cable per
+/// connector: a second debugger connecting while one is on is refused, its
+/// connection closed at once.  A debugger that says it is done, or whose
+/// stream goes away, is unplugged --- [`Connector::step_cabled`] says so
+/// --- with whatever it had on DBGIN lifted and the listener open again.
+///
+/// The machine is stepped by whoever holds the connector: on its own with
+/// no debugger on the cable, however the engine steps --- a microcycle of
+/// `rtl`, a transition of the netlist --- and by [`Connector::step_cabled`]
+/// while one is, which steps as the debugger's promise allows.
+pub struct Connector<E: CableEnd> {
+    /// Always `Some` between calls; taken to move the machine between the
+    /// two ends.
+    end: Option<End<E>>,
+    listener: Option<TcpListener>,
+    /// Where the debugger on the cable connected from, while one is on.
+    debugger: Option<SocketAddr>,
+    /// A handle on the cable's socket while one is on, to shut it down when
+    /// the cable is pulled: the [`Remote`]'s reader thread holds a handle of
+    /// its own and sits in a read, so dropping the [`Remote`] alone leaves
+    /// the socket open until the other end closes it.
+    socket: Option<std::net::TcpStream>,
+    connections: u32,
+    /// Debug cycles over the cables that have gone; the one on adds its own.
+    cycles: u64,
+}
+
+enum End<E: CableEnd> {
+    Free(E),
+    Cabled(Remote<E>),
+}
+
+/// What [`Connector::attend`] found at the listener.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Plug {
+    /// A debugger connected from here and is on the cable.
+    Connected(SocketAddr),
+    /// A debugger connected from here while one was on the cable, and its
+    /// connection was closed: one cable per connector.
+    Refused(SocketAddr),
+}
+
+/// What one turn of [`Connector::step_cabled`] did.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Turn {
+    /// The machine stepped.
+    Stepped,
+    /// The machine could not step yet, and a message was waited for.
+    Waited,
+    /// The cable went --- the debugger said it is done, or its stream went
+    /// away, which is what the text says --- and the machine runs on its
+    /// own from here, the listener open.
+    Unplugged(String),
+}
+
+impl<E: CableEnd> Connector<E> {
+    /// The connector on `machine`'s DBGIN, with `listener` at it; none is
+    /// the machine alone.  The listener is made non-blocking here, for
+    /// [`Connector::attend`].
+    pub fn new(machine: E, listener: Option<TcpListener>) -> io::Result<Connector<E>> {
+        if let Some(l) = &listener {
+            l.set_nonblocking(true)?;
+        }
+        Ok(Connector {
+            end: Some(End::Free(machine)),
+            listener,
+            debugger: None,
+            socket: None,
+            connections: 0,
+            cycles: 0,
+        })
+    }
+
+    /// Where the listener is, if there is one.
+    pub fn addr(&self) -> Option<SocketAddr> {
+        self.listener.as_ref().and_then(|l| l.local_addr().ok())
+    }
+
+    fn end(&self) -> &End<E> {
+        self.end.as_ref().expect("the machine is at one end or the other")
+    }
+
+    fn end_mut(&mut self) -> &mut End<E> {
+        self.end.as_mut().expect("the machine is at one end or the other")
+    }
+
+    pub fn machine(&self) -> &E {
+        match self.end() {
+            End::Free(e) => e,
+            End::Cabled(r) => &r.machine,
+        }
+    }
+
+    pub fn machine_mut(&mut self) -> &mut E {
+        match self.end_mut() {
+            End::Free(e) => e,
+            End::Cabled(r) => &mut r.machine,
+        }
+    }
+
+    /// Where the debugger on the cable connected from; `None` with nobody
+    /// on it, when the machine is the caller's to step.
+    pub fn debugger(&self) -> Option<SocketAddr> {
+        self.debugger
+    }
+
+    /// Debuggers that have been on the cable, the one on it included.
+    pub fn connections(&self) -> u32 {
+        self.connections
+    }
+
+    /// `DEBUG_CYCLE` requests taken over the cable, every debugger's.
+    pub fn debug_cycles(&self) -> u64 {
+        self.cycles
+            + match self.end() {
+                End::Free(_) => 0,
+                End::Cabled(r) => r.debug_cycles(),
+            }
+    }
+
+    /// The listener looked at, once: a debugger connecting is plugged in
+    /// and the machine is on the cable from here, or is refused while one
+    /// is on already.  Nothing waits: with nobody connecting this returns
+    /// at once, and it is for between two microcycles.
+    pub fn attend(&mut self) -> Option<Plug> {
+        let listener = self.listener.as_ref()?;
+        let (stream, from) = match listener.accept() {
+            Ok(accepted) => accepted,
+            // `WouldBlock` is nobody connecting; anything else is the
+            // host's for this turn, and the next turn looks again.
+            Err(_) => return None,
+        };
+        if self.debugger.is_some() {
+            drop(stream);
+            return Some(Plug::Refused(from));
+        }
+        // The accepted stream blocks, as the cable's reader wants: whether
+        // it inherits the listener's non-blocking flag differs between
+        // systems, so it is set either way.  A stream that cannot be set
+        // up is dropped, which the debugger sees as the cable going away.
+        if stream.set_nonblocking(false).is_err() || stream.set_nodelay(true).is_err() {
+            return None;
+        }
+        let (Ok(reader), Ok(socket)) = (stream.try_clone(), stream.try_clone()) else {
+            return None;
+        };
+        let End::Free(machine) = self.end.take().expect("the machine is at one end or the other")
+        else {
+            unreachable!("a debugger on the cable and none")
+        };
+        self.end = Some(End::Cabled(Remote::debuggee(machine, reader, stream)));
+        self.socket = Some(socket);
+        self.debugger = Some(from);
+        self.connections += 1;
+        Some(Plug::Connected(from))
+    }
+
+    /// One turn with the debugger on the cable: a step of the machine as
+    /// far as the debugger's promise allows, or a wait for its next
+    /// message ([`Remote::step`]).  A debugger that has said it is done, or
+    /// whose stream has gone --- or sent what it had no business sending
+    /// --- is unplugged, and the turn says so; from there the machine is
+    /// the caller's to step until the next debugger comes.  Not for a
+    /// connector with nobody on it.
+    pub fn step_cabled(&mut self) -> Result<Turn, Halt> {
+        let from = self.debugger.expect("a debugger is on the cable");
+        let End::Cabled(r) = self.end_mut() else { unreachable!("a debugger is on the cable") };
+        let turn = match r.step() {
+            Ok(true) => Turn::Stepped,
+            Ok(false) => Turn::Waited,
+            Err(Error::Halt(h)) => return Err(h),
+            Err(Error::Io(e)) => return Ok(self.unplug(format!("the debugger at {from}: {e}"))),
+        };
+        if r.peer_done() {
+            return Ok(self.unplug(format!("the debugger at {from} is done")));
+        }
+        Ok(turn)
+    }
+
+    /// The cable pulled: [`Remote::hang_up`], the socket shut down behind
+    /// it so that both ends' readers see it go, and the machine on its own.
+    fn unplug(&mut self, why: String) -> Turn {
+        let End::Cabled(r) = self.end.take().expect("the machine is at one end or the other")
+        else {
+            unreachable!("a debugger is on the cable")
+        };
+        self.cycles += r.debug_cycles();
+        self.end = Some(End::Free(r.hang_up()));
+        if let Some(socket) = self.socket.take() {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+        self.debugger = None;
+        Turn::Unplugged(why)
+    }
+
+    /// The run's end: a debugger on the cable is told and its own end
+    /// waited for, as [`Remote::finish`]; with nobody on it, nothing.
+    pub fn finish(&mut self) -> Result<(), Error> {
+        match self.end_mut() {
+            End::Free(_) => Ok(()),
+            End::Cabled(r) => r.finish(),
         }
     }
 }
