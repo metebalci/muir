@@ -522,16 +522,19 @@ impl FarEnd {
     /// `cadr/busint.erface` says of `-BOOT1` "It has a pullup".
     ///
     /// **Unverified**: that the cage joins the I/O board's `CP1` to the
-    /// bus interface's `CR1`. The two are different pins where every
-    /// other wire the boards share is on the same one; MIT's own list for
-    /// the backplane, `cadr1/dubspc.wires`, buses the shared ones and has
-    /// neither of these, and leaves device wiring to the hand, so the
-    /// wire, if there was one, is of the kind no list carries.
-    /// `tests/unibus_backplane_pins.rs` holds all of that, and
-    /// `docs/keyboard-boot.md` has the rest. This wire models what
-    /// `cadrio/iob.eco` ECO#3 says happened --- keyboards did reboot
-    /// machines --- and not a wire any file shows. What would settle it:
-    /// a photograph of a cage, or an installation note.
+    /// bus interface's `CR1` by a hand wire, which is what this wire
+    /// assumes. The two pins differ because they must: MIT's Xbus
+    /// specification, `cadr1/xspec.text.3`, has `CP1` at the bus
+    /// interface's slot carrying `-XBUS.SYNC` and marks `CR1` there
+    /// "bussed through"; its SPC slot, the I/O board's kind, has both
+    /// pins uncommitted, and MIT's list for the SPC backplane,
+    /// `cadr1/dubspc.wires`, buses the shared wires and neither of these,
+    /// leaving device wiring to the hand. `tests/unibus_backplane_pins.rs`
+    /// holds all of that and `docs/keyboard-boot.md` has the rest. What
+    /// ECO#3 of `cadrio/iob.eco` says happened --- keyboards did reboot
+    /// machines --- is what the wire models; the wire itself is in no
+    /// file. What would settle it: a photograph of a cage, or an
+    /// installation note.
     ///
     /// Whether the processor's end moved. Compared against what the
     /// processor is being driven with rather than remembered, so a resume
