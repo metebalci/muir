@@ -213,7 +213,7 @@ work.
          [--terminal [<endpoint>]]
          [--debug-in-process [--debuggee-disk-pack <image>[,<unit>][,ro]]
                              [--debuggee-terminal [<endpoint>]]]
-         [--debug-cable-listen [<endpoint>]]
+         [--debug-cable-listen [<endpoint>]] [--no-debug-cable-listen]
          [--debug-cable-connect [<endpoint>|0x<address>]]
          [--checkpoint <file>] [--resume <file>]
          [--stop-after <microcycles>] [--stop-at <pc>] [--stop-at-prom <pc>]
@@ -296,12 +296,26 @@ debugger, which is where CC finds it.
 Both machines get a terminal, the second at the display above the first's,
 or wherever `--debuggee-terminal` says. So you connect a viewer to
 the machine you invoked and CC there debugs the other, and a second viewer
-watches the other being debugged. `--debug-cable-listen` and `--debug-cable-connect` are the
-same cable over TCP with one machine in each process, the listener being the
-debuggee. Both take an endpoint the same way and meet at 127.0.0.1:7661
-without one. The listener may be a `--chip` machine: the netlist board's
-own DBGIN then answers the debugger, an event at a time, at the netlist's
-pace.
+watches the other being debugged.
+
+The same cable runs over TCP with one machine in each process, and there
+the debuggee needs no flag at all: **every `rtl` and `chip` run listens for
+a debugger**, because the bus interface's DBGIN is on every machine --- it
+takes the Unibus as master when a debugger drives its cable, and nothing in
+the machine enables it. The connector is at 127.0.0.1:7661, or the port
+above it when another muir has that one, and the start says where. The
+machine runs on its own until a debugger connects, in step with it while
+one is on the cable, and on its own again when the debugger is done or goes
+away, listening again. `--debug-cable-connect` in another muir is the
+debugger, meeting it at 127.0.0.1:7661 unless told otherwise; the listener
+may be a `--chip` machine, whose netlist board's own DBGIN then answers the
+debugger an event at a time, at the netlist's pace. `--debug-cable-listen`
+moves the connector, and `--no-debug-cable-listen` leaves it empty, which a
+machine that must not be touched from outside wants --- a debugger reads
+and writes the whole Unibus and stops the clock, which is why the connector
+stays on the loopback unless an address is named. `--checkpoint`,
+`--tv-capture` and `--watch` want a machine on its own and leave the
+connector empty too, saying so.
 
 There is a third transport, where the debuggee is not a program at all.
 `--debug-cable-connect 0x<address>` is a CADR in the programmable logic of

@@ -10,7 +10,9 @@
 
 mod support;
 
+use std::io::Write;
 use std::net::{TcpListener, TcpStream};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use muir::capture::PAIR_RULE;
@@ -36,29 +38,41 @@ fn a_debuggee_runs_beside_the_debugger_in_one_process() {
 }
 
 /// `--debug-cable-listen` and `--debug-cable-connect`: the same two machines in two
-/// processes, the debugger connecting to the debuggee's DBGIN, both ending
-/// their windows and telling each other so.
+/// processes, the debugger connecting to the debuggee's DBGIN.  The
+/// debuggee runs on its own from the start rather than waiting, so its
+/// window is left open and it is quit once the debugger's window has run
+/// out: the debugger's end says the two agreed to stop, and the debuggee
+/// says the debugger came and went and it listens again.
 #[test]
 fn a_debuggee_and_a_debugger_meet_over_tcp() {
-    let debuggee = muir()
-        .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "3000"])
+    let mut debuggee = muir()
+        .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
+        .stdin(Stdio::piped())
         .start();
     let addr = listening(&debuggee);
     let debugger =
         muir().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "3000"]).start();
     let a = debugger.wait();
-    let b = debuggee.wait();
-    let (ta, tb) = (text(&a), text(&b));
+    let ta = text(&a);
     assert!(a.status.success(), "the debugger failed:\n{ta}");
-    assert!(b.status.success(), "the debuggee failed:\n{tb}");
     assert!(ta.contains("DBGOUT connected") && ta.contains("rtl, debugger"), "the debugger:\n{ta}");
-    assert!(
-        tb.contains("the debugger connected") && tb.contains("rtl, debuggee"),
-        "the debuggee:\n{tb}"
+    assert!(ta.contains("ran out at 3000"), "the debugger's window ran out:\n{ta}");
+    debuggee.stderr().wait_until(
+        |t| t.contains("is done; DBGIN listening at"),
+        "the debuggee said the debugger is done and it listens again",
     );
+    let mut stdin = debuggee.stdin();
+    writeln!(stdin, "quit").unwrap();
+    let b = debuggee.wait();
+    drop(stdin);
+    let tb = text(&b);
+    assert!(b.status.success(), "the debuggee failed:\n{tb}");
+    assert!(tb.contains("the debugger connected"), "the debuggee:\n{tb}");
+    assert!(tb.contains("quit at PC"), "the debuggee ended by quit:\n{tb}");
+    assert!(tb.contains("0 debug cycles on the cable"), "no debug cycles without CC:\n{tb}");
     assert!(
-        ta.contains("ran out at 3000") && tb.contains("ran out at 3000"),
-        "both windows ran out:\n{ta}\n{tb}"
+        !ta.contains("muir: the debug cable") && !tb.contains("muir: the debug cable"),
+        "the two agreed to stop:\n{ta}\n{tb}"
     );
 }
 
@@ -196,28 +210,38 @@ fn the_debuggee_has_a_chaosnet_of_its_own() {
 }
 
 /// `--chip --debug-cable-listen`: the netlist board is the debuggee over
-/// TCP, an `rtl` debugger in the other process; both end their windows
-/// and tell each other so.
+/// TCP, an `rtl` debugger in the other process.  As with `rtl` above, the
+/// debuggee runs from the start and is quit once the debugger's window has
+/// run out, having said the debugger came and went.
 #[test]
 fn a_chip_debuggee_and_an_rtl_debugger_meet_over_tcp() {
-    let debuggee = muir()
+    let mut debuggee = muir()
         .args(["--chip", "--main-memory", "model", "--io-board", "model", "--tv", "model"])
-        .args(["--debug-cable-listen", "127.0.0.1:0", "--stop-after", "300"])
+        .args(["--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
+        .stdin(Stdio::piped())
         .start();
     let addr = listening(&debuggee);
     let debugger =
         muir().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "300"]).start();
     let a = debugger.wait();
-    let b = debuggee.wait();
-    let (ta, tb) = (text(&a), text(&b));
+    let ta = text(&a);
     assert!(a.status.success(), "the debugger failed:\n{ta}");
-    assert!(b.status.success(), "the debuggee failed:\n{tb}");
     assert!(
         ta.contains("rtl, debugger") && ta.contains("ran out at 300"),
         "the debugger reported:\n{ta}"
     );
+    debuggee.stderr().wait_until(
+        |t| t.contains("is done; DBGIN listening at"),
+        "the netlist debuggee said the debugger is done and it listens again",
+    );
+    let mut stdin = debuggee.stdin();
+    writeln!(stdin, "quit").unwrap();
+    let b = debuggee.wait();
+    drop(stdin);
+    let tb = text(&b);
+    assert!(b.status.success(), "the debuggee failed:\n{tb}");
     assert!(
-        tb.contains("chip, debuggee") && tb.contains("ran out at 300"),
+        tb.contains("the debugger connected") && tb.contains("quit at PC"),
         "the debuggee reported:\n{tb}"
     );
     assert!(tb.contains("0 debug cycles on the cable"), "no debug cycles without CC:\n{tb}");

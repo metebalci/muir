@@ -75,24 +75,32 @@ fn the_start_says_what_the_run_is() {
 }
 
 /// **The start says whether the run has a prompt, on every shape of run.**
-/// One `rtl` machine at either end of the debug cable over TCP has it, as
-/// one alone does; the lashup in one process and the netlist debuggee
-/// have none and say so, with why.  Issue 102 met a cable run whose start
-/// said neither, and which had none.
+/// One machine at either end of the debug cable over TCP has it, as one
+/// alone does --- the netlist machine with its connector listening too,
+/// which had none while it waited for the debugger and now runs from the
+/// start; the lashup in one process has none and says so, with why.  Issue
+/// 102 met a cable run whose start said neither, and which had none.
 #[test]
 fn the_start_says_whether_the_run_has_a_prompt() {
     const HAS: &str = "^C holds the machine at the prompt; help lists muir's commands";
-    let debuggee = muir()
-        .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "3000"])
+    let mut debuggee = muir()
+        .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
+        .stdin(Stdio::piped())
         .start();
     let addr = listening(&debuggee);
     let debugger =
         muir().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "3000"]).start();
-    let (a, b) = (debugger.wait(), debuggee.wait());
-    let (ta, tb) = (text(&a), text(&b));
-    assert!(a.status.success() && b.status.success(), "{ta}\n{tb}");
+    let a = debugger.wait();
+    let ta = text(&a);
+    assert!(a.status.success(), "{ta}");
     assert!(ta.contains(HAS), "the debugger over TCP:\n{ta}");
-    assert!(tb.contains(HAS), "and the debuggee:\n{tb}");
+    debuggee.stderr().wait_until(|t| t.contains(HAS), "and the debuggee");
+    let mut stdin = debuggee.stdin();
+    writeln!(stdin, "quit").unwrap();
+    let b = debuggee.wait();
+    drop(stdin);
+    let tb = text(&b);
+    assert!(b.status.success(), "{tb}");
 
     let out = muir().args(["--rtl", "--debug-in-process", "--stop-after", "10"]).run();
     let t = text(&out);
@@ -102,14 +110,16 @@ fn the_start_says_whether_the_run_has_a_prompt() {
         "the lashup in one process says it has none, and why:\n{t}"
     );
 
-    // The netlist debuggee says so before it waits for a debugger, which
-    // never comes: the run is ended once it has said.
-    let debuggee = muir()
+    // The netlist machine with its connector listening has the prompt as
+    // the netlist machine alone does, and runs to its stop with nobody on
+    // the cable.
+    let out = muir()
         .args(["--chip", "--main-memory-boards", "1", "--debug-cable-listen", "127.0.0.1:0"])
-        .start();
-    let said = |t: &str| t.contains("prompt: none; the netlist debuggee runs for the debugger");
-    debuggee.stderr().wait_until(said, "the netlist debuggee says it has none, and why");
-    debuggee.kill();
+        .args(["--stop-after", "1"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains(HAS), "the netlist machine, its connector listening:\n{t}");
 }
 
 /// **A path under the directory muir was run from is written relative to

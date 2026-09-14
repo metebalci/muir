@@ -1261,6 +1261,22 @@ impl DebugIn {
         self.phase = p;
     }
 
+    /// One transition of the boards with nobody on the cable: what `--chip`
+    /// alone runs, [`FarEnd::tick_with`], with the microcycle count kept
+    /// here as [`DebugIn::advance_to`] keeps it, so that a debugger
+    /// plugging in finds the count where the run has it.  Whether a
+    /// microcycle ended on this transition.
+    pub fn tick(&mut self) -> bool {
+        self.far.tick_with(&mut self.cpu, &mut self.clk);
+        let p = self.clk.phase_ns();
+        let wrapped = p < self.phase;
+        if wrapped {
+            self.microcycles += 1;
+        }
+        self.phase = p;
+        wrapped
+    }
+
     /// The boards to `limit`: a lift, a request or a release on the way is
     /// made at its instant.
     fn run_to(&mut self, limit: u64) {
@@ -1363,6 +1379,15 @@ impl CableEnd for DebugIn {
 
     fn debug_ack(&self) -> Option<(u64, Option<u16>)> {
         self.answer
+    }
+
+    /// The cable pulled: what the wire had brought for instants to come
+    /// never happens, and the request on the connector, if one is, is
+    /// lifted now, the pull-ups having `-DEBUG IN REQ`.
+    fn debug_unplug(&mut self) {
+        self.due.clear();
+        let now = self.clk.time_ns();
+        let _ = self.debug_release(now);
     }
 
     /// A held request is answered no sooner than its own instant: a strobe

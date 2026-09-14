@@ -11,7 +11,7 @@ use std::io::Write;
 
 use std::path::{Path, PathBuf};
 
-use support::{Run, Scratch, muir, scratch, text};
+use support::{Run, Scratch, muir, muir_default, scratch, text};
 
 /// A usage error: exit status 2, and the flag named on stderr.
 fn refused(args: &[&str], flag: &str) {
@@ -185,16 +185,137 @@ fn a_debuggee_pack_needs_the_lashup() {
     );
 }
 
-/// **The serial port is one machine's, and the lashup runs two.** The
-/// endpoint would be the debugger's alone, and nothing in the run loops
-/// that step two machines through the debug cable reaches the other
+/// **The serial port is one machine's, and the lashup in one process runs
+/// two.** The endpoint would be the debugger's alone, and nothing in the
+/// loop that steps two machines through the debug cable reaches the other
 /// machine's port, so the flag is refused there rather than opened for one
-/// of them without saying which.
+/// of them without saying which.  A machine with its DBGIN listening is
+/// one machine, and the port is its.
 #[test]
 fn the_serial_port_is_not_the_lashups() {
-    for lashup in ["--debug-in-process", "--debug-cable-listen"] {
-        refused(&["--rtl", lashup, "--serial", "0", "--stop-after", "1"], "--serial");
+    refused(&["--rtl", "--debug-in-process", "--serial", "0", "--stop-after", "1"], "--serial");
+    let t = text(
+        &muir()
+            .args(["--rtl", "--serial", "0", "--debug-cable-listen", "127.0.0.1:0"])
+            .args(["--stop-after", "1"])
+            .run(),
+    );
+    assert!(t.contains("serial: tcp://"), "the serial port beside the connector:\n{t}");
+    assert!(t.contains("debug cable: DBGIN listening at 127.0.0.1:"), "and the connector:\n{t}");
+}
+
+/// **DBGIN listens by default.** The bus interface's DBGIN is always there
+/// --- nothing in the machine enables it, and the microcode neither knows
+/// nor can refuse --- so every `rtl` and `chip` run has the connector at
+/// 127.0.0.1:7661, or the port above it when that is taken, and says where;
+/// with both taken the run says so and goes on without.  Either way the run
+/// does not wait for a debugger.  `--no-debug-cable-listen` leaves the
+/// connector empty, `--debug-cable-listen` moves it, and of the two the
+/// last given wins, so a file of flags can say one and the command line
+/// the other.  `micro` has no timing model and no end of the cable, and
+/// says so rather than nothing.
+#[test]
+fn dbgin_listens_by_default() {
+    let t = text(&muir_default().args(["--rtl", "--stop-after", "1"]).run());
+    assert!(t.contains("ran out at 1"), "the run did not wait for a debugger:\n{t}");
+    let line = t.lines().find(|l| l.starts_with("debug cable: ")).expect("a debug cable line");
+    assert!(
+        line.starts_with("debug cable: DBGIN listening at 127.0.0.1:766")
+            || line.starts_with("debug cable: none --- 7661 and 7662 are both taken"),
+        "the default connector, or why not:\n{t}"
+    );
+    let t =
+        text(&muir_default().args(["--rtl", "--no-debug-cable-listen", "--stop-after", "1"]).run());
+    assert!(
+        t.contains("debug cable: none --- --no-debug-cable-listen"),
+        "left empty, and said:\n{t}"
+    );
+    let t = text(
+        &muir_default()
+            .args(["--rtl", "--no-debug-cable-listen", "--debug-cable-listen", "127.0.0.1:0"])
+            .args(["--stop-after", "1"])
+            .run(),
+    );
+    assert!(t.contains("debug cable: DBGIN listening at 127.0.0.1:"), "the last wins:\n{t}");
+    let t = text(
+        &muir_default()
+            .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--no-debug-cable-listen"])
+            .args(["--stop-after", "1"])
+            .run(),
+    );
+    assert!(t.contains("debug cable: none --- --no-debug-cable-listen"), "either way:\n{t}");
+    let t = text(&muir_default().args(["--micro", "--stop-after", "1"]).run());
+    assert!(
+        t.contains("debug cable: none --- micro has no timing model"),
+        "micro says why it has none:\n{t}"
+    );
+    refused_saying(&["--micro", "--debug-cable-listen", "--stop-after", "1"], "no timing model");
+}
+
+/// **What wants a machine on its own leaves the connector empty, and says
+/// which flag did.** `--checkpoint` writes a machine on its own --- a
+/// debugger's cycle in the bus interface is nothing `--resume` can start
+/// from --- `--tv-capture` records one clock, and `--watch` on `chip` is
+/// the run's own loop, which a debuggee stepped by the debugger's events
+/// does not have.  Asked for beside one of them in as many words, the
+/// connector is refused as before.
+#[test]
+fn flags_that_want_a_machine_on_its_own_leave_the_connector_empty() {
+    let dir = scratch("cable-alone");
+    let chk = dir.join("alone.chk");
+    let gif = dir.join("alone.gif");
+    for (flag, path) in [("--checkpoint", &chk), ("--tv-capture", &gif)] {
+        let path = path.to_str().unwrap();
+        let t = text(&muir_default().args(["--rtl", flag, path, "--stop-after", "1"]).run());
+        assert!(t.contains(&format!("debug cable: none --- {flag}")), "{flag}: said:\n{t}");
+        refused(
+            &["--rtl", flag, path, "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1"],
+            flag,
+        );
     }
+    let t =
+        text(&muir_default().args(["--chip", "--watch", "0-1:PC/14", "--stop-after", "1"]).run());
+    assert!(t.contains("debug cable: none --- --watch"), "--watch: said:\n{t}");
+    refused(
+        &[
+            "--chip",
+            "--watch",
+            "0-1:PC/14",
+            "--debug-cable-listen",
+            "127.0.0.1:0",
+            "--stop-after",
+            "1",
+        ],
+        "--watch",
+    );
+}
+
+/// **A held start goes with the connector**: `--no-auto-boot` is a machine
+/// on its own with its button unpressed, and its DBGIN is there like any
+/// machine's --- a debugger may connect to a machine standing at the
+/// prompt, which is the two machines powered on together.  The lashup in
+/// one process and the debugger's end still refuse it.
+#[test]
+fn a_held_start_goes_with_the_connector() {
+    let out = muir().args(["--rtl", "--no-auto-boot", "--debug-cable-listen", "127.0.0.1:0"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "held, stdin ended, and the run ended:\n{t}");
+    assert!(t.contains("start: held"), "held:\n{t}");
+    assert!(t.contains("debug cable: DBGIN listening at 127.0.0.1:"), "and listening:\n{t}");
+    refused(&["--rtl", "--debug-in-process", "--no-auto-boot"], "--no-auto-boot");
+}
+
+/// **The netlist machine runs with its connector listening**, to its stop,
+/// with the prompt: nothing waits for a debugger, and the run is `--chip`
+/// alone until one connects.
+#[test]
+fn the_netlist_machine_runs_with_its_connector_listening() {
+    let t = text(
+        &muir().args(["--chip", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1"]).run(),
+    );
+    assert!(t.contains("debug cable: DBGIN listening at 127.0.0.1:"), "listening:\n{t}");
+    assert!(t.contains("ran out at 1"), "and ran to its stop:\n{t}");
+    assert!(t.contains("^C holds the machine at the prompt"), "with the prompt:\n{t}");
 }
 
 /// **`--watch` is refused for the shape of its argument**, and the first

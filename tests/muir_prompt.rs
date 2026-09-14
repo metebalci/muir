@@ -493,6 +493,69 @@ fn both_ends_of_the_cable_over_tcp_have_the_prompt() {
     );
 }
 
+/// **The debuggee runs before the debugger comes, and after it goes.** Its
+/// DBGIN is a connector, not a plugged cable: the machine answers `pc` with
+/// nobody on the cable and has moved between two of them; a debugger
+/// connects, is answered, quits, and the debuggee says the debugger is
+/// done and that it is listening again; it answers `pc` again, takes a
+/// second debugger the same way, and is quit.  Neither end finds the other
+/// gone.  Before this the debuggee blocked in `accept` until the debugger
+/// came and its run ended when the debugger went.
+#[test]
+fn the_debuggee_runs_before_the_debugger_comes_and_after_it_goes() {
+    let mut debuggee = muir()
+        .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
+        .stdin(Stdio::piped())
+        .start();
+    let addr = listening(&debuggee);
+    let mut to_debuggee = debuggee.stdin();
+    let b = debuggee.stdout();
+    writeln!(to_debuggee, "pc").unwrap();
+    b.wait_until(|t| pc_lines(t) >= 1, "the debuggee answered pc with nobody on the cable");
+    std::thread::sleep(Duration::from_millis(100));
+    writeln!(to_debuggee, "pc").unwrap();
+    b.wait_until(|t| pc_lines(t) >= 2, "and again");
+    let mut texts = Vec::new();
+    for k in 1..=2 {
+        let mut debugger = muir()
+            .args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "1000000000"])
+            .stdin(Stdio::piped())
+            .start();
+        debuggee.stderr().wait_until(
+            |t| t.matches("the debugger connected from").count() == k,
+            "the debuggee said the debugger came",
+        );
+        let mut to_debugger = debugger.stdin();
+        writeln!(to_debugger, "pc").unwrap();
+        debugger.stdout().wait_until(|t| pc_lines(t) >= 1, "the debugger answered pc");
+        writeln!(to_debugger, "quit").unwrap();
+        let a = debugger.wait();
+        drop(to_debugger);
+        let ta = text(&a);
+        assert!(a.status.success(), "debugger {k}:\n{ta}");
+        assert!(ta.contains("quit at PC"), "debugger {k} ended by quit:\n{ta}");
+        debuggee.stderr().wait_until(
+            |t| t.matches("is done; DBGIN listening at").count() == k,
+            "the debuggee said the debugger is done and it is listening again",
+        );
+        writeln!(to_debuggee, "pc").unwrap();
+        b.wait_until(|t| pc_lines(t) >= 2 + k, "the debuggee answered pc after the cable went");
+        texts.push(ta);
+    }
+    writeln!(to_debuggee, "quit").unwrap();
+    let out = debuggee.wait();
+    drop(to_debuggee);
+    let tb = text(&out);
+    assert!(out.status.success(), "the debuggee:\n{tb}");
+    let pcs: Vec<&str> = tb.lines().filter(|l| l.starts_with("PC ")).collect();
+    assert_eq!(pcs.len(), 4, "pc answered four times:\n{tb}");
+    assert!(after(pcs[1]) > after(pcs[0]), "and the machine ran with nobody on the cable:\n{tb}");
+    assert!(tb.contains("quit at PC"), "the debuggee ended by quit:\n{tb}");
+    for t in texts.iter().chain([&tb]) {
+        assert!(!t.contains("muir: the debug cable"), "nobody found the other end gone:\n{t}");
+    }
+}
+
 /// **^C at an end of the cable is what it is on a machine alone**: the
 /// first holds the debugger at the prompt, `continue` runs it on, and ^C
 /// while held ends the run as `quit` does, the two ends agreeing to stop.
