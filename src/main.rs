@@ -40,9 +40,14 @@
 //! `--main-memory` is main memory; `--main-memory-boards` is how many
 //! 64K-word boards the machine has --- main memory on every engine, the
 //! boards on the Xbus on `chip` --- 32 by default for the two million
-//! words. `--io-board` is the I/O board, `--tv` the display, and
-//! `--tv-board` which display: the SIMPLE TV, the black-and-white board
-//! System 100 drives, or the LISPM TV that replaced it. `--disk-controller`
+//! words. `--io-board` is the I/O board and `--tv` the display.
+//! `--tv-board` is which display, **on every engine**: the SIMPLE TV, the
+//! black-and-white board System 100 drives, or the LISPM TV that replaced
+//! it in December 1980. One model serves either board --- MIT's own
+//! `cadrtv/lmtv.order` is the LISPM TV's specification and both boards
+//! program by it --- so the flag chooses the netlist `chip` builds the
+//! backplane with and the board every engine's model answers as, and the
+//! start says which it is. `--disk-controller`
 //! is the disk controller, whose netlist runs its own microcode with the
 //! pack on its cable as a drive and takes the drive's time over every
 //! block, milliseconds where the model takes none. **A run that touches no
@@ -264,6 +269,13 @@ use muir::serial::Endpoint;
 use muir::terminal::keyboard::{BootKeys, Keyboard, Mapping};
 use muir::terminal::mouse::Mouse;
 use muir::terminal::{Frame, Terminal};
+// Which display board `--tv-board` puts on the backplane, on every engine.
+// The model's own type, since the board a machine has is the machine's and
+// not this program's: it names the netlist `chip` builds the backplane
+// with and the board every engine's model answers as, and a checkpoint
+// carries it so that a resume onto the other one is refused by the flag's
+// name.
+use muir::tv::Board as TvBoard;
 
 /// 145 ns per microcycle at normal speed: `Speed::cycle_ns`, and what
 /// `tests/clock.rs` pins.
@@ -711,24 +723,6 @@ const LISPMTV: &str = include_str!("../data/LISPMTV.netlist");
 const CADRDC: &str = include_str!("../data/CADRDC.netlist");
 const DM: &str = include_str!("../data/DM.netlist");
 
-/// Which display board `--tv-board` puts on the backplane.
-#[derive(Clone, Copy, PartialEq)]
-enum TvBoard {
-    SimpleTv,
-    LispmTv,
-}
-
-impl TvBoard {
-    /// What `--tv-board` calls it, which is also what a checkpoint carries
-    /// so that a resume onto the other one is refused by the flag's name.
-    fn name(self) -> &'static str {
-        match self {
-            TvBoard::SimpleTv => "simple-tv",
-            TvBoard::LispmTv => "lispm-tv",
-        }
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Which {
     Micro,
@@ -1085,7 +1079,12 @@ A simulator of the MIT CADR Lisp Machine.
                                it]
   --tv netlist|model           chip: the display. [default: netlist]
   --tv-board simple-tv|lispm-tv
-                               chip: which display board. [default:
+                               which display board, on every engine: the
+                               SIMPLE TV that System 100 drives, or the
+                               LISPM TV that replaced it in 1980. The two
+                               program alike but for mode bit 7, which
+                               reads the sync enable back on the LISPM TV
+                               and zero on the SIMPLE TV. [default:
                                simple-tv]
   --tv-capture <gif>           record the display to <gif> as the run goes,
                                an animated GIF timed by the machine's own
@@ -1700,9 +1699,10 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
     }
 }
 
-fn machine(prom: &[Insn], packs: &[Pack], memory_boards: usize) -> Machine {
+fn machine(prom: &[Insn], packs: &[Pack], memory_boards: usize, tv_board: TvBoard) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
     m.load_prom(prom);
+    m.tv.set_board(tv_board);
     attach(&mut m, packs);
     m
 }
@@ -3090,7 +3090,20 @@ fn chip_busy_with(cpu: &Chip, far: &FarEnd, memrq: netlist::NetId) -> Option<&'s
 
 /// Loads the checkpoint read from `path` into `e`, built and booted as the
 /// flags say, or says why not and exits.
-fn resume_engine<E: Engine>(name: &str, e: &mut E, (path, c): &(PathBuf, Checkpoint)) {
+///
+/// **The display board is refused after the read, not before it.** A
+/// `chip` checkpoint carries the board in its own header, so
+/// [`resume_chip`] can refuse one before it builds anything; an engine's
+/// carries it in the body, where `Tv::save` writes it, and the machine is
+/// built before the file is opened. So the file is read, and a board apart
+/// from the flag's ends the run then --- by the flag's name, as the other
+/// refusal does.
+fn resume_engine<E: Engine>(
+    name: &str,
+    e: &mut E,
+    tv_board: TvBoard,
+    (path, c): &(PathBuf, Checkpoint),
+) {
     if c.engine != name {
         usage(&format!(
             "--resume {}: a {} checkpoint, and this is {name}",
@@ -3100,6 +3113,14 @@ fn resume_engine<E: Engine>(name: &str, e: &mut E, (path, c): &(PathBuf, Checkpo
     }
     let mut r = muir::checkpoint::Reader::new(&c.body);
     e.load(&mut r).and_then(|()| r.done()).unwrap_or_else(|err| stale_checkpoint(path, &err, None));
+    if e.machine().tv.board() != tv_board {
+        usage(&format!(
+            "--resume {}: a {} checkpoint, and --tv-board is {}",
+            path.display(),
+            e.machine().tv.board().name(),
+            tv_board.name()
+        ));
+    }
     let m = e.machine();
     eprintln!(
         "resumed: {} at {} microcycles, {} ns, {} memory boards",
@@ -3173,6 +3194,7 @@ fn chip_machine(
     boards: Boards,
     memory_boards: usize,
     chaos: muir::chaos::Config,
+    tv_board: TvBoard,
     auto_boot: bool,
 ) -> ChipMachine {
     let n = netlist::parse(NETLIST).unwrap();
@@ -3183,6 +3205,10 @@ fn chip_machine(
     let mut clk = Behavioural::new();
     let mut machine = Machine::with_memory_boards(memory_boards);
     attach(&mut machine, packs);
+    // The board `--tv model` answers as: the far end's machine is the
+    // model display on a netlist machine, and it is the board the run
+    // named whether or not there is a netlist of it on the backplane.
+    machine.tv.set_board(tv_board);
     machine.chaos = chaos;
     let bus_n = netlist::parse(BUSINT).unwrap();
     let mem_n = netlist::parse(CADRM).unwrap();
@@ -3378,7 +3404,15 @@ fn time_chip(
         boot,
         // A resume brings the board up but does not press the button: what
         // the button and the power-on set is what the checkpoint replaces.
-    } = chip_machine(image, packs, boards, memory_boards, chaos, !hold && resume.is_none());
+    } = chip_machine(
+        image,
+        packs,
+        boards,
+        memory_boards,
+        chaos,
+        tv_board,
+        !hold && resume.is_none(),
+    );
     // One microcycle is however many clock transitions it takes for the phase
     // to wrap, not a fixed number of them.
     let t = Instant::now();
@@ -4553,7 +4587,6 @@ fn main() {
             ("--io-board", "chip", which == Which::Chip),
             ("--main-memory", "chip", which == Which::Chip),
             ("--tv", "chip", which == Which::Chip),
-            ("--tv-board", "chip", which == Which::Chip),
             ("--watch", "chip", which == Which::Chip),
         ] {
             if !has && given.iter().any(|w| w == flag) {
@@ -4581,6 +4614,11 @@ fn main() {
                 if use_multiplexor { " with a multiplexor, eight drive ports" } else { "" }
             )
             .unwrap();
+        } else {
+            // The board `--tv-board` chose, which the other engines run as
+            // the model of; `chip` says it in the line above, beside
+            // whether the board itself or its model is on the backplane.
+            writeln!(s, "tv: model {}", tv_board.name()).unwrap();
         }
         let chosen = pack_choice(packs);
         if chosen.is_empty() {
@@ -4750,7 +4788,7 @@ fn main() {
             // from an engine is a clock, and this one has the machine's
             // periods; `tests/micro_chaos.rs` holds the two engines to
             // the same conversation with the server.
-            let mut m = machine(&prom, packs, boards);
+            let mut m = machine(&prom, packs, boards, tv_board);
             m.chaos = chaos.clone();
             m.plug_chaos(0);
             let mut e = Micro::new(m);
@@ -4758,7 +4796,7 @@ fn main() {
                 e.boot();
             }
             if let Some(p) = &resume {
-                resume_engine("micro", &mut e, p);
+                resume_engine("micro", &mut e, tv_board, p);
             }
             let run = Run {
                 stop,
@@ -4771,7 +4809,7 @@ fn main() {
             time_engine("micro", Alone(e), terminal.as_mut(), serial.as_mut(), run);
         }
         Which::Rtl => {
-            let mut m = machine(&prom, packs, boards);
+            let mut m = machine(&prom, packs, boards, tv_board);
             // The Chaosnet, as under chip: the interface on the I/O board
             // and, if a link was bound, the network on its cable.
             m.chaos = chaos.clone();
@@ -4785,6 +4823,7 @@ fn main() {
                 // debuggee usually has none --- CC loads it over the cable.
                 let mut mb = Machine::with_memory_boards(boards);
                 mb.load_prom(&prom);
+                mb.tv.set_board(tv_board);
                 if let Some(p) = debuggee_pack.as_ref() {
                     attach(&mut mb, std::slice::from_ref(p));
                 }
@@ -4821,7 +4860,7 @@ fn main() {
                 eprintln!("debug cable: DBGOUT connected to the debuggee at {addr}");
                 let reader = stream.try_clone().expect("a second handle on the cable");
                 if let Some(p) = &resume {
-                    resume_engine("rtl", &mut e, p);
+                    resume_engine("rtl", &mut e, tv_board, p);
                 }
                 let run = Run {
                     stop,
@@ -4850,7 +4889,7 @@ fn main() {
                 time_fabric(FreeRunning::new(e, window), stop, terminal.as_mut(), &setup);
             } else {
                 if let Some(p) = &resume {
-                    resume_engine("rtl", &mut e, p);
+                    resume_engine("rtl", &mut e, tv_board, p);
                 }
                 let run = Run {
                     stop,

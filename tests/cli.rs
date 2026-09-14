@@ -384,6 +384,37 @@ fn a_watch_on_the_other_engines_is_said_to_be_ignored() {
     }
 }
 
+/// **`--tv-board` names the display board on every engine**, not `chip`
+/// alone: the same model answers for either board on `micro` and `rtl`
+/// and under `--tv model`, so the flag is obeyed rather than warned
+/// about, and the start says which board the run has.
+#[test]
+fn the_display_board_is_named_on_every_engine() {
+    for engine in ["--micro", "--rtl"] {
+        let out = muir().args([engine, "--tv-board", "lispm-tv", "--stop-after", "1"]).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}:\n{t}");
+        assert!(t.contains("tv: model lispm-tv"), "{engine}: the start says the board:\n{t}");
+        assert!(!t.contains("warning: --tv-board"), "{engine}: and does not ignore it:\n{t}");
+    }
+    // The board a run has with nothing said is the SIMPLE TV, System 100's
+    // own.
+    let out = muir().args(["--rtl", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("tv: model simple-tv"), "the default board:\n{t}");
+
+    // `chip` says it in its boards line, where it always has, and the
+    // model on `chip` takes the flag as the netlist does.
+    let out = muir()
+        .args(["--chip", "--main-memory-boards", "4", "--tv", "model"])
+        .args(["--tv-board", "lispm-tv", "--stop-after", "1"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("TV model lispm-tv"), "chip with the model board:\n{t}");
+}
+
 /// A `.muirrc` of its own for one test, in a directory of its own: the
 /// directory, and the file's path under it.
 fn muirrc(name: &str, text: &str) -> (Scratch, PathBuf) {

@@ -119,6 +119,15 @@ controller being a second master on the Xbus that the model memory does not
 answer. `--main-memory-boards` sets how many 64K-word boards the machine
 has, on every engine: 32 by default, up to 60.
 
+`--tv-board` is the exception among the board flags: it is every engine's.
+It says which display board the machine has --- the SIMPLE TV that System
+100 drives, or the LISPM TV that replaced it in December 1980 --- and one
+model serves either, MIT's own `cadrtv/lmtv.order` being the LISPM TV's
+programming specification and both boards answering it. So it chooses the
+netlist `chip` builds the backplane with and the board the model answers
+as on `micro`, on `rtl` and under `--tv model`; the start says which the
+run has, and a checkpoint carries it.
+
 ## The netlists
 
 A netlist here is the board itself --- every part, every pin, every wire. None
@@ -137,7 +146,7 @@ level order.
 | `CADRIO.netlist` | I/O board: keyboard, mouse, clocks, the serial port, and the Chaosnet half of the same board | 173 |
 | `CADRDC.netlist` | disk controller | 171 |
 | `SIMPLETV.netlist` | the black-and-white TV, MIT's word for the screen | 171 |
-| `LISPMTV.netlist` | colour TV, four- and eight-bit; replaced the SIMPLE TV in 1980 | 172 |
+| `LISPMTV.netlist` | LISPM TV, the four- and eight-bit display that replaced the SIMPLE TV in 1980 | 172 |
 
 A part is one device at one board location --- the chips, the oscillators,
 the delay lines, the switches, the LED digits --- and not the bypass

@@ -26,6 +26,17 @@
 //!    `--tv model`, written from the programming interface as
 //!    [`crate::disk_controller`] is.  **primary, for the mode register**
 //!
+//! **Two boards, one model.** `--tv-board` says which ([`Board`]), on
+//! every engine: the SIMPLE TV above, and the LISPM TV that replaced it in
+//! December 1980 --- `data/LISPMTV.netlist` through
+//! `tools/lispmtv-netlist.sh`, the board `lmtv.order` is the specification
+//! of. **They program alike but for one bit**, mode
+//! bit 7 ([`mode::SYNC_PROM_ENABLE`]); register 4, the colour map's write
+//! port ([`Tv::color_map`]), is the same circuit on both, measured on each
+//! board in `tests/simpletv_netlist.rs` and `tests/lispmtv_netlist.rs`.
+//! Either board is strapped here as the normal TV, at `17000000` and
+//! `17377760`.
+//!
 //! **The sync program is run.** The board's timing is the program in its
 //! sync RAM, or in its PROM until the software selects the RAM, and the
 //! model runs that program as the board does ([`sync`]): the vertical flag
@@ -79,6 +90,62 @@ pub const HEIGHT: usize = 963;
 /// --- 24 words of 32 bits is the 768 pixels of a line, one bit each.
 pub const WORDS_PER_LINE: usize = 24;
 
+/// Which display board this is: `--tv-board`, on every engine.
+///
+/// **One model serves both boards.** `cadrtv/lmtv.order` is the LISPM
+/// TV's own programming specification and it is what the SIMPLE TV model
+/// was written from; both boards answer the same eight control words at
+/// `17377760` and carry the same 32K-word buffer at `17000000`
+/// (`tests/simpletv_netlist.rs` and `tests/lispmtv_netlist.rs` each bring
+/// their board up on a bus and read them). **One bit of the interface
+/// differs**, [`mode::SYNC_PROM_ENABLE`], mode bit 7, and that is what
+/// this says.
+///
+/// Register 4, the colour map's write port, is **not** a difference: the
+/// SIMPLE TV carries the same page, `RAMCOL.DRW` in `lmtv.stf`'s own
+/// words "SIMPLE TV / COLOR MAP", revised to `nracol` in May 1980, and
+/// part for part it is the LISPM TV's `COLOR`. Both boards strobe it,
+/// measured on each, so [`Tv::color_map`] is written on both.
+///
+/// The LISPM TV is strapped here as the normal TV, exactly as the SIMPLE
+/// TV is: `lmtv.order`'s "for the normal TV, x is 6" and "the normal TV
+/// has x equal to 0, so the buffer starts at 17000000". The color TV ---
+/// MIT's own spelling for the second board, strapped to `17200000` and
+/// `17377750` --- is not this flag.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Board {
+    /// The black-and-white board System 100 drives, `data/SIMPLETV.netlist`.
+    #[default]
+    SimpleTv,
+    /// The four- and eight-bit board that replaced it in December 1980,
+    /// `data/LISPMTV.netlist`.
+    LispmTv,
+}
+
+impl Board {
+    /// What `--tv-board` calls it, which is also what the start summary
+    /// says and what a checkpoint carries.
+    pub fn name(self) -> &'static str {
+        match self {
+            Board::SimpleTv => "simple-tv",
+            Board::LispmTv => "lispm-tv",
+        }
+    }
+}
+
+/// Colours the colour map holds: `lmtv.order`'s "3-0 Color (i.e. address
+/// into color map)" and "we only use a 16x8 subset of it", and
+/// `WRITE-COLOR-MAP`'s `(LOGAND LOC 17)`.
+pub const COLORS: usize = 16;
+
+/// Channels the colour map has: `lmtv.order`'s "7-6 Select which color
+/// map (up to 4 channels)", of which three are wired --- the 74S139 at
+/// 0E10, on the LISPM TV's COLOR page and the SIMPLE TV's NRACOL, decodes
+/// them into `-LOAD COLOR 0`, `1` and `2` and leaves its fourth output
+/// unconnected. `WRITE-COLOR-MAP` writes red on 0, green on 1 and blue
+/// on 2.
+pub const CHANNELS: usize = 3;
+
 /// Mode register bits, read off the board's own "SIMPLE TV / MODE REGISTER"
 /// drawing and named as `lmtv.order` names them. That is the word MIT's
 /// window system uses in `'(:CONTROLLER :SIMPLE)`.
@@ -127,21 +194,43 @@ pub mod mode {
     pub const VSYNC: u32 = 0o40;
     /// `MODE<6>`, `HSYNC`.  Read only.
     pub const HSYNC: u32 = 0o100;
-    /// `MODE<7>`, `SYNC PROM ENB`.  Read only, and zero on this board.
+    /// `MODE<7>`, `SYNC PROM ENB`.  Read only, and **the one bit of the
+    /// interface the two boards differ in**: on the LISPM TV it reads the
+    /// sync enable back, and on the SIMPLE TV it reads zero.
     ///
-    /// NXBCTL 0F11 drives `XDO 7` from a net of that name, so the bit reads
-    /// back; `lmtv.order` calls everything from 7 up garbage.
-    /// Both are right, because ECO 2 of `cadrtv/lmtv.eco`, 18 June 1980,
-    /// grounds that buffer input --- "new window system not initializing tv
-    /// properly at original power-up; on old TV boards the check if TV is in
-    /// PROM mode (extant only on new TV boards) reads an unused input". The
-    /// window system reads this bit to tell the boards apart, and on this
-    /// one it must read zero.
+    /// On the LISPM TV the read buffer is the 74LS244 at XBCTL 0F11
+    /// section A, and its bit 7 input, pin 8, is the net `-SYNC PROM ENB`
+    /// --- pin 19 of the 74LS273 at TVINC 0A07, the Q of the D that `XDI7`
+    /// feeds, which is register 3's bit 7, [`SyncRam::enabled`]. So the bit
+    /// is one while the sync RAM is selected and zero while MIT's PROM is.
+    /// On the SIMPLE TV the same pin is `GND`: ECO 2 of `cadrtv/lmtv.eco`,
+    /// 18 June 1980, "new window system not initializing tv properly at
+    /// original power-up; on old TV boards the check if TV is in PROM mode
+    /// (extant only on new TV boards) reads an unused input", applied when
+    /// `data/SIMPLETV.netlist` is built. `lmtv.order` --- the LISPM TV's
+    /// own sheet --- calls everything from bit 7 up garbage all the same,
+    /// so the bit is the board's and not the programming specification's.
+    ///
+    /// **No source in System 100 reads it, and the source that would is
+    /// not in the release.** The release's only reads of the mode register
+    /// are `shwarm.lisp`'s three read-modify-writes of [`BOW`] and
+    /// `color.lisp`'s waits on [`VSYNC`]. `SI:SETUP-CPT`, which ECO 2 says
+    /// does the checking, is called from `sys/sys/ltop.lisp` and
+    /// `shwarm.lisp` and exported by `sys/cold/export.lisp` as
+    /// `SYS: WINDOW; SHWARM`, and is defined in no file the release ships;
+    /// nor are `SI:STOP-SYNC`, `SI:FILL-SYNC` and `SI:START-SYNC`, which
+    /// `color.lisp` calls and the same file exports as `SYS: WINDOW;
+    /// COLOR`. So what the software does with the bit is **the ECO's word
+    /// and not a line of code we have**: it tells a new board from an old
+    /// one. Both boards are modelled as the boards read, which is what
+    /// either answer of that check would find.
     pub const SYNC_PROM_ENABLE: u32 = 0o200;
 
     /// `MODE<7:4>`, everything the read buffer sources from somewhere other
-    /// than the 2519. [`VERT`] is the flop above; the other three are
-    /// undriven here and read as zero.
+    /// than the 2519: [`VERT`], the flop above; [`VSYNC`] and [`HSYNC`],
+    /// the sync program's own bits; and [`SYNC_PROM_ENABLE`], the sync
+    /// enable on the LISPM TV and ground on the SIMPLE TV. None of the
+    /// four can be written.
     pub const READ_ONLY: u32 = 0o360;
 }
 
@@ -221,14 +310,18 @@ impl SyncRam {
     }
 }
 
-/// The frame buffer, the mode register, the vertical flag, and the sync
-/// program RAM with the program running.
+/// The frame buffer, the mode register, the vertical flag, the sync
+/// program RAM with the program running, and the colour map.
 #[derive(Clone)]
 pub struct Tv {
+    /// Which of the two boards this is: what mode bit 7 reads.
+    board: Board,
     buffer: Vec<u32>,
     mode: u32,
     /// Registers 1 to 3.
     pub sync: SyncRam,
+    /// The colour map as written, `[colour][channel]`: [`Tv::color_map`].
+    color_map: [[u8; CHANNELS]; COLORS],
     /// The bit the last mode write clocked into the vertical flag's flop.
     flag_written: bool,
     /// When that write was, in the machine's nanoseconds: the flag is
@@ -249,9 +342,11 @@ impl Default for Tv {
         let sync = SyncRam::default();
         let timeline = Timeline::of(sync.program(), 0);
         Tv {
+            board: Board::default(),
             buffer: vec![0; BUFFER_WORDS as usize],
             mode: 0,
             sync,
+            color_map: [[0; CHANNELS]; COLORS],
             flag_written: false,
             written_at: 0,
             timeline,
@@ -261,6 +356,39 @@ impl Default for Tv {
 }
 
 impl Tv {
+    /// Which board this is.
+    pub fn board(&self) -> Board {
+        self.board
+    }
+
+    /// Puts the model on the other board. What `--tv-board` does, where
+    /// each engine builds its machine; the board is the backplane's and
+    /// does not change under a running machine.
+    pub fn set_board(&mut self, board: Board) {
+        self.board = board;
+    }
+
+    /// The colour map as the software has written it, `[colour][channel]`:
+    /// sixteen colours of three channels, red, green and blue. Written on
+    /// either board, both having the circuit that strobes it.
+    ///
+    /// **These are the bytes written, not brightnesses.**
+    /// `WRITE-COLOR-MAP` in `sys/window/color.lisp` writes `377 - value`
+    /// --- "R, G and B (red, green and blue) are numbers from 0 to 377
+    /// that together say how pixels containing LOC should appear", stored
+    /// inverted --- and what the D-A makes of the byte is off this board
+    /// and **unverified**: `lmtv.order` says only "the color map is a 64x9
+    /// RAM for each channel, with a D-A on it", the RAMs and the D-As are
+    /// past the paddle connections ECO 2 of `cadrtv/lmtv4b.eco` rewires
+    /// ("these wires are from paddles to old or new Outs"), and no drawing
+    /// of them reached us: `cadrtv/lmtv.book`, the board's own print list,
+    /// is the 25 sheets and eight text files of the board itself and
+    /// nothing of the paddles. What would settle it is a drawing or a
+    /// parts list of them. Nothing is rendered from this map here.
+    pub fn color_map(&self) -> &[[u8; CHANNELS]; COLORS] {
+        &self.color_map
+    }
+
     /// The program the board is running, as the model runs it: `None` while
     /// what is loaded makes no frame.
     pub fn timeline(&self) -> Option<&Timeline> {
@@ -408,24 +536,31 @@ impl Tv {
         match register {
             0 => {
                 let (hsync, vsync) = self.sync_at(ns);
+                // Bit 7 is the sync enable read back on the LISPM TV, and
+                // grounded on the SIMPLE TV: `mode::SYNC_PROM_ENABLE`.
+                let prom_enable = self.board == Board::LispmTv && self.sync.enabled();
                 self.mode
                     | if self.vert_flag(ns) { mode::VERT } else { 0 }
                     | if vsync { mode::VSYNC } else { 0 }
                     | if hsync { mode::HSYNC } else { 0 }
+                    | if prom_enable { mode::SYNC_PROM_ENABLE } else { 0 }
             }
             // The sync program's word at the pointer, eight bits: the RAM's
             // while it is selected, the PROM's otherwise; `lmtv.order`
             // calls 31-8 garbage.
             1 => self.sync.program().get(self.sync.pointer as usize).copied().unwrap_or(0) as u32,
-            // 2 and 3 are write only, and 5 to 7 "respond but don't do
-            // anything".
+            // 2, 3 and 4 are write only --- `color.lisp` keeps
+            // `HARDWARE-COLOR-MAP` in the band because "the hardware does
+            // not allow reading back of the color map" --- and 5 to 7
+            // "respond but don't do anything".
             _ => 0,
         }
     }
 
     /// The four pins of the 2519 land, bit 4 lands in the vertical flag's
-    /// flop, and the sync program's three registers take theirs;
-    /// everything else the write carries has nowhere to be stored. A write
+    /// flop, the sync program's three registers take theirs, and register 4
+    /// writes one byte of the colour map; everything
+    /// else the write carries has nowhere to be stored. A write
     /// that changes the program the generator runs --- the clock mode, the
     /// RAM's selection, or a word of the RAM while it is selected --- runs
     /// it afresh ([`Tv::restart`]).
@@ -454,6 +589,40 @@ impl Tv {
                     self.restart(ns);
                 }
             }
+            // The colour register, `lmtv.order`'s "173777x4 Color (write
+            // only), 15-8 Value to write into color map, 7-6 Select which
+            // color map (up to 4 channels), 3-0 Color (i.e. address into
+            // color map)". On the board, page COLOR: the 74LS244 at 0D13
+            // puts `XDI0..7` on `COLOR 0..7` while `-LOAD COLOR` is low,
+            // the 74S241 at 0E09 puts `XDI8..15` on `COLOR VALUE 0..7`,
+            // and the 74S139 at 0E10 decodes `XDI6` and `XDI7` into
+            // `-LOAD COLOR 0`, `1` and `2`, the three channels' write
+            // strobes, its fourth output unconnected --- so a write naming
+            // the fourth channel strobes nothing, which
+            // `tests/lispmtv_netlist.rs` measures. The map RAMs are off
+            // the board, so what is kept here is the byte written.
+            //
+            // **The SIMPLE TV has the same page**, `nracol`, titled
+            // "SIMPLE TV / COLOR MAP" in `lmtv.stf` and part for part the
+            // same circuit; the two differ only in the 74S257's select and
+            // the 241's pull-up net, neither of which is this write.
+            // `tests/simpletv_netlist.rs` measures that board strobing the
+            // map with the same colour and value, so the write is the same
+            // here.
+            //
+            // **`XDI4` and `XDI5` leave the board too**, on `COLOR 4` and
+            // `COLOR 5`, where a 64-entry map would take them as address;
+            // `lmtv.order` gives the colour four bits and `WRITE-COLOR-MAP`
+            // writes `(LOGAND LOC 17)`, so MIT's own software never sets
+            // them. What an off-board map does with them is
+            // **unverified** --- see [`Tv::color_map`].
+            4 => {
+                let channel = (v >> 6) as usize & 3;
+                if channel < CHANNELS {
+                    self.color_map[v as usize & (COLORS - 1)][channel] = (v >> 8) as u8;
+                }
+            }
+            // 5 to 7 "respond but don't do anything".
             _ => {}
         }
     }
@@ -549,13 +718,32 @@ impl SyncRam {
 }
 
 impl Tv {
-    /// The display into a checkpoint: the frame buffer, the mode, the sync
-    /// RAM and the vertical flag.
+    /// The display into a checkpoint: which board it is, the frame buffer,
+    /// the mode, the sync RAM, the colour map and the vertical flag.
     pub fn save(&self, w: &mut crate::checkpoint::Writer) {
-        let Tv { buffer, mode, sync, flag_written, written_at, timeline: _, origin } = self;
+        let Tv {
+            board,
+            buffer,
+            mode,
+            sync,
+            color_map,
+            flag_written,
+            written_at,
+            timeline: _,
+            origin,
+        } = self;
+        w.u8(match board {
+            Board::SimpleTv => 0,
+            Board::LispmTv => 1,
+        });
         w.u32s(buffer);
         w.u32(*mode);
         sync.save(w);
+        for colour in color_map {
+            for channel in colour {
+                w.u8(*channel);
+            }
+        }
         w.bool(*flag_written);
         w.u64(*written_at);
         w.u64(*origin);
@@ -564,9 +752,21 @@ impl Tv {
     /// The timeline is not in the checkpoint: it is the program and the
     /// clock mode run, and is run again here.
     pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        // The board the machine was built with, so that a resume onto the
+        // other one is refused rather than run: `--tv-board`.
+        self.board = match r.u8()? {
+            0 => Board::SimpleTv,
+            1 => Board::LispmTv,
+            other => return Err(crate::checkpoint::bad(format!("display board {other}"))),
+        };
         r.u32s_into(&mut self.buffer)?;
         self.mode = r.u32()?;
         self.sync.load(r)?;
+        for colour in &mut self.color_map {
+            for channel in colour {
+                *channel = r.u8()?;
+            }
+        }
         self.flag_written = r.bool()?;
         self.written_at = r.u64()?;
         self.origin = r.u64()?;
