@@ -26,12 +26,19 @@
 //!    `--tv model`, written from the programming interface as
 //!    [`crate::disk_controller`] is.  **primary, for the mode register**
 //!
-//! Where this is knowingly not the machine: there
-//! is no video timing, so `VSYNC` and `HSYNC` never rise; the vertical flag
-//! is kept on a frame clock rather than a raster, [`FRAME_NS`], which is
-//! the netlist board's own period; and the sync RAM behind registers 1 to 3
-//! is a store the program is written into and read back from, not run ---
-//! `SI:SETUP-CPT` loads it at every `LISP-REINITIALIZE`, and reads it back.
+//! **The sync program is run.** The board's timing is the program in its
+//! sync RAM, or in its PROM until the software selects the RAM, and the
+//! model runs that program as the board does ([`sync`]): the vertical flag
+//! is preset where the program's `TVMA CLR` falls, and `VSYNC` and `HSYNC`
+//! in the mode register are the program's own bits, which is what the
+//! colour software's `%XBUS-WRITE-SYNC` waits on. What the model does not
+//! do is scan: no dot is fetched and no monitor is driven, so the picture
+//! is the frame buffer as it stands, and a program that fetches part of it
+//! or none shows the whole of it all the same.
+
+pub mod sync;
+
+use sync::Timeline;
 
 /// First word of the frame buffer.  `MAIN-SCREEN-BUFFER-ADDRESS` is
 /// `IO-SPACE-VIRTUAL-ADDRESS`, the base of Xbus I/O space, which
@@ -138,10 +145,14 @@ pub mod mode {
     pub const READ_ONLY: u32 = 0o360;
 }
 
-/// One frame of the board's raster, and so the period of `TVMA CLR` and
-/// the vertical flag: 966 lines of 16.000 us, measured on the netlist
-/// board in `tests/simpletv_netlist.rs` and `tests/monitor.rs`. 64.7 Hz,
-/// which is what the microcode calls "the roughly-60-cycle clock".
+/// One frame of MIT's PROM program in clock mode 0, and so the period of
+/// `TVMA CLR` and the vertical flag from power-on: 966 lines of 16.000 us,
+/// measured on the netlist board in `tests/simpletv_netlist.rs` and
+/// `tests/monitor.rs`, and what running `cpt.prom` here comes to
+/// (`tests/sync_program.rs`). 64.7 Hz, which is what the microcode calls
+/// "the roughly-60-cycle clock". The model's own timing is the program
+/// running, [`sync`]; this is the nominal frame for whoever wants one, the
+/// terminal's refresh among them.
 pub const FRAME_NS: u64 = 15_456_000;
 
 /// The word offset into the frame buffer a physical address names, if it is
@@ -171,14 +182,11 @@ pub fn control_register(phys: u32) -> Option<u32> {
 /// ([`SimpleTv::xbus_init`]), and power-on --- [`SyncRam::default`] ---
 /// clears them.
 ///
-/// The program in it is not run: the board's timing here is [`FRAME_NS`]
-/// whatever is loaded. What is modelled is that a program written can be
-/// read back, which `SI:SETUP-CPT` does, and that the enable and the
-/// spacing hold what they were given. The enable is also what selects the
-/// RAM over the PROM at NSYRAM --- the 2147s' chip select is `SYNC PROM
-/// ENB` and the 74S472's its complement --- so with it clear a read of
-/// the data register is the PROM's word, which reads as zero here, the
-/// PROM's program not being loaded on this path.
+/// The enable is also what selects the RAM over the PROM at NSYRAM --- the
+/// 2147s' chip select is `SYNC PROM ENB` and the 74S472's its complement
+/// --- so the program the board runs is the RAM's while it is set and
+/// MIT's `cpt.prom` while it is clear ([`SyncRam::program`]), and a read
+/// of the data register with it clear is the PROM's word.
 #[derive(Clone)]
 pub struct SyncRam {
     words: Vec<u8>,
@@ -205,10 +213,16 @@ impl SyncRam {
     pub fn enabled(&self) -> bool {
         self.enable & 0o200 != 0
     }
+
+    /// The program the sync generator fetches: the RAM's while the enable
+    /// selects it, MIT's PROM's otherwise.
+    pub fn program(&self) -> &[u8] {
+        if self.enabled() { &self.words } else { sync::prom() }
+    }
 }
 
 /// The frame buffer, the mode register, the vertical flag, and the sync
-/// program RAM.
+/// program RAM with the program running.
 #[derive(Clone)]
 pub struct SimpleTv {
     buffer: Vec<u32>,
@@ -218,23 +232,74 @@ pub struct SimpleTv {
     /// The bit the last mode write clocked into the vertical flag's flop.
     flag_written: bool,
     /// When that write was, in the machine's nanoseconds: the flag is
-    /// that bit, or the frame start that has come since.
+    /// that bit, or the `TVMA CLR` that has come since.
     written_at: u64,
+    /// The program running, laid out in time; `None` while the RAM is
+    /// selected and holds no program that makes a frame, as it does before
+    /// and part way through the software's loading of it.
+    timeline: Option<Timeline>,
+    /// When the program running started from its location 0, in the
+    /// machine's nanoseconds: power-on, or the last change of program or
+    /// clock mode ([`SimpleTv::restart`]).
+    origin: u64,
 }
 
 impl Default for SimpleTv {
     fn default() -> Self {
+        let sync = SyncRam::default();
+        let timeline = Timeline::of(sync.program(), 0);
         SimpleTv {
             buffer: vec![0; BUFFER_WORDS as usize],
             mode: 0,
-            sync: SyncRam::default(),
+            sync,
             flag_written: false,
             written_at: 0,
+            timeline,
+            origin: 0,
         }
     }
 }
 
 impl SimpleTv {
+    /// The program the board is running, as the model runs it: `None` while
+    /// what is loaded makes no frame.
+    pub fn timeline(&self) -> Option<&Timeline> {
+        self.timeline.as_ref()
+    }
+
+    /// When the running program last started from location 0.
+    pub fn origin(&self) -> u64 {
+        self.origin
+    }
+
+    /// The program or the clock mode changed at `ns`: the program is run
+    /// afresh from location 0 there. **Unverified** that the board starts
+    /// over rather than fetching the new program from wherever its address
+    /// counter stood: the 74LS569s at NSYADR are cleared only by `-SYNC ADR
+    /// CLR`, and what settles it is the phase of `-TVMA CLR` on the netlist
+    /// across a `SETUP-CPT`. Nothing in the software depends on the phase.
+    fn restart(&mut self, ns: u64) {
+        self.timeline = Timeline::of(self.sync.program(), self.mode & mode::CLOCK);
+        self.origin = ns;
+    }
+
+    /// `-TVMA CLR`s from the running program's start to `ns` inclusive.
+    fn tvma_clrs_by(&self, ns: u64) -> u64 {
+        match &self.timeline {
+            Some(t) if ns >= self.origin => t.tvma_clrs_by(ns - self.origin),
+            _ => 0,
+        }
+    }
+
+    /// The sync bits the program has in the register at `ns`: `(hsync,
+    /// vsync)`.
+    pub fn sync_at(&self, ns: u64) -> (bool, bool) {
+        match &self.timeline {
+            Some(t) if ns >= self.origin => t.sync_at(ns - self.origin),
+            _ => (false, false),
+        }
+    }
+
     /// The whole frame buffer, for whatever draws it.
     pub fn buffer(&self) -> &[u32] {
         &self.buffer
@@ -326,7 +391,7 @@ impl SimpleTv {
     /// set, if a frame has started since --- `-TVMA CLR` presets it once
     /// every [`FRAME_NS`], the frames counted from power-on.
     pub fn vert_flag(&self, ns: u64) -> bool {
-        self.flag_written || ns / FRAME_NS > self.written_at / FRAME_NS
+        self.flag_written || self.tvma_clrs_by(ns) > self.tvma_clrs_by(self.written_at)
     }
 
     /// `SEND INTR`: the vertical flag with [`mode::INTERRUPT_ENABLE`] up,
@@ -341,10 +406,17 @@ impl SimpleTv {
     /// `SETUP-CPT` reads the sync program back through register 1.
     pub fn read_control(&self, register: u32, ns: u64) -> u32 {
         match register {
-            0 => self.mode | if self.vert_flag(ns) { mode::VERT } else { 0 },
-            // The sync program's word at the pointer, eight bits, while the
-            // RAM is the one selected; `lmtv.order` calls 31-8 garbage.
-            1 if self.sync.enabled() => self.sync.words[self.sync.pointer as usize] as u32,
+            0 => {
+                let (hsync, vsync) = self.sync_at(ns);
+                self.mode
+                    | if self.vert_flag(ns) { mode::VERT } else { 0 }
+                    | if vsync { mode::VSYNC } else { 0 }
+                    | if hsync { mode::HSYNC } else { 0 }
+            }
+            // The sync program's word at the pointer, eight bits: the RAM's
+            // while it is selected, the PROM's otherwise; `lmtv.order`
+            // calls 31-8 garbage.
+            1 => self.sync.program().get(self.sync.pointer as usize).copied().unwrap_or(0) as u32,
             // 2 and 3 are write only, and 5 to 7 "respond but don't do
             // anything".
             _ => 0,
@@ -353,17 +425,35 @@ impl SimpleTv {
 
     /// The four pins of the 2519 land, bit 4 lands in the vertical flag's
     /// flop, and the sync program's three registers take theirs;
-    /// everything else the write carries has nowhere to be stored.
+    /// everything else the write carries has nowhere to be stored. A write
+    /// that changes the program the generator runs --- the clock mode, the
+    /// RAM's selection, or a word of the RAM while it is selected --- runs
+    /// it afresh ([`SimpleTv::restart`]).
     pub fn write_control(&mut self, register: u32, v: u32, ns: u64) {
         match register {
             0 => {
+                let clock_changed = (v ^ self.mode) & mode::CLOCK != 0;
                 self.mode = v & mode::WRITABLE;
                 self.flag_written = v & mode::VERT != 0;
                 self.written_at = ns;
+                if clock_changed {
+                    self.restart(ns);
+                }
             }
-            1 => self.sync.words[self.sync.pointer as usize] = v as u8,
+            1 => {
+                self.sync.words[self.sync.pointer as usize] = v as u8;
+                if self.sync.enabled() {
+                    self.restart(ns);
+                }
+            }
             2 => self.sync.pointer = (v as u16) & (SYNC_RAM_WORDS as u16 - 1),
-            3 => self.sync.enable = v as u8,
+            3 => {
+                let was = self.sync.enabled();
+                self.sync.enable = v as u8;
+                if self.sync.enabled() != was {
+                    self.restart(ns);
+                }
+            }
             _ => {}
         }
     }
@@ -395,6 +485,13 @@ impl SimpleTv {
     /// that becomes `-LM POWER RESET` at XA 0B13, which the 26S10 at XA
     /// 0F21 puts on `-XBUS POWER RESET`; no other part drives it.
     /// The flag is preset again by the next frame's `-TVMA CLR`.
+    ///
+    /// The sync program's phase is left alone. `lmtv.order` says "Control
+    /// also gets to location 0 when the Xbus is reset", but the counters'
+    /// clear, `-SYNC ADR CLR`, is the 74S10 at 0D01 on `-SYNC EOL`, `-SYNC
+    /// NEW LINE` and a third input, the program's own end-of-loop logic;
+    /// **unverified** whether that third input carries the reset, which
+    /// what drives 0D03 pin 11 would settle.
     pub fn xbus_init(&mut self, ns: u64) {
         self.flag_written = false;
         self.written_at = ns;
@@ -455,20 +552,25 @@ impl SimpleTv {
     /// The display into a checkpoint: the frame buffer, the mode, the sync
     /// RAM and the vertical flag.
     pub fn save(&self, w: &mut crate::checkpoint::Writer) {
-        let SimpleTv { buffer, mode, sync, flag_written, written_at } = self;
+        let SimpleTv { buffer, mode, sync, flag_written, written_at, timeline: _, origin } = self;
         w.u32s(buffer);
         w.u32(*mode);
         sync.save(w);
         w.bool(*flag_written);
         w.u64(*written_at);
+        w.u64(*origin);
     }
 
+    /// The timeline is not in the checkpoint: it is the program and the
+    /// clock mode run, and is run again here.
     pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
         r.u32s_into(&mut self.buffer)?;
         self.mode = r.u32()?;
         self.sync.load(r)?;
         self.flag_written = r.bool()?;
         self.written_at = r.u64()?;
+        self.origin = r.u64()?;
+        self.timeline = Timeline::of(self.sync.program(), self.mode & mode::CLOCK);
         Ok(())
     }
 }

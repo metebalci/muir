@@ -164,3 +164,54 @@ fn the_board_comes_up_on_the_bus() {
     eprintln!("frame buffer: write acknowledged in {took_w} ns, read in {took_r} ns");
     assert_eq!(word, 0x1234_5678, "the word written at 17000005 reads back");
 }
+
+/// **How long an instruction of the sync program takes in each clock
+/// mode, measured on the board.** `lmtv.order` says "an instruction every
+/// (32, 16, 8, 32) bits of video (indexed by Mode<1-0>) or roughly every
+/// 1/2 microsecond" and names the modes CPT 64 MHz, Motorola 4408 32 MHz,
+/// standard video 12 MHz and color 12 MHz; what that comes to in
+/// nanoseconds is the clock PROM's business, `lmtv4b.prom`, and this
+/// reads it off `HSYNC OUT` with `cpt.prom` running: 32 instructions a
+/// line, so a line's period over 32 is the instruction's.
+#[test]
+fn an_instruction_of_the_sync_program_in_each_clock_mode() {
+    use muir::part::Level;
+    use muir::simpletv::CONTROL;
+    use muir::xbus::XbusMaster;
+
+    let n = lispmtv();
+    for mode in 0..4u32 {
+        let mut b = XbusMaster::new(&n, 0);
+        b.cycle(CONTROL, Some(mode));
+        let h = b.net("HSYNC OUT");
+        let mut was = b.chip.net(h);
+        let mut falls = Vec::new();
+        let until = b.now + 400_000;
+        while b.now < until && falls.len() < 6 {
+            let tap = b.chip.next_tap().unwrap_or(until).clamp(b.now + 1, until);
+            b.run(tap);
+            let now = b.chip.net(h);
+            if now != was {
+                if now == Level::Low {
+                    falls.push(b.now);
+                }
+                was = now;
+            }
+        }
+        let periods: Vec<u64> = falls.windows(2).map(|w| w[1] - w[0]).collect();
+        eprintln!(
+            "mode {mode}: HSYNC OUT fell at {falls:?}; line periods {periods:?}; an instruction {:?} ns",
+            periods.first().map(|p| *p as f64 / 32.0)
+        );
+        assert!(periods.len() >= 2, "mode {mode}: lines seen {falls:?}");
+        assert!(
+            periods.windows(2).all(|w| w[0] == w[1]),
+            "mode {mode}: a steady line: {periods:?}"
+        );
+        assert_eq!(
+            periods[0],
+            32 * muir::simpletv::sync::INSTRUCTION_NS[mode as usize],
+            "mode {mode}: 32 instructions a line"
+        );
+    }
+}
