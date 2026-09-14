@@ -521,15 +521,17 @@ impl FarEnd {
     /// an undriven TTL input reads high on this engine, and MIT's
     /// `cadr/busint.erface` says of `-BOOT1` "It has a pullup".
     ///
-    /// **Unverified**: that the backplane joins the I/O board's `CP1` to
-    /// the bus interface's `CR1`. The two are different pins where every
-    /// other wire the boards share is on the same one, and no file in
-    /// `mit/` describes the cage's wiring; `tests/unibus_backplane_pins.rs`
-    /// holds the two pins as the lists give them, and
+    /// **Unverified**: that the cage joins the I/O board's `CP1` to the
+    /// bus interface's `CR1`. The two are different pins where every
+    /// other wire the boards share is on the same one; MIT's own list for
+    /// the backplane, `cadr1/dubspc.wires`, buses the shared ones and has
+    /// neither of these, and leaves device wiring to the hand, so the
+    /// wire, if there was one, is of the kind no list carries.
+    /// `tests/unibus_backplane_pins.rs` holds all of that, and
     /// `docs/keyboard-boot.md` has the rest. This wire models what
     /// `cadrio/iob.eco` ECO#3 says happened --- keyboards did reboot
-    /// machines --- and not a wire any file shows. What would settle it: a
-    /// backplane wire list, or a photograph of a cage.
+    /// machines --- and not a wire any file shows. What would settle it:
+    /// a photograph of a cage, or an installation note.
     ///
     /// Whether the processor's end moved. Compared against what the
     /// processor is being driven with rather than remembered, so a resume

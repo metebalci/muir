@@ -84,14 +84,31 @@ boards sit on the same pin name in both lists (`-MSYN*` and `-UB MSYN` on
 grant reach the backplane through jumpers, and their pin records agree
 too). Both boards use DEC's SPC lettering, with the grant chains and
 `NPG` on DEC's pins, and `LM BOOT` is not a Unibus signal, so nothing in
-the standard bus carries it from one slot's `CP1` to another's `CR1`. So
-either MIT's card cage has a backplane wire from the I/O slot's `CP1` to
-the bus interface slot's `CR1`, or one of the two lists is wrong about its
-pin, or the two were never joined and keyboards booted machines some other
-way. No file in `mit/` describes the cage's wiring. **Unverified.** What
-would settle it: a backplane wire list, or a photograph of a cage.
+the standard bus carries it from one slot's `CP1` to another's `CR1`.
+
+**MIT's own list for the backplane has neither pin.**
+`mit/cadr1/dubspc.wires`, "Wire List for double (9-slot) SPC backplane",
+is the cage's wiring as MIT specified it: the Unibus as bus strips "all
+the way across" on DEC's SPC pins --- `D00` on `CS2`, `D01` on `CR2`,
+`D05` on `CP2`, `MSYN` on `EE1`, every one of the forty-two on the pin
+both boards give it --- `NPG` and `BG7` to `BG4` as wires from slot to
+slot, and grant-continuity jumpers to be "installed last" because "some
+of them will be removed by hand and replaced with grant wiring for
+specific devices". `CP1` and `CR1` are in it nowhere: not bused, not
+chained, not joined. So a wire between them, if there was one, was
+device wiring of the kind the list leaves to the hand, and MIT ran such
+wires: the console cabling in `mit/cadrio/iob.eco` notes twisted pairs
+"on backplane" from the I/O board's slot to the display's --- "H SYNC
+2FE1,2FC2 15EU1,15ET1", the I/O board's `FE1` in the slot the note
+numbers 2 to `EU1` in slot 15 --- landing on pins named differently at
+the two ends. So either MIT's card cage carried a hand wire from the I/O
+slot's `CP1` to the bus interface slot's `CR1`, or one of the two lists
+is wrong about its pin, or the two were never joined and keyboards
+booted machines some other way. **Unverified.** What would settle it:
+the wire itself --- a photograph of a cage, or an installation note.
 `tests/unibus_backplane_pins.rs` holds the two pins as the lists give
-them, so that a corrected list is noticed.
+them, and the forty-two to the backplane list, so that a corrected list
+is noticed.
 
 **Link 3, the bus interface to the processor: established, and it is
 `-BOOT1`.** `data/cables.txt` pairs the bus interface's `J08-12` with the

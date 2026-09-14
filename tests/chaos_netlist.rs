@@ -993,3 +993,56 @@ fn diagnose_the_turn_timer() {
         b.cycle(chaos::CSR, Some(csr::LOOP_BACK | csr::CLEAR_RECEIVER));
     }
 }
+
+/// **The CSR's Timer Interrupt Enable reaches no gate on this board.**
+/// AIM-628 has the bit "for the interval timer present in some versions
+/// of the interface", and this is not one of them. In `cadrio/iob.wlr`
+/// `TIMER.IEN` has two pins --- the 74LS174 at LMUCON B20 the CSR write
+/// loads, pin 12, and the 74LS244 at LMDATP D16 that reads it back, pin
+/// 17 --- and the net has the same two in the netlist. The 74S51 at
+/// LMUCON E05 that makes the interrupt has both of its AND pairs taken,
+/// `RDONE` with `RIEN` and `TDONE` with `TIEN`, and a '51 has no third
+/// input: TI's sheet marks pins 11 and 12 "make no external connection".
+/// MIT's own `chatst.lisp`, on the bit: "This bit doesnt seem to do
+/// anything." Issue 96.
+#[test]
+fn the_timer_interrupt_enable_reaches_no_gate() {
+    let n = cadrio();
+    let net = n.by_name_id("TIMER.IEN").expect("TIMER.IEN");
+    let mut on_net: Vec<(String, String, u8)> = n
+        .parts
+        .iter()
+        .flat_map(|p| {
+            p.pins
+                .iter()
+                .filter(move |&&(_, id)| id == net)
+                .map(move |&(pin, _)| (p.page.clone(), p.reference.clone(), pin))
+        })
+        .collect();
+    on_net.sort();
+    let want =
+        |page: &str, reference: &str, pin: u8| (page.to_string(), reference.to_string(), pin);
+    assert_eq!(on_net, [want("LMDATP", "0D16", 17), want("LMUCON", "0B20", 12)]);
+
+    let wires = support::wire_list(&n, &["cadrio", "iob.wlr"]);
+    let s = wires.iter().find(|s| s.names.iter().any(|x| x == "TIMER.IEN")).expect("in iob.wlr");
+    let mut pins: Vec<(String, u8)> =
+        s.pins.iter().map(|p| (p.location.clone(), p.number)).collect();
+    pins.sort();
+    assert_eq!(pins, [("B20".to_string(), 12), ("D16".to_string(), 17)]);
+
+    let aoi: Vec<&netlist::Part> =
+        n.parts.iter().filter(|p| p.reference == "0E05" && p.kind == "74S51").collect();
+    let mut pages: Vec<&str> = aoi.iter().map(|p| p.page.as_str()).collect();
+    pages.sort();
+    assert_eq!(pages, ["LMRBUF", "LMUCON"], "the two gates of the 74S51, one on each page");
+    let mut used: Vec<u8> = aoi.iter().flat_map(|p| p.pins.iter().map(|&(pin, _)| pin)).collect();
+    used.sort();
+    assert_eq!(used, [1, 2, 3, 4, 5, 6, 8, 9, 10, 13], "no pin 11 or 12, and none spare");
+    let id = |name: &str| n.by_name_id(name).unwrap_or_else(|| panic!("no net {name}"));
+    let interrupt = aoi.iter().find(|p| p.pins.iter().any(|&(pin, _)| pin == 8)).unwrap();
+    for (pin, name) in [(1, "RDONE"), (13, "RIEN"), (10, "TDONE"), (9, "TIEN")] {
+        let &(_, on) = interrupt.pins.iter().find(|&&(k, _)| k == pin).unwrap();
+        assert_eq!(on, id(name), "pin {pin} is {name}");
+    }
+}

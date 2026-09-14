@@ -8,9 +8,13 @@
 //! page, both in DEC's SPC lettering, `EE1` for `MSYN` --- and a pairing
 //! by name is only right if the two boards put the wire on the same pin.
 //! So that is held here, for every pair, and it is how the boot line was
-//! found to be the exception.
+//! found to be the exception. MIT's own list for the backplane itself,
+//! `cadr1/dubspc.wires`, is held to the same pins, and has neither of the
+//! boot line's.
 
 mod support;
+
+use std::collections::BTreeMap;
 
 use muir::netlist;
 use muir::wirelist::Signal;
@@ -83,13 +87,18 @@ fn every_shared_unibus_wire_is_on_the_same_backplane_pin_on_both_boards() {
 /// interface takes `-LM BOOT` on `CR1` (`busint.wlr`, page CUBUS) and
 /// passes it, with no part on it, to cable header `J08-12`. `CP1` and
 /// `CR1` are different pins, when every other shared wire above is on
-/// the same one. So either MIT's card cage joins them with a backplane
-/// wire no file here describes, or one list is wrong about its pin, or
-/// the two were never joined. **Unverified**: what would settle it is a
-/// backplane wire list or a photograph of a cage. That keyboards did
-/// reboot machines is on record --- `cadrio/iob.eco` ECO#3 warns of "the
-/// old keyboard rebooting the machine accidentally" --- so the path was
-/// live; the pin is what is not established.
+/// the same one, and MIT's own list for the backplane has neither of
+/// them: they are not bus strips and not in the grant chains, and the
+/// list leaves device wiring to the hand (the test below). So either the
+/// cage carried a hand wire from the I/O slot's `CP1` to the interface
+/// slot's `CR1` --- of the kind `cadrio/iob.eco` records for the video,
+/// twisted pairs "on backplane" from slot 2 to slot 15 landing on pins
+/// named differently at the two ends --- or one list is wrong about its
+/// pin, or the two were never joined. **Unverified**: what would settle
+/// it is the wire itself, a photograph of a cage or an installation
+/// note. That keyboards did reboot machines is on record --- ECO#3 warns
+/// of "the old keyboard rebooting the machine accidentally" --- so the
+/// path was live; the pin is what is not established.
 ///
 /// muir carries the wire all the same, from the board's `-BOOT*` straight
 /// to the processor's `-BOOT1`, `FarEnd::boot_line`, as what ECO#3 says
@@ -176,4 +185,120 @@ fn the_boot_line_reaches_the_processor_as_boot1_and_the_light_panel_is_boot2() {
         c.settle();
         assert_eq!(c.net(net("-BOOT")), Level::High, "{input} released");
     }
+}
+
+/// A backplane pin as `cadr1/dubspc.wires` writes one: `CS2` on a bus
+/// strip, or `C1-S2` at a slot's end of a wire from slot to slot, the
+/// slot dropped. A row `A` to `F`, a pin letter, and side 1 or 2 --- so
+/// `BR7`, a signal, is not one.
+fn spc_pin(token: &str) -> Option<String> {
+    let row = |c: u8| (b'A'..=b'F').contains(&c);
+    let side = |c: u8| c == b'1' || c == b'2';
+    match token.as_bytes() {
+        [r, p, n] if row(*r) && p.is_ascii_uppercase() && side(*n) => Some(token.to_string()),
+        [r, s, b'-', p, n]
+            if row(*r) && s.is_ascii_digit() && p.is_ascii_uppercase() && side(*n) =>
+        {
+            Some(format!("{}{}{}", *r as char, *p as char, *n as char))
+        }
+        _ => None,
+    }
+}
+
+/// MIT's backplane list, read: the bus strips, pin to signal, and the
+/// grant chains' pins at the slots, pin to signal.
+fn backplane_list(text: &str) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    let mut strips = BTreeMap::new();
+    let mut chains = BTreeMap::new();
+    let mut in_strips = false;
+    let mut name = String::new();
+    for line in text.lines() {
+        if line.starts_with("Bus strip, all the way across") {
+            in_strips = true;
+            continue;
+        }
+        if line.starts_with("Extra ground wiring") {
+            in_strips = false;
+        }
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if in_strips {
+            let is_pin = |t: &str| t.len() == 3 && spc_pin(t).is_some();
+            let words: Vec<&str> = tokens.iter().copied().take_while(|t| !is_pin(t)).collect();
+            if !words.is_empty() {
+                name = words.join(" ");
+            }
+            for pin in tokens.iter().copied().filter(|t| is_pin(t)) {
+                strips.insert(pin.to_string(), name.clone());
+            }
+        } else if let [signal, dir, .., end] = tokens[..]
+            && (dir == "(IN)" || dir == "(OUT)")
+        {
+            chains.insert(spc_pin(end).unwrap(), signal.to_string());
+        }
+    }
+    (strips, chains)
+}
+
+/// The backplane list's name for a board's record: `-D0*` is its `D00`,
+/// `-A1*` its `A01`, `-MSYN*` its `MSYN`, and `BG5.IN*` the chain `BG5`.
+fn strip_name(record: &str) -> String {
+    let core = record.trim_start_matches('-').trim_end_matches('*');
+    let core = core.split('.').next().unwrap();
+    let (letter, digits) = core.split_at(1);
+    if matches!(letter, "A" | "D")
+        && !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+    {
+        format!("{letter}{:02}", digits.parse::<u32>().unwrap())
+    } else {
+        core.to_string()
+    }
+}
+
+/// **MIT's own list for the backplane buses every shared wire on the pin
+/// both boards give it, and has neither boot pin.** `cadr1/dubspc.wires`,
+/// "Wire List for double (9-slot) SPC backplane", is the cage's wiring as
+/// MIT specified it: the Unibus as bus strips "all the way across" on
+/// DEC's SPC pins, `NPG` and `BG7` to `BG4` as wires from slot to slot,
+/// and grant-continuity jumpers to be "installed last" because "some of
+/// them will be removed by hand and replaced with grant wiring for
+/// specific devices". It is the third copy of the forty-two pins above,
+/// by a different route from either board's list. And `CP1` and `CR1`
+/// are in it nowhere --- not bused, not chained, not joined --- while
+/// `CP2` and `CR2` beside them carry `D05` and `D01`: a wire between them
+/// would be device wiring of the kind the list leaves to the hand.
+#[test]
+fn mits_backplane_list_buses_every_shared_wire_and_has_neither_boot_pin() {
+    let text = mit_text(&["cadr1", "dubspc.wires"]);
+    assert!(text.starts_with("Wire List for double (9-slot) SPC backplane."));
+    let (strips, chains) = backplane_list(&text);
+    assert_eq!(strips.len(), 77, "bus strip pins: the supplies, the grounds and the Unibus");
+    assert_eq!(chains.len(), 10, "NPG and BG7 to BG4, in at slot 1 and out at slot 9");
+    let (_, io) = the_two_lists();
+    let mut checked = 0;
+    for (_, board) in muir::unibus::wire_pairs() {
+        let record = match board.as_str() {
+            "-BR*" => "-BR5*",
+            "BG.IN*" => "BG5.IN*",
+            other => other,
+        };
+        let pins = backplane_pins(signal(&io, record));
+        let pin = &pins[0];
+        let want = strip_name(record);
+        match (strips.get(pin), chains.get(pin)) {
+            (Some(name), _) => assert_eq!(*name, want, "{board} on {pin}: a bus strip"),
+            (None, Some(name)) => assert_eq!(*name, want, "{board} on {pin}: a chain pin"),
+            (None, None) => panic!("{board} on {pin}: neither a bus strip nor a chain pin"),
+        }
+        checked += 1;
+    }
+    assert_eq!(checked, 42, "the pairs");
+    for pin in ["CP1", "CR1"] {
+        assert!(!text.contains(pin), "{pin} is in the backplane list");
+    }
+    assert!(!text.to_ascii_uppercase().contains("BOOT"));
+    assert_eq!(strips.get("CP2").map(String::as_str), Some("D05"));
+    assert_eq!(strips.get("CR2").map(String::as_str), Some("D01"));
+    assert!(text.contains("will be removed by hand and replaced with grant"));
+    assert!(text.contains("wiring for specific devices"));
 }
