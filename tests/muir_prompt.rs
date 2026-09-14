@@ -11,7 +11,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use support::{Child, Run, muir, scratch, text};
+use support::{Child, Run, listening, muir, scratch, text};
 
 /// `hold` holds the machine, `step` moves it so far and holds again,
 /// `checkpoint` writes it, a line that is no command is said to be none,
@@ -30,15 +30,18 @@ fn the_prompt_holds_steps_checkpoints_and_quits() {
     assert!(out.status.success(), "muir failed:\n{t}");
     let pcs: Vec<&str> = t.lines().filter(|l| l.starts_with("PC ")).collect();
     assert_eq!(pcs.len(), 3, "pc, hold and step each say where the machine is:\n{t}");
-    let after = |l: &str| {
-        l.split(';').nth(1).unwrap().trim().split(' ').next().unwrap().parse::<u64>().unwrap()
-    };
     assert_eq!(after(pcs[2]), after(pcs[1]) + 7, "step 7 moved it seven microcycles:\n{t}");
     assert!(t.contains("bogus is no command"), "{t}");
     assert!(chk.exists(), "the checkpoint was written");
     assert!(t.contains("quit at PC"), "the run ended by quit:\n{t}");
     assert!(!t.contains("ran out"), "not by its window:\n{t}");
     assert!(!t.contains("muir: "), "no prompt down a pipe, only the answers:\n{t}");
+}
+
+/// The machine's microcycles off a line that says where it is: the second
+/// field of `PC 0 in the PROM; 240 microcycles, 34800 ns; 240 this run`.
+fn after(pc_line: &str) -> u64 {
+    pc_line.split(';').nth(1).unwrap().trim().split(' ').next().unwrap().parse().unwrap()
 }
 
 /// `reg` writes every register, and a memory command dumps that memory:
@@ -407,4 +410,119 @@ fn control_c_with_no_prompt_quits() {
              the ended stdin had to end the run, rather than leave the hold standing:\n{t}"
         );
     }
+}
+
+/// The cable over TCP with the prompt at each end: the debuggee listening
+/// where the host says, the debugger connected to it, stdin a pipe on
+/// both and a window long enough to be typed at.
+fn pair() -> (Child, Child) {
+    let debuggee = muir()
+        .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
+        .stdin(Stdio::piped())
+        .start();
+    let addr = listening(&debuggee);
+    let debugger = muir()
+        .args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "1000000000"])
+        .stdin(Stdio::piped())
+        .start();
+    (debuggee, debugger)
+}
+
+/// **Either end of the cable over TCP has the prompt**, with the commands
+/// a machine alone has: `pc`, `hold`, `step`, `info` and `quit` answer on
+/// the debugger, `pc` and `quit` on the debuggee, and the two agree to
+/// stop as their windows would have made them.
+///
+/// **What an end of the cable cannot write is refused with the reason,
+/// not silently absent.** `checkpoint` and the capture commands are the
+/// two: a checkpoint of a machine with the cable in its bus interface is
+/// none `--resume` can take, and a recording over the cable is two clocks,
+/// which is why `--checkpoint` and `--tv-capture` are refused there from
+/// the command line.  Issue 102 met a `--debug-cable-connect` run that
+/// answered nothing at all and could only be signalled.
+#[test]
+fn both_ends_of_the_cable_over_tcp_have_the_prompt() {
+    let dir = scratch("cable-prompt");
+    let chk = dir.join("cabled.chk");
+    let (mut debuggee, mut debugger) = pair();
+    let (mut to_debugger, mut to_debuggee) = (debugger.stdin(), debuggee.stdin());
+    let (a, b) = (debugger.stdout(), debuggee.stdout());
+    writeln!(to_debugger, "pc").unwrap();
+    a.wait_until(|t| pc_lines(t) >= 1, "the debugger answered pc, so its run has begun");
+    writeln!(to_debuggee, "pc").unwrap();
+    b.wait_until(|t| pc_lines(t) >= 1, "and the debuggee answered pc, in step with it");
+    // Held with the debuggee live at the other end, stepped seven, asked
+    // for the two things an end of the cable does not write, and run on.
+    write!(
+        to_debugger,
+        "hold\nstep 7\ncheckpoint {}\nstartcapture\nendcapture\ninfo\ncontinue\n",
+        chk.display()
+    )
+    .unwrap();
+    a.wait_until(
+        |t| pc_lines(t) >= 3 && t.contains("engine: rtl"),
+        "hold and step said where the debugger is, and info what the run is",
+    );
+    // The debuggee's quit first: it tells the debugger it is done and
+    // waits for the debugger's own, which the debugger's quit sends.
+    writeln!(to_debuggee, "quit").unwrap();
+    writeln!(to_debugger, "quit").unwrap();
+    let (a, b) = (debugger.wait(), debuggee.wait());
+    drop((to_debugger, to_debuggee));
+    let (ta, tb) = (text(&a), text(&b));
+    assert!(a.status.success(), "the debugger:\n{ta}");
+    assert!(b.status.success(), "the debuggee:\n{tb}");
+    let pcs: Vec<&str> = ta.lines().filter(|l| l.starts_with("PC ")).collect();
+    assert_eq!(pcs.len(), 3, "pc, hold and step each said where the debugger is:\n{ta}");
+    assert_eq!(after(pcs[2]), after(pcs[1]) + 7, "step 7 moved it seven microcycles:\n{ta}");
+    assert!(
+        ta.contains("checkpoint: none on an end of the debug cable"),
+        "checkpoint refused, with the reason:\n{ta}"
+    );
+    assert!(!chk.exists(), "and none was written");
+    assert_eq!(
+        ta.matches("capture: none on an end of the debug cable").count(),
+        2,
+        "startcapture and endcapture each refused, with the reason:\n{ta}"
+    );
+    assert!(ta.contains("quit at PC"), "the debugger ended by quit:\n{ta}");
+    assert!(tb.contains("quit at PC"), "and so did the debuggee:\n{tb}");
+    assert!(
+        !ta.contains("muir: the debug cable") && !tb.contains("muir: the debug cable"),
+        "the two agreed to stop rather than one finding the other gone:\n{ta}\n{tb}"
+    );
+}
+
+/// **^C at an end of the cable is what it is on a machine alone**: the
+/// first holds the debugger at the prompt, `continue` runs it on, and ^C
+/// while held ends the run as `quit` does, the two ends agreeing to stop.
+/// Before this one ^C ended a cable run outright, with nothing held.
+#[test]
+fn control_c_holds_the_debugger_over_tcp_and_again_quits() {
+    let (mut debuggee, mut debugger) = pair();
+    let (mut to_debugger, mut to_debuggee) = (debugger.stdin(), debuggee.stdin());
+    let a = debugger.stdout();
+    writeln!(to_debugger, "pc").unwrap();
+    a.wait_until(|t| pc_lines(t) >= 1, "pc answered, so the run has begun");
+    debugger.interrupt();
+    a.wait_until(|t| t.contains("held at ^C") && pc_lines(t) >= 2, "held at the first ^C");
+    writeln!(to_debugger, "continue\npc").unwrap();
+    a.wait_until(|t| pc_lines(t) >= 3, "continue ran the debugger on, and pc answered");
+    debugger.interrupt();
+    a.wait_until(|t| t.matches("held at ^C").count() >= 2, "held at the second ^C");
+    // The debuggee's quit first, as above, so that the debugger's own end
+    // is agreed and not merely noticed.
+    writeln!(to_debuggee, "quit").unwrap();
+    debugger.interrupt();
+    let (a, b) = (debugger.wait(), debuggee.wait());
+    drop((to_debugger, to_debuggee));
+    let (ta, tb) = (text(&a), text(&b));
+    assert!(a.status.success(), "the debugger ended as a quit does:\n{ta}");
+    assert!(b.status.success(), "the debuggee:\n{tb}");
+    assert_eq!(ta.matches("held at ^C").count(), 2, "held twice, run on once between:\n{ta}");
+    assert!(ta.contains("quit at PC") && tb.contains("quit at PC"), "{ta}\n{tb}");
+    assert!(
+        !ta.contains("muir: the debug cable") && !tb.contains("muir: the debug cable"),
+        "the two agreed to stop:\n{ta}\n{tb}"
+    );
 }

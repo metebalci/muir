@@ -726,6 +726,18 @@ pub fn muir() -> std::process::Command {
     c
 }
 
+/// The address a debuggee's DBGIN listens on, said on its stderr once it
+/// is bound.  The debuggee is given `--debug-cable-listen 127.0.0.1:0` and
+/// the host picks the port, so there is none to guess at; and the
+/// debugger is started once the address has been said, so there is none to
+/// lose in between either.
+pub fn listening(debuggee: &Child) -> String {
+    const SAID: &str = "debug cable: DBGIN listening on ";
+    debuggee.stderr().wait_until(|t| t.contains(SAID), "the debuggee said where it listens");
+    let t = debuggee.stderr().so_far();
+    t.lines().find_map(|l| l.trim().strip_prefix(SAID)).unwrap().to_string()
+}
+
 /// What a run wrote, stdout then stderr, as text.
 pub fn text(out: &std::process::Output) -> String {
     format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))

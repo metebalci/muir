@@ -646,6 +646,11 @@ impl<E: CableEnd> Remote<E> {
         }
     }
 
+    /// Which end of the cable this is.
+    pub fn side(&self) -> Side {
+        self.side
+    }
+
     /// Runs this machine to `ns` at least, in step with the other end, and
     /// then stays on the line until the other end is done too.
     pub fn run_until(&mut self, ns: u64) -> Result<(), Error> {

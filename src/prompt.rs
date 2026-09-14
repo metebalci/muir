@@ -172,11 +172,16 @@ screenshot, ss [file]   the screen as it stands, as a PNG, to the file or to
                         muir-yyyymmdd-hhmmss.png in the current directory
 startcapture, sc [file] record the display from here on, as a GIF, to the
                         file or to muir-yyyymmdd-hhmmss.gif; it is written
-                        when the run stops, or when endcapture closes it
+                        when the run stops, or when endcapture closes it.
+                        Not at an end of the debug cable, as --tv-capture
+                        is not: over the cable the machines are two clocks
 endcapture, ec          write the recording that is going and stop
                         recording, with the machine left running
 checkpoint [file]       the machine's whole state to the file, or to
-                        muir-yyyymmdd-hhmmss.chk in the current directory
+                        muir-yyyymmdd-hhmmss.chk in the current directory.
+                        Not at an end of the debug cable, as --checkpoint
+                        is not: the cable is in the bus interface's state,
+                        and --resume takes a machine on its own
 info, i                 what this run is, as said at the start
 keys                    the keyboard mapping in force: what a viewer's
                         keysyms mean on the Lisp Machine keyboard
