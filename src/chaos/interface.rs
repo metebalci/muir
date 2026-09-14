@@ -48,7 +48,16 @@ pub const START: u32 = 0o764152;
 /// AIM-628 §7 lists them.
 pub mod csr {
     /// Timer Interrupt Enable (read/write), "for the interval timer present
-    /// in some versions of the interface".
+    /// in some versions of the interface". Not this one: `cadrio/iob.wlr`
+    /// gives `TIMER.IEN` two pins, the CSR's 74LS174 at LMUCON B20 and the
+    /// 74LS244 at LMDATP D16 that reads it back, and the 74S51 at LMUCON
+    /// E05 that makes the interrupt has both its AND pairs on the receive
+    /// and transmit enables. Stored, readable, and reaching no gate ---
+    /// `the_timer_interrupt_enable_reaches_no_gate` in
+    /// `tests/chaos_netlist.rs` --- which MIT's own `chatst.lisp` says of
+    /// the bit: "This bit doesnt seem to do anything." The version with
+    /// the timer is MIT's PDP-11 Unibus Chaosnet interface, built from
+    /// these same pages and an interval-timer page of its own.
     pub const TIMER_INT_ENABLE: u16 = 0o1;
     /// Loop Back (read/write). "If this bit is 1, the cable and transceiver
     /// are not used and the interface is looped back to itself. This is
