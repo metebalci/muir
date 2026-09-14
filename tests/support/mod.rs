@@ -462,9 +462,9 @@ pub fn wait_for_the_prompt<E: Engine>(e: &mut E) -> u64 {
     // rows watched are the band the line falls in for either, and the
     // herald itself is above all of them.
     let reading = |e: &E| {
-        let tv = &e.machine().simpletv;
+        let tv = &e.machine().tv;
         (84..130usize)
-            .flat_map(|y| (0..muir::simpletv::WIDTH).map(move |x| (x, y)))
+            .flat_map(|y| (0..muir::tv::WIDTH).map(move |x| (x, y)))
             .filter(|&(x, y)| tv.pixel(x, y))
             .count()
             > 400
@@ -643,7 +643,7 @@ pub struct Netlists {
     pub busint: Netlist,
     pub cadrm: Netlist,
     pub cadrio: Netlist,
-    pub simpletv: Netlist,
+    pub simple_tv: Netlist,
 }
 
 pub fn netlists() -> Netlists {
@@ -653,7 +653,7 @@ pub fn netlists() -> Netlists {
         busint: parse(include_str!("../../data/BUSINT.netlist")),
         cadrm: parse(include_str!("../../data/CADRM.netlist")),
         cadrio: cadrio(),
-        simpletv: parse(include_str!("../../data/SIMPLETV.netlist")),
+        simple_tv: parse(include_str!("../../data/SIMPLETV.netlist")),
     }
 }
 
@@ -661,7 +661,7 @@ pub fn netlists() -> Netlists {
 /// [`netlists`]: the processor chip, its clock and the far end of its
 /// cables.
 pub fn chip(n: &Netlists) -> (Chip, Behavioural, FarEnd) {
-    muir::benchmark::chip(&n.cpu, &n.busint, &n.cadrm, &n.cadrio, &n.simpletv)
+    muir::benchmark::chip(&n.cpu, &n.busint, &n.cadrm, &n.cadrio, &n.simple_tv)
 }
 
 /// A machine with the boot PROM in place and the System 100 pack, `pack`,
@@ -676,8 +676,8 @@ pub fn machine_with_pack(pack: &Path) -> Machine {
 
 /// Lit pixels in rows `rows` of the screen.
 pub fn lit_rows<E: Engine>(e: &E, rows: std::ops::Range<usize>) -> usize {
-    let tv = &e.machine().simpletv;
-    rows.flat_map(|y| (0..muir::simpletv::WIDTH).map(move |x| (x, y)))
+    let tv = &e.machine().tv;
+    rows.flat_map(|y| (0..muir::tv::WIDTH).map(move |x| (x, y)))
         .filter(|&(x, y)| tv.pixel(x, y))
         .count()
 }

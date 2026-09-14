@@ -192,7 +192,7 @@ fn engines_agree_on_memory() {
 /// which is the display board's vertical flag, and what MIT's comment two
 /// lines below calls "the roughly-60-cycle clock interrupt handler". `rtl`
 /// has the bit set and `micro` has not: the flag is up once a frame of
-/// [`muir::simpletv::FRAME_NS`] counted from power-on, and after 1.8
+/// [`muir::tv::FRAME_NS`] counted from power-on, and after 1.8
 /// million instructions `micro`'s clock stands 8 ms from `rtl`'s ---
 /// `micro` charges a mean memory wait and has no bus to wait on, `rtl`
 /// counts its stalls. So the two are on different sides of a frame
@@ -257,17 +257,13 @@ fn the_engines_hold_the_same_lc_until_their_clocks_part() {
     // clocks have put them on different sides of a frame --- and in the
     // sync bits, which are the program's at two different instants.
     let (x, y) = (a.machine(), b.machine());
-    let sync = muir::simpletv::mode::VSYNC | muir::simpletv::mode::HSYNC;
+    let sync = muir::tv::mode::VSYNC | muir::tv::mode::HSYNC;
     assert_eq!(
         (x.md ^ y.md) & !sync,
-        muir::simpletv::mode::VERT,
+        muir::tv::mode::VERT,
         "MD differs in the vertical flag, the sync bits aside"
     );
-    assert_ne!(
-        x.simpletv.vert_flag(x.ns),
-        y.simpletv.vert_flag(y.ns),
-        "and the flag itself is what differs"
-    );
+    assert_ne!(x.tv.vert_flag(x.ns), y.tv.vert_flag(y.ns), "and the flag itself is what differs");
     assert_ne!(x.ns, y.ns, "the clocks have parted");
     // The branch goes two ways: `micro` to `INTRX1`, `rtl` on into the
     // clock handler at `INTRX0+3`. Addresses of microcode 323, named by

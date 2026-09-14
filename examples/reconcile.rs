@@ -69,7 +69,7 @@ struct Move {
 /// `F11-8 : F11-10`. The drawing of 17 May 1980 has that pin, the read
 /// buffer's input for `XDO 7`, on `SYNC PROM ENB`; the ECO takes it to
 /// ground, and System 100's window system reads the bit to tell the boards
-/// apart. `src/simpletv.rs` has bit 7 reading zero for the same reason.
+/// apart. `src/tv.rs` has bit 7 reading zero for the same reason.
 ///
 /// **REQLM E09 pin 2, discrepancy 68.** The 74S08 at E09
 /// gates a Unibus master's Xbus request, `UBXRQ`, with the Xbus grant, and

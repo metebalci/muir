@@ -17,7 +17,7 @@ use muir::engine::Engine;
 use muir::machine::Machine;
 use muir::micro::Micro;
 use muir::rtl::Rtl;
-use muir::simpletv::SimpleTv;
+use muir::tv::Tv;
 
 fn vendor(parts: &[&str]) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -26,7 +26,7 @@ fn vendor(parts: &[&str]) -> PathBuf {
     p
 }
 
-fn dump(name: &str, t: &SimpleTv, at: usize, pc: u16) {
+fn dump(name: &str, t: &Tv, at: usize, pc: u16) {
     let p = vendor(&["run", &format!("screen-{name}-{at}.png")]);
     std::fs::write(&p, t.png()).unwrap();
     println!("{}: {} pixels lit, mode {:o}, PC {:o}", p.display(), t.lit(), t.mode(), pc);
@@ -34,10 +34,10 @@ fn dump(name: &str, t: &SimpleTv, at: usize, pc: u16) {
 
 fn run<E: Engine>(name: &str, mut e: E, limit: usize, interval: usize) {
     // The screen a thousand microcycles back, for the frame before a halt.
-    let mut previous = (e.machine().simpletv.clone(), e.pc());
+    let mut previous = (e.machine().tv.clone(), e.pc());
     for cycle in 1..=limit {
         if cycle % 1000 == 0 {
-            previous = (e.machine().simpletv.clone(), e.pc());
+            previous = (e.machine().tv.clone(), e.pc());
         }
         if let Err(h) = e.step() {
             println!("halted at microcycle {cycle}: {h:?}");
@@ -45,11 +45,11 @@ fn run<E: Engine>(name: &str, mut e: E, limit: usize, interval: usize) {
             return;
         }
         if cycle % interval == 0 {
-            dump(name, &e.machine().simpletv, cycle, e.pc());
+            dump(name, &e.machine().tv, cycle, e.pc());
         }
     }
     if !limit.is_multiple_of(interval) {
-        dump(name, &e.machine().simpletv, limit, e.pc());
+        dump(name, &e.machine().tv, limit, e.pc());
     }
 }
 

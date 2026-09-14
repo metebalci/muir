@@ -4,7 +4,7 @@
 //! The display board as a netlist: `data/SIMPLETV.netlist`, MIT's `cadrtv`
 //! drawings through `tools/simpletv-netlist.sh`.
 //!
-//! The board is the SIMPLE TV, the one `src/simpletv.rs` models. Two things
+//! The board is the SIMPLE TV, the one `src/tv.rs` models. Two things
 //! stand behind it: `cadrtv/lmtv.stf`, MIT's own page list for the board,
 //! which names 29 drawings and titles every one of them `SIMPLE TV`, and
 //! `cadrtv/lmtv.order`, MIT's register map for it, which the drawings have to
@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 
 use muir::netlist::{self, Netlist, Part};
-use muir::simpletv::mode;
+use muir::tv::mode;
 
 mod support;
 
@@ -66,7 +66,7 @@ fn parses_to_the_expected_shape() {
     assert_eq!(rams, 64, "four rows of sixteen 16K DRAMs: 64 by 16K by 1");
     assert_eq!(
         rams * 16_384,
-        muir::simpletv::BUFFER_WORDS as usize * 32,
+        muir::tv::BUFFER_WORDS as usize * 32,
         "the DRAMs hold exactly MAIN-SCREEN-BUFFER-LENGTH words of 32 bits"
     );
 }
@@ -106,7 +106,7 @@ fn every_page_is_a_simple_tv_page() {
     assert!(board.iter().all(|&t| t == "SIMPLE TV"), "a page of another board: {board:?}");
 }
 
-/// **The mode register is the one `src/simpletv.rs` models.** NXBCTL 0F12
+/// **The mode register is the one `src/tv.rs` models.** NXBCTL 0F12
 /// is an Am25LS2519, a quad register with two three-state output sets:
 /// `XDI0..3` go in, the `W` outputs are the four bits the board acts on, and
 /// the `Y` outputs put the same four back on `XDO 0..3` for a read. Four
@@ -144,7 +144,7 @@ fn the_writable_mode_bits_are_the_four_the_register_has() {
 /// **The four bits above the register are the read buffer's, and nothing
 /// latches them.** NXBCTL 0F11 is half a 74LS244 with `VERT FLAG`, `VSYNC`,
 /// `HSYNC` and `SYNC PROM ENB` on its inputs and `XDO 4..7` on its outputs,
-/// which is [`mode::READ_ONLY`], and the drawing is why `src/simpletv.rs`
+/// which is [`mode::READ_ONLY`], and the drawing is why `src/tv.rs`
 /// says they cannot be written.
 #[test]
 fn the_read_only_mode_bits_come_off_a_buffer() {
@@ -176,7 +176,7 @@ fn the_read_only_mode_bits_come_off_a_buffer() {
 /// 0F13 is a 74S138 on `ADR0..2` and `CTL RQ`, and its first five outputs
 /// are the five writes `cadrtv/lmtv.order` lists at `173777x0` to
 /// `173777x4`: mode, sync program, sync pointer, vertical spacing, colour.
-/// `src/simpletv.rs` models the first and answers the rest without storing
+/// `src/tv.rs` models the first and answers the rest without storing
 /// them.
 #[test]
 fn the_control_registers_decode_in_mits_order() {
@@ -197,13 +197,13 @@ fn the_control_registers_decode_in_mits_order() {
         assert_eq!(on(&n, dec, pin), name, "register {register}");
     }
     // Registers 5, 6 and 7 answer and do nothing, which is why the board
-    // takes eight words and `src/simpletv.rs` with it. `src/netlist.rs`
+    // takes eight words and `src/tv.rs` with it. `src/netlist.rs`
     // gives every unconnected pin a net of its own, numbered, so that they
     // do not tie together.
     for pin in [10, 9, 7] {
         assert!(on(&n, dec, pin).starts_with("NC#"), "the top three decode to nothing");
     }
-    assert_eq!(muir::simpletv::CONTROL_WORDS, 8);
+    assert_eq!(muir::tv::CONTROL_WORDS, 8);
 }
 
 /// **The board has the Xbus nets it needs, and not the two it does not.**
@@ -523,7 +523,7 @@ fn the_sync_program_makes_a_frame() {
 #[test]
 fn the_board_drives_the_bus_only_to_read() {
     use muir::part::Level;
-    use muir::simpletv::BUFFER;
+    use muir::tv::BUFFER;
     use muir::xbus::XbusMaster;
 
     let n = simpletv();
@@ -591,7 +591,7 @@ fn the_board_answers_on_its_own_slots() {
     /// which the board acknowledges. Measured here.
     const SLOT_NS: u64 = 500;
     const ACK_INTO_SLOT_NS: u64 = 257;
-    /// One line of the raster: [`muir::simpletv::FRAME_NS`] over the 966
+    /// One line of the raster: [`muir::tv::FRAME_NS`] over the 966
     /// lines `the_sync_program_makes_a_frame` counts.
     const LINE_NS: u64 = 16_000;
     /// When the first refresh cycle begins, and every [`LINE_NS`] after
@@ -650,7 +650,7 @@ fn the_board_answers_on_its_own_slots() {
         b.run(b.now + 1 + (b.now * 53) % (SLOT_NS - 1));
         let t0 = b.now;
         let write = t0.is_multiple_of(2);
-        b.request(muir::simpletv::BUFFER + 21491, write.then_some(0o525252));
+        b.request(muir::tv::BUFFER + 21491, write.then_some(0o525252));
         let mut guard = 0;
         while !b.acked() {
             let next = b.chip.next_tap().filter(|&t| t > b.now).unwrap_or(b.now + 1);
@@ -785,7 +785,7 @@ fn the_sync_prom_is_fetched_out_of_reset() {
 
 /// **The board answers its own control registers, and not only its frame
 /// buffer.** `cadrtv/lmtv.order` runs them from `173777x0` with `x` 6,
-/// which is [`muir::simpletv::CONTROL`]; the 25LS2521 comparators at XBADR
+/// which is [`muir::tv::CONTROL`]; the 25LS2521 comparators at XBADR
 /// match `ADR3..21` against the `DEVADR` straps to decide that a cycle is
 /// the control block's, and the 74S138 at NXBCTL 0F13 picks the register
 /// out of `ADR0..2`.
@@ -828,9 +828,9 @@ fn the_board_answers_its_control_registers() {
         }
         None
     };
-    for k in 0..muir::simpletv::CONTROL_WORDS {
+    for k in 0..muir::tv::CONTROL_WORDS {
         for write in [None, Some(0o525252)] {
-            let addr = muir::simpletv::CONTROL + k;
+            let addr = muir::tv::CONTROL + k;
             let took = answer(addr, write).unwrap_or_else(|| {
                 panic!(
                     "the board never answered {addr:o}, register {k} of its control block, \
@@ -843,7 +843,7 @@ fn the_board_answers_its_control_registers() {
     // And the frame buffer still does, on its own slower path: the RAM is
     // handed out a slot at a time and `the_board_answers_on_its_own_slots`
     // is what says how.
-    let buffer = muir::simpletv::BUFFER + 21_491;
+    let buffer = muir::tv::BUFFER + 21_491;
     assert!(answer(buffer, None).is_some(), "the frame buffer answered a read");
     assert!(answer(buffer, Some(0o525252)).is_some(), "the frame buffer answered a write");
 }
@@ -987,8 +987,8 @@ fn what_the_board_takes_to_answer_in_the_picture() {
 
     let n = simpletv();
     let mut b = XbusMaster::new(&n, 0);
-    let buffer = muir::simpletv::BUFFER + 0o51763;
-    let control = muir::simpletv::CONTROL;
+    let buffer = muir::tv::BUFFER + 0o51763;
+    let control = muir::tv::CONTROL;
     let blanking = b.net("BLANKING");
 
     // **A line of its own for each sweep.** A sweep stops when the line
@@ -1185,7 +1185,7 @@ fn what_the_board_takes_to_answer_in_the_picture() {
 ///   is the 32nd instruction of the first line, 16.000 us after the
 ///   program starts, and not again for the frame.
 ///
-/// `src/simpletv/sync.rs` runs the program on those terms.
+/// `src/tv/sync.rs` runs the program on those terms.
 #[test]
 fn the_sync_bits_the_mode_register_reads_are_the_programs() {
     use muir::part::Level;

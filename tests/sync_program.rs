@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! The sync program run by the model, `src/simpletv/sync.rs`, held to
+//! The sync program run by the model, `src/tv/sync.rs`, held to
 //! what the boards make of the same programs: MIT's PROM program against
 //! the netlist SIMPLE TV's measured raster, the program the window system
 //! loads for the main screen against its own arithmetic, and the program
 //! the colour software loads against NTSC. Nothing here needs `vendor/`
 //! but the colour program, whose test says so when it is skipped.
 
-use muir::simpletv::sync::{INSTRUCTION_NS, Timeline, prom};
-use muir::simpletv::{FRAME_NS, SimpleTv, mode};
+use muir::tv::sync::{INSTRUCTION_NS, Timeline, prom};
+use muir::tv::{FRAME_NS, Tv, mode};
 
 mod support;
 
@@ -233,7 +233,7 @@ fn a_program_that_never_ends_makes_no_frame() {
 /// `cpt.prom`'s 15.456 ms to 16.528 ms.
 #[test]
 fn the_model_runs_the_prom_and_then_the_ram() {
-    let mut tv = SimpleTv::default();
+    let mut tv = Tv::default();
     assert_eq!(tv.timeline().map(|t| t.period_ns), Some(FRAME_NS), "the PROM from power-on");
     assert_eq!(tv.read_control(0, 500) & (mode::HSYNC | mode::VSYNC), mode::HSYNC | mode::VSYNC);
     assert_eq!(tv.read_control(0, 5_000_000) & (mode::HSYNC | mode::VSYNC), 0);

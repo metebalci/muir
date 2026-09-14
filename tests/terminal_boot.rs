@@ -19,7 +19,7 @@ use support::{CHAOS_100, boot_to_the_prompt, lit_rows, machine_with_pack, type_a
 
 /// Lit pixels on the screen.
 fn lit(e: &Rtl) -> usize {
-    e.machine().simpletv.lit()
+    e.machine().tv.lit()
 }
 
 /// **A character typed at a viewer is read by the machine.** With System
@@ -86,7 +86,7 @@ fn a_key_typed_at_the_listener_is_read_and_echoed() {
     assert_eq!(in_ptr, out_ptr, "Lisp took every word out of the channel buffer");
     assert_eq!(main[0o502] & 0o77777777, 0o260, "the channel is the keyboard's, vector 260");
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vendor/run/screen-typed.png");
-    std::fs::write(&p, e.machine().simpletv.png()).unwrap();
+    std::fs::write(&p, e.machine().tv.png()).unwrap();
     eprintln!("screen at {}", p.display());
     assert!(echo > 60, "the screen should have the echo on it: {echo} pixels on its line");
     assert!(value > 20, "and the value under it: {value} pixels on its line");

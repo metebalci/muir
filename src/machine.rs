@@ -13,8 +13,8 @@ use crate::busint;
 use crate::disk_controller::{self, Controller};
 use crate::ioboard::{self, IoBoard};
 use crate::isa::Insn;
-use crate::simpletv::{self, SimpleTv};
 use crate::spy;
+use crate::tv::{self, Tv};
 
 /// Control store size: 16K words, fourteen bits of PC.
 pub const IMEM_WORDS: usize = 16 * 1024;
@@ -169,7 +169,7 @@ pub struct Machine {
     /// reaches the rest of the network over.
     pub chaos: crate::chaos::Config,
     /// The standard black-and-white display.
-    pub simpletv: SimpleTv,
+    pub tv: Tv,
     /// The keyboard, the mouse and the clocks.
     pub ioboard: IoBoard,
 
@@ -248,7 +248,7 @@ impl Machine {
                 b.plug_chaos(crate::chaos::Config::default().address, None, 0, false);
                 b
             },
-            simpletv: SimpleTv::default(),
+            tv: Tv::default(),
             cycles: 0,
             ns: 0,
         }
@@ -427,7 +427,7 @@ impl Machine {
     pub fn xbus_interrupt(&self) -> bool {
         // The controller was told the time at the last bus access; a run's
         // engine keeps `ns` current between them (`rtl` every microcycle).
-        self.disk.interrupt() || self.simpletv.interrupt(self.ns)
+        self.disk.interrupt() || self.tv.interrupt(self.ns)
     }
 
     /// The Unibus interrupt the interface has taken, as `UB INT` and the
@@ -687,7 +687,7 @@ impl Machine {
     /// cable; and `UNIBUS INIT IN` from another master of the Unibus.
     ///
     /// Each model board clears what its own reset pin clears and nothing
-    /// more: [`SimpleTv::xbus_init`], [`Controller::xbus_init`],
+    /// more: [`Tv::xbus_init`], [`Controller::xbus_init`],
     /// [`IoBoard::unibus_init`].  The netlist boards on `chip` take the wire
     /// itself, and behind the netlist interface [`crate::buses::Buses`]
     /// calls this as the wire is asserted.  The memory boards are the
@@ -710,7 +710,7 @@ impl Machine {
     /// two-machine run of CC's diagnostics: three pulses at A's boot and
     /// one at B's, none after.
     pub fn bus_reset(&mut self) {
-        self.simpletv.xbus_init(self.ns);
+        self.tv.xbus_init(self.ns);
         self.disk.xbus_init();
         self.ioboard.unibus_init();
     }
@@ -722,11 +722,11 @@ impl Machine {
             self.disk.advance(self.ns);
             return self.disk.read(r);
         }
-        if let Some(off) = simpletv::buffer_offset(phys) {
-            return self.simpletv.read_buffer(off);
+        if let Some(off) = tv::buffer_offset(phys) {
+            return self.tv.read_buffer(off);
         }
-        if let Some(r) = simpletv::control_register(phys) {
-            return self.simpletv.read_control(r, self.ns);
+        if let Some(r) = tv::control_register(phys) {
+            return self.tv.read_control(r, self.ns);
         }
         // The Unibus carries 16 bits, in the bottom of one Lisp machine word.
         if let Some(r) = busint::unibus_address(phys).and_then(busint::register) {
@@ -749,12 +749,12 @@ impl Machine {
             self.disk.write(r, value, &mut self.main);
             return;
         }
-        if let Some(off) = simpletv::buffer_offset(phys) {
-            self.simpletv.write_buffer(off, value);
+        if let Some(off) = tv::buffer_offset(phys) {
+            self.tv.write_buffer(off, value);
             return;
         }
-        if let Some(r) = simpletv::control_register(phys) {
-            self.simpletv.write_control(r, value, self.ns);
+        if let Some(r) = tv::control_register(phys) {
+            self.tv.write_control(r, value, self.ns);
             return;
         }
         // The Unibus carries 16 bits, in the bottom of one Lisp machine word.
@@ -855,7 +855,7 @@ impl Machine {
             vmaok,
             disk,
             chaos: _,
-            simpletv,
+            tv,
             ioboard,
             cycles,
             ns,
@@ -895,7 +895,7 @@ impl Machine {
         w.u16s(write_buffer);
         w.bool(*vmaok);
         disk.save(w);
-        simpletv.save(w);
+        tv.save(w);
         ioboard.save(w);
         w.u64(*cycles);
         w.u64(*ns);
@@ -974,7 +974,7 @@ impl Machine {
         r.u16s_into(&mut self.write_buffer)?;
         self.vmaok = r.bool()?;
         self.disk.load(r)?;
-        self.simpletv.load(r)?;
+        self.tv.load(r)?;
         self.ioboard.load(r)?;
         self.cycles = r.u64()?;
         self.ns = r.u64()?;

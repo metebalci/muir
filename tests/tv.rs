@@ -3,14 +3,14 @@
 
 //! The black-and-white display, checked against MIT's own window system.
 //!
-//! The constants in `src/simpletv.rs` are not asserted against themselves here:
+//! The constants in `src/tv.rs` are not asserted against themselves here:
 //! `the_geometry_is_mits_own` reads `sys/window/shwarm.lisp` out of the
 //! System 100 release and fails if we have drifted from it. Without the
 //! vendored release that one test reports that it was skipped.
 
 use muir::busint::{self, Responder};
 use muir::machine::{MAIN_WORDS, Machine, bus_error};
-use muir::simpletv::{self, SimpleTv, mode};
+use muir::tv::{self, Tv, mode};
 
 mod support;
 use support::release;
@@ -44,7 +44,7 @@ fn cadr_decimal(src: &str, name: &str) -> usize {
     digits.parse().unwrap()
 }
 
-/// Every number in `src/simpletv.rs` that MIT states, taken from MIT.
+/// Every number in `src/tv.rs` that MIT states, taken from MIT.
 #[test]
 fn the_geometry_is_mits_own() {
     let Some(src) = shwarm() else { return };
@@ -54,20 +54,20 @@ fn the_geometry_is_mits_own() {
     let control = defconst_octal(&src, "MAIN-SCREEN-CONTROL-ADDRESS");
     assert_eq!(control, 0o377760, "MIT's control address");
     assert_eq!(
-        simpletv::CONTROL,
-        simpletv::BUFFER + control,
+        tv::CONTROL,
+        tv::BUFFER + control,
         "control register is at the buffer base + offset"
     );
 
     assert_eq!(
-        simpletv::BUFFER_WORDS,
+        tv::BUFFER_WORDS,
         defconst_octal(&src, "MAIN-SCREEN-BUFFER-LENGTH"),
         "MAIN-SCREEN-BUFFER-LENGTH"
     );
-    assert_eq!(simpletv::WIDTH, cadr_decimal(&src, "MAIN-SCREEN-WIDTH"), "MAIN-SCREEN-WIDTH");
-    assert_eq!(simpletv::HEIGHT, cadr_decimal(&src, "MAIN-SCREEN-HEIGHT"), "MAIN-SCREEN-HEIGHT");
+    assert_eq!(tv::WIDTH, cadr_decimal(&src, "MAIN-SCREEN-WIDTH"), "MAIN-SCREEN-WIDTH");
+    assert_eq!(tv::HEIGHT, cadr_decimal(&src, "MAIN-SCREEN-HEIGHT"), "MAIN-SCREEN-HEIGHT");
     assert_eq!(
-        simpletv::WORDS_PER_LINE,
+        tv::WORDS_PER_LINE,
         cadr_decimal(&src, "MAIN-SCREEN-LOCATIONS-PER-LINE"),
         "MAIN-SCREEN-LOCATIONS-PER-LINE"
     );
@@ -76,9 +76,9 @@ fn the_geometry_is_mits_own() {
 /// One bit per pixel, and the line stride says so.
 #[test]
 fn a_line_is_the_width_in_bits() {
-    assert_eq!(simpletv::WORDS_PER_LINE * 32, simpletv::WIDTH, "24 words of 32 bits is 768 pixels");
-    let used = simpletv::WORDS_PER_LINE * simpletv::HEIGHT;
-    assert!(used <= simpletv::BUFFER_WORDS as usize, "the screen must fit in the buffer");
+    assert_eq!(tv::WORDS_PER_LINE * 32, tv::WIDTH, "24 words of 32 bits is 768 pixels");
+    let used = tv::WORDS_PER_LINE * tv::HEIGHT;
+    assert!(used <= tv::BUFFER_WORDS as usize, "the screen must fit in the buffer");
     assert_eq!(used, 23_112, "what the screen actually occupies");
 }
 
@@ -87,7 +87,7 @@ fn a_line_is_the_width_in_bits() {
 /// to work at all.
 #[test]
 fn black_on_white_is_one_bit_read_modify_written() {
-    let mut tv = SimpleTv::default();
+    let mut tv = Tv::default();
     assert!(!tv.black_on_white(), "comes up showing one bits as white");
 
     // (%XBUS-WRITE control (LOGIOR 4 (%XBUS-READ control)))
@@ -105,7 +105,7 @@ fn black_on_white_is_one_bit_read_modify_written() {
 /// grounded on this board.
 #[test]
 fn the_read_only_bits_never_stick() {
-    let mut tv = SimpleTv::default();
+    let mut tv = Tv::default();
     // Clock mode 0 kept, so that the program's timing is the PROM's.
     tv.write_control(0, !mode::CLOCK, 0);
     assert_eq!(
@@ -133,9 +133,9 @@ fn the_read_only_bits_never_stick() {
 /// settles it (discrepancy 26).
 #[test]
 fn the_vertical_flag_sets_each_frame_and_a_mode_write_clears_it() {
-    use muir::simpletv::FRAME_NS;
+    use muir::tv::FRAME_NS;
     const CLR: u64 = 16_000;
-    let mut tv = SimpleTv::default();
+    let mut tv = Tv::default();
     assert!(!tv.vert_flag(0), "cleared by reset");
     assert!(!tv.vert_flag(CLR - 1), "and not yet set before the first line ends");
     assert!(tv.vert_flag(CLR), "set by TVMA CLR as it does");
@@ -165,25 +165,13 @@ fn the_vertical_flag_sets_each_frame_and_a_mode_write_clears_it() {
 #[test]
 fn the_display_answers_where_nothing_did_before() {
     let d = |p| busint::decode(p, MAIN_WORDS);
-    assert_eq!(d(simpletv::BUFFER), Responder::Device, "the first word of the screen");
-    assert_eq!(
-        d(simpletv::BUFFER + simpletv::BUFFER_WORDS - 1),
-        Responder::Device,
-        "the last word"
-    );
-    assert_eq!(d(simpletv::CONTROL), Responder::Device, "the mode register");
-    assert_eq!(
-        d(simpletv::CONTROL + simpletv::CONTROL_WORDS - 1),
-        Responder::Device,
-        "its last word"
-    );
+    assert_eq!(d(tv::BUFFER), Responder::Device, "the first word of the screen");
+    assert_eq!(d(tv::BUFFER + tv::BUFFER_WORDS - 1), Responder::Device, "the last word");
+    assert_eq!(d(tv::CONTROL), Responder::Device, "the mode register");
+    assert_eq!(d(tv::CONTROL + tv::CONTROL_WORDS - 1), Responder::Device, "its last word");
 
-    assert_eq!(
-        d(simpletv::BUFFER + simpletv::BUFFER_WORDS),
-        Responder::NoXbus,
-        "just past the screen"
-    );
-    assert_eq!(d(simpletv::CONTROL - 1), Responder::NoXbus, "just below the mode register");
+    assert_eq!(d(tv::BUFFER + tv::BUFFER_WORDS), Responder::NoXbus, "just past the screen");
+    assert_eq!(d(tv::CONTROL - 1), Responder::NoXbus, "just below the mode register");
     // The disk controller is four words further up the same page.
     assert_eq!(d(0o17377774), Responder::Device, "the disk still decodes");
 }
@@ -192,19 +180,19 @@ fn the_display_answers_where_nothing_did_before() {
 #[test]
 fn the_bus_reaches_the_frame_buffer() {
     let mut m = Machine::new();
-    let last = simpletv::BUFFER + simpletv::BUFFER_WORDS - 1;
+    let last = tv::BUFFER + tv::BUFFER_WORDS - 1;
 
-    m.bus_write(simpletv::BUFFER, 0o12345670123);
+    m.bus_write(tv::BUFFER, 0o12345670123);
     m.bus_write(last, 1);
-    assert_eq!(m.bus_read(simpletv::BUFFER), 0o12345670123);
+    assert_eq!(m.bus_read(tv::BUFFER), 0o12345670123);
     assert_eq!(m.bus_read(last), 1);
     assert_eq!(m.bus_error, 0, "the display answers, so nothing times out");
 
     // The mode register is on the same bus and is not the buffer; its sync
     // bits are the program's, wherever it stands.
-    m.bus_write(simpletv::CONTROL, mode::BOW);
-    assert_eq!(m.bus_read(simpletv::CONTROL) & !(mode::HSYNC | mode::VSYNC), mode::BOW);
-    assert!(m.simpletv.black_on_white());
+    m.bus_write(tv::CONTROL, mode::BOW);
+    assert_eq!(m.bus_read(tv::CONTROL) & !(mode::HSYNC | mode::VSYNC), mode::BOW);
+    assert!(m.tv.black_on_white());
     assert_eq!(m.bus_error, 0);
 }
 
@@ -212,22 +200,22 @@ fn the_bus_reaches_the_frame_buffer() {
 #[test]
 fn past_the_display_the_xbus_still_times_out() {
     let mut m = Machine::new();
-    m.bus_read(simpletv::BUFFER + simpletv::BUFFER_WORDS);
+    m.bus_read(tv::BUFFER + tv::BUFFER_WORDS);
     assert_eq!(m.bus_error & bus_error::XBUS_NXM, bus_error::XBUS_NXM);
 }
 
 /// Bit order within a word: pixel 0 of a line is bit 0 of its first word.
 #[test]
 fn the_first_pixel_of_a_line_is_the_low_bit() {
-    let mut tv = SimpleTv::default();
+    let mut tv = Tv::default();
     tv.write_buffer(0, 1);
     assert!(tv.pixel(0, 0), "bit 0 is the leftmost pixel");
     assert!(!tv.pixel(1, 0));
 
     // The first word of line 1 is WORDS_PER_LINE in.
-    tv.write_buffer(simpletv::WORDS_PER_LINE as u32, 1);
+    tv.write_buffer(tv::WORDS_PER_LINE as u32, 1);
     assert!(tv.pixel(0, 1), "line 1 starts one stride along");
-    assert_eq!(tv.buffer().len(), simpletv::BUFFER_WORDS as usize);
+    assert_eq!(tv.buffer().len(), tv::BUFFER_WORDS as usize);
 }
 
 /// **A sync pointer past the RAM is a corrupt checkpoint, and is refused**
@@ -237,23 +225,23 @@ fn the_first_pixel_of_a_line_is_the_low_bit() {
 #[test]
 fn a_sync_pointer_past_the_ram_is_refused() {
     use muir::checkpoint::{Reader, Writer};
-    let mut tv = SimpleTv::default();
-    tv.sync.pointer = simpletv::SYNC_RAM_WORDS as u16;
+    let mut tv = Tv::default();
+    tv.sync.pointer = tv::SYNC_RAM_WORDS as u16;
     let mut w = Writer::new();
     tv.save(&mut w);
     let body = w.finish();
-    let err = SimpleTv::default().load(&mut Reader::new(&body)).unwrap_err().to_string();
+    let err = Tv::default().load(&mut Reader::new(&body)).unwrap_err().to_string();
     assert!(err.contains("pointer"), "{err}");
     // The last word's address loads as itself.
-    tv.sync.pointer = simpletv::SYNC_RAM_WORDS as u16 - 1;
+    tv.sync.pointer = tv::SYNC_RAM_WORDS as u16 - 1;
     let mut w = Writer::new();
     tv.save(&mut w);
     let body = w.finish();
-    let mut back = SimpleTv::default();
+    let mut back = Tv::default();
     let mut r = Reader::new(&body);
     back.load(&mut r).unwrap();
     r.done().unwrap();
-    assert_eq!(back.sync.pointer, simpletv::SYNC_RAM_WORDS as u16 - 1);
+    assert_eq!(back.sync.pointer, tv::SYNC_RAM_WORDS as u16 - 1);
 }
 
 /// MIT's own order sheet for the board, committed with the drawings.
@@ -280,22 +268,22 @@ fn the_addresses_are_mits_own() {
     let src = lmtv_order();
 
     assert!(src.contains("For the normal TV, x is 6"), "which x the normal TV is");
-    assert_eq!(simpletv::CONTROL, 0o17377760, "173777x0 with x = 6");
+    assert_eq!(tv::CONTROL, 0o17377760, "173777x0 with x = 6");
 
     assert!(src.contains("17x00000-17x77777"), "the buffer's range");
     assert!(src.contains("32K x 32 bits of video buffer"), "its size");
     assert!(src.contains("buffer starts at 17000000"), "where the normal TV's buffer is");
-    assert_eq!(simpletv::BUFFER, 0o17000000);
-    assert_eq!(simpletv::BUFFER_WORDS, 0o100000, "32K words");
+    assert_eq!(tv::BUFFER, 0o17000000);
+    assert_eq!(tv::BUFFER_WORDS, 0o100000, "32K words");
 
     // Eight control words: five that do something and three that "respond
     // but don't do anything".
     assert!(src.contains("173777x5,6,7  These addresses respond but don't do anything"));
-    assert_eq!(simpletv::CONTROL_WORDS, 8);
+    assert_eq!(tv::CONTROL_WORDS, 8);
 }
 
 /// **The mode bits are MIT's**, named and numbered on the order sheet, and
-/// bit for bit what `src/simpletv.rs` has. Bit 4 is not in the register:
+/// bit for bit what `src/tv.rs` has. Bit 4 is not in the register:
 /// `VERT FLAG` is a flop of its own, set by `TVMA CLR`, loaded by a mode
 /// write, and read back through the buffer with the two syncs.
 #[test]
@@ -325,10 +313,10 @@ fn the_mode_bits_are_mits_own() {
     // XDO 7 through the read buffer, and ECO 2 of `lmtv.eco` grounds that
     // buffer input on this board, "on old TV boards the check if TV is in
     // PROM mode (extant only on new TV boards) reads an unused input". So
-    // it reads zero either way, which is what `src/simpletv.rs` gives.
+    // it reads zero either way, which is what `src/tv.rs` gives.
     assert!(block.contains("31-7  Garbage"), "everything above bit 6");
     assert_eq!(mode::SYNC_PROM_ENABLE, 0o200);
-    let mut tv = SimpleTv::default();
+    let mut tv = Tv::default();
     tv.write_control(0, !0, 0);
     assert_eq!(tv.mode() & mode::SYNC_PROM_ENABLE, 0, "bit 7 reads zero");
 }
@@ -340,8 +328,8 @@ fn the_mode_bits_are_mits_own() {
 /// "cleared by Xbus reset", the drawing is followed.
 #[test]
 fn an_xbus_init_clears_the_vertical_flag_and_nothing_else() {
-    use muir::simpletv::FRAME_NS;
-    let mut tv = SimpleTv::default();
+    use muir::tv::FRAME_NS;
+    let mut tv = Tv::default();
     tv.write_control(0, mode::INTERRUPT_ENABLE | mode::BOW | mode::VERT, 10);
     tv.write_control(2, 0o17, 10);
     tv.write_control(3, 0o200 | 0o5, 10);

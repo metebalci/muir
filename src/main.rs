@@ -630,7 +630,7 @@ fn terminal_line(terminal: &Option<Terminal>, why: &Option<String>, at: SocketAd
 
 /// Serves the screen as it was left, while anyone is still looking and
 /// until ^C; `seen` is the run's own count of the ^Cs it has acted on.
-fn serve_last_screen(terminal: &mut Terminal, tv: &muir::simpletv::SimpleTv, seen: &mut u32) {
+fn serve_last_screen(terminal: &mut Terminal, tv: &muir::tv::Tv, seen: &mut u32) {
     serve_last_screens(&mut [(terminal, tv)], seen);
 }
 
@@ -649,10 +649,9 @@ fn serve_last_screen(terminal: &mut Terminal, tv: &muir::simpletv::SimpleTv, see
 /// which put `SIGINT`'s default back first --- and that ended the process
 /// with nothing dropped, as `kill -KILL`, the way out on the other five,
 /// does. Issue 103 met it on the fabric's run.
-fn serve_last_screens(screens: &mut [(&mut Terminal, &muir::simpletv::SimpleTv)], seen: &mut u32) {
-    let looking = |screens: &[(&mut Terminal, &muir::simpletv::SimpleTv)]| {
-        screens.iter().any(|(t, _)| t.viewers() > 0)
-    };
+fn serve_last_screens(screens: &mut [(&mut Terminal, &muir::tv::Tv)], seen: &mut u32) {
+    let looking =
+        |screens: &[(&mut Terminal, &muir::tv::Tv)]| screens.iter().any(|(t, _)| t.viewers() > 0);
     // A ^C since the run last looked at the count --- while the checkpoint
     // was written, say --- is the stop it asked for, and is not to be
     // asked for twice.
@@ -682,7 +681,7 @@ fn attend<E: Engine>(
 ) {
     let m = e.machine_mut();
     if poll && let Some(term) = terminal {
-        term.poll(Frame::of(&m.simpletv));
+        term.poll(Frame::of(&m.tv));
         for (keysym, down) in term.take_keys() {
             keyboard.key(keysym, down);
         }
@@ -1823,8 +1822,8 @@ fn time_lashup(
         if ran % TERMINAL_CHECK == 0 {
             if let Some((_, rec)) = capture.as_mut() {
                 rec.sample_pair(
-                    &lashup.debugger.machine().simpletv,
-                    &lashup.debuggee.machine().simpletv,
+                    &lashup.debugger.machine().tv,
+                    &lashup.debuggee.machine().tv,
                     lashup.debugger.ns(),
                     wall_clock(),
                 );
@@ -1853,8 +1852,8 @@ fn time_lashup(
     );
     if let Some((path, rec)) = capture.as_mut() {
         rec.sample_pair(
-            &lashup.debugger.machine().simpletv,
-            &lashup.debuggee.machine().simpletv,
+            &lashup.debugger.machine().tv,
+            &lashup.debuggee.machine().tv,
             lashup.debugger.ns(),
             wall_clock(),
         );
@@ -1862,10 +1861,10 @@ fn time_lashup(
     }
     let mut screens = Vec::new();
     if let Some(term) = terminal {
-        screens.push((term, &lashup.debugger.machine().simpletv));
+        screens.push((term, &lashup.debugger.machine().tv));
     }
     if let Some(term) = debuggee_terminal {
-        screens.push((term, &lashup.debuggee.machine().simpletv));
+        screens.push((term, &lashup.debuggee.machine().tv));
     }
     serve_last_screens(&mut screens, &mut interrupts_seen);
 }
@@ -2121,7 +2120,7 @@ fn time_fabric(
     if !hold.quit
         && let Some(term) = terminal
     {
-        serve_last_screen(term, &run.debugger.machine().simpletv, &mut hold.interrupts_seen);
+        serve_last_screen(term, &run.debugger.machine().tv, &mut hold.interrupts_seen);
     }
 }
 
@@ -2325,7 +2324,7 @@ impl Hold {
                 Ok(Some(Command::Keys)) => print!("{}", keys_in_force()),
                 Ok(Some(Command::Screenshot(path))) => {
                     let path = path.unwrap_or_else(|| timestamped("png"));
-                    write_screenshot(&path, &e.machine().simpletv);
+                    write_screenshot(&path, &e.machine().tv);
                 }
                 Ok(Some(Command::StartCapture(path))) => match writes {
                     Writes::Alone { capture, clocks, .. } => match capture.as_ref() {
@@ -2348,7 +2347,7 @@ impl Hold {
                 Ok(Some(Command::EndCapture)) => match writes {
                     Writes::Alone { capture, .. } => match capture.take() {
                         Some((path, mut rec)) => {
-                            rec.sample(&e.machine().simpletv, e.machine().ns, wall_clock());
+                            rec.sample(&e.machine().tv, e.machine().ns, wall_clock());
                             write_capture(&path, &rec);
                         }
                         None => println!("capture: none is going; startcapture begins one"),
@@ -2473,13 +2472,13 @@ fn time_engine<S: Stepper>(
             && let Some((_, rec)) = capture.as_mut()
         {
             let m = s.engine().machine();
-            rec.sample(&m.simpletv, m.ns, wall_clock());
+            rec.sample(&m.tv, m.ns, wall_clock());
         }
         if last_poll.elapsed() >= TERMINAL_INTERVAL
             && let Some(term) = terminal.as_deref_mut()
         {
             let e = s.engine_mut();
-            term.poll(Frame::of(&e.machine().simpletv));
+            term.poll(Frame::of(&e.machine().tv));
             for (keysym, down) in term.take_keys() {
                 keyboard.key(keysym, down);
             }
@@ -2548,7 +2547,7 @@ fn time_engine<S: Stepper>(
     }
     if let Some((path, rec)) = capture.as_mut() {
         let m = s.engine().machine();
-        rec.sample(&m.simpletv, m.ns, wall_clock());
+        rec.sample(&m.tv, m.ns, wall_clock());
         write_capture(path, rec);
     }
     if let Some(path) = &checkpoint {
@@ -2557,7 +2556,7 @@ fn time_engine<S: Stepper>(
     if !hold.quit
         && let Some(term) = terminal
     {
-        serve_last_screen(term, &s.engine().machine().simpletv, &mut hold.interrupts_seen);
+        serve_last_screen(term, &s.engine().machine().tv, &mut hold.interrupts_seen);
     }
 }
 
@@ -2959,9 +2958,9 @@ fn timestamped(extension: &str) -> PathBuf {
     ))
 }
 
-/// The screen as it stands, as a PNG: [`SimpleTv::png`], which is the
+/// The screen as it stands, as a PNG: [`Tv::png`], which is the
 /// frame buffer as the monitor shows it.
-fn write_screenshot(path: &Path, tv: &muir::simpletv::SimpleTv) {
+fn write_screenshot(path: &Path, tv: &muir::tv::Tv) {
     match std::fs::write(path, tv.png()) {
         Ok(()) => eprintln!(
             "screenshot: {}, {} bytes",
@@ -3269,7 +3268,7 @@ fn attend_chip(
     mouse: &mut Mouse,
 ) -> bool {
     if poll && let Some(term) = terminal {
-        term.poll(Frame::of(&far.buses.machine.simpletv));
+        term.poll(Frame::of(&far.buses.machine.tv));
         for (keysym, down) in term.take_keys() {
             keyboard.key(keysym, down);
         }
@@ -3520,7 +3519,7 @@ fn time_chip(
             && let Some((_, rec)) = capture.as_mut()
         {
             let m = end.machine();
-            rec.sample(&m.far.buses.machine.simpletv, m.clk.time_ns(), wall_clock());
+            rec.sample(&m.far.buses.machine.tv, m.clk.time_ns(), wall_clock());
         }
         // Everything else goes by the wall clock, not by a microcycle
         // count. `chip` runs about 1,800 microcycles a second, so
@@ -3630,7 +3629,7 @@ fn time_chip(
                     Ok(Some(Command::Keys)) => print!("{}", keys_in_force()),
                     Ok(Some(Command::Screenshot(path))) => {
                         let path = path.unwrap_or_else(|| timestamped("png"));
-                        write_screenshot(&path, &m.far.buses.machine.simpletv);
+                        write_screenshot(&path, &m.far.buses.machine.tv);
                     }
                     Ok(Some(Command::StartCapture(_))) if on_cable => {
                         println!("capture: {NO_CAPTURE_OVER_THE_CABLE}")
@@ -3655,11 +3654,7 @@ fn time_chip(
                     }
                     Ok(Some(Command::EndCapture)) => match capture.take() {
                         Some((path, mut rec)) => {
-                            rec.sample(
-                                &m.far.buses.machine.simpletv,
-                                m.clk.time_ns(),
-                                wall_clock(),
-                            );
+                            rec.sample(&m.far.buses.machine.tv, m.clk.time_ns(), wall_clock());
                             write_capture(&path, &rec);
                         }
                         None => println!("capture: none is going; startcapture begins one"),
@@ -3792,7 +3787,7 @@ fn time_chip(
     }
     let m = end.machine_mut();
     if let Some((path, rec)) = capture.as_mut() {
-        rec.sample(&m.far.buses.machine.simpletv, m.clk.time_ns(), wall_clock());
+        rec.sample(&m.far.buses.machine.tv, m.clk.time_ns(), wall_clock());
         write_capture(path, rec);
     }
     // The checkpoint last, and at the first quiet microcycle from here:
@@ -3822,7 +3817,7 @@ fn time_chip(
         }
     }
     if let Some(term) = terminal {
-        serve_last_screen(term, &m.far.buses.machine.simpletv, &mut interrupts_seen);
+        serve_last_screen(term, &m.far.buses.machine.tv, &mut interrupts_seen);
     }
 }
 

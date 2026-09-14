@@ -9,9 +9,9 @@
 
 use muir::engine::Engine;
 use muir::rtl::Rtl;
-use muir::simpletv::{FRAME_NS, mode};
 use muir::sym::{self, Space};
 use muir::terminal::keyboard::Keyboard;
+use muir::tv::{FRAME_NS, mode};
 
 mod support;
 use support::{CHAOS_100, boot_to_the_prompt, machine_with_pack, type_at};
@@ -57,7 +57,7 @@ fn setup_cpt_enables_the_vertical_interrupt_and_the_microcode_counts_frames() {
     // its own host table's numbers rather than at muir's defaults, which
     // are on the private subnet 376 and no band's.
     let ran = boot_to_the_prompt(&mut e, CHAOS_100, root);
-    let tv = &e.machine().simpletv;
+    let tv = &e.machine().tv;
     eprintln!(
         "at the prompt after {ran}: mode {:o}, sync RAM enable {:o}",
         tv.mode(),
@@ -78,7 +78,7 @@ fn setup_cpt_enables_the_vertical_interrupt_and_the_microcode_counts_frames() {
     for _ in 0..10_000_000 {
         e.step().expect("halted after SETUP-CPT");
     }
-    let tv = &e.machine().simpletv;
+    let tv = &e.machine().tv;
     let loaded = tv.sync.words().iter().filter(|&&w| w != 0).count();
     eprintln!(
         "after (si:setup-cpt): mode {:o}, sync RAM {loaded} words loaded, enable {:o}",
