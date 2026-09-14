@@ -1655,9 +1655,11 @@ const PCI_TXD: GateFn = |i, s| match pci_mode(s) {
 /// receiver.
 ///
 /// The transmitter moves `TxD` every sixteen clocks and loads the next
-/// character when the frame is out, or goes empty; the sheet has `TxEMT`
-/// rising "at the beginning of the last data bit" when nothing is
-/// waiting, which is up to two and a half bits earlier than here. The
+/// character when the frame is out, or goes empty; disabled, it finishes
+/// the character in the shift register and loads nothing after it. The
+/// sheet has `TxEMT` rising "at the beginning of the last data bit" when
+/// nothing is waiting, which is up to two and a half bits earlier than
+/// here. The
 /// receiver looks for a low on `RxD` at every clock, samples eight clocks
 /// later to confirm the start bit and every sixteen from there for the
 /// data, the parity and the stop bit, and has the character at the stop
@@ -1728,9 +1730,11 @@ fn pci_update(now: &Pins, prev: &Pins, st: &mut State) {
     }
     let tx_on = pci_tx_on(st);
     let rx_on = pci_rx_on(st);
-    if !(tx_on || rx_on) {
+    if !(tx_on || rx_on || bit(st.bits, PCI_TX_ACTIVE)) {
         // The generator held, at zero: it counts from the write that
         // turns either half on, as the behavioural port counts from it.
+        // A character the disable found in the shift register keeps it
+        // counting until the character is out.
         pci_put_u16(st, PCI_DIV, 0);
         return;
     }
@@ -1749,29 +1753,34 @@ fn pci_update(now: &Pins, prev: &Pins, st: &mut State) {
     let local = pci_local_loop(st);
     let cts = if local { st.cells[PCI_CR] & serial_cr::RTS != 0 } else { !v(now, 17) };
     let dcd = if local { st.cells[PCI_CR] & serial_cr::DTR != 0 } else { dcd_pin };
-    if tx_on {
-        let load = |st: &mut State| {
-            st.cells[PCI_TXSR] = st.cells[PCI_THR];
-            put(&mut st.bits, PCI_THR_FULL, false);
-            put(&mut st.bits, PCI_TX_ACTIVE, true);
-            pci_put_u16(st, PCI_TXT, 0);
-        };
-        if bit(st.bits, PCI_TX_ACTIVE) {
-            let t = pci_u16(st, PCI_TXT) + 1;
-            if pci_tx_bit(f, st.cells[PCI_TXSR], t).is_some() {
-                pci_put_u16(st, PCI_TXT, t);
-            } else if bit(st.bits, PCI_THR_FULL) && cts {
-                load(st);
-            } else {
-                put(&mut st.bits, PCI_TX_ACTIVE, false);
-                pci_put_u16(st, PCI_TXT, 0);
-                if !bit(st.bits, PCI_THR_FULL) {
-                    put(&mut st.bits, PCI_TX_EMPTY, true);
-                }
-            }
-        } else if bit(st.bits, PCI_THR_FULL) && cts {
+    // The transmitter. A disabled one "will complete the transmission of
+    // the character in the transmit shift register (if any) prior to
+    // terminating operation" --- the sheet on the command register,
+    // quoted whole at `Pci::transmit` in `src/serial.rs` --- so the shift
+    // register steps whether or not the transmitter is on, and only the
+    // load of the next character and `TxEMT` wait on it. Issue 100.
+    let load = |st: &mut State| {
+        st.cells[PCI_TXSR] = st.cells[PCI_THR];
+        put(&mut st.bits, PCI_THR_FULL, false);
+        put(&mut st.bits, PCI_TX_ACTIVE, true);
+        pci_put_u16(st, PCI_TXT, 0);
+    };
+    let next = tx_on && bit(st.bits, PCI_THR_FULL) && cts;
+    if bit(st.bits, PCI_TX_ACTIVE) {
+        let t = pci_u16(st, PCI_TXT) + 1;
+        if pci_tx_bit(f, st.cells[PCI_TXSR], t).is_some() {
+            pci_put_u16(st, PCI_TXT, t);
+        } else if next {
             load(st);
+        } else {
+            put(&mut st.bits, PCI_TX_ACTIVE, false);
+            pci_put_u16(st, PCI_TXT, 0);
+            if tx_on && !bit(st.bits, PCI_THR_FULL) {
+                put(&mut st.bits, PCI_TX_EMPTY, true);
+            }
         }
+    } else if next {
+        load(st);
     }
     if rx_on && dcd {
         let rxd = if local { pci_tx_level(st) } else { v(now, 3) };
@@ -4372,7 +4381,8 @@ pub fn behaviour(kind: &str) -> Option<Behaviour> {
         // HIGH" and "FORCE -RTS OUTPUT HIGH" (Table 7).
         //
         // The generator is held while neither the transmitter nor the
-        // receiver is on. The chip's runs always, but its output reaches
+        // receiver is on and nothing is in the transmit shift register.
+        // The chip's runs always, but its output reaches
         // nothing off the chip --- `-TxC` and `-RxC` are not connected on
         // this board --- so its phase while idle cannot be seen, and
         // holding it lets a board with an idle port sleep between bus

@@ -525,3 +525,114 @@ fn the_endpoint_runs_at_whatever_rate_the_port_was_given() {
         assert_eq!(far.framing_errors, 0, "{what}: the far end read whole frames");
     }
 }
+
+/// **A disable mid-character completes the character, on the board as on
+/// the model, and the next burst's first character is its own.** The
+/// sheet, on the command register: "If the transmitter is disabled, it
+/// will complete the transmission of the character in the transmit shift
+/// register (if any) prior to terminating operation. The TxD output will
+/// then remain in the marking state (High) while TxRDY and TxEMT will go
+/// High (inactive)." MIT's `serial.lisp` ends every burst that way, the
+/// output channel's turnoff clearing `CR0` while the last character is
+/// still shifting, so a shift register that froze on the disable would
+/// hand the far end that character late, stuck to the next burst's first.
+/// Issue 100.
+#[test]
+fn a_disable_mid_character_completes_it_on_the_board_as_on_the_model() {
+    let n = cadrio();
+    let mut b = UnibusMaster::new(&n, 10_000, &quiet());
+    let mut m = IoBoard::default();
+    let mut far = OnCable::of(&n, RATE, Framing::of(eight_n_one())).unwrap();
+    far.plug();
+    far.apply(&mut b.chip, b.now);
+    m.serial.cable.plug(b.now);
+    set_up(&mut b, &mut m);
+    let bit = serial::bit_ns(RATE);
+    let frame = Framing::of(eight_n_one()).frame_ns(RATE);
+    let on = (command::TX_ENABLE | command::RX_ENABLE | command::DTR | command::RTS) as u16;
+    // The EIA data wire out of the MC1488: low is a mark.
+    let data_out = b.net("'EIA DATA OUT'");
+    read_both(&mut b, &mut m, STATUS, "the plug's data set change, read away");
+
+    write_both(&mut b, &mut m, DATA, b'A' as u16);
+    let t0 = b.now;
+    // Half a frame in, the disable, where the output channel's turnoff
+    // lands.
+    run(&mut b, &mut far, t0 + frame / 2, |_, _| false);
+    write_both(&mut b, &mut m, COMMAND, on & !(command::TX_ENABLE as u16));
+    let s = read_both(&mut b, &mut m, STATUS, "status disabled mid-character");
+    assert_eq!(s & (status::TX_READY | status::TX_EMPTY_OR_DSCHG), 0, "both inactive: {s:o}");
+    assert!(far.received.is_empty(), "the character is still on the wire");
+    // The character completes on the wire, when it would have.
+    run(&mut b, &mut far, t0 + 3 * frame, |_, f| f.received.len() == 1);
+    assert_eq!(far.received, [b'A'], "the far end has the character the disable found shifting");
+    assert_eq!(far.framing_errors, 0);
+    let took = b.now - t0;
+    eprintln!("the far end had it {took} ns after the write; a frame is {frame}, a bit {bit}");
+    assert!(took + bit / 2 >= frame && took < frame + bit, "{took} against {frame}");
+    // The model's is on its cable at the same instant, to within a bit.
+    m.advance(b.now + bit);
+    let (at, c) = m.serial.cable.take().expect("the model's character");
+    assert_eq!(c, b'A');
+    assert!(at >= b.now && at < b.now + bit, "the model's at {at}, the board's at {}", b.now);
+    // Then the wire marks, and stays marking: nothing follows.
+    let until = b.now + 2 * frame;
+    run(&mut b, &mut far, until, |b, _| b.chip.net(data_out) != Level::Low);
+    assert_eq!(b.chip.net(data_out), Level::Low, "the wire marks after the character");
+    assert_eq!(far.received.len(), 1);
+    let s = read_both(&mut b, &mut m, STATUS, "status with the transmitter off and empty");
+    assert_eq!(s & (status::TX_READY | status::TX_EMPTY_OR_DSCHG), 0, "still inactive: {s:o}");
+
+    // The next burst: its first character is its own, one frame after
+    // its write.
+    write_both(&mut b, &mut m, COMMAND, on);
+    let s = read_both(&mut b, &mut m, STATUS, "status at the enable");
+    assert_eq!(s & (status::TX_READY | status::TX_EMPTY_OR_DSCHG), status::TX_READY, "{s:o}");
+    write_both(&mut b, &mut m, DATA, b'B' as u16);
+    let t1 = b.now;
+    run(&mut b, &mut far, t1 + 3 * frame, |_, f| f.received.len() == 2);
+    assert_eq!(far.received, [b'A', b'B']);
+    assert_eq!(far.framing_errors, 0);
+    let took = b.now - t1;
+    assert!(took + bit / 2 >= frame && took < frame + bit, "{took} against {frame}: its own frame");
+    m.advance(b.now + bit);
+    assert_eq!(m.serial.cable.take().map(|(_, c)| c), Some(b'B'));
+}
+
+/// **With the receiver disabled too**, so that nothing but the character
+/// in the shift register keeps the chip's clock going, it completes all
+/// the same, on the board as on the model.
+#[test]
+fn a_disable_of_both_halves_mid_character_still_completes_it() {
+    let n = cadrio();
+    let mut b = UnibusMaster::new(&n, 10_000, &quiet());
+    let mut m = IoBoard::default();
+    let mut far = OnCable::of(&n, RATE, Framing::of(eight_n_one())).unwrap();
+    far.plug();
+    far.apply(&mut b.chip, b.now);
+    m.serial.cable.plug(b.now);
+    set_up(&mut b, &mut m);
+    let bit = serial::bit_ns(RATE);
+    let frame = Framing::of(eight_n_one()).frame_ns(RATE);
+    let data_out = b.net("'EIA DATA OUT'");
+    read_both(&mut b, &mut m, STATUS, "the plug's data set change, read away");
+
+    write_both(&mut b, &mut m, DATA, b'A' as u16);
+    let t0 = b.now;
+    run(&mut b, &mut far, t0 + frame / 2, |_, _| false);
+    write_both(&mut b, &mut m, COMMAND, (command::DTR | command::RTS) as u16);
+    read_both(&mut b, &mut m, STATUS, "status with both halves off");
+    run(&mut b, &mut far, t0 + 3 * frame, |_, f| f.received.len() == 1);
+    assert_eq!(far.received, [b'A'], "the character completes with both halves off");
+    assert_eq!(far.framing_errors, 0);
+    let took = b.now - t0;
+    assert!(took + bit / 2 >= frame && took < frame + bit, "{took} against {frame}");
+    m.advance(b.now + bit);
+    let (at, c) = m.serial.cable.take().expect("the model's character");
+    assert_eq!(c, b'A');
+    assert!(at >= b.now && at < b.now + bit, "the model's at {at}, the board's at {}", b.now);
+    let until = b.now + frame;
+    run(&mut b, &mut far, until, |b, _| b.chip.net(data_out) != Level::Low);
+    assert_eq!(b.chip.net(data_out), Level::Low, "the wire marks after the character");
+    read_both(&mut b, &mut m, STATUS, "status once it is out");
+}
