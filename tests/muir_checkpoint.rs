@@ -217,3 +217,36 @@ fn a_resume_has_the_checkpoint_s_display_board() {
     assert!(t.contains("--tv-board"), "the refusal names the flag:\n{t}");
     assert!(t.contains("lispm-tv"), "and the board the checkpoint has:\n{t}");
 }
+
+/// **A checkpoint carries the color TV too**, and a resume onto a machine
+/// `--color-tv` disagrees with is refused by the flag's name, as
+/// `--tv-board` is.  The second display board is the backplane's: a
+/// machine with a colour screen is not the machine without one, and the
+/// probe `COLOR-EXISTS-P` makes answers differently on each.
+#[test]
+fn a_resume_has_the_checkpoint_s_color_tv() {
+    let dir = scratch("checkpoint-color-tv");
+    let chk = dir.join("colour.chk");
+    let out = muir()
+        .args(["--micro", "--color-tv", "--stop-after", "100", "--checkpoint"])
+        .arg(&chk)
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "the first run failed:\n{t}");
+    assert!(chk.exists(), "the checkpoint was written:\n{t}");
+
+    // The board it was written with, and the run resumes.
+    let out =
+        muir().args(["--micro", "--color-tv", "--stop-after", "10", "--resume"]).arg(&chk).run();
+    let t = text(&out);
+    assert!(out.status.success(), "the resumed run failed:\n{t}");
+    assert!(t.contains("100 microcycles"), "{t}");
+    assert!(t.contains("color tv: model lispm-tv"), "the resumed run has the board:\n{t}");
+
+    // Without the flag there is one screen, which is another machine.
+    let out = muir().args(["--micro", "--stop-after", "10", "--resume"]).arg(&chk).run();
+    let t = text(&out);
+    assert!(!out.status.success(), "a machine without the board resumed anyway:\n{t}");
+    assert!(t.contains("--color-tv"), "the refusal names the flag:\n{t}");
+    assert!(t.contains("with the color tv"), "and says what the checkpoint has:\n{t}");
+}

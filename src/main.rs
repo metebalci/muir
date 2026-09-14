@@ -12,6 +12,7 @@
 //!          [--chaos-udp [<endpoint>]]
 //!          [--chaos-udp-default-peer <host>[:<port>]]
 //!          [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
+//!          [--color-terminal [<endpoint>]] [--color-tv]
 //!          [--debug-cable-connect [<endpoint>|0x<address>]]
 //!          [--debug-cable-listen [<endpoint>]] [--debug-in-process]
 //!          [--debuggee-disk-pack <image>[,<unit>][,ro]]
@@ -47,7 +48,19 @@
 //! `cadrtv/lmtv.order` is the LISPM TV's specification and both boards
 //! program by it --- so the flag chooses the netlist `chip` builds the
 //! backplane with and the board every engine's model answers as, and the
-//! start says which it is. `--disk-controller`
+//! start says which it is. `--color-tv` fits a **second** display board,
+//! the color TV: a LISPM TV strapped to the other addresses the same sheet
+//! gives, the buffer at `17200000` and the registers at `17377750`, "for
+//! the color TV, x is 5". The main screen stays at `17000000` whichever
+//! board `--tv-board` named, the release hardwiring `MAIN-SCREEN` to one
+//! bit a pixel there. It is off by default, and a machine without it
+//! answers those addresses with an NXM, which is how `COLOR-EXISTS-P`
+//! finds out there is no colour screen; with it, the cold boot's
+//! `COLOR:SETUP` loads the NTSC sync program, starts it in clock mode 3
+//! with vertical spacing 36, and writes the colour map. The picture is 576
+//! by 454 at four bits a pixel through that map. It is the model on every
+//! engine, `chip` included: there is no netlist of this board on the
+//! backplane. `--disk-controller`
 //! is the disk controller, whose netlist runs its own microcode with the
 //! pack on its cable as a drive and takes the drive's time over every
 //! block, milliseconds where the model takes none. **A run that touches no
@@ -95,7 +108,12 @@
 //! screen for as long as a viewer is looking at it once the run has
 //! stopped. In the lashup the other machine is served a terminal too, the
 //! display above this machine's, and `--debuggee-terminal` puts that
-//! elsewhere.
+//! elsewhere. With `--color-tv` the colour screen is served as well, at
+//! the display above the last one bound or where `--color-terminal` says,
+//! and it is **pixels only**: the machine has one keyboard and one mouse,
+//! both on the I/O board, and they stay with the terminal that serves the
+//! main screen, so what a viewer types or points at the colour screen is
+//! dropped. `--tv-capture` records the main screen alone.
 //!
 //! **Every `rtl` and `chip` run listens for a debugger too**, since the
 //! bus interface's DBGIN is on every machine: it takes the Unibus as
@@ -589,18 +607,31 @@ fn endpoint_at(spec: Option<&str>, default: SocketAddr) -> Option<SocketAddr> {
     v.parse::<IpAddr>().ok().map(|ip| SocketAddr::new(ip, default.port()))
 }
 
-/// The other machine's display against this machine's: the display above
-/// it unless `--debuggee-terminal` says another. A free display is looked
-/// for by moving the port up, so this against the endpoint that was asked
-/// for and this against the one that was bound differ only in the port
-/// each already carries.
-fn debuggee_endpoint(spec: Option<&str>, base: SocketAddr) -> SocketAddr {
-    let above = base.port().checked_add(1).unwrap_or_else(|| {
-        usage("--terminal: no port above this one for the other machine's display")
-    });
+/// A second screen's display against the one below it: the display above
+/// it unless the flag names another. A free display is looked for by
+/// moving the port up, so this against the endpoint that was asked for and
+/// this against the one that was bound differ only in the port each
+/// already carries.
+fn display_above(spec: Option<&str>, base: SocketAddr, flag: &str, what: &str) -> SocketAddr {
+    let above = base
+        .port()
+        .checked_add(1)
+        .unwrap_or_else(|| usage(&format!("--terminal: no port above this one for {what}")));
     endpoint_at(spec, SocketAddr::new(base.ip(), above)).unwrap_or_else(|| {
-        usage("--debuggee-terminal wants nothing, a port, an address or address:port")
+        usage(&format!("{flag} wants nothing, a port, an address or address:port"))
     })
+}
+
+/// The other machine's display against this machine's: the display above
+/// it unless `--debuggee-terminal` says another.
+fn debuggee_endpoint(spec: Option<&str>, base: SocketAddr) -> SocketAddr {
+    display_above(spec, base, "--debuggee-terminal", "the other machine's display")
+}
+
+/// The color TV's screen against the display below it: the one above it
+/// unless `--color-terminal` says another.
+fn color_endpoint(spec: Option<&str>, base: SocketAddr) -> SocketAddr {
+    display_above(spec, base, "--color-terminal", "the color TV's screen")
 }
 
 /// Whether a flag's endpoint names a port: nothing and a bare address do
@@ -638,12 +669,6 @@ fn terminal_line(terminal: &Option<Terminal>, why: &Option<String>, at: SocketAd
         (None, Some(why)) => format!("none --- {why}"),
         (None, None) => "none".to_string(),
     }
-}
-
-/// Serves the screen as it was left, while anyone is still looking and
-/// until ^C; `seen` is the run's own count of the ^Cs it has acted on.
-fn serve_last_screen(terminal: &mut Terminal, tv: &muir::tv::Tv, seen: &mut u32) {
-    serve_last_screens(&mut [(terminal, tv)], seen);
 }
 
 /// Serves each screen as it was left, while anyone is still looking at
@@ -686,12 +711,21 @@ fn serve_last_screens(screens: &mut [(&mut Terminal, &muir::tv::Tv)], seen: &mut
 /// boot.
 fn attend<E: Engine>(
     terminal: Option<&mut Terminal>,
+    color: Option<&mut Terminal>,
     poll: bool,
     e: &mut E,
     keyboard: &mut Keyboard,
     mouse: &mut Mouse,
 ) {
     let m = e.machine_mut();
+    // The colour screen, when the board is fitted: the picture out and
+    // nothing in.
+    if poll
+        && let Some(term) = color
+        && let Some(tv) = m.color_tv.as_ref()
+    {
+        term.poll(Frame::of(tv));
+    }
     if poll && let Some(term) = terminal {
         term.poll(Frame::of(&m.tv));
         for (keysym, down) in term.take_keys() {
@@ -763,6 +797,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--chaos-trace] [--chaos-udp [<endpoint>]]
             [--chaos-udp-default-peer <host>[:<port>]]
             [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
+            [--color-terminal [<endpoint>]] [--color-tv]
             [-c|--config <file>]
             [--debug-cable-connect [<endpoint>|0x<address>]]
             [--debug-cable-listen [<endpoint>]] [--debug-in-process]
@@ -852,6 +887,30 @@ A simulator of the MIT CADR Lisp Machine.
                                with no bus cycle in flight. The prompt's
                                checkpoint writes one as the run goes, and
                                the run goes on.
+  --color-terminal [<endpoint>]
+                               where the color TV's screen is served, as
+                               --terminal is the main screen's: a port, an
+                               address or address:port. Pixels only --- the
+                               machine has one keyboard and one mouse, on
+                               the I/O board, and they stay with the main
+                               screen --- so what a viewer types or points
+                               at here is dropped. It needs --color-tv.
+                               [default: the display above the main
+                               screen's]
+  --color-tv                   fit the color TV, the second display board:
+                               a LISPM TV strapped to 17200000 with its
+                               registers at 17377750, which is MIT's own
+                               \"for the color TV, x is 5\". Off by default,
+                               and a machine without it answers those
+                               addresses with an NXM, which is how System
+                               100 finds out it has no colour screen. With
+                               it the band's cold boot starts the board:
+                               the NTSC sync program, clock mode 3, and the
+                               colour map. The picture is 576 x 454 at four
+                               bits a pixel through sixteen colours, on
+                               --color-terminal. The model on every engine,
+                               chip included: there is no netlist of this
+                               board.
   -c, --config <file>          the file of flags to read before the command
                                line, which must be there. Without it muir
                                reads .muirrc in the directory it was run
@@ -1093,7 +1152,9 @@ A simulator of the MIT CADR Lisp Machine.
                                given. In the lashup it is both machines on
                                one canvas, the debugger at the left and the
                                debuggee at the right; not over the debug
-                               cable, where they are two clocks.
+                               cable, where they are two clocks. The main
+                               screen only: the color TV's is served and
+                               not recorded.
   --tv-capture-no-time         leave the clocks off the recording. By
                                default a line below the screen, hiding none
                                of it, shows the machine's simulated time at
@@ -1699,10 +1760,19 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
     }
 }
 
-fn machine(prom: &[Insn], packs: &[Pack], memory_boards: usize, tv_board: TvBoard) -> Machine {
+fn machine(
+    prom: &[Insn],
+    packs: &[Pack],
+    memory_boards: usize,
+    tv_board: TvBoard,
+    color_tv: bool,
+) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
     m.load_prom(prom);
     m.tv.set_board(tv_board);
+    if color_tv {
+        m.fit_color_tv();
+    }
     attach(&mut m, packs);
     m
 }
@@ -1784,11 +1854,15 @@ fn time_lashup(
     stop: Stop,
     terminal: Option<&mut Terminal>,
     debuggee_terminal: Option<&mut Terminal>,
+    color: Option<&mut Terminal>,
     capture: Option<(PathBuf, bool)>,
 ) {
     let t = Instant::now();
     let mut halt = None;
     let (mut terminal, mut debuggee_terminal) = (terminal, debuggee_terminal);
+    // The color TV is the debugger's board: `--color-tv` fits one machine,
+    // the one this process is running as its own.
+    let mut color = color;
     // Both screens on one canvas: the debugger's at the left and the
     // debuggee's at the right, timed by the debugger's clock, which the
     // lashup holds the debuggee's to within a generator cycle.
@@ -1830,9 +1904,16 @@ fn time_lashup(
             }
             let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
             let e = &mut lashup.debugger;
-            attend(terminal.as_deref_mut(), poll, e, &mut keyboard, &mut mouse);
+            attend(
+                terminal.as_deref_mut(),
+                color.as_deref_mut(),
+                poll,
+                e,
+                &mut keyboard,
+                &mut mouse,
+            );
             let e = &mut lashup.debuggee;
-            attend(debuggee_terminal.as_deref_mut(), poll, e, &mut b_keyboard, &mut b_mouse);
+            attend(debuggee_terminal.as_deref_mut(), None, poll, e, &mut b_keyboard, &mut b_mouse);
             if poll {
                 last_poll = Instant::now();
             }
@@ -1865,6 +1946,9 @@ fn time_lashup(
     }
     if let Some(term) = debuggee_terminal {
         screens.push((term, &lashup.debuggee.machine().tv));
+    }
+    if let (Some(term), Some(tv)) = (color, lashup.debugger.machine().color_tv.as_ref()) {
+        screens.push((term, tv));
     }
     serve_last_screens(&mut screens, &mut interrupts_seen);
 }
@@ -2049,11 +2133,13 @@ fn time_fabric(
     mut run: FreeRunning<muir::fabric::Fabric<muir::fabric::Mapped>>,
     stop: Stop,
     terminal: Option<&mut Terminal>,
+    color: Option<&mut Terminal>,
     setup: &str,
 ) {
     let t = Instant::now();
     let mut halt = None;
     let mut terminal = terminal;
+    let mut color = color;
     let (mut keyboard, mut mouse) = (a_keyboard(), Mouse::new());
     let mut last_poll = Instant::now();
     let mut ran = 0;
@@ -2096,7 +2182,14 @@ fn time_fabric(
             continue;
         }
         let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
-        attend(terminal.as_deref_mut(), poll, &mut run.debugger, &mut keyboard, &mut mouse);
+        attend(
+            terminal.as_deref_mut(),
+            color.as_deref_mut(),
+            poll,
+            &mut run.debugger,
+            &mut keyboard,
+            &mut mouse,
+        );
         if poll {
             last_poll = Instant::now();
         }
@@ -2117,10 +2210,16 @@ fn time_fabric(
             run.debugger.debug_cycles()
         ),
     }
-    if !hold.quit
-        && let Some(term) = terminal
-    {
-        serve_last_screen(term, &run.debugger.machine().tv, &mut hold.interrupts_seen);
+    if !hold.quit {
+        let m = run.debugger.machine();
+        let mut screens: Vec<(&mut Terminal, &muir::tv::Tv)> = Vec::new();
+        if let Some(term) = terminal {
+            screens.push((term, &m.tv));
+        }
+        if let (Some(term), Some(tv)) = (color, m.color_tv.as_ref()) {
+            screens.push((term, tv));
+        }
+        serve_last_screens(&mut screens, &mut hold.interrupts_seen);
     }
 }
 
@@ -2132,6 +2231,11 @@ struct Run<'a> {
     capture: Option<(PathBuf, bool)>,
     checkpoint: Option<PathBuf>,
     setup: &'a str,
+    /// The color TV's screen, when `--color-tv` fitted the board: a second
+    /// RFB server, pixels only.  It rides here rather than beside the
+    /// terminal because it is a second screen of the same machine and
+    /// every run loop that serves one serves the other.
+    color: Option<&'a mut Terminal>,
     /// The run starts held, with the machine as `--no-auto-boot` left it:
     /// the button unpressed, and nothing to run until the prompt's `boot`.
     hold: bool,
@@ -2424,11 +2528,12 @@ fn time_engine<S: Stepper>(
     serial: Option<&mut Endpoint>,
     run: Run,
 ) {
-    let Run { stop, capture, checkpoint, setup, hold: held, clocks } = run;
+    let Run { stop, capture, checkpoint, setup, hold: held, clocks, color } = run;
     let t = Instant::now();
     let mut ran = 0;
     let mut halt = None;
     let mut terminal = terminal;
+    let mut color = color;
     let mut serial = serial;
     let mut keyboard = a_keyboard();
     let mut mouse = Mouse::new();
@@ -2474,19 +2579,26 @@ fn time_engine<S: Stepper>(
             let m = s.engine().machine();
             rec.sample(&m.tv, m.ns, wall_clock());
         }
-        if last_poll.elapsed() >= TERMINAL_INTERVAL
-            && let Some(term) = terminal.as_deref_mut()
-        {
-            let e = s.engine_mut();
-            term.poll(Frame::of(&e.machine().tv));
-            for (keysym, down) in term.take_keys() {
-                keyboard.key(keysym, down);
+        if last_poll.elapsed() >= TERMINAL_INTERVAL {
+            if let Some(term) = terminal.as_deref_mut() {
+                let e = s.engine_mut();
+                term.poll(Frame::of(&e.machine().tv));
+                for (keysym, down) in term.take_keys() {
+                    keyboard.key(keysym, down);
+                }
+                for (buttons, x, y) in term.take_pointers() {
+                    mouse.pointer(buttons, x, y);
+                }
+                if e.machine_mut().ioboard.take_beep() {
+                    term.ring();
+                }
             }
-            for (buttons, x, y) in term.take_pointers() {
-                mouse.pointer(buttons, x, y);
-            }
-            if e.machine_mut().ioboard.take_beep() {
-                term.ring();
+            // The colour screen, when the board is fitted: the picture
+            // out and nothing in.
+            if let Some(term) = color.as_deref_mut()
+                && let Some(tv) = s.engine().machine().color_tv.as_ref()
+            {
+                term.poll(Frame::of(tv));
             }
             last_poll = Instant::now();
         }
@@ -2553,10 +2665,16 @@ fn time_engine<S: Stepper>(
     if let Some(path) = &checkpoint {
         write_checkpoint(name, s.engine(), path);
     }
-    if !hold.quit
-        && let Some(term) = terminal
-    {
-        serve_last_screen(term, &s.engine().machine().tv, &mut hold.interrupts_seen);
+    if !hold.quit {
+        let m = s.engine().machine();
+        let mut screens: Vec<(&mut Terminal, &muir::tv::Tv)> = Vec::new();
+        if let Some(term) = terminal {
+            screens.push((term, &m.tv));
+        }
+        if let (Some(term), Some(tv)) = (color, m.color_tv.as_ref()) {
+            screens.push((term, tv));
+        }
+        serve_last_screens(&mut screens, &mut hold.interrupts_seen);
     }
 }
 
@@ -2998,6 +3116,7 @@ fn resume_chip(
     clk: &mut Behavioural,
     far: &mut FarEnd,
     tv_board: TvBoard,
+    color_tv: bool,
     (path, c): &(PathBuf, Checkpoint),
 ) -> u64 {
     let refuse = |err: std::io::Error| -> ! { stale_checkpoint(path, &err, None) };
@@ -3017,6 +3136,10 @@ fn resume_chip(
             it.far_end(far)
         })
         .unwrap_or_else(|e| refuse(e));
+    // The color TV rides in the machine behind the buses, which the far
+    // end has just been loaded with; the header carries only the board
+    // `--tv-board` named, as it has since the flag existed.
+    refuse_color_tv(path, far.buses.machine.color_tv.is_some(), color_tv);
     far.join(cpu, clk.time_ns());
     eprintln!(
         "resumed: {} at {ran} microcycles, {} ns, {} memory boards",
@@ -3025,6 +3148,22 @@ fn resume_chip(
         far.buses.machine.memory_boards()
     );
     ran
+}
+
+/// **A resume onto a machine `--color-tv` disagrees with is refused by the
+/// flag's name**, as `--tv-board` is: the second display board is the
+/// backplane's, and a checkpoint of a machine with one is not a
+/// description of a machine without.
+fn refuse_color_tv(path: &Path, had: bool, asked: bool) {
+    if had == asked {
+        return;
+    }
+    usage(&format!(
+        "--resume {}: a checkpoint of a machine {} the color tv, and --color-tv was {} given",
+        path.display(),
+        if had { "with" } else { "without" },
+        if asked { "" } else { "not" }
+    ));
 }
 
 /// Runs on to the first point a netlist machine may be checkpointed at,
@@ -3102,6 +3241,7 @@ fn resume_engine<E: Engine>(
     name: &str,
     e: &mut E,
     tv_board: TvBoard,
+    color_tv: bool,
     (path, c): &(PathBuf, Checkpoint),
 ) {
     if c.engine != name {
@@ -3121,6 +3261,7 @@ fn resume_engine<E: Engine>(
             tv_board.name()
         ));
     }
+    refuse_color_tv(path, e.machine().color_tv.is_some(), color_tv);
     let m = e.machine();
     eprintln!(
         "resumed: {} at {} microcycles, {} ns, {} memory boards",
@@ -3188,6 +3329,7 @@ struct ChipMachine {
     boot: netlist::NetId,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn chip_machine(
     image: &[u64],
     packs: &[Pack],
@@ -3195,6 +3337,7 @@ fn chip_machine(
     memory_boards: usize,
     chaos: muir::chaos::Config,
     tv_board: TvBoard,
+    color_tv: bool,
     auto_boot: bool,
 ) -> ChipMachine {
     let n = netlist::parse(NETLIST).unwrap();
@@ -3209,6 +3352,12 @@ fn chip_machine(
     // model display on a netlist machine, and it is the board the run
     // named whether or not there is a netlist of it on the backplane.
     machine.tv.set_board(tv_board);
+    // The color TV is the model on every engine: there is no netlist of a
+    // LISPM TV strapped colour on this backplane, so the far end's machine
+    // answers `17200000` and `17377750` as it answers `--tv model`.
+    if color_tv {
+        machine.fit_color_tv();
+    }
     machine.chaos = chaos;
     let bus_n = netlist::parse(BUSINT).unwrap();
     let mem_n = netlist::parse(CADRM).unwrap();
@@ -3289,10 +3438,19 @@ fn press_boot(c: &mut Chip, clk: &mut Behavioural, boot: netlist::NetId) {
 fn attend_chip(
     far: &mut FarEnd,
     terminal: Option<&mut Terminal>,
+    color: Option<&mut Terminal>,
     poll: bool,
     keyboard: &mut Keyboard,
     mouse: &mut Mouse,
 ) -> bool {
+    // The colour screen, when the board is fitted: the picture out and
+    // nothing in.
+    if poll
+        && let Some(term) = color
+        && let Some(tv) = far.buses.machine.color_tv.as_ref()
+    {
+        term.poll(Frame::of(tv));
+    }
     if poll && let Some(term) = terminal {
         term.poll(Frame::of(&far.buses.machine.tv));
         for (keysym, down) in term.take_keys() {
@@ -3385,9 +3543,10 @@ fn time_chip(
     run: Run,
     resume: Option<(PathBuf, Checkpoint)>,
     tv_board: TvBoard,
+    color_tv: bool,
     watch: Option<WatchSpec>,
 ) {
-    let Run { stop, capture, checkpoint, setup, hold, clocks } = run;
+    let Run { stop, capture, checkpoint, setup, hold, clocks, mut color } = run;
     let ChipMachine {
         mut cpu,
         mut clk,
@@ -3411,6 +3570,7 @@ fn time_chip(
         memory_boards,
         chaos,
         tv_board,
+        color_tv,
         !hold && resume.is_none(),
     );
     // One microcycle is however many clock transitions it takes for the phase
@@ -3421,7 +3581,7 @@ fn time_chip(
     // other two engines, so that `--stop-after` is a window on the run and
     // not on the machine's whole life.
     let resumed_at = match &resume {
-        Some(p) => resume_chip(&mut cpu, &mut clk, &mut far, tv_board, p),
+        Some(p) => resume_chip(&mut cpu, &mut clk, &mut far, tv_board, color_tv, p),
         None => 0,
     };
     let mut serial = serial;
@@ -3586,7 +3746,14 @@ fn time_chip(
         }
         let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
         if poll || !held {
-            if attend_chip(&mut m.far, terminal.as_deref_mut(), poll, &mut keyboard, &mut mouse) {
+            if attend_chip(
+                &mut m.far,
+                terminal.as_deref_mut(),
+                color.as_deref_mut(),
+                poll,
+                &mut keyboard,
+                &mut mouse,
+            ) {
                 press_boot(&mut m.cpu, &mut m.clk, boot1);
             }
             if poll {
@@ -3850,8 +4017,16 @@ fn time_chip(
             ),
         }
     }
-    if let Some(term) = terminal {
-        serve_last_screen(term, &m.far.buses.machine.tv, &mut interrupts_seen);
+    {
+        let machine = &m.far.buses.machine;
+        let mut screens: Vec<(&mut Terminal, &muir::tv::Tv)> = Vec::new();
+        if let Some(term) = terminal {
+            screens.push((term, &machine.tv));
+        }
+        if let (Some(term), Some(tv)) = (color, machine.color_tv.as_ref()) {
+            screens.push((term, tv));
+        }
+        serve_last_screens(&mut screens, &mut interrupts_seen);
     }
 }
 
@@ -3883,6 +4058,13 @@ fn main() {
     let mut io = true;
     let mut tv = true;
     let mut tv_board = TvBoard::SimpleTv;
+    // The color TV, the second display board: off unless `--color-tv`
+    // fits it, because a CADR has one screen unless somebody plugged a
+    // second board in, and `COLOR-EXISTS-P` is System 100 asking which
+    // kind of machine this is.
+    let mut color_tv = false;
+    // Absent, or present with or without an endpoint.
+    let mut color_terminal: Option<Option<String>> = None;
     // **The disk controller is a netlist like every other board**, since
     // 12 September 2026, when a boot through it was run to the end ---
     // two and a half days of it, issue 40.  `disk_given` is whether a run
@@ -4070,6 +4252,11 @@ fn main() {
                 Some("lispm-tv") => tv_board = TvBoard::LispmTv,
                 _ => usage("--tv-board wants simple-tv or lispm-tv"),
             },
+            (None, "--color-tv") => color_tv = true,
+            (None, "--color-terminal") => {
+                // The endpoint is optional: the next word is it unless it is a flag.
+                color_terminal = Some(args.next_if(|v| !v.starts_with('-')));
+            }
             (None, "--disk-controller") => {
                 disk_given = true;
                 match args.next().as_deref() {
@@ -4326,6 +4513,26 @@ fn main() {
             usage("--debuggee-terminal: the same endpoint as --terminal");
         }
     }
+    // The colour screen's display: it takes the board, and it is not
+    // another screen's endpoint.  Settled here, before anything is bound.
+    if let Some(spec) = color_terminal.as_ref() {
+        if !color_tv {
+            usage("--color-terminal is the color TV's screen: it needs --color-tv");
+        }
+        // Port 0 is the host's choice, and two of them are never the same
+        // port.
+        let at = color_endpoint(spec.as_deref(), listen.addr);
+        if listen.addr.port() != 0 {
+            if at == listen.addr {
+                usage("--color-terminal: the same endpoint as --terminal");
+            }
+            if let Some(other) = debuggee_terminal.as_ref()
+                && at == debuggee_endpoint(other.as_deref(), listen.addr)
+            {
+                usage("--color-terminal: the same endpoint as --debuggee-terminal");
+            }
+        }
+    }
     if capture_tv.is_some() && (cable_listen.asked || cable_connect.is_some()) {
         usage(
             "--tv-capture records a machine on its own or the lashup in one process, not an end of the debug cable to another program or to the fabric",
@@ -4524,6 +4731,32 @@ fn main() {
             Err(e) => (None, Some(e)),
         },
     };
+    // The colour screen's display: the one above the last display bound,
+    // so a lashup with a colour board has three and none of them collide,
+    // or where the flag says.
+    let color_listen = color_tv.then(|| {
+        let bound = |t: &Option<Terminal>| t.as_ref().and_then(|t| t.addr().ok());
+        let base = bound(&debuggee_terminal).or_else(|| bound(&terminal)).unwrap_or(listen.addr);
+        let spec = color_terminal.clone().flatten();
+        TerminalAt {
+            addr: color_endpoint(spec.as_deref(), base),
+            port_named: names_a_port(spec.as_deref()),
+            asked: color_terminal.is_some(),
+        }
+    });
+    let (mut color_screen, no_color_screen) = match color_listen {
+        None => (None, None),
+        Some(at) => match bind_terminal(at) {
+            Ok(mut t) => {
+                // Pixels only: the machine's one keyboard and one mouse
+                // are on the I/O board and stay with the main screen.
+                t.pixels_only = true;
+                (Some(t), None)
+            }
+            Err(e) if at.asked => usage(&format!("--color-terminal {e}")),
+            Err(e) => (None, Some(e)),
+        },
+    };
     // The serial port's endpoint, if one was asked for. Its port is always
     // named, so it is bound as it stands and the run stops if it cannot
     // be: it is where someone is being told to attach, and serving that
@@ -4666,6 +4899,24 @@ fn main() {
             }
         }
         writeln!(s, "terminal: {}", terminal_line(&terminal, &no_terminal, listen.addr)).unwrap();
+        // The second display board and where its screen is served. Both
+        // lines, because they are two things: a board on the backplane,
+        // and a monitor on it.
+        if color_tv {
+            writeln!(
+                s,
+                "color tv: model lispm-tv at 17200000, 576 x 454 four-bit; no netlist of it on \
+                 chip"
+            )
+            .unwrap();
+            let at = color_listen.map_or(listen.addr, |a| a.addr);
+            writeln!(
+                s,
+                "color terminal: {}; pixels only, no keyboard or mouse",
+                terminal_line(&color_screen, &no_color_screen, at)
+            )
+            .unwrap();
+        }
         writeln!(s, "keyboard: {keyboard_said}; boot sequence {boot_keys} with Rubout or Return")
             .unwrap();
         if let Some(end) = &serial {
@@ -4788,7 +5039,7 @@ fn main() {
             // from an engine is a clock, and this one has the machine's
             // periods; `tests/micro_chaos.rs` holds the two engines to
             // the same conversation with the server.
-            let mut m = machine(&prom, packs, boards, tv_board);
+            let mut m = machine(&prom, packs, boards, tv_board, color_tv);
             m.chaos = chaos.clone();
             m.plug_chaos(0);
             let mut e = Micro::new(m);
@@ -4796,7 +5047,7 @@ fn main() {
                 e.boot();
             }
             if let Some(p) = &resume {
-                resume_engine("micro", &mut e, tv_board, p);
+                resume_engine("micro", &mut e, tv_board, color_tv, p);
             }
             let run = Run {
                 stop,
@@ -4805,11 +5056,12 @@ fn main() {
                 setup: &setup,
                 hold: !auto_boot,
                 clocks: capture_tv_time,
+                color: color_screen.as_mut(),
             };
             time_engine("micro", Alone(e), terminal.as_mut(), serial.as_mut(), run);
         }
         Which::Rtl => {
-            let mut m = machine(&prom, packs, boards, tv_board);
+            let mut m = machine(&prom, packs, boards, tv_board, color_tv);
             // The Chaosnet, as under chip: the interface on the I/O board
             // and, if a link was bound, the network on its cable.
             m.chaos = chaos.clone();
@@ -4839,6 +5091,7 @@ fn main() {
                     stop,
                     terminal.as_mut(),
                     debuggee_terminal.as_mut(),
+                    color_screen.as_mut(),
                     capture,
                 );
             } else if let Some(Connect::Endpoint(addr)) = cable_connect {
@@ -4860,7 +5113,7 @@ fn main() {
                 eprintln!("debug cable: DBGOUT connected to the debuggee at {addr}");
                 let reader = stream.try_clone().expect("a second handle on the cable");
                 if let Some(p) = &resume {
-                    resume_engine("rtl", &mut e, tv_board, p);
+                    resume_engine("rtl", &mut e, tv_board, color_tv, p);
                 }
                 let run = Run {
                     stop,
@@ -4869,6 +5122,7 @@ fn main() {
                     setup: &setup,
                     hold: !auto_boot,
                     clocks: capture_tv_time,
+                    color: color_screen.as_mut(),
                 };
                 time_engine(
                     "rtl, debugger",
@@ -4886,10 +5140,16 @@ fn main() {
                     std::process::exit(1);
                 });
                 eprintln!("debug cable: DBGOUT at the fabric's window at {at:#x}");
-                time_fabric(FreeRunning::new(e, window), stop, terminal.as_mut(), &setup);
+                time_fabric(
+                    FreeRunning::new(e, window),
+                    stop,
+                    terminal.as_mut(),
+                    color_screen.as_mut(),
+                    &setup,
+                );
             } else {
                 if let Some(p) = &resume {
-                    resume_engine("rtl", &mut e, tv_board, p);
+                    resume_engine("rtl", &mut e, tv_board, color_tv, p);
                 }
                 let run = Run {
                     stop,
@@ -4898,6 +5158,7 @@ fn main() {
                     setup: &setup,
                     hold: !auto_boot,
                     clocks: capture_tv_time,
+                    color: color_screen.as_mut(),
                 };
                 // The machine with DBGIN's connector at it, listening or
                 // not: a debugger that connects is plugged in between two
@@ -4942,6 +5203,7 @@ fn main() {
                 setup: &setup,
                 hold: !auto_boot,
                 clocks: capture_tv_time,
+                color: color_screen.as_mut(),
             };
             time_chip(
                 cable,
@@ -4955,6 +5217,7 @@ fn main() {
                 run,
                 resume,
                 tv_board,
+                color_tv,
                 watch,
             );
         }

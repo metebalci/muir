@@ -15,7 +15,7 @@
 
 use muir::busint::{self, Responder};
 use muir::machine::{MAIN_WORDS, Machine, bus_error};
-use muir::tv::{self, Board, Tv, mode};
+use muir::tv::{self, Board, FRAME_NS, Tv, mode};
 
 mod support;
 use support::release;
@@ -495,4 +495,285 @@ fn the_board_and_its_colour_map_go_through_a_checkpoint() {
     wrong[0] = 2;
     let err = Tv::default().load(&mut Reader::new(&wrong)).unwrap_err().to_string();
     assert!(err.contains("display board 2"), "{err}");
+}
+
+// --- The color TV, the second board ----------------------------------------
+
+/// **The color TV's strap is MIT's other x**, and neither board answers
+/// the other's addresses.
+///
+/// `lmtv.order`: "Note: For the normal TV, x is 6.  For the color TV, x is
+/// 5", and of the buffer, "The normal TV has x equal to 0, so the buffer
+/// starts at 17000000.  The color TV has x equal to 2, and so the buffer
+/// starts at 17200000." System 100 asks for the same two ---
+/// `COLOR:MAKE-SCREEN` in `sys/window/color.lisp` defines the screen
+/// `:BUFFER -600000 :CONTROL-ADDRESS 377750`, whose `(LOGAND ... 377777)`
+/// is `200000` as an Xbus I/O offset --- so the strap is settled twice
+/// over.
+#[test]
+fn the_color_tv_is_strapped_to_mits_other_x() {
+    let src = lmtv_order();
+    assert!(src.contains("For the color TV, x is 5"), "which x the color TV is");
+    assert!(src.contains("has x equal to 2, and so the buffer starts at 17200000"));
+    assert_eq!(tv::COLOR_TV.control, 0o17377750, "173777x0 with x = 5");
+    assert_eq!(tv::COLOR_TV.buffer, 0o17200000);
+
+    // Each strap answers its own eight registers and 32K buffer words, and
+    // nothing of the other's.
+    let colour = Tv::color();
+    let normal = Tv::default();
+    assert_eq!(colour.strap(), tv::COLOR_TV);
+    assert_eq!(normal.strap(), tv::NORMAL_TV);
+    for (what, phys) in [("the buffer", 0o17200000), ("the last buffer word", 0o17277777)] {
+        assert!(tv::COLOR_TV.buffer_offset(phys).is_some(), "the colour {what}");
+        assert!(
+            tv::NORMAL_TV.buffer_offset(phys).is_none(),
+            "and the normal board is not at {what}"
+        );
+    }
+    assert_eq!(tv::COLOR_TV.buffer_offset(0o17277777), Some(0o77777));
+    assert!(tv::COLOR_TV.buffer_offset(0o17300000).is_none(), "past the colour buffer");
+    assert_eq!(tv::COLOR_TV.control_register(0o17377754), Some(4), "the colour register");
+    assert_eq!(tv::COLOR_TV.control_register(0o17377757), Some(7), "the last of the eight");
+    assert!(tv::COLOR_TV.control_register(0o17377760).is_none(), "which is the normal board's 0");
+    assert_eq!(tv::NORMAL_TV.control_register(0o17377760), Some(0));
+    assert!(tv::NORMAL_TV.control_register(0o17377750).is_none(), "the colour board's 0");
+    assert!(!tv::NORMAL_TV.answers(0o17200000) && !tv::NORMAL_TV.answers(0o17377750));
+    assert!(!tv::COLOR_TV.answers(0o17000000) && !tv::COLOR_TV.answers(0o17377760));
+
+    // The colour board is a LISPM TV: the four-bit picture and its map are
+    // that board's, and `--tv-board` is the normal TV's flag alone.
+    assert_eq!(colour.board(), Board::LispmTv);
+}
+
+/// **The colour picture's geometry is MIT's own**, read out of
+/// `COLOR:MAKE-SCREEN`.
+///
+/// Read from the vendored release; skipped without it.
+#[test]
+fn the_colour_geometry_is_mits_own() {
+    let Some(src) = release("window/color.lisp") else { return };
+    let at = src.find("(DEFUN MAKE-SCREEN").expect("COLOR:MAKE-SCREEN");
+    let block = &src[at..at + 600];
+    assert!(block.contains("':BITS-PER-PIXEL 4"), "four bits a pixel:\n{block}");
+    assert!(block.contains("':HEIGHT 454."), "the height:\n{block}");
+    assert!(block.contains("':WIDTH 576."), "the width:\n{block}");
+    assert!(block.contains("':CONTROL-ADDRESS CONTROL-ADR"), "the control address:\n{block}");
+    assert!(block.contains("(CONTROL-ADR 377750)"), "and where that is:\n{block}");
+    assert!(block.contains("(XBUS-ADR -600000)"), "and where the buffer is:\n{block}");
+    assert_eq!(tv::COLOR_WIDTH, 576);
+    assert_eq!(tv::COLOR_HEIGHT, 454);
+    assert_eq!(tv::COLOR_BITS_PER_PIXEL, 4);
+    assert_eq!(tv::COLOR_WORDS_PER_LINE, 72, "576 pixels of 4 bits is 72 words of 32");
+
+    // `(LOGAND (TV:SCREEN-BUFFER SCREEN) 377777)` of `-600000`, which is
+    // what `COLOR-EXISTS-P` writes to as an Xbus I/O offset.
+    let offset = (-0o600000i32) as u32 & 0o377777;
+    assert_eq!(tv::BUFFER + offset, tv::COLOR_TV.buffer, "COLOR-EXISTS-P's own address");
+}
+
+/// **A four-bit pixel is a nibble of the buffer, the low one first.**
+///
+/// `COLOR:MAKE-SCREEN` displaces an `ART-4B` array onto the buffer.
+/// `sys/cold/qcom.lisp` gives `ART-4B` eight elements a word of four bits
+/// each, and `XCOLOR-TRANSFORM` in `sys/ucadr/uc-hacks.lisp` --- MIT's own
+/// microcode walking such an array over this screen --- takes element `k`
+/// from bit `4 * (k mod 8)` of word `k / 8`: `((M-K) DPB M-J (BYTE-FIELD 3
+/// 2) A-ZERO) ;Rotation amount in bits`, and the word offset
+/// `(BYTE-FIELD (DIFFERENCE Q-POINTER-WIDTH 3) 3) M-Q`. So the low nibble
+/// is the leftmost pixel, as `lmtv.order` has the low-order bit of a word
+/// sent to the TV first.
+#[test]
+fn a_four_bit_pixel_is_a_nibble_low_one_first() {
+    let mut tv = Tv::color();
+    // The first eight pixels of line 0, in a word: 0, 1, 2 ... 7.
+    tv.write_buffer(0, 0x7654_3210);
+    for x in 0..8 {
+        assert_eq!(tv.pixel4(x, 0), x as u8, "pixel {x} of the first word");
+    }
+    // The ninth is the next word's low nibble, and a line is 72 words.
+    tv.write_buffer(1, 0x0000_000f);
+    assert_eq!(tv.pixel4(8, 0), 0o17);
+    tv.write_buffer(tv::COLOR_WORDS_PER_LINE as u32, 0x0000_00a0);
+    assert_eq!(tv.pixel4(0, 1), 0, "line 1 begins a word later");
+    assert_eq!(tv.pixel4(1, 1), 0o12);
+    // The last pixel of the last line is inside the buffer.
+    let last = (tv::COLOR_HEIGHT - 1) * tv::COLOR_WORDS_PER_LINE + tv::COLOR_WORDS_PER_LINE - 1;
+    assert!((last as u32) < tv::BUFFER_WORDS, "454 lines of 72 words fit the 32K buffer");
+    tv.write_buffer(last as u32, 0x9000_0000);
+    assert_eq!(tv.pixel4(tv::COLOR_WIDTH - 1, tv::COLOR_HEIGHT - 1), 9);
+}
+
+/// **The map is shown inverted**, because that is the software's own model
+/// of it: `WRITE-COLOR-MAP` stores `377 - value` and `READ-COLOR-MAP`
+/// hands back `377 - stored`. What the D-A off the board makes of a stored
+/// byte is undocumented, so the inversion is the only reference there is,
+/// and `Tv::rgb` is where that decision lives.
+#[test]
+fn the_map_is_shown_inverted_as_the_software_stores_it() {
+    let mut tv = Tv::color();
+    // A map fresh from power-on holds zeros, which show as full white ---
+    // the inversion, applied to a board nobody has written.
+    assert_eq!(tv.rgb(0), [255, 255, 255], "the unwritten map");
+
+    // What `WRITE-COLOR-MAP` puts in the register: `377 - value`, so
+    // `COLOR-MAP-ON`, 377, is written as 0 and `COLOR-MAP-OFF`, 0, as 377.
+    let (on, off): (u32, u32) = (0, 0o377);
+
+    // `R-G-B-COLOR-MAP`'s colour 0: `COLOR-MAP-OFF` on every channel.
+    for channel in 0..3u32 {
+        tv.write_control(4, off << 8 | channel << 6, 0);
+    }
+    assert_eq!(tv.color_map()[0], [0o377, 0o377, 0o377], "stored inverted");
+    assert_eq!(tv.rgb(0), [0, 0, 0], "and shown black");
+
+    // Colour 1, full green: `COLOR-MAP-ON` on channel 1 and off on the
+    // others.
+    tv.write_control(4, off << 8 | 1, 0);
+    tv.write_control(4, on << 8 | 1 << 6 | 1, 0);
+    tv.write_control(4, off << 8 | 2 << 6 | 1, 0);
+    assert_eq!(tv.color_map()[1], [0o377, 0, 0o377]);
+    assert_eq!(tv.rgb(1), [0, 255, 0], "full green");
+
+    // The colour is four bits: `WRITE-COLOR-MAP` writes `(LOGAND LOC 17)`.
+    assert_eq!(tv.rgb(0o21), tv.rgb(1), "the address is four bits wide");
+}
+
+/// **`COLOR-EXISTS-P`'s probe: the board answers when it is fitted and the
+/// bus faults when it is not.**
+///
+/// `sys/window/color.lisp`: `XBUS-LOCATION-EXISTS-P` writes `BITS` into
+/// the address and reads it back with the error stop off
+/// (`XBUS-READ-NO-PARITY`), and `COLOR-EXISTS-P` calls it with `1` at
+/// `(LOGAND (TV:SCREEN-BUFFER SCREEN) 377777)`, the first word of the
+/// colour buffer. That is how the release finds out whether there is a
+/// colour screen, so a machine without the board has to give it the NXM.
+#[test]
+fn color_exists_p_finds_the_board_only_when_it_is_fitted() {
+    const PROBE: u32 = 0o17200000;
+    const CONTROL: u32 = 0o17377750;
+    let m = MAIN_WORDS;
+
+    // The decode, which is what says whether anything is there at all.
+    for phys in [PROBE, PROBE + 0o77777, CONTROL, CONTROL + 7] {
+        assert_eq!(busint::decode(phys, m), Responder::NoXbus, "{phys:o} with no board");
+        assert_eq!(busint::decode_with(phys, m, false), Responder::NoXbus);
+        assert_eq!(busint::decode_with(phys, m, true), Responder::Device, "{phys:o} with one");
+    }
+    // The normal board is there either way, and the gap between the two
+    // control blocks is nobody's.
+    assert_eq!(busint::decode_with(0o17377760, m, false), Responder::Device, "the normal TV");
+    assert_eq!(busint::decode_with(0o17300000, m, true), Responder::NoXbus, "past the buffer");
+
+    // The probe itself, on a machine with no board: the write goes
+    // nowhere and the read faults.
+    let mut without = Machine::new();
+    assert!(without.color_tv.is_none());
+    without.bus_write(PROBE, 1);
+    assert_eq!(without.bus_read(PROBE), 0);
+    assert_ne!(without.bus_error & bus_error::XBUS_NXM, 0, "COLOR-EXISTS-P gets the NXM");
+
+    // And with the board: the word reads back, which is what
+    // `(BIT-TEST BITS ...)` wants.
+    let mut with = Machine::new();
+    with.fit_color_tv();
+    with.bus_write(PROBE, 1);
+    assert_eq!(with.bus_read(PROBE), 1, "the board answers");
+    assert_eq!(with.bus_error & bus_error::XBUS_NXM, 0, "and no bus error");
+    // The main screen is untouched by it: two boards, two buffers.
+    assert_eq!(with.tv.read_buffer(0), 0, "the main screen's first word");
+    // The colour board's own registers, at the other strap.
+    with.bus_write(CONTROL + 4, 0o252 << 8 | 5);
+    assert_eq!(with.color_tv.as_ref().unwrap().color_map()[5], [0o252, 0, 0]);
+    assert_eq!(with.tv.color_map()[5], [0, 0, 0], "and not the main board's map");
+}
+
+/// **Both display boards drive the one interrupt line, and `-XBUS INIT`
+/// reaches both.**
+///
+/// `-XBUS.INTR` is a bused line with one open-collector driver a board, so
+/// the line is the boards ORed; `-XBUS INIT` likewise reaches every board
+/// on the backplane. Nothing in System 100 enables the colour board's
+/// interrupt --- `COLOR:SETUP` starts its sync with `(SI:START-SYNC 3 0
+/// 36.)`, which `CC-TV-START-SYNC` writes as the clock mode alone --- but
+/// the wire is the wire.
+#[test]
+fn both_boards_are_on_the_one_interrupt_line() {
+    let mut m = Machine::new();
+    m.fit_color_tv();
+    // A mode write puts its own bit 4 into the vertical flag's flop, so
+    // one that enables the interrupt leaves the flag down; a frame later
+    // the program's `TVMA CLR` has preset it again. Both boards run the
+    // PROM's program from power-on, so a frame is `FRAME_NS` for each.
+    m.ns = FRAME_NS;
+    assert!(!m.xbus_interrupt(), "neither enable is up");
+
+    // The colour board alone, through its own registers.
+    m.bus_write(0o17377750, mode::INTERRUPT_ENABLE);
+    assert!(!m.xbus_interrupt(), "the write cleared the flag");
+    m.ns += FRAME_NS;
+    assert!(m.xbus_interrupt(), "the colour board's SEND INTR is on the line");
+    assert!(m.color_tv.as_ref().unwrap().interrupt(m.ns));
+    assert!(!m.tv.interrupt(m.ns), "and it is not the main board's");
+
+    // The main board alone.
+    m.bus_write(0o17377750, 0);
+    assert!(!m.xbus_interrupt());
+    m.bus_write(0o17377760, mode::INTERRUPT_ENABLE);
+    m.ns += FRAME_NS;
+    assert!(m.xbus_interrupt(), "the main board's");
+    assert!(!m.color_tv.as_ref().unwrap().interrupt(m.ns), "with the colour board's enable down");
+
+    // `-XBUS INIT` clears the vertical flag on both: `Machine::bus_reset`
+    // is the wire.
+    m.bus_write(0o17377750, mode::INTERRUPT_ENABLE);
+    m.ns += FRAME_NS;
+    assert!(m.tv.vert_flag(m.ns) && m.color_tv.as_ref().unwrap().vert_flag(m.ns));
+    m.bus_reset();
+    assert!(!m.tv.vert_flag(m.ns), "the main board's flag cleared");
+    assert!(!m.color_tv.as_ref().unwrap().vert_flag(m.ns), "and the colour board's");
+    assert!(!m.xbus_interrupt(), "so nothing is on the line");
+}
+
+/// **A checkpoint carries the second board, and whether there was one.**
+/// A machine with a colour screen is not the machine without one, so a
+/// resume that disagrees is refused rather than run --- `--color-tv` by
+/// name, as `--tv-board` is --- and this is the half of that the format
+/// holds.
+#[test]
+fn the_color_tv_goes_through_a_machine_checkpoint() {
+    use muir::checkpoint::{Reader, Writer};
+
+    let mut m = Machine::new();
+    m.fit_color_tv();
+    m.bus_write(0o17200000, 0x1234_5678);
+    m.bus_write(0o17377750, 3); // clock mode 3, as COLOR:SETUP starts it
+    m.bus_write(0o17377754, 0o252 << 8 | 1 << 6 | 5);
+    let mut w = Writer::new();
+    m.save(&mut w);
+    let body = w.finish();
+
+    let mut back = Machine::new();
+    back.fit_color_tv();
+    back.load(&mut Reader::new(&body)).unwrap();
+    let tv = back.color_tv.as_ref().expect("the board came back");
+    assert_eq!(tv.strap(), tv::COLOR_TV);
+    assert_eq!(tv.board(), Board::LispmTv);
+    assert_eq!(tv.read_buffer(0), 0x1234_5678);
+    assert_eq!(tv.mode() & tv::mode::CLOCK, 3);
+    assert_eq!(tv.color_map()[5], [0, 0o252, 0]);
+
+    // A machine built without the board takes the same file and comes back
+    // with one, so that the flag's refusal has something to compare.
+    let mut plain = Machine::new();
+    plain.load(&mut Reader::new(&body)).unwrap();
+    assert!(plain.color_tv.is_some(), "the checkpoint says there was a board");
+
+    // And the other way: a machine with no board writes none.
+    let mut w = Writer::new();
+    Machine::new().save(&mut w);
+    let mut had = Machine::new();
+    had.fit_color_tv();
+    had.load(&mut Reader::new(&w.finish())).unwrap();
+    assert!(had.color_tv.is_none(), "and none when there was none");
 }

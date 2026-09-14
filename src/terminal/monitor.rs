@@ -194,6 +194,10 @@ impl Monitor {
             height: self.lines,
             words_per_line: WORDS_A_LINE,
             black_on_white: false,
+            // The raster this accumulates is `MECL VIDEO OUT`, one dot a
+            // bit; the colour board's nibbles leave on other pins and no
+            // monitor here takes them.
+            colours: None,
         }
     }
 

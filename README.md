@@ -128,6 +128,21 @@ netlist `chip` builds the backplane with and the board the model answers
 as on `micro`, on `rtl` and under `--tv model`; the start says which the
 run has, and a checkpoint carries it.
 
+`--color-tv` fits a second display board, **the color TV** --- MIT's own
+spelling, and the software's `COLOR-SCREEN`. It is a LISPM TV strapped to
+the other addresses `cadrtv/lmtv.order` gives: the frame buffer at
+`17200000` and the registers at `17377750`, "for the color TV, x is 5". The
+main screen stays at `17000000` whichever board `--tv-board` named, because
+System 100 hardwires `MAIN-SCREEN` to one bit a pixel there. It is off by
+default, and a machine without it answers those addresses with an NXM,
+which is how the release's `COLOR-EXISTS-P` finds out there is no colour
+screen. With it fitted the cold boot sets the board up: `COLOR:SETUP` loads
+the NTSC sync program, starts it in clock mode 3 with vertical spacing 36,
+and writes the sixteen colours of the map. The picture is 576 by 454 at
+four bits a pixel through that map, served on `--color-terminal`. It is the
+model on every engine, `chip` included: there is no netlist of a LISPM TV
+strapped colour on the backplane.
+
 ## The netlists
 
 A netlist here is the board itself --- every part, every pin, every wire. None
@@ -219,6 +234,7 @@ work.
          [--disk-pack <image>[,<unit>][,ro]]
          [--main-memory netlist|model] [--io-board netlist|model]
          [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
+         [--color-tv [--color-terminal [<endpoint>]]]
          [--terminal [<endpoint>]]
          [--debug-in-process [--debuggee-disk-pack <image>[,<unit>][,ro]]
                              [--debuggee-terminal [<endpoint>]]]
@@ -256,6 +272,12 @@ address or address:port. An address other than the loopback is worth
 meaning: RFB's `None` security is the only type offered, so a viewer needs
 no password. A port that is named there is bound as it stands, and the run
 stops rather than serving a viewer somewhere it was not told to look.
+
+With `--color-tv` the colour screen is served too, at the display above
+this one or wherever `--color-terminal` says. **Pixels only**: the machine
+has one keyboard and one mouse, both on the I/O board, and they stay with
+the terminal that serves the main screen, so what a viewer types or points
+at there is dropped. `--tv-capture` is the main screen as well.
 
 The machine's other way out is its serial port, the Signetics 2651 at J9,
 and `--serial <endpoint>` is where it is reached: a TCP port, or
@@ -345,7 +367,8 @@ the lashup it records both machines on one canvas, the debugger's screen at
 the left and the debuggee's at the right, so that a frame is one instant on
 both: in one process the two are one clock, and a GIF writes each frame's
 length in centiseconds, which two files of the same run could not hold
-together.
+together. It is the main screen: the color TV's is served and not
+recorded.
 
 `--checkpoint <file>` writes the machine's whole state when the run stops,
 and `--resume <file>` starts from it instead of booting: the engine that

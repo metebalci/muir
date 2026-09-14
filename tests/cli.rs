@@ -1102,3 +1102,106 @@ fn keyboard_boot_takes_four_spellings_and_names_them_to_the_rest() {
     }
     refused(&["--keyboard-boot"], "--keyboard-boot");
 }
+
+/// A viewer of our own: RFC 6143's opening exchange as far as `ServerInit`,
+/// whose first four bytes are the screen's width and height.  The idiom is
+/// `tests/muir_lashup.rs`'s, which reads the lashup's two displays the same
+/// way.
+fn rfb_screen(addr: &str) -> (u16, u16) {
+    use std::io::Read;
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut s = loop {
+        match TcpStream::connect(addr) {
+            Ok(s) => break s,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => panic!("{addr}: {e}"),
+        }
+    };
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    let mut version = [0u8; 12];
+    s.read_exact(&mut version).unwrap();
+    assert_eq!(&version, b"RFB 003.008\n", "{addr}: the version offered");
+    s.write_all(&version).unwrap();
+    let mut types = [0u8; 2];
+    s.read_exact(&mut types).unwrap();
+    assert_eq!(types, [1, 1], "{addr}: one security type, None");
+    s.write_all(&[1]).unwrap();
+    let mut result = [0u8; 4];
+    s.read_exact(&mut result).unwrap();
+    assert_eq!(result, [0; 4], "{addr}: SecurityResult ok");
+    s.write_all(&[1]).unwrap();
+    let mut init = [0u8; 24];
+    s.read_exact(&mut init).unwrap();
+    (u16::from_be_bytes([init[0], init[1]]), u16::from_be_bytes([init[2], init[3]]))
+}
+
+/// **`--color-tv` fits the second display board on every engine**, and the
+/// start says the board and where its screen is served.  There is no
+/// netlist of a LISPM TV strapped colour, so `chip` takes the model as the
+/// other two do rather than warning the flag away.
+#[test]
+fn the_color_tv_is_fitted_on_every_engine() {
+    for engine in ["--micro", "--rtl"] {
+        let out = muir().args([engine, "--color-tv", "--stop-after", "1"]).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}:\n{t}");
+        assert!(t.contains("color tv: model lispm-tv at 17200000"), "{engine}: the board:\n{t}");
+        assert!(t.contains("color terminal: vnc://"), "{engine}: and its screen:\n{t}");
+        assert!(t.contains("pixels only"), "{engine}: which has no keyboard:\n{t}");
+        assert!(!t.contains("warning: --color-tv"), "{engine}: and is not ignored:\n{t}");
+    }
+    let out = muir()
+        .args(["--chip", "--main-memory-boards", "4", "--tv", "model"])
+        .args(["--color-tv", "--stop-after", "1"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "chip:\n{t}");
+    assert!(t.contains("color tv: model lispm-tv"), "chip has it as the model:\n{t}");
+    assert!(t.contains("no netlist of it on chip"), "and says there is no netlist:\n{t}");
+
+    // Off unless it is asked for: a CADR has one screen unless somebody
+    // plugged a second board in.
+    let out = muir().args(["--rtl", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(!t.contains("color tv:"), "no second board unasked:\n{t}");
+}
+
+/// **The colour screen is a second RFB server of 576 by 454**, at the
+/// display above the main one or where `--color-terminal` says; and the
+/// flag without the board is refused, as is the main screen's endpoint.
+#[test]
+fn the_color_terminal_serves_the_colour_screen() {
+    refused(&["--rtl", "--color-terminal", "--stop-after", "1"], "--color-terminal");
+
+    // Both displays on ports the host picks, each said on stderr as it is
+    // bound.  The run is killed once the colour screen has answered.
+    let run = muir()
+        .args(["--rtl", "--color-tv", "--terminal", "127.0.0.1:0"])
+        .args(["--color-terminal", "127.0.0.1:0", "--stop-after", "400000000"])
+        .start();
+    let endpoint = |t: &str| {
+        t.lines()
+            .find_map(|l| l.trim().strip_prefix("color terminal: vnc://"))
+            .map(|rest| rest.split([' ', ';']).next().unwrap().to_string())
+    };
+    run.stderr().wait_until(|t| endpoint(t).is_some(), "the colour screen said where it is");
+    let said = run.stderr().so_far();
+    let at = endpoint(&said).unwrap();
+    let main = said
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("terminal: vnc://"))
+        .map(|rest| rest.split(' ').next().unwrap().to_string())
+        .unwrap();
+    assert_ne!(at, main, "two screens, two ports:\n{said}");
+    let screen = rfb_screen(&at);
+    run.kill();
+    assert_eq!(
+        screen,
+        (muir::tv::COLOR_WIDTH as u16, muir::tv::COLOR_HEIGHT as u16),
+        "COLOR:MAKE-SCREEN's 576 by 454"
+    );
+}

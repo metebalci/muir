@@ -1869,7 +1869,11 @@ impl Rtl {
                 // the answer arrives.
                 self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
                 self.bus_data = self.m.md;
-                self.bus_responder = busint::decode(self.bus_addr, self.m.main.len());
+                self.bus_responder = busint::decode_with(
+                    self.bus_addr,
+                    self.m.main.len(),
+                    self.m.color_tv.is_some(),
+                );
                 self.busint.request(self.wrcyc);
                 self.bus_cycles += 1;
                 self.bus_written = false;
