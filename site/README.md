@@ -27,7 +27,7 @@ Hand-written files, no build step and no generator:
                   buffer and the size the page shows it at. Made by starting
                   `target/release/muir` as step 4 says, waiting for the boot,
                   and typing `ss` at the prompt; then recompressed, since
-                  `SimpleTv::png` writes stored deflate blocks and zlib -9
+                  `Tv::png` writes stored deflate blocks and zlib -9
                   puts the same pixels in 2.4K rather than 93K.
     style.css     the stylesheet the three pages share
     .nojekyll     keeps GitHub Pages from running Jekyll over it

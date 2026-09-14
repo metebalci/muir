@@ -140,7 +140,7 @@ fn the_monitor_terminates_the_cable() {
 #[test]
 #[ignore = "a frame of board time is about half a minute: cargo test --test monitor -- --ignored --nocapture"]
 fn the_monitor_is_handed_the_boards_picture() {
-    use muir::simpletv::BUFFER;
+    use muir::tv::BUFFER;
     /// 768 dots at 32 bits a word.
     const WORDS_A_LINE: u32 = 24;
     /// Buffer line 0 is raster line 9: eight border lines and the dark one.

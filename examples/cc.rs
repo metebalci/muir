@@ -42,9 +42,9 @@ use muir::engine::Engine;
 use muir::lashup::Lashup;
 use muir::machine::Machine;
 use muir::rtl::Rtl;
-use muir::simpletv::SimpleTv;
 use muir::spy;
 use muir::terminal::keyboard::{Keyboard, keysym};
+use muir::tv::Tv;
 
 fn vendor(parts: &[&str]) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -53,7 +53,7 @@ fn vendor(parts: &[&str]) -> PathBuf {
     p
 }
 
-fn dump(t: &SimpleTv, at: u64, pc: u16) {
+fn dump(t: &Tv, at: u64, pc: u16) {
     let p = vendor(&["run", &format!("screen-cc-{at}.png")]);
     std::fs::write(&p, t.png()).unwrap();
     println!("{}: {} pixels lit, PC {:o}", p.display(), t.lit(), pc);
@@ -121,7 +121,7 @@ fn main() {
     let settle: u64 =
         std::env::var("MUIR_CC_SETTLE").ok().and_then(|v| v.parse().ok()).unwrap_or(30_000_000);
     run(&mut l, settle);
-    dump(&l.debugger.machine().simpletv, l.steps.0, l.debugger.pc());
+    dump(&l.debugger.machine().tv, l.steps.0, l.debugger.pc());
     let mut k = Keyboard::new();
     // Each line with the microcycles to give it, `line@cycles`; without a
     // count, an equal share of the window.
@@ -149,12 +149,12 @@ fn main() {
         while l.steps.0 < until {
             run(&mut l, 1_000_000);
             if l.steps.0 >= next_dump {
-                dump(&l.debugger.machine().simpletv, l.steps.0, l.debugger.pc());
+                dump(&l.debugger.machine().tv, l.steps.0, l.debugger.pc());
                 next_dump += interval;
             }
         }
     }
-    dump(&l.debugger.machine().simpletv, l.steps.0, l.debugger.pc());
+    dump(&l.debugger.machine().tv, l.steps.0, l.debugger.pc());
     let (a, b) = (&l.debugger, &l.debuggee);
     println!(
         "A: {} microcycles, {} debug cycles on the cable, bus error {:o}",

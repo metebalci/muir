@@ -27,7 +27,7 @@
 //! the run was made.  Each changes once its second ticks, a small frame of
 //! its own.
 
-use crate::simpletv::{HEIGHT, SimpleTv, WIDTH};
+use crate::tv::{HEIGHT, Tv, WIDTH};
 
 /// The height of the clock line below the screen, when it is shown: two
 /// rows of margin above and below a `GLYPH_H`-tall digit doubled.
@@ -127,7 +127,7 @@ impl Recorder {
     /// The screen at `ns` of the machine's time, the wall clock reading
     /// `wall_ns` since midnight: a frame if the canvas differs from the
     /// last.
-    pub fn sample(&mut self, tv: &SimpleTv, ns: u64, wall_ns: u64) {
+    pub fn sample(&mut self, tv: &Tv, ns: u64, wall_ns: u64) {
         self.screens(&[tv], ns, wall_ns);
     }
 
@@ -135,13 +135,13 @@ impl Recorder {
     /// left of the canvas and the debuggee's at the right, on a recorder
     /// made by [`Recorder::pair`].  `ns` is the debugger's clock and times
     /// the frame for both.
-    pub fn sample_pair(&mut self, debugger: &SimpleTv, debuggee: &SimpleTv, ns: u64, wall_ns: u64) {
+    pub fn sample_pair(&mut self, debugger: &Tv, debuggee: &Tv, ns: u64, wall_ns: u64) {
         self.screens(&[debugger, debuggee], ns, wall_ns);
     }
 
     /// The canvas as `screens` shows it, left to right: a frame if it
     /// differs from the last.
-    fn screens(&mut self, screens: &[&SimpleTv], ns: u64, wall_ns: u64) {
+    fn screens(&mut self, screens: &[&Tv], ns: u64, wall_ns: u64) {
         assert_eq!(
             self.width,
             screens.len() * WIDTH + (screens.len() - 1) * PAIR_RULE,

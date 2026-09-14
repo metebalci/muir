@@ -139,7 +139,7 @@ fn boots_and_reads_a_file<E: Engine>(mut e: E, root: std::path::PathBuf, name: &
         e.step().expect("the machine halted");
     }
     let from = packets(&e).len();
-    let before = lit_rows(&e, 0..muir::simpletv::HEIGHT);
+    let before = lit_rows(&e, 0..muir::tv::HEIGHT);
     // No Return after it: the listener runs a form as soon as its last
     // parenthesis is in, and a Return typed after would sit in the
     // keyboard buffer as typeahead. `PROBE-FILE` is
@@ -153,7 +153,7 @@ fn boots_and_reads_a_file<E: Engine>(mut e: E, root: std::path::PathBuf, name: &
             e.step().expect("the machine halted");
         }
         ran_more += 1_000_000;
-        if packets(&e).len() > from && lit_rows(&e, 0..muir::simpletv::HEIGHT) != before {
+        if packets(&e).len() > from && lit_rows(&e, 0..muir::tv::HEIGHT) != before {
             break;
         }
     }
@@ -176,13 +176,13 @@ fn boots_and_reads_a_file<E: Engine>(mut e: E, root: std::path::PathBuf, name: &
         "{name}: and the service answered it"
     );
     assert_ne!(
-        lit_rows(&e, 0..muir::simpletv::HEIGHT),
+        lit_rows(&e, 0..muir::tv::HEIGHT),
         before,
         "{name}: and the band printed what it found"
     );
     let png = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join(format!("vendor/run/micro-chaos-{name}.png"));
-    std::fs::write(&png, e.machine().simpletv.png()).unwrap();
+    std::fs::write(&png, e.machine().tv.png()).unwrap();
     eprintln!("{name}'s screen at {}", png.display());
     assert_eq!(e.machine().bus_error, 0, "{name}: every cycle of the machine's was answered");
 }

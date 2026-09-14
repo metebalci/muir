@@ -41,7 +41,7 @@ fn parses_to_the_expected_shape() {
     assert_eq!(n.populated_pages().len(), 23);
     let rams = n.parts.iter().filter(|p| p.kind == "2118").count();
     assert_eq!(rams, 64, "four rows of sixteen 16K DRAMs");
-    assert_eq!(rams * 16_384, muir::simpletv::BUFFER_WORDS as usize * 32);
+    assert_eq!(rams * 16_384, muir::tv::BUFFER_WORDS as usize * 32);
 }
 
 /// **Every page is a LISPM TV page.** The same filename collision as the
@@ -135,7 +135,7 @@ fn matches_mits_wire_list() {
 #[test]
 fn the_board_comes_up_on_the_bus() {
     use muir::part::Level;
-    use muir::simpletv::{BUFFER, CONTROL, mode};
+    use muir::tv::{BUFFER, CONTROL, mode};
     use muir::xbus::XbusMaster;
 
     let n = lispmtv();
@@ -176,7 +176,7 @@ fn the_board_comes_up_on_the_bus() {
 #[test]
 fn an_instruction_of_the_sync_program_in_each_clock_mode() {
     use muir::part::Level;
-    use muir::simpletv::CONTROL;
+    use muir::tv::CONTROL;
     use muir::xbus::XbusMaster;
 
     let n = lispmtv();
@@ -210,7 +210,7 @@ fn an_instruction_of_the_sync_program_in_each_clock_mode() {
         );
         assert_eq!(
             periods[0],
-            32 * muir::simpletv::sync::INSTRUCTION_NS[mode as usize],
+            32 * muir::tv::sync::INSTRUCTION_NS[mode as usize],
             "mode {mode}: 32 instructions a line"
         );
     }

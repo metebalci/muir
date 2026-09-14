@@ -179,7 +179,7 @@ pub fn control_register(phys: u32) -> Option<u32> {
 /// makes; so where `lmtv.order` has the enable "cleared by Xbus reset",
 /// the drawing has it cleared by the backplane's `-XBUS POWER RESET`, and
 /// the drawing is followed: a bus reset leaves both standing
-/// ([`SimpleTv::xbus_init`]), and power-on --- [`SyncRam::default`] ---
+/// ([`Tv::xbus_init`]), and power-on --- [`SyncRam::default`] ---
 /// clears them.
 ///
 /// The enable is also what selects the RAM over the PROM at NSYRAM --- the
@@ -224,7 +224,7 @@ impl SyncRam {
 /// The frame buffer, the mode register, the vertical flag, and the sync
 /// program RAM with the program running.
 #[derive(Clone)]
-pub struct SimpleTv {
+pub struct Tv {
     buffer: Vec<u32>,
     mode: u32,
     /// Registers 1 to 3.
@@ -240,15 +240,15 @@ pub struct SimpleTv {
     timeline: Option<Timeline>,
     /// When the program running started from its location 0, in the
     /// machine's nanoseconds: power-on, or the last change of program or
-    /// clock mode ([`SimpleTv::restart`]).
+    /// clock mode ([`Tv::restart`]).
     origin: u64,
 }
 
-impl Default for SimpleTv {
+impl Default for Tv {
     fn default() -> Self {
         let sync = SyncRam::default();
         let timeline = Timeline::of(sync.program(), 0);
-        SimpleTv {
+        Tv {
             buffer: vec![0; BUFFER_WORDS as usize],
             mode: 0,
             sync,
@@ -260,7 +260,7 @@ impl Default for SimpleTv {
     }
 }
 
-impl SimpleTv {
+impl Tv {
     /// The program the board is running, as the model runs it: `None` while
     /// what is loaded makes no frame.
     pub fn timeline(&self) -> Option<&Timeline> {
@@ -428,7 +428,7 @@ impl SimpleTv {
     /// everything else the write carries has nowhere to be stored. A write
     /// that changes the program the generator runs --- the clock mode, the
     /// RAM's selection, or a word of the RAM while it is selected --- runs
-    /// it afresh ([`SimpleTv::restart`]).
+    /// it afresh ([`Tv::restart`]).
     pub fn write_control(&mut self, register: u32, v: u32, ns: u64) {
         match register {
             0 => {
@@ -467,7 +467,7 @@ impl SimpleTv {
     /// receiver of the backplane's `-XBUS POWER RESET`, a wire of its own
     /// that the interface drives from the cable's `-BUS.POWER.RESET`
     /// (OLORD2 1A06).  Power-on is the only processor event that raises it,
-    /// so here only [`SimpleTv::default`] clears them.  `-BUS.POWER.RESET`
+    /// so here only [`Tv::default`] clears them.  `-BUS.POWER.RESET`
     /// is the 74S37 at OLORD2 1A06 inverting `POWER RESET A`, and `POWER
     /// RESET A` is `-POWER RESET` inverted by the 74S02 at 1A11 (pin 8 on
     /// ground); `-POWER RESET` comes off the 74LS14 at 1A20 from the
@@ -548,11 +548,11 @@ impl SyncRam {
     }
 }
 
-impl SimpleTv {
+impl Tv {
     /// The display into a checkpoint: the frame buffer, the mode, the sync
     /// RAM and the vertical flag.
     pub fn save(&self, w: &mut crate::checkpoint::Writer) {
-        let SimpleTv { buffer, mode, sync, flag_written, written_at, timeline: _, origin } = self;
+        let Tv { buffer, mode, sync, flag_written, written_at, timeline: _, origin } = self;
         w.u32s(buffer);
         w.u32(*mode);
         sync.save(w);

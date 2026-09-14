@@ -14,10 +14,10 @@ use std::path::PathBuf;
 use muir::engine::Engine;
 use muir::ioboard::KB_CLK_NS;
 use muir::rtl::Rtl;
-use muir::simpletv::FRAME_NS;
 use muir::sym::{self, Space};
 use muir::terminal::keyboard::Keyboard;
 use muir::terminal::mouse::Mouse;
+use muir::tv::FRAME_NS;
 
 mod support;
 use support::{CHAOS_100, boot_to_the_prompt, machine_with_pack, type_at};
@@ -72,7 +72,7 @@ fn the_pointer_moves_the_machines_mouse() {
         "MOUSE-INITIALIZE ran: the mouse screen is the main screen"
     );
     assert_ne!(
-        e.machine().simpletv.mode() & muir::simpletv::mode::INTERRUPT_ENABLE,
+        e.machine().tv.mode() & muir::tv::mode::INTERRUPT_ENABLE,
         0,
         "SETUP-CPT enabled the vertical interrupt"
     );
@@ -115,6 +115,6 @@ fn the_pointer_moves_the_machines_mouse() {
     assert!(x2 > x1, "moved right: {x1} -> {x2}");
     assert!(y2 > y1, "moved down: {y1} -> {y2}");
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vendor/run/screen-mouse.png");
-    std::fs::write(&p, e.machine().simpletv.png()).unwrap();
+    std::fs::write(&p, e.machine().tv.png()).unwrap();
     eprintln!("screen at {}", p.display());
 }

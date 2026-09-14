@@ -20,7 +20,7 @@
 //!
 //! **Where the pixels come from is the caller's choice, and there are two
 //! sources.** `micro` and `rtl` have no video timing --- see
-//! [`crate::simpletv`] --- so they hand over the frame buffer itself,
+//! [`crate::tv`] --- so they hand over the frame buffer itself,
 //! [`Frame::of`]. `chip` with the netlist display board scans out for
 //! real, 966 lines at 16.000 us with 912 of them carrying 768 dots, and
 //! the faithful frame is the raster a monitor accumulates off `MECL VIDEO
@@ -46,7 +46,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-use crate::simpletv::{self, SimpleTv};
+use crate::tv::{self, Tv};
 use rfb::{ClientMessage, PixelFormat, Version};
 
 /// What the viewer's window is called.
@@ -62,7 +62,7 @@ pub struct Frame<'a> {
     pub height: usize,
     pub words_per_line: usize,
     /// Whether a one bit shows black rather than white: the display
-    /// board's [`simpletv::mode::BOW`].
+    /// board's [`tv::mode::BOW`].
     pub black_on_white: bool,
 }
 
@@ -72,12 +72,12 @@ impl<'a> Frame<'a> {
     /// because every write to the board is mirrored into the model
     /// (`crate::buses`), but it is not what the monitor sees: the monitor
     /// sees what the board scans out.
-    pub fn of(tv: &'a SimpleTv) -> Frame<'a> {
+    pub fn of(tv: &'a Tv) -> Frame<'a> {
         Frame {
             words: tv.buffer(),
-            width: simpletv::WIDTH,
-            height: simpletv::HEIGHT,
-            words_per_line: simpletv::WORDS_PER_LINE,
+            width: tv::WIDTH,
+            height: tv::HEIGHT,
+            words_per_line: tv::WORDS_PER_LINE,
             black_on_white: tv.black_on_white(),
         }
     }
@@ -91,7 +91,7 @@ impl<'a> Frame<'a> {
 
     /// Whether the monitor shows this pixel white.
     ///
-    /// The same rule as [`SimpleTv::shows_white`], stated again because a
+    /// The same rule as [`Tv::shows_white`], stated again because a
     /// frame may be a raster and not that buffer;
     /// `tests/terminal.rs` holds the two to each other pixel for pixel.
     pub fn shows_white(&self, x: usize, y: usize) -> bool {
@@ -565,7 +565,7 @@ pub const INPUT_BACKLOG: usize = 256;
 pub const MAX_VIEWERS: usize = 8;
 
 /// The most often a viewer is given the whole screen: one frame of the
-/// board's own raster, [`simpletv::FRAME_NS`], which is 15.456 ms.
+/// board's own raster, [`tv::FRAME_NS`], which is 15.456 ms.
 ///
 /// A viewer asks for an update either incrementally, meaning what has
 /// changed, or not, meaning the whole screen. A well-behaved one asks
@@ -580,7 +580,7 @@ pub const MAX_VIEWERS: usize = 8;
 /// picture faster than it scans one, so nothing is lost by it. In an
 /// ordinary run it never bites: `main` attends the terminal every 33 ms,
 /// which is longer.
-const FULL_UPDATE_INTERVAL: Duration = Duration::from_nanos(simpletv::FRAME_NS);
+const FULL_UPDATE_INTERVAL: Duration = Duration::from_nanos(tv::FRAME_NS);
 
 /// What the viewers have typed and pointed at, waiting for the engine's
 /// next look, and what there was no room for.

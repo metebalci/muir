@@ -16,7 +16,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use muir::capture::PAIR_RULE;
-use muir::simpletv::WIDTH;
+use muir::tv::WIDTH;
 
 use support::{Run, listening, muir, scratch, text};
 
@@ -145,7 +145,7 @@ fn the_lashup_serves_both_displays() {
     let a = rfb_screen(&first);
     let b = rfb_screen(&second);
     lashup.kill();
-    let screen = (muir::simpletv::WIDTH as u16, muir::simpletv::HEIGHT as u16);
+    let screen = (muir::tv::WIDTH as u16, muir::tv::HEIGHT as u16);
     assert_eq!(a, screen, "the debugger's screen");
     assert_eq!(b, screen, "the debuggee's screen");
 }

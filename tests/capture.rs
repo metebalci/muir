@@ -8,7 +8,7 @@
 mod support;
 
 use muir::capture::{PAIR_RULE, Recorder, TIME_H};
-use muir::simpletv::{HEIGHT, SimpleTv, WIDTH};
+use muir::tv::{HEIGHT, Tv, WIDTH};
 
 use crate::support::{Frame, decode_gif};
 
@@ -21,7 +21,7 @@ const PAIR_W: usize = 2 * WIDTH + PAIR_RULE;
 /// the whole screen and the changed rectangle, pixel for pixel.
 #[test]
 fn the_recording_decodes_to_the_screens() {
-    let mut tv = SimpleTv::default();
+    let mut tv = Tv::default();
     tv.write_buffer(3, 0xa5a5_a5a5);
     tv.write_buffer(24 * 100 + 7, 0x0000_ffff);
     let mut rec = Recorder::new(false);
@@ -66,7 +66,7 @@ fn lit_columns((rect, px): &Frame) -> Vec<bool> {
 /// both reading `00:00:00`.
 #[test]
 fn the_clocks_sit_at_either_end_of_the_line() {
-    let tv = SimpleTv::default();
+    let tv = Tv::default();
     let mut rec = Recorder::new(true);
     rec.sample(&tv, 0, 0);
     let frames = decode_gif(&rec.gif());
@@ -91,7 +91,7 @@ fn the_clocks_sit_at_either_end_of_the_line() {
 #[test]
 fn each_clock_ticks_a_frame_of_its_own() {
     const S: u64 = 1_000_000_000;
-    let tv = SimpleTv::default();
+    let tv = Tv::default();
     let mut rec = Recorder::new(true);
     rec.sample(&tv, 0, 0);
     assert!(!rec.due(S / 2, S / 2));
@@ -117,7 +117,7 @@ fn each_clock_ticks_a_frame_of_its_own() {
 #[test]
 fn the_hours_wrap_at_a_hundred() {
     const H: u64 = 3600 * 1_000_000_000;
-    let tv = SimpleTv::default();
+    let tv = Tv::default();
     let mut long = Recorder::new(true);
     long.sample(&tv, 100 * H, 0);
     let mut fresh = Recorder::new(true);
@@ -139,7 +139,7 @@ fn the_hours_wrap_at_a_hundred() {
 /// rule down between them.
 #[test]
 fn the_lashup_records_two_screens_side_by_side() {
-    let (mut a, mut b) = (SimpleTv::default(), SimpleTv::default());
+    let (mut a, mut b) = (Tv::default(), Tv::default());
     // A word is 32 pixels and a row 24 words: word 0 is row 0 from the
     // left, word 24 the same of row 1.
     a.write_buffer(0, 0xffff_ffff);
@@ -166,7 +166,7 @@ fn the_lashup_records_two_screens_side_by_side() {
 /// the debugger's one wholly in the left, each on the row written.
 #[test]
 fn a_change_is_a_rectangle_on_its_own_side() {
-    let (mut a, mut b) = (SimpleTv::default(), SimpleTv::default());
+    let (mut a, mut b) = (Tv::default(), Tv::default());
     let mut r = Recorder::pair(false);
     r.sample_pair(&a, &b, 0, 0);
     b.write_buffer(24 * 40 + 2, 0xff);
@@ -189,7 +189,7 @@ fn a_change_is_a_rectangle_on_its_own_side() {
 /// line.
 #[test]
 fn the_clock_line_spans_the_pair() {
-    let tv = SimpleTv::default();
+    let tv = Tv::default();
     let mut r = Recorder::pair(true);
     r.sample_pair(&tv, &tv, 0, 0);
     let frames = decode_gif(&r.gif());

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Extract data/SIMPLETV.netlist from MIT's SUDS drawings of the display board.
 #
-# The board is the SIMPLE TV, the black-and-white display `src/simpletv.rs` models
+# The board is the SIMPLE TV, the black-and-white display `src/tv.rs` models
 # --- `'(:VIDEO :BLACK-AND-WHITE :CONTROLLER :SIMPLE)'` to the window system,
 # the "normal TV" of `cadrtv/lmtv.order`, control at `17377760` and buffer at
 # `17000000`. It is not the LISPM TV, the four- and eight-bit board of

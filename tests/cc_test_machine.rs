@@ -37,7 +37,7 @@ use std::path::PathBuf;
 
 use muir::capture::PAIR_RULE;
 use muir::engine::Engine;
-use muir::simpletv::WIDTH;
+use muir::tv::WIDTH;
 
 #[test]
 #[ignore = "loads CC and runs cc-test-machine, recording both screens: minutes; run with --ignored"]

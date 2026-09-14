@@ -117,7 +117,7 @@ fn bring_up(memory: &Netlist, switches: u8, powered_at: u64) -> Chip {
 /// switch is set when it is installed. `cadrtv/lmtv.order` says what the
 /// normal TV was strapped to --- the buffer at `17000000`, the control
 /// registers at `173777x0` with `x` 6 --- and those are
-/// [`crate::simpletv::BUFFER`] and [`crate::simpletv::CONTROL`]. `MAPADR
+/// [`crate::tv::BUFFER`] and [`crate::tv::CONTROL`]. `MAPADR
 /// 16..21` compare the buffer's top six address bits; `DEVADR 3..21` the
 /// control block's, bits 0 to 2 picking the register.
 ///
@@ -156,12 +156,12 @@ pub fn straps(board: &Netlist) -> Vec<(NetId, Level)> {
     let bit = |addr: u32, k: u32| if addr >> k & 1 != 0 { Level::High } else { Level::Low };
     for k in 16..22 {
         if let Some(net) = find(board, &format!("MAPADR {k}")) {
-            out.push((net, bit(crate::simpletv::BUFFER, k)));
+            out.push((net, bit(crate::tv::BUFFER, k)));
         }
     }
     for k in 3..22 {
         if let Some(net) = find(board, &format!("DEVADR {k}")) {
-            out.push((net, bit(crate::simpletv::CONTROL, k)));
+            out.push((net, bit(crate::tv::CONTROL, k)));
         }
     }
     // `MAPADR BANK` only: `ADR BANK SEL` is `ADR15` off the bus, not a

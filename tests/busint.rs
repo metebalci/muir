@@ -19,7 +19,7 @@ use muir::machine::MAIN_WORDS;
 /// The four regions, at their edges. Xbus memory below page `0o36000`, Xbus
 /// I/O to `0o36777`, the Unibus above that; and inside Xbus I/O, the devices
 /// built are the display's frame buffer and mode register and the disk
-/// controller's four registers. `tests/simpletv.rs` has the display's own edges.
+/// controller's four registers. `tests/tv.rs` has the display's own edges.
 #[test]
 fn the_bus_is_decoded_by_page() {
     let m = MAIN_WORDS;
@@ -876,7 +876,7 @@ fn a_bus_reset_through_the_interface_reaches_the_model_boards() {
     use muir::disk_controller::REGS;
     use muir::ioboard::{self, csr};
     use muir::part::Level;
-    use muir::simpletv::{CONTROL, mode};
+    use muir::tv::{CONTROL, mode};
 
     let (n, mut c) = interface();
     let mut m = Machine::new();
@@ -884,20 +884,20 @@ fn a_bus_reset_through_the_interface_reaches_the_model_boards() {
     m.bus_write(CONTROL, mode::INTERRUPT_ENABLE | mode::VERT);
     m.bus_write(muir::busint::unibus_physical(ioboard::CSR), csr::WRITABLE as u32);
     m.bus_write(REGS, 1 << 11);
-    assert!(m.simpletv.interrupt(1_000) && m.disk.interrupt());
+    assert!(m.tv.interrupt(1_000) && m.disk.interrupt());
     assert_eq!(m.ioboard.csr() & csr::WRITABLE, csr::WRITABLE);
     let mut buses = Buses::new(&n, m);
     let ubreset = n.by_name_id("'-LM UNIBUS RESET'").unwrap();
 
     buses.tick(&mut c, 2_000);
-    assert!(buses.machine.simpletv.interrupt(2_000), "nothing has reset yet");
+    assert!(buses.machine.tv.interrupt(2_000), "nothing has reset yet");
 
     c.drive(ubreset, Level::Low);
     c.settle();
     buses.tick(&mut c, 3_000);
     let m = &buses.machine;
-    assert!(!m.simpletv.vert_flag(3_000), "the display's flag");
-    assert_eq!(m.simpletv.mode(), mode::INTERRUPT_ENABLE, "and not its mode register");
+    assert!(!m.tv.vert_flag(3_000), "the display's flag");
+    assert_eq!(m.tv.mode(), mode::INTERRUPT_ENABLE, "and not its mode register");
     assert!(!m.disk.interrupt(), "the controller's command register");
     assert_eq!(m.ioboard.csr() & csr::WRITABLE, 0, "the I/O board's enables");
 
@@ -907,7 +907,7 @@ fn a_bus_reset_through_the_interface_reaches_the_model_boards() {
     buses.tick(&mut c, 4_000);
     buses.machine.bus_write(CONTROL, mode::INTERRUPT_ENABLE | mode::VERT);
     buses.tick(&mut c, 5_000);
-    assert!(buses.machine.simpletv.interrupt(5_000));
+    assert!(buses.machine.tv.interrupt(5_000));
 }
 
 /// **The processor's own `PROG.UNIBUS.RESET` reaches the model boards on
@@ -925,7 +925,7 @@ fn the_processors_own_bus_reset_reaches_the_model_boards() {
     use muir::isa::asm::{ALU, SETA, a_src, filler};
     use muir::micro::Micro;
     use muir::rtl::Rtl;
-    use muir::simpletv::{CONTROL, mode};
+    use muir::tv::{CONTROL, mode};
 
     /// Functional destination 2, `INTERRUPT-CONTROL`: `IR<23:19>` with
     /// `IR<25>` clear, as `asm::MD` spells destination 30.
@@ -941,7 +941,7 @@ fn the_processors_own_bus_reset_reaches_the_model_boards() {
         m.bus_write(CONTROL, mode::INTERRUPT_ENABLE | mode::VERT);
         m.bus_write(muir::busint::unibus_physical(ioboard::CSR), csr::WRITABLE as u32);
         m.bus_write(REGS, 1 << 11);
-        assert!(m.simpletv.interrupt(1_000) && m.disk.interrupt());
+        assert!(m.tv.interrupt(1_000) && m.disk.interrupt());
         assert_eq!(m.ioboard.csr() & csr::WRITABLE, csr::WRITABLE);
         m
     }
@@ -952,8 +952,8 @@ fn the_processors_own_bus_reset_reaches_the_model_boards() {
             e.step().unwrap();
         }
         let m = e.machine();
-        assert!(!m.simpletv.vert_flag(m.ns), "{what}: the display's flag");
-        assert_eq!(m.simpletv.mode(), mode::INTERRUPT_ENABLE, "{what}: and not its mode register");
+        assert!(!m.tv.vert_flag(m.ns), "{what}: the display's flag");
+        assert_eq!(m.tv.mode(), mode::INTERRUPT_ENABLE, "{what}: and not its mode register");
         assert!(!m.disk.interrupt(), "{what}: the controller's command register");
         assert_eq!(m.ioboard.csr() & csr::WRITABLE, 0, "{what}: the I/O board's enables");
     }

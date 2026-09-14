@@ -99,7 +99,7 @@ pub struct Buses {
     pub io_board: bool,
     /// Whether the display is a netlist on the backplane, answering its
     /// frame buffer and mode register itself. Writes are mirrored into
-    /// the machine's model either way, so `machine.simpletv` is the
+    /// the machine's model either way, so `machine.tv` is the
     /// picture whichever board drew it.
     pub tv_board: bool,
     /// Whether the disk controller is a netlist on the backplane. Then its
@@ -207,8 +207,7 @@ impl Buses {
     /// Whether an Xbus address is the display's: its frame buffer or its
     /// control registers.
     fn is_display(phys: u32) -> bool {
-        crate::simpletv::buffer_offset(phys).is_some()
-            || crate::simpletv::control_register(phys).is_some()
+        crate::tv::buffer_offset(phys).is_some() || crate::tv::control_register(phys).is_some()
     }
 
     /// Whether a device board on the backplane answers this address, so
@@ -464,7 +463,7 @@ impl Buses {
         // board drives the wire itself. The I/O board's is a Unibus one,
         // and goes by the cycle above or by the netlist board's own.
         self.machine.disk.advance(now);
-        let vertical = !self.tv_board && self.machine.simpletv.interrupt(now);
+        let vertical = !self.tv_board && self.machine.tv.interrupt(now);
         let want = if self.machine.disk.interrupt() || vertical { Some(Level::Low) } else { None };
         if self.asserting(self.xintr) != want {
             self.asserting[self.xintr as usize] = want;

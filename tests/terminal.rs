@@ -12,14 +12,14 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
-use muir::simpletv::{self, SimpleTv};
 use muir::terminal::{Frame, Terminal, rfb};
+use muir::tv::{self, Tv};
 
 /// A viewer, blocking, with the server it is talking to.
 struct Viewer {
     terminal: Terminal,
     stream: TcpStream,
-    tv: SimpleTv,
+    tv: Tv,
 }
 
 impl Viewer {
@@ -29,7 +29,7 @@ impl Viewer {
         let terminal = Terminal::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
         let stream = TcpStream::connect(terminal.addr().unwrap()).unwrap();
         stream.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
-        Viewer { terminal, stream, tv: SimpleTv::default() }
+        Viewer { terminal, stream, tv: Tv::default() }
     }
 
     /// [`Viewer::open`], then RFC 6143's opening exchange as 3.8 as far as
@@ -60,7 +60,7 @@ impl Viewer {
         incremental: bool,
         bytes_per_pixel: usize,
     ) -> Vec<(u16, u16, u16, u16, Vec<u8>)> {
-        let whole = (0, 0, simpletv::WIDTH as u16, simpletv::HEIGHT as u16);
+        let whole = (0, 0, tv::WIDTH as u16, tv::HEIGHT as u16);
         self.update_rect(incremental, whole, bytes_per_pixel)
     }
 
@@ -138,8 +138,8 @@ fn formats() -> Vec<rfb::PixelFormat> {
 
 /// A screen whose bits fall in no pattern, so that a wrong bit anywhere in
 /// a byte or a word shows up rather than cancelling out.
-fn scramble(tv: &mut SimpleTv) {
-    for k in 0..(simpletv::HEIGHT * simpletv::WORDS_PER_LINE) as u32 {
+fn scramble(tv: &mut Tv) {
+    for k in 0..(tv::HEIGHT * tv::WORDS_PER_LINE) as u32 {
         tv.write_buffer(k, k.wrapping_mul(0x9e37_79b9) ^ k.rotate_left(13));
     }
 }
@@ -194,8 +194,8 @@ fn exchange_with(
 #[test]
 fn a_viewer_is_told_the_screens_size() {
     let (_v, init) = Viewer::connect();
-    assert_eq!(u16::from_be_bytes([init[0], init[1]]), simpletv::WIDTH as u16, "width");
-    assert_eq!(u16::from_be_bytes([init[2], init[3]]), simpletv::HEIGHT as u16, "height");
+    assert_eq!(u16::from_be_bytes([init[0], init[1]]), tv::WIDTH as u16, "width");
+    assert_eq!(u16::from_be_bytes([init[2], init[3]]), tv::HEIGHT as u16, "height");
     assert_eq!(
         rfb::PixelFormat::parse(&init[4..20]),
         rfb::PixelFormat::RGB888,
@@ -209,7 +209,7 @@ fn a_viewer_is_told_the_screens_size() {
 }
 
 /// **The first update is the whole screen, and it is the frame buffer.**
-/// Every pixel of it, against [`SimpleTv::shows_white`] --- so a viewer
+/// Every pixel of it, against [`Tv::shows_white`] --- so a viewer
 /// and the PNG cannot disagree about which way round the screen is.
 #[test]
 fn the_first_update_is_the_whole_screen() {
@@ -217,25 +217,25 @@ fn the_first_update_is_the_whole_screen() {
     // Something to see: a word at the top left, a word further down, and
     // the mode register left white-on-black.
     v.tv.write_buffer(0, 0x0f0f_0f0f);
-    v.tv.write_buffer(100 * simpletv::WORDS_PER_LINE as u32 + 3, 0xffff_ffff);
+    v.tv.write_buffer(100 * tv::WORDS_PER_LINE as u32 + 3, 0xffff_ffff);
 
     let rects = v.update(false, 4);
     assert_eq!(rects.len(), 1, "one rectangle for the whole screen");
     let (x, y, w, h, pixels) = &rects[0];
-    assert_eq!((*x, *y, *w, *h), (0, 0, simpletv::WIDTH as u16, simpletv::HEIGHT as u16));
+    assert_eq!((*x, *y, *w, *h), (0, 0, tv::WIDTH as u16, tv::HEIGHT as u16));
 
     let white = rfb::PixelFormat::RGB888.white();
     let mut checked = 0;
-    for row in 0..simpletv::HEIGHT {
-        for col in 0..simpletv::WIDTH {
-            let at = (row * simpletv::WIDTH + col) * 4;
+    for row in 0..tv::HEIGHT {
+        for col in 0..tv::WIDTH {
+            let at = (row * tv::WIDTH + col) * 4;
             let got = u32::from_le_bytes(pixels[at..at + 4].try_into().unwrap());
             let want = if v.tv.shows_white(col, row) { white } else { 0 };
             assert_eq!(got, want, "pixel {col},{row}");
             checked += 1;
         }
     }
-    assert_eq!(checked, simpletv::WIDTH * simpletv::HEIGHT, "every pixel of the screen");
+    assert_eq!(checked, tv::WIDTH * tv::HEIGHT, "every pixel of the screen");
 }
 
 /// **An incremental update carries only the rows that changed.** The
@@ -248,23 +248,23 @@ fn an_incremental_update_carries_only_what_changed() {
 
     // Nothing has changed: the request stays outstanding, and asking for
     // the whole screen again is the way to get an answer.
-    v.tv.write_buffer(7 * simpletv::WORDS_PER_LINE as u32 + 2, 0xdead_beef);
+    v.tv.write_buffer(7 * tv::WORDS_PER_LINE as u32 + 2, 0xdead_beef);
     let rects = v.update(true, 4);
     assert_eq!(rects.len(), 1, "one rectangle: {rects:?}");
     let (x, y, w, h, _) = rects[0];
-    assert_eq!((x, y, w, h), (0, 7, simpletv::WIDTH as u16, 1), "the one row that moved");
+    assert_eq!((x, y, w, h), (0, 7, tv::WIDTH as u16, 1), "the one row that moved");
 
     // Two rows next to each other come back as one rectangle.
     for row in [20u32, 21] {
-        v.tv.write_buffer(row * simpletv::WORDS_PER_LINE as u32, 1);
+        v.tv.write_buffer(row * tv::WORDS_PER_LINE as u32, 1);
     }
     let rects = v.update(true, 4);
     assert_eq!(rects.len(), 1, "two touching rows are one rectangle: {rects:?}");
     assert_eq!((rects[0].1, rects[0].3), (20, 2), "at row 20, two rows high");
 
     // And two apart come back as two.
-    v.tv.write_buffer(30 * simpletv::WORDS_PER_LINE as u32, 1);
-    v.tv.write_buffer(60 * simpletv::WORDS_PER_LINE as u32, 1);
+    v.tv.write_buffer(30 * tv::WORDS_PER_LINE as u32, 1);
+    v.tv.write_buffer(60 * tv::WORDS_PER_LINE as u32, 1);
     let rects = v.update(true, 4);
     assert_eq!(rects.len(), 2, "two rows apart are two rectangles: {rects:?}");
     assert_eq!((rects[0].1, rects[0].3), (30, 1));
@@ -298,7 +298,7 @@ fn a_viewer_can_ask_for_a_colour_map() {
     let rects = v.update(false, 1);
     let (_, _, _, _, pixels) = &rects[0];
     assert_eq!(pixels[0], rfb::WHITE_INDEX, "the lit pixel is the white entry");
-    assert_eq!(pixels[simpletv::WIDTH - 1], 0, "and the far end of the row is black");
+    assert_eq!(pixels[tv::WIDTH - 1], 0, "and the far end of the row is black");
 }
 
 /// **Black-on-white swaps every pixel.** `MODE BOW` is the display
@@ -308,7 +308,7 @@ fn the_mode_registers_bow_bit_swaps_the_screen() {
     let (mut v, _) = Viewer::connect();
     v.tv.write_buffer(0, 1);
     let plain = v.update(false, 4)[0].4.clone();
-    v.tv.write_control(0, simpletv::mode::BOW, 0);
+    v.tv.write_control(0, tv::mode::BOW, 0);
     let swapped = v.update(false, 4)[0].4.clone();
     let white = rfb::PixelFormat::RGB888.white().to_le_bytes();
     assert_eq!(&plain[0..4], &white, "the lit bit is white to start with");
@@ -318,22 +318,22 @@ fn the_mode_registers_bow_bit_swaps_the_screen() {
 }
 
 /// **A frame and the frame buffer agree on which way round the screen
-/// is.** The rule lives in [`SimpleTv::shows_white`] and again in
+/// is.** The rule lives in [`Tv::shows_white`] and again in
 /// [`Frame::shows_white`], because a frame may be a monitor's raster and
 /// not that buffer; this is the check that the second copy says the same
 /// as the first.
 #[test]
 fn a_frame_shows_what_the_frame_buffer_shows() {
-    let mut tv = SimpleTv::default();
+    let mut tv = Tv::default();
     for (k, word) in [0x0000_0001u32, 0xffff_ffff, 0xaaaa_5555, 0x8000_0000].iter().enumerate() {
         tv.write_buffer(k as u32, *word);
     }
     for bow in [false, true] {
-        tv.write_control(0, if bow { simpletv::mode::BOW } else { 0 }, 0);
+        tv.write_control(0, if bow { tv::mode::BOW } else { 0 }, 0);
         let frame = Frame::of(&tv);
         assert_eq!(frame.black_on_white, bow);
         for y in 0..4 {
-            for x in 0..simpletv::WIDTH {
+            for x in 0..tv::WIDTH {
                 assert_eq!(frame.shows_white(x, y), tv.shows_white(x, y), "{x},{y} bow {bow}");
             }
         }
@@ -481,7 +481,7 @@ fn pointer_event(buttons: u8, x: u16, y: u16) -> Vec<u8> {
 /// A `FramebufferUpdateRequest` for the whole screen the viewer was told of.
 fn update_request(incremental: bool) -> Vec<u8> {
     let mut b = vec![3u8, incremental as u8];
-    for v in [0u16, 0, simpletv::WIDTH as u16, simpletv::HEIGHT as u16] {
+    for v in [0u16, 0, tv::WIDTH as u16, tv::HEIGHT as u16] {
         b.extend_from_slice(&v.to_be_bytes());
     }
     b
@@ -505,7 +505,7 @@ fn an_unpublished_version_is_spoken_to_as_3_3() {
     assert_eq!(&v.exchange(&[], 12)[..], rfb::VERSION);
     assert_eq!(v.exchange(b"RFB 003.889\n", 4), [0, 0, 0, 1], "3.3: the type None, as a word");
     let head = v.exchange(&[1], 24);
-    assert_eq!(u16::from_be_bytes([head[0], head[1]]), simpletv::WIDTH as u16, "ServerInit");
+    assert_eq!(u16::from_be_bytes([head[0], head[1]]), tv::WIDTH as u16, "ServerInit");
 }
 
 /// **A 3.8 viewer that picks a type not offered is told why before the
@@ -538,7 +538,7 @@ fn viewers_beyond_the_cap_are_turned_away() {
     use muir::terminal::MAX_VIEWERS;
     let mut terminal = Terminal::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
     let addr = terminal.addr().unwrap();
-    let tv = SimpleTv::default();
+    let tv = Tv::default();
     let streams: Vec<TcpStream> =
         (0..=MAX_VIEWERS).map(|_| TcpStream::connect(addr).unwrap()).collect();
     for _ in 0..20 {
@@ -594,29 +594,26 @@ fn a_taller_frame_is_clipped_to_the_screen_the_viewer_was_told_of() {
     fn frame(words: &[u32]) -> Frame<'_> {
         Frame {
             words,
-            width: simpletv::WIDTH,
-            height: words.len() / simpletv::WORDS_PER_LINE,
-            words_per_line: simpletv::WORDS_PER_LINE,
+            width: tv::WIDTH,
+            height: words.len() / tv::WORDS_PER_LINE,
+            words_per_line: tv::WORDS_PER_LINE,
             black_on_white: false,
         }
     }
     let (mut v, _) = Viewer::connect();
-    let tall = simpletv::HEIGHT + 16;
-    let mut words = vec![0u32; tall * simpletv::WORDS_PER_LINE];
+    let tall = tv::HEIGHT + 16;
+    let mut words = vec![0u32; tall * tv::WORDS_PER_LINE];
     let (t, s) = (&mut v.terminal, &mut v.stream);
     let head = exchange_with(t, s, frame(&words), &update_request(false), 4);
     assert_eq!(u16::from_be_bytes([head[2], head[3]]), 1, "one rectangle");
     let r = exchange_with(t, s, frame(&words), &[], 12);
     let at = |k: usize| u16::from_be_bytes([r[k], r[k + 1]]);
-    assert_eq!(
-        (at(0), at(2), at(4), at(6)),
-        (0, 0, simpletv::WIDTH as u16, simpletv::HEIGHT as u16)
-    );
-    exchange_with(t, s, frame(&words), &[], simpletv::WIDTH * simpletv::HEIGHT * 4);
+    assert_eq!((at(0), at(2), at(4), at(6)), (0, 0, tv::WIDTH as u16, tv::HEIGHT as u16));
+    exchange_with(t, s, frame(&words), &[], tv::WIDTH * tv::HEIGHT * 4);
 
     // A change on the screen and one below it: the one on the screen goes.
-    words[5 * simpletv::WORDS_PER_LINE] = 1;
-    words[(simpletv::HEIGHT + 3) * simpletv::WORDS_PER_LINE] = 1;
+    words[5 * tv::WORDS_PER_LINE] = 1;
+    words[(tv::HEIGHT + 3) * tv::WORDS_PER_LINE] = 1;
     let head = exchange_with(t, s, frame(&words), &update_request(true), 4);
     assert_eq!(u16::from_be_bytes([head[2], head[3]]), 1, "one rectangle");
     let r = exchange_with(t, s, frame(&words), &[], 12);
@@ -909,7 +906,7 @@ fn a_beep_reaches_the_viewer_as_a_bell() {
 #[test]
 fn a_bell_with_no_viewers_is_not_held() {
     let mut terminal = Terminal::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
-    let tv = SimpleTv::default();
+    let tv = Tv::default();
     terminal.ring();
     terminal.poll(Frame::of(&tv));
 
@@ -921,7 +918,7 @@ fn a_bell_with_no_viewers_is_not_held() {
     assert_eq!(exchange_with(&mut terminal, &mut stream, frame, &[1], 4), vec![0, 0, 0, 0]);
     // `ServerInit` and nothing before it: no bell arrived first.
     let head = exchange_with(&mut terminal, &mut stream, frame, &[1], 24);
-    assert_eq!(u16::from_be_bytes([head[0], head[1]]), simpletv::WIDTH as u16, "ServerInit");
+    assert_eq!(u16::from_be_bytes([head[0], head[1]]), tv::WIDTH as u16, "ServerInit");
 }
 
 /// **Every pixel format a viewer may ask for is sent as
@@ -937,12 +934,12 @@ fn every_pixel_format_is_sent_as_put_would_write_it() {
         for bow in [false, true] {
             let (mut v, _) = Viewer::connect();
             scramble(&mut v.tv);
-            v.tv.write_control(0, if bow { simpletv::mode::BOW } else { 0 }, 0);
+            v.tv.write_control(0, if bow { tv::mode::BOW } else { 0 }, 0);
             v.set_format(f);
             let n = f.bytes_per_pixel().unwrap();
             let rects = v.update(false, n);
             assert_eq!(rects.len(), 1, "one rectangle for the whole screen");
-            let want = as_put_would(Frame::of(&v.tv), f, (0, 0, simpletv::WIDTH, simpletv::HEIGHT));
+            let want = as_put_would(Frame::of(&v.tv), f, (0, 0, tv::WIDTH, tv::HEIGHT));
             assert_eq!(rects[0].4.len(), want.len(), "{f:?} bow {bow}: as many bytes");
             assert!(rects[0].4 == want, "{f:?} bow {bow}: the pixels put would write");
         }

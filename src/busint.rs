@@ -29,7 +29,7 @@
 //!   the other masters on the bus, of which the disk is one.
 //!
 
-use crate::{disk_controller, ioboard, simpletv, spy};
+use crate::{disk_controller, ioboard, spy, tv};
 
 /// "it is the responsibility of the bus master to assert good address, write,
 /// and data lines 80 ns. prior to asserting -XBUS.RQ" --- `xspec.text.3`.
@@ -1030,8 +1030,8 @@ pub fn decode(phys: u32, memory_words: usize) -> Responder {
     } else if page >= 0o36000 {
         // The frame buffer is the bottom of Xbus I/O space; the display's
         // mode register and the disk's four share the top page with it.
-        let built = simpletv::buffer_offset(phys).is_some()
-            || simpletv::control_register(phys).is_some()
+        let built = tv::buffer_offset(phys).is_some()
+            || tv::control_register(phys).is_some()
             || disk_controller::register(phys).is_some();
         if built { Responder::Device } else { Responder::NoXbus }
     } else if (phys as usize) < memory_words {

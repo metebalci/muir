@@ -72,7 +72,7 @@ const HARNESS: Chosen =
 /// going out three microcycles earlier --- `-XBUS WR` low at PC 30027 and
 /// `-XBUS RQ` low 80 ns after it, the deskew `cadr1/xspec.text.3` asks of
 /// a master, with address `017051763`, word 21491 of the frame buffer
-/// ([`muir::simpletv::BUFFER`] and `BUFFER_WORDS`). `-XBUS ACK` comes back
+/// ([`muir::tv::BUFFER`] and `BUFFER_WORDS`). `-XBUS ACK` comes back
 /// 857 ns later and the request is released at 887, by which time the
 /// microinstruction in progress is 25333. So **a frame-buffer write takes
 /// 887 ns on `chip` where `rtl` charges 145**, and 25333 --- which is
@@ -1622,7 +1622,7 @@ fn chip_agrees_with_rtl() {
     // `chip`'s cables and `rtl`'s machine --- as `screen-chip-<n>.png` and
     // `screen-rtl-<n>.png`, for comparing what the two boards drew.
     if let Ok(dir) = std::env::var("MUIR_SCREEN") {
-        for (name, tv) in [("chip", &far.buses.machine.simpletv), ("rtl", &r.m.simpletv)] {
+        for (name, tv) in [("chip", &far.buses.machine.tv), ("rtl", &r.m.tv)] {
             let p = std::path::Path::new(&dir).join(format!("screen-{name}-{cycles}.png"));
             std::fs::write(&p, tv.png()).unwrap();
             eprintln!("{}: {} pixels lit", p.display(), tv.lit());

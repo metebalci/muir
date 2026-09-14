@@ -32,8 +32,8 @@ use muir::lashup::Lashup;
 use muir::machine::Machine;
 use muir::mcr;
 use muir::rtl::Rtl;
-use muir::simpletv::WIDTH;
 use muir::terminal::keyboard::{Keyboard, keysym};
+use muir::tv::WIDTH;
 
 pub use crate::support::{ChaosServer, pack_100, time, vendor};
 
@@ -140,7 +140,7 @@ static SHARED_ROOT: Mutex<()> = Mutex::new(());
 
 /// Lit pixels in rows `rows` of A's screen.
 pub fn lit_rows(l: &Lashup, rows: std::ops::Range<usize>) -> usize {
-    let tv = &l.debugger.machine().simpletv;
+    let tv = &l.debugger.machine().tv;
     rows.flat_map(|y| (0..WIDTH).map(move |x| (x, y))).filter(|&(x, y)| tv.pixel(x, y)).count()
 }
 
@@ -163,8 +163,8 @@ impl Cc {
             self.l.step().expect("a machine halted");
             if self.l.steps.0 >= self.next_sample {
                 self.rec.sample_pair(
-                    &self.l.debugger.machine().simpletv,
-                    &self.l.debuggee.machine().simpletv,
+                    &self.l.debugger.machine().tv,
+                    &self.l.debuggee.machine().tv,
                     self.l.debugger.ns(),
                     muir::capture::wall_clock(),
                 );
@@ -238,7 +238,7 @@ impl Cc {
         self.l
             .debugger
             .machine()
-            .simpletv
+            .tv
             .buffer()
             .iter()
             .fold(0xcbf2_9ce4_8422_2325u64, |h, &w| (h ^ w as u64).wrapping_mul(0x100_0000_01b3))
@@ -410,7 +410,7 @@ impl Cc {
     /// A's screen as a PNG under `vendor/run`.
     pub fn screenshot(&self, name: &str) -> PathBuf {
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("vendor/run/{name}.png"));
-        std::fs::write(&p, self.l.debugger.machine().simpletv.png()).unwrap();
+        std::fs::write(&p, self.l.debugger.machine().tv.png()).unwrap();
         eprintln!("A's screen at {}", p.display());
         p
     }
