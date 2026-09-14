@@ -37,6 +37,17 @@
 //! Either board is strapped here as the normal TV, at `17000000` and
 //! `17377760`.
 //!
+//! **A second board, the color TV.** `lmtv.order`: "For the normal TV, x
+//! is 6.  For the color TV, x is 5", and the buffer "starts at 17200000".
+//! That is [`COLOR_TV`], a LISPM TV strapped there and fitted by
+//! `--color-tv`; the main screen stays at `17000000` whichever board
+//! `--tv-board` named, because System 100 hardwires `MAIN-SCREEN` to one
+//! bit a pixel there and defines `COLOR-SCREEN` at `17200000`
+//! ([`Tv::color`]). Its picture is 576 by 454 at four bits a pixel
+//! ([`Tv::pixel4`]) through the sixteen colours of the map
+//! ([`Tv::rgb`]). On `chip` it is the model too: there is no netlist of
+//! a LISPM TV strapped colour on the backplane.
+//!
 //! **The sync program is run.** The board's timing is the program in its
 //! sync RAM, or in its PROM until the software selects the RAM, and the
 //! model runs that program as the board does ([`sync`]): the vertical flag
@@ -89,6 +100,75 @@ pub const HEIGHT: usize = 963;
 /// `(DEFVAR MAIN-SCREEN-LOCATIONS-PER-LINE (SELECT-PROCESSOR (:CADR 24.)))`
 /// --- 24 words of 32 bits is the 768 pixels of a line, one bit each.
 pub const WORDS_PER_LINE: usize = 24;
+
+/// Where a board is strapped on the Xbus: `lmtv.order`'s x, which the two
+/// boards of a two-screen machine are wired to two values of.
+///
+/// > Note: For the normal TV, x is 6.  For the color TV, x is 5.
+///
+/// and, of the buffer, "The normal TV has x equal to 0, so the buffer
+/// starts at 17000000.  The color TV has x equal to 2, and so the buffer
+/// starts at 17200000." Two xs, because the registers and the buffer are
+/// two decodes; one strap, because one board carries both.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Strap {
+    /// First word of this board's 32K-word frame buffer.
+    pub buffer: u32,
+    /// First of its eight control words.
+    pub control: u32,
+}
+
+/// The normal TV's strap, [`BUFFER`] and [`CONTROL`]: whichever board
+/// `--tv-board` put there.
+pub const NORMAL_TV: Strap = Strap { buffer: BUFFER, control: CONTROL };
+
+/// The color TV's strap: the buffer at `17200000` and the registers at
+/// `17377750`, `lmtv.order`'s x = 2 and x = 5. System 100 asks for exactly
+/// these --- `COLOR:MAKE-SCREEN` in `sys/window/color.lisp` defines the
+/// screen `:BUFFER -600000 :CONTROL-ADDRESS 377750`, and `COLOR-EXISTS-P`
+/// probes `(LOGAND (TV:SCREEN-BUFFER SCREEN) 377777)`, which is `200000`
+/// as an Xbus I/O offset.
+pub const COLOR_TV: Strap = Strap { buffer: 0o17200000, control: 0o17377750 };
+
+impl Strap {
+    /// The word offset into this board's frame buffer a physical address
+    /// names, if it is in it.
+    pub fn buffer_offset(self, phys: u32) -> Option<u32> {
+        let off = phys.wrapping_sub(self.buffer);
+        (off < BUFFER_WORDS).then_some(off)
+    }
+
+    /// Which of this board's control registers a physical address names,
+    /// if it is one.
+    pub fn control_register(self, phys: u32) -> Option<u32> {
+        let off = phys.wrapping_sub(self.control);
+        (off < CONTROL_WORDS).then_some(off)
+    }
+
+    /// Whether a board at this strap answers the address at all.
+    pub fn answers(self, phys: u32) -> bool {
+        self.buffer_offset(phys).is_some() || self.control_register(phys).is_some()
+    }
+}
+
+/// `(:WIDTH 576.)` of `COLOR:MAKE-SCREEN` --- the colour picture's width in
+/// pixels, which is `lmtv.order`'s "successive 4-bit pixels of the video
+/// buffer at a 12 MHz rate" over the 36 video cycles of 64 bits a line
+/// that `COLOR:SYNC` fetches (`tests/sync_program.rs`).
+pub const COLOR_WIDTH: usize = 576;
+
+/// `(:HEIGHT 454.)` of `COLOR:MAKE-SCREEN`, which is the 227 picture lines
+/// of each of `COLOR:SYNC`'s two NTSC fields.
+pub const COLOR_HEIGHT: usize = 454;
+
+/// `(:BITS-PER-PIXEL 4)` of `COLOR:MAKE-SCREEN`: a pixel is a colour, the
+/// four-bit address into the map.
+pub const COLOR_BITS_PER_PIXEL: usize = 4;
+
+/// Words of the buffer a colour line takes: 576 pixels of 4 bits is 2304
+/// bits, 72 words of 32.  The screen array `COLOR:MAKE-SCREEN` displaces
+/// onto the buffer is `ART-4B` and this is its row.
+pub const COLOR_WORDS_PER_LINE: usize = COLOR_WIDTH * COLOR_BITS_PER_PIXEL / 32;
 
 /// Which display board this is: `--tv-board`, on every engine.
 ///
@@ -244,17 +324,16 @@ pub mod mode {
 /// terminal's refresh among them.
 pub const FRAME_NS: u64 = 15_456_000;
 
-/// The word offset into the frame buffer a physical address names, if it is
-/// in it.
+/// The word offset into the normal TV's frame buffer a physical address
+/// names, if it is in it: [`NORMAL_TV`]'s.
 pub fn buffer_offset(phys: u32) -> Option<u32> {
-    let off = phys.wrapping_sub(BUFFER);
-    (off < BUFFER_WORDS).then_some(off)
+    NORMAL_TV.buffer_offset(phys)
 }
 
-/// Which control register a physical address names, if it is one.
+/// Which of the normal TV's control registers a physical address names, if
+/// it is one: [`NORMAL_TV`]'s.
 pub fn control_register(phys: u32) -> Option<u32> {
-    let off = phys.wrapping_sub(CONTROL);
-    (off < CONTROL_WORDS).then_some(off)
+    NORMAL_TV.control_register(phys)
 }
 
 /// The sync program RAM and its two registers, `lmtv.order`'s `173777x1`
@@ -316,6 +395,10 @@ impl SyncRam {
 pub struct Tv {
     /// Which of the two boards this is: what mode bit 7 reads.
     board: Board,
+    /// Where on the Xbus it is strapped, and so which screen it is: the
+    /// normal TV or the color TV.  The backplane's, not the software's:
+    /// it does not change under a running machine.
+    strap: Strap,
     buffer: Vec<u32>,
     mode: u32,
     /// Registers 1 to 3.
@@ -343,6 +426,7 @@ impl Default for Tv {
         let timeline = Timeline::of(sync.program(), 0);
         Tv {
             board: Board::default(),
+            strap: NORMAL_TV,
             buffer: vec![0; BUFFER_WORDS as usize],
             mode: 0,
             sync,
@@ -356,9 +440,26 @@ impl Default for Tv {
 }
 
 impl Tv {
+    /// **The color TV**: a LISPM TV strapped to [`COLOR_TV`], which is the
+    /// second display board a CADR can carry and what `--color-tv` fits.
+    ///
+    /// A LISPM TV because that is the board the four-bit picture and its
+    /// map belong to --- `lmtv.order` is its specification and MIT's own
+    /// `lmtv4b` is the four-bit build of it --- and because the main board
+    /// may be either: `--tv-board` is the normal TV's and not this one's.
+    pub fn color() -> Tv {
+        Tv { board: Board::LispmTv, strap: COLOR_TV, ..Tv::default() }
+    }
+
     /// Which board this is.
     pub fn board(&self) -> Board {
         self.board
+    }
+
+    /// Where on the Xbus this board is strapped: [`NORMAL_TV`] or
+    /// [`COLOR_TV`].
+    pub fn strap(&self) -> Strap {
+        self.strap
     }
 
     /// Puts the model on the other board. What `--tv-board` does, where
@@ -447,6 +548,45 @@ impl Tv {
     pub fn pixel(&self, x: usize, y: usize) -> bool {
         let bit = y * WORDS_PER_LINE * 32 + x;
         self.buffer[bit / 32] >> (bit % 32) & 1 != 0
+    }
+
+    /// The four-bit pixel at `x`, `y` of the colour picture: the colour,
+    /// which is an address into [`Tv::color_map`].
+    ///
+    /// `COLOR:MAKE-SCREEN` displaces an `ART-4B` array onto the buffer, so
+    /// a pixel is an element of one: `sys/cold/qcom.lisp` gives `ART-4B`
+    /// eight elements a word of four bits each, and
+    /// `XCOLOR-TRANSFORM` in `sys/ucadr/uc-hacks.lisp` --- MIT's own
+    /// microcode walking such an array over this very screen --- takes
+    /// element `k` from bit `4 * (k mod 8)` of word `k / 8`
+    /// (`((M-K) DPB M-J (BYTE-FIELD 3 2) A-ZERO) ;Rotation amount in
+    /// bits`). The low nibble first, as `lmtv.order` has the low-order bit
+    /// of a word sent to the TV first. Pixel `x` of line `y` is therefore
+    /// nibble `x mod 8` of word `y * `[`COLOR_WORDS_PER_LINE`]` + x / 8`.
+    pub fn pixel4(&self, x: usize, y: usize) -> u8 {
+        let at = y * COLOR_WORDS_PER_LINE + x / 8;
+        (self.buffer[at] >> (x % 8 * COLOR_BITS_PER_PIXEL)) as u8 & 0o17
+    }
+
+    /// What the monitor shows a pixel of colour `colour` as: the three
+    /// guns, red, green and blue, from the map.
+    ///
+    /// **This is a property decision and not a fact about the D-A**, which
+    /// is off the board and undocumented --- see [`Tv::color_map`]. The
+    /// software's own model of the RAM is that it holds the complement:
+    /// `WRITE-COLOR-MAP` stores `377 - value` and `READ-COLOR-MAP` hands
+    /// back `377 - stored`, so the map that `R-G-B-COLOR-MAP` leaves for
+    /// full red has zero in the red channel. So a stored byte is rendered
+    /// as `255 - stored`, and the software's inversion is the only
+    /// reference for it. **Unverified**: a drawing or a parts list of the
+    /// paddles that carry the map RAMs and their D-As would settle what a
+    /// stored byte really makes at the monitor.
+    pub fn rgb(&self, colour: usize) -> [u8; CHANNELS] {
+        let mut out = [0; CHANNELS];
+        for (gun, stored) in out.iter_mut().zip(self.color_map[colour & (COLORS - 1)]) {
+            *gun = u8::MAX - stored;
+        }
+        out
     }
 
     /// Whether the monitor shows the pixel at `x`, `y` white: a lit bit is
@@ -721,8 +861,13 @@ impl Tv {
     /// The display into a checkpoint: which board it is, the frame buffer,
     /// the mode, the sync RAM, the colour map and the vertical flag.
     pub fn save(&self, w: &mut crate::checkpoint::Writer) {
+        // The strap is the backplane's and not the board's state: which
+        // screen this is, is where the checkpoint keeps it --- the
+        // machine's `tv` or its `color_tv` --- and `--color-tv` is refused
+        // against the checkpoint by name, as `--tv-board` is.
         let Tv {
             board,
+            strap: _,
             buffer,
             mode,
             sync,

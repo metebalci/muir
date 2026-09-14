@@ -1010,8 +1010,26 @@ pub mod error_status {
     pub const WRITE_THROUGH: u16 = 0o200;
 }
 
-/// Which side of the bus an address is on, and whether anything lives there.
+/// Which side of the bus an address is on, and whether anything lives
+/// there, on a backplane with no color TV on it.
+///
+/// [`decode_with`] is the one that takes the second display board into
+/// account; this is it with none, which is every machine `--color-tv` did
+/// not fit one to.
 pub fn decode(phys: u32, memory_words: usize) -> Responder {
+    decode_with(phys, memory_words, false)
+}
+
+/// Which side of the bus an address is on, and whether anything lives
+/// there.  `color_tv` is whether the second display board, the color TV
+/// at `17200000` and `17377750`, is on the backplane.
+///
+/// **The colour ranges answer only when the board is fitted.**
+/// `COLOR-EXISTS-P` in `sys/window/color.lisp` is how System 100 finds out
+/// whether a machine has one: it writes 1 into the first buffer word with
+/// the error stop off and reads it back, and a machine with no board there
+/// has to give it the NXM.
+pub fn decode_with(phys: u32, memory_words: usize, color_tv: bool) -> Responder {
     let page = (phys >> 8) & 0o37777;
     if page >= 0o37000 {
         // On the Unibus: the diagnostic bus's sixteen registers, of which
@@ -1030,8 +1048,8 @@ pub fn decode(phys: u32, memory_words: usize) -> Responder {
     } else if page >= 0o36000 {
         // The frame buffer is the bottom of Xbus I/O space; the display's
         // mode register and the disk's four share the top page with it.
-        let built = tv::buffer_offset(phys).is_some()
-            || tv::control_register(phys).is_some()
+        let built = tv::NORMAL_TV.answers(phys)
+            || (color_tv && tv::COLOR_TV.answers(phys))
             || disk_controller::register(phys).is_some();
         if built { Responder::Device } else { Responder::NoXbus }
     } else if (phys as usize) < memory_words {

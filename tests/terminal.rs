@@ -26,25 +26,43 @@ impl Viewer {
     /// Binds a terminal to a port the host picks and connects to it, with
     /// nothing said yet.
     fn open() -> Viewer {
+        Viewer::open_showing(Tv::default())
+    }
+
+    /// The same, showing another board: [`Tv::color`] is the color TV,
+    /// whose screen is four bits a pixel through the colour map.
+    fn open_showing(tv: Tv) -> Viewer {
         let terminal = Terminal::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
         let stream = TcpStream::connect(terminal.addr().unwrap()).unwrap();
         stream.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
-        Viewer { terminal, stream, tv: Tv::default() }
+        Viewer { terminal, stream, tv }
     }
 
     /// [`Viewer::open`], then RFC 6143's opening exchange as 3.8 as far as
     /// `ServerInit`, which it returns.
     fn connect() -> (Viewer, Vec<u8>) {
-        let mut v = Viewer::open();
-        assert_eq!(&v.exchange(&[], 12)[..], rfb::VERSION, "the version the server offers");
+        Viewer::connect_showing(Tv::default())
+    }
+
+    /// The same, showing another board.
+    fn connect_showing(tv: Tv) -> (Viewer, Vec<u8>) {
+        let mut v = Viewer::open_showing(tv);
+        let init = v.handshake();
+        (v, init)
+    }
+
+    /// RFC 6143's opening exchange as 3.8 as far as `ServerInit`, on a
+    /// viewer already opened.
+    fn handshake(&mut self) -> Vec<u8> {
+        assert_eq!(&self.exchange(&[], 12)[..], rfb::VERSION, "the version the server offers");
         // 3.8: one security type on offer, and it is None.
-        assert_eq!(v.exchange(rfb::VERSION, 2), vec![1, 1], "one type, and it is None");
-        assert_eq!(v.exchange(&[1], 4), vec![0, 0, 0, 0], "SecurityResult, and it is ok");
+        assert_eq!(self.exchange(rfb::VERSION, 2), vec![1, 1], "one type, and it is None");
+        assert_eq!(self.exchange(&[1], 4), vec![0, 0, 0, 0], "SecurityResult, and it is ok");
         // ClientInit's shared flag, then ServerInit: 24 bytes and a name.
-        let head = v.exchange(&[1], 24);
+        let head = self.exchange(&[1], 24);
         let name = u32::from_be_bytes(head[20..24].try_into().unwrap()) as usize;
-        let rest = v.exchange(&[], name);
-        (v, [head, rest].concat())
+        let rest = self.exchange(&[], name);
+        [head, rest].concat()
     }
 
     /// Writes `out`, then polls the server and reads until `want` bytes
@@ -94,15 +112,23 @@ impl Viewer {
         out
     }
 
-    /// `SetPixelFormat`, and the colour map that follows a mapped one.
+    /// `SetPixelFormat`, and the colour map that follows a mapped one:
+    /// two entries for the black-and-white screen and sixteen for the
+    /// colour one, six bytes each.
     fn set_format(&mut self, f: rfb::PixelFormat) {
         let mut m = vec![0u8, 0, 0, 0];
         m.extend_from_slice(&f.encode());
         if f.true_colour {
             self.exchange(&m, 0);
         } else {
-            let map = self.exchange(&m, 6 + 12);
+            let entries = if self.tv.strap() == tv::COLOR_TV { tv::COLORS } else { 2 };
+            let map = self.exchange(&m, 6 + 6 * entries);
             assert_eq!(map[0], 1, "SetColourMapEntries");
+            assert_eq!(
+                u16::from_be_bytes([map[4], map[5]]) as usize,
+                entries,
+                "the screen's colours"
+            );
         }
     }
 }
@@ -598,6 +624,7 @@ fn a_taller_frame_is_clipped_to_the_screen_the_viewer_was_told_of() {
             height: words.len() / tv::WORDS_PER_LINE,
             words_per_line: tv::WORDS_PER_LINE,
             black_on_white: false,
+            colours: None,
         }
     }
     let (mut v, _) = Viewer::connect();
@@ -973,4 +1000,140 @@ fn a_rectangle_that_ends_inside_a_byte_is_sent_as_put_would_write_it() {
         let want = as_put_would(Frame::of(&v.tv), rfb::PixelFormat::RGB888, (x, y, w, h));
         assert!(rects[0].4 == want, "the pixels put would write at {x}+{w}");
     }
+}
+
+/// What [`rfb::PixelFormat::put`] would write for the rectangle `(x, y, w,
+/// h)` of the colour screen, one pixel at a time: the colour of the
+/// pixel's four bits, through the map, in the viewer's format --- or the
+/// four bits themselves where the viewer asked for a mapped format, the
+/// map having gone as `SetColourMapEntries`.
+fn as_colour_put_would(
+    tv: &Tv,
+    f: rfb::PixelFormat,
+    (x, y, w, h): (usize, usize, usize, usize),
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    for row in y..y + h {
+        for col in x..x + w {
+            let colour = tv.pixel4(col, row) as usize;
+            let value = if f.true_colour { f.colour(tv.rgb(colour)) } else { colour as u32 };
+            f.put(&mut out, value);
+        }
+    }
+    out
+}
+
+/// **The colour screen is 576 by 454 at four bits a pixel, through the
+/// map.** `ServerInit` says the size `COLOR:MAKE-SCREEN` gives, and every
+/// pixel of the update is the colour its nibble names, in whatever format
+/// the viewer asked for --- held to [`rfb::PixelFormat::put`] one pixel at
+/// a time, as the black-and-white screen is.
+#[test]
+fn the_colour_screen_is_sent_through_the_map() {
+    for f in formats() {
+        let (mut v, init) = Viewer::connect_showing(Tv::color());
+        assert_eq!(
+            (u16::from_be_bytes([init[0], init[1]]), u16::from_be_bytes([init[2], init[3]])),
+            (tv::COLOR_WIDTH as u16, tv::COLOR_HEIGHT as u16),
+            "the colour screen's size"
+        );
+        // A map of sixteen different colours, and a picture that uses all
+        // of them: `WRITE-COLOR-MAP` writes `377 - value` on channel
+        // 0, 1 and 2 for red, green and blue.
+        for colour in 0..tv::COLORS as u32 {
+            for channel in 0..tv::CHANNELS as u32 {
+                let value = (colour * 0o21 + channel * 0o5) & 0o377;
+                v.tv.write_control(4, (0o377 - value) << 8 | channel << 6 | colour, 0);
+            }
+        }
+        for k in 0..(tv::COLOR_HEIGHT * tv::COLOR_WORDS_PER_LINE) as u32 {
+            v.tv.write_buffer(k, k.wrapping_mul(0x9e37_79b9) ^ k.rotate_left(13));
+        }
+        v.set_format(f);
+        let n = f.bytes_per_pixel().unwrap();
+        let whole = (0, 0, tv::COLOR_WIDTH as u16, tv::COLOR_HEIGHT as u16);
+        let rects = v.update_rect(false, whole, n);
+        assert_eq!(rects.len(), 1, "{f:?}: one rectangle, the whole screen");
+        let (x, y, w, h, pixels) = &rects[0];
+        assert_eq!((*x, *y, *w, *h), whole);
+        assert_eq!(
+            pixels,
+            &as_colour_put_would(&v.tv, f, (0, 0, tv::COLOR_WIDTH, tv::COLOR_HEIGHT)),
+            "{f:?}: the colours through the map"
+        );
+    }
+}
+
+/// **A map written while a viewer is looking repaints the screen.** The
+/// buffer has not changed, so nothing the viewer holds says the picture
+/// has; the colours it was sent no longer mean what they meant, and a
+/// mapped viewer is told the new map as well.
+#[test]
+fn a_map_written_under_a_viewer_repaints_it() {
+    let (mut v, _) = Viewer::connect_showing(Tv::color());
+    // Every pixel colour 1, and colour 1 black.
+    for k in 0..(tv::COLOR_HEIGHT * tv::COLOR_WORDS_PER_LINE) as u32 {
+        v.tv.write_buffer(k, 0x1111_1111);
+    }
+    let whole = (0, 0, tv::COLOR_WIDTH as u16, tv::COLOR_HEIGHT as u16);
+    let f = rfb::PixelFormat::RGB888;
+    let rects = v.update_rect(false, whole, 4);
+    assert_eq!(rects.len(), 1);
+    assert_eq!(v.tv.rgb(1), [255, 255, 255], "an unwritten map shows full white");
+    assert_eq!(
+        rects[0].4,
+        as_colour_put_would(&v.tv, f, (0, 0, tv::COLOR_WIDTH, tv::COLOR_HEIGHT)),
+        "and the viewer has it"
+    );
+
+    // `WRITE-COLOR-MAP 1 0 0 0`: black, stored as 377 on every channel.
+    for channel in 0..tv::CHANNELS as u32 {
+        v.tv.write_control(4, 0o377 << 8 | channel << 6 | 1, 0);
+    }
+    // Incremental, and the whole screen comes back all the same.
+    let rects = v.update_rect(true, whole, 4);
+    assert_eq!(rects.len(), 1, "the map changed, so the screen did");
+    assert_eq!((rects[0].0, rects[0].1, rects[0].2, rects[0].3), whole);
+    assert_eq!(v.tv.rgb(1), [0, 0, 0], "and colour 1 is now black");
+    assert!(rects[0].4.iter().all(|&b| b == 0), "so every pixel of it is");
+
+    // Nothing changed since, so an incremental request is left outstanding.
+    let mut request = vec![3u8, 1];
+    for value in [whole.0, whole.1, whole.2, whole.3] {
+        request.extend_from_slice(&value.to_be_bytes());
+    }
+    v.stream.write_all(&request).unwrap();
+    for _ in 0..5 {
+        v.terminal.poll(Frame::of(&v.tv));
+    }
+    let mut buf = [0u8; 1];
+    assert!(v.stream.read(&mut buf).is_err(), "nothing more to send");
+}
+
+/// **A pixels-only terminal drops what a viewer types and points at.** The
+/// machine has one keyboard and one mouse, both on the I/O board, and they
+/// stay with the terminal that serves the main screen; the colour screen
+/// is a second monitor and has neither. The bytes still come off the wire
+/// --- the stream would desync otherwise --- and go nowhere, so the queues
+/// stay empty and nothing is counted as lost.
+#[test]
+fn a_pixels_only_terminal_drops_the_keyboard_and_the_mouse() {
+    let mut v = Viewer::open_showing(Tv::color());
+    v.terminal.pixels_only = true;
+    v.handshake();
+    let mut typed = vec![4u8, 1, 0, 0];
+    typed.extend_from_slice(&0x41u32.to_be_bytes());
+    typed.extend_from_slice(&[5, 1]);
+    typed.extend_from_slice(&100u16.to_be_bytes());
+    typed.extend_from_slice(&200u16.to_be_bytes());
+    // A `FramebufferUpdateRequest` after them, so that the poll below can
+    // be waited on: the head of its answer is what says the messages
+    // before it have all been read.
+    typed.extend_from_slice(&update_request(false));
+    v.stream.write_all(&typed).unwrap();
+    let head = exchange_with(&mut v.terminal, &mut v.stream, Frame::of(&v.tv), &[], 4);
+    assert_eq!(head[0], 0, "a FramebufferUpdate, so the messages before it were read");
+    assert!(v.terminal.take_keys().is_empty(), "the key went nowhere");
+    assert!(v.terminal.take_pointers().is_empty(), "nor did the pointer");
+    assert_eq!(v.terminal.keys_lost(), 0, "and nothing was lost: it was never queued");
 }

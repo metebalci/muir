@@ -133,6 +133,24 @@ impl PixelFormat {
         0
     }
 
+    /// The pixel value for a colour given as eight bits a gun, RFC 6143
+    /// section 7.4: each gun scaled to the format's own maximum and
+    /// shifted where the format wants it.  `[255, 255, 255]` is
+    /// [`PixelFormat::white`] and `[0, 0, 0]` is [`PixelFormat::black`].
+    ///
+    /// A mapped format has no colour in the pixel --- the pixel is an
+    /// index --- so this is for true-colour formats; the caller sends
+    /// [`colour_map_entries`] instead for the other kind.
+    pub fn colour(&self, rgb: [u8; 3]) -> u32 {
+        let at = |max: u16, shift: u8, v: u8| {
+            let scaled = v as u32 * max as u32 / 255;
+            scaled.checked_shl(shift as u32).unwrap_or(0)
+        };
+        at(self.red_max, self.red_shift, rgb[0])
+            | at(self.green_max, self.green_shift, rgb[1])
+            | at(self.blue_max, self.blue_shift, rgb[2])
+    }
+
     /// One pixel, in as many bytes and whichever order the viewer asked
     /// for.
     pub fn put(&self, out: &mut Vec<u8>, value: u32) {
@@ -150,20 +168,32 @@ impl PixelFormat {
 /// format rather than a true-colour one.
 pub const WHITE_INDEX: u8 = 1;
 
-/// `SetColourMapEntries`, RFC 6143 section 7.6.2: the two colours this
-/// screen has, black at 0 and white at 1, sent to a viewer that asked for
-/// a mapped format.
-pub fn colour_map() -> Vec<u8> {
+/// `SetColourMapEntries`, RFC 6143 section 7.6.2: `colours` from index
+/// `first`, each entry sixteen bits a gun in red, green, blue order, sent
+/// to a viewer that asked for a mapped format.
+pub fn colour_map_entries(first: u16, colours: &[[u16; 3]]) -> Vec<u8> {
     let mut m = vec![1u8, 0];
-    m.extend_from_slice(&0u16.to_be_bytes()); // first colour
-    m.extend_from_slice(&2u16.to_be_bytes()); // how many
-    for _ in 0..3 {
-        m.extend_from_slice(&0u16.to_be_bytes()); // black
-    }
-    for _ in 0..3 {
-        m.extend_from_slice(&u16::MAX.to_be_bytes()); // white
+    m.extend_from_slice(&first.to_be_bytes());
+    m.extend_from_slice(&(colours.len() as u16).to_be_bytes());
+    for gun in colours.iter().flatten() {
+        m.extend_from_slice(&gun.to_be_bytes());
     }
     m
+}
+
+/// The two colours the black-and-white screen has, black at 0 and white
+/// at [`WHITE_INDEX`].
+pub fn colour_map() -> Vec<u8> {
+    colour_map_entries(0, &[[0; 3], [u16::MAX; 3]])
+}
+
+/// The sixteen colours of the colour screen's map, a byte a gun widened
+/// to RFC 6143's sixteen bits: the whole map, at indices 0 to 15, which is
+/// what a four-bit pixel is.
+pub fn colour_map_of(map: &[[u8; 3]]) -> Vec<u8> {
+    let widened: Vec<[u16; 3]> =
+        map.iter().map(|c| [c[0], c[1], c[2]].map(|v| v as u16 * 0x101)).collect();
+    colour_map_entries(0, &widened)
 }
 
 /// The version the server offers, RFC 6143 section 7.1.1. A viewer that

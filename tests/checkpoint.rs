@@ -124,11 +124,13 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// down a netlist board's delay lines, which is what a machine has to be
 /// saved with to be saved while it is busy, version 22 when the
 /// display's sync program last started, its timing being that program
-/// run rather than a fixed frame, and version 23 which display board the
-/// machine has and the colour map the LISPM TV's register 4 writes.
+/// run rather than a fixed frame, version 23 which display board the
+/// machine has and the colour map the LISPM TV's register 4 writes, and
+/// version 24 the color TV, the second display board, with whether the
+/// machine had one at all.
 #[test]
-fn the_format_is_version_23_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 23, "a new version needs its own tests");
+fn the_format_is_version_24_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 24, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -136,16 +138,14 @@ fn the_format_is_version_23_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 23u32.to_le_bytes());
-    for other in
-        [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, u32::MAX]
-    {
+    assert_eq!(&good[at..at + 4], 24u32.to_le_bytes());
+    for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 23"), "{err}");
+        assert!(err.contains("reads 24"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -204,10 +204,15 @@ impl Buses {
         }
     }
 
-    /// Whether an Xbus address is the display's: its frame buffer or its
-    /// control registers.
+    /// Whether an Xbus address is the netlist display board's: its frame
+    /// buffer or its control registers.
+    ///
+    /// The normal TV's strap alone. The color TV is a model on every
+    /// engine --- there is no netlist of a LISPM TV strapped colour on
+    /// this backplane --- so its addresses fall through to the machine
+    /// behind the buses, as `--tv model`'s do.
     fn is_display(phys: u32) -> bool {
-        crate::tv::buffer_offset(phys).is_some() || crate::tv::control_register(phys).is_some()
+        crate::tv::NORMAL_TV.answers(phys)
     }
 
     /// Whether a device board on the backplane answers this address, so
@@ -327,7 +332,11 @@ impl Buses {
             (true, None) => {
                 let phys = Self::word(c, &self.xaddr);
                 let write = Self::asserted(c, self.xwr);
-                let responder = busint::decode(phys, self.machine.main.len());
+                let responder = busint::decode_with(
+                    phys,
+                    self.machine.main.len(),
+                    self.machine.color_tv.is_some(),
+                );
                 if matches!(responder, Responder::Memory(_)) && self.memory_boards {
                     // The boards answer. A write is mirrored into `main`,
                     // which is what the disk controller's DMA reads.
@@ -459,11 +468,14 @@ impl Buses {
         }
 
         // The Xbus interrupt line: the disk controller's request, and the
-        // behavioural display's vertical interrupt --- the netlist display
-        // board drives the wire itself. The I/O board's is a Unibus one,
-        // and goes by the cycle above or by the netlist board's own.
+        // behavioural displays' vertical interrupts --- the netlist display
+        // board drives the wire itself. The color TV is a model whatever
+        // the engine, there being no netlist of it, so its own is always
+        // this side. The I/O board's is a Unibus one, and goes by the
+        // cycle above or by the netlist board's own.
         self.machine.disk.advance(now);
-        let vertical = !self.tv_board && self.machine.tv.interrupt(now);
+        let vertical = (!self.tv_board && self.machine.tv.interrupt(now))
+            || self.machine.color_tv.as_ref().is_some_and(|tv| tv.interrupt(now));
         let want = if self.machine.disk.interrupt() || vertical { Some(Level::Low) } else { None };
         if self.asserting(self.xintr) != want {
             self.asserting[self.xintr as usize] = want;

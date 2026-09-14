@@ -171,6 +171,12 @@ pub struct Machine {
     /// The display board, whichever of the two `--tv-board` named:
     /// [`crate::tv::Board`].
     pub tv: Tv,
+    /// **The color TV**, the second display board, when `--color-tv`
+    /// fitted one: a LISPM TV strapped to [`tv::COLOR_TV`], `17200000` and
+    /// `17377750`.  `None` is a machine with one screen, which is what a
+    /// CADR has unless somebody plugged a second board in, and is what
+    /// `COLOR-EXISTS-P` finds when it probes.
+    pub color_tv: Option<Tv>,
     /// The keyboard, the mouse and the clocks.
     pub ioboard: IoBoard,
 
@@ -250,9 +256,17 @@ impl Machine {
                 b
             },
             tv: Tv::default(),
+            color_tv: None,
             cycles: 0,
             ns: 0,
         }
+    }
+
+    /// Puts the color TV on the backplane, which is what `--color-tv`
+    /// does where an engine builds its machine.  The board is the
+    /// backplane's and does not come and go under a running machine.
+    pub fn fit_color_tv(&mut self) {
+        self.color_tv = Some(Tv::color());
     }
 
     /// Loads the boot PROM.  Words past the end of the image stay zero.
@@ -384,7 +398,7 @@ impl Machine {
     /// interface's own registers and the I/O board on the Unibus. Every
     /// other I/O address times out.
     fn device(&mut self, phys: u32) -> Option<usize> {
-        match busint::decode(phys, self.main.len()) {
+        match busint::decode_with(phys, self.main.len(), self.color_tv.is_some()) {
             busint::Responder::Memory(_) => Some(phys as usize),
             busint::Responder::Device
             | busint::Responder::Interface
@@ -423,12 +437,29 @@ impl Machine {
         self.xbus_interrupt() || self.unibus_interrupt().is_some()
     }
 
-    /// `XBUS INTR IN`: the disk controller's request, or the display's
+    /// `XBUS INTR IN`: the disk controller's request, or either display's
     /// vertical interrupt, on the one Xbus line.
+    ///
+    /// **Both display boards drive the same wire.** On each of them the
+    /// 74S08 at 0D10 ands `MODE INTR ENB` with `VERT FLAG` into `SEND
+    /// INTR`, and the 26S10 at 0F14 --- an open-collector bus transceiver
+    /// --- puts that on `-XBUS.INTR`; the nets are the same on both
+    /// boards' netlists.  So the line is the boards ORed, and a second
+    /// board fitted adds its own `SEND INTR` to it.  Nothing in
+    /// System 100 turns the colour board's on: `COLOR:SETUP` starts its
+    /// sync with `(SI:START-SYNC 3 0 36.)`, and `CC-TV-START-SYNC` in
+    /// `sys/cc/dmon.lisp` --- the same call, written out --- writes the
+    /// mode as `(+ (LSH BOW 2) CLOCK)`, which is 3: the clock mode alone,
+    /// with [`tv::mode::INTERRUPT_ENABLE`] clear.  That matters because
+    /// `INTRX0` in microcode 323 reads `A-TV-REGS-BASE`, the normal TV's
+    /// register, and clears the flag there; a colour-board interrupt would
+    /// have nothing to take it.
     pub fn xbus_interrupt(&self) -> bool {
         // The controller was told the time at the last bus access; a run's
         // engine keeps `ns` current between them (`rtl` every microcycle).
-        self.disk.interrupt() || self.tv.interrupt(self.ns)
+        self.disk.interrupt()
+            || self.tv.interrupt(self.ns)
+            || self.color_tv.as_ref().is_some_and(|tv| tv.interrupt(self.ns))
     }
 
     /// The Unibus interrupt the interface has taken, as `UB INT` and the
@@ -712,6 +743,11 @@ impl Machine {
     /// one at B's, none after.
     pub fn bus_reset(&mut self) {
         self.tv.xbus_init(self.ns);
+        // `-XBUS INIT` is a bused line and reaches every board on it, the
+        // second display board with the rest.
+        if let Some(tv) = self.color_tv.as_mut() {
+            tv.xbus_init(self.ns);
+        }
         self.disk.xbus_init();
         self.ioboard.unibus_init();
     }
@@ -728,6 +764,16 @@ impl Machine {
         }
         if let Some(r) = tv::control_register(phys) {
             return self.tv.read_control(r, self.ns);
+        }
+        // The color TV, when one is fitted: the same board at the other
+        // strap.  `device` has already given the NXM when it is not.
+        if let Some(tv) = self.color_tv.as_ref() {
+            if let Some(off) = tv::COLOR_TV.buffer_offset(phys) {
+                return tv.read_buffer(off);
+            }
+            if let Some(r) = tv::COLOR_TV.control_register(phys) {
+                return tv.read_control(r, self.ns);
+            }
         }
         // The Unibus carries 16 bits, in the bottom of one Lisp machine word.
         if let Some(r) = busint::unibus_address(phys).and_then(busint::register) {
@@ -757,6 +803,18 @@ impl Machine {
         if let Some(r) = tv::control_register(phys) {
             self.tv.write_control(r, value, self.ns);
             return;
+        }
+        // The color TV, when one is fitted.
+        let ns = self.ns;
+        if let Some(tv) = self.color_tv.as_mut() {
+            if let Some(off) = tv::COLOR_TV.buffer_offset(phys) {
+                tv.write_buffer(off, value);
+                return;
+            }
+            if let Some(r) = tv::COLOR_TV.control_register(phys) {
+                tv.write_control(r, value, ns);
+                return;
+            }
         }
         // The Unibus carries 16 bits, in the bottom of one Lisp machine word.
         if let Some(r) = busint::unibus_address(phys).and_then(busint::register) {
@@ -857,6 +915,7 @@ impl Machine {
             disk,
             chaos: _,
             tv,
+            color_tv,
             ioboard,
             cycles,
             ns,
@@ -897,6 +956,13 @@ impl Machine {
         w.bool(*vmaok);
         disk.save(w);
         tv.save(w);
+        // Whether the color TV was on the backplane, and if it was, the
+        // board: a resume onto a machine `--color-tv` says otherwise about
+        // is refused by the flag's name.
+        w.bool(color_tv.is_some());
+        if let Some(tv) = color_tv {
+            tv.save(w);
+        }
         ioboard.save(w);
         w.u64(*cycles);
         w.u64(*ns);
@@ -976,6 +1042,14 @@ impl Machine {
         self.vmaok = r.bool()?;
         self.disk.load(r)?;
         self.tv.load(r)?;
+        self.color_tv = match r.bool()? {
+            true => {
+                let mut tv = Tv::color();
+                tv.load(r)?;
+                Some(tv)
+            }
+            false => None,
+        };
         self.ioboard.load(r)?;
         self.cycles = r.u64()?;
         self.ns = r.u64()?;
