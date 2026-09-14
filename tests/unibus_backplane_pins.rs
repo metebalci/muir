@@ -94,11 +94,14 @@ fn every_shared_unibus_wire_is_on_the_same_backplane_pin_on_both_boards() {
 /// slot's `CR1` --- of the kind `cadrio/iob.eco` records for the video,
 /// twisted pairs "on backplane" from slot 2 to slot 15 landing on pins
 /// named differently at the two ends --- or one list is wrong about its
-/// pin, or the two were never joined. **Unverified**: what would settle
-/// it is the wire itself, a photograph of a cage or an installation
-/// note. That keyboards did reboot machines is on record --- ECO#3 warns
-/// of "the old keyboard rebooting the machine accidentally" --- so the
-/// path was live; the pin is what is not established.
+/// pin, or the two were never joined. MIT's Xbus specification settles
+/// why the pins differ (the last test in this file): `CP1` is taken at
+/// the bus interface's slot and `CR1` is a bused line there. The hand
+/// wire is what muir assumes. **Unverified**: what would settle it is
+/// the wire itself, a photograph of a cage or an installation note. That
+/// keyboards did reboot machines is on record --- ECO#3 warns of "the
+/// old keyboard rebooting the machine accidentally" --- so the path was
+/// live; the wire is what is not shown.
 ///
 /// muir carries the wire all the same, from the board's `-BOOT*` straight
 /// to the processor's `-BOOT1`, `FarEnd::boot_line`, as what ECO#3 says
@@ -301,4 +304,203 @@ fn mits_backplane_list_buses_every_shared_wire_and_has_neither_boot_pin() {
     assert_eq!(strips.get("CR2").map(String::as_str), Some("D01"));
     assert!(text.contains("will be removed by hand and replaced with grant"));
     assert!(text.contains("wiring for specific devices"));
+}
+
+/// The entries of a line of `cadr1/xspec.text.3`, each with the column
+/// it starts at: a tab is a stop of eight and ends an entry, as does a
+/// run of two spaces; a single space is inside one, `NPG IN`.
+fn spec_entries(line: &str) -> Vec<(usize, String)> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut cur: Option<(usize, String)> = None;
+    let mut col = 0;
+    let mut in_gap = false;
+    for (i, &c) in chars.iter().enumerate() {
+        match c {
+            '\t' => {
+                out.extend(cur.take());
+                in_gap = true;
+                col = (col / 8 + 1) * 8;
+            }
+            ' ' => {
+                let next_blank = chars.get(i + 1).is_none_or(|&n| n == ' ' || n == '\t');
+                if in_gap || next_blank {
+                    out.extend(cur.take());
+                    in_gap = true;
+                } else if let Some((_, text)) = cur.as_mut() {
+                    text.push(' ');
+                }
+                col += 1;
+            }
+            _ => {
+                in_gap = false;
+                match cur.as_mut() {
+                    Some((_, text)) => text.push(c),
+                    None => cur = Some((col, c.to_string())),
+                }
+                col += 1;
+            }
+        }
+    }
+    out.extend(cur.take());
+    out
+}
+
+/// A slot table of MIT's Xbus specification, `cadr1/xspec.text.3`: the
+/// pin rows from `header` to the next form feed, each as the row's two
+/// letters and its side 1 and side 2 entries. Side 1 starts before
+/// column 24 and side 2 at 16 or later; what starts at 40 or later is
+/// another slot's column and not read. A `"` is a ditto for the row
+/// above, `BG7 IN` over `" OUT`.
+fn spec_slot(text: &str, header: &str) -> Vec<(String, String, String)> {
+    let start = text.find(header).unwrap_or_else(|| panic!("no table {header}"));
+    let body = &text[start..];
+    let end = body.find('\x0c').unwrap_or(body.len());
+    let mut rows: Vec<(String, String, String)> = Vec::new();
+    for line in body[..end].lines() {
+        let entries = spec_entries(line);
+        let Some((0, letters)) = entries.first() else { continue };
+        let b = letters.as_bytes();
+        if b.len() != 2 || !(b'A'..=b'F').contains(&b[0]) || !b[1].is_ascii_uppercase() {
+            continue;
+        }
+        let side1 = entries.iter().position(|(c, _)| (3..24).contains(c));
+        let side2 = entries
+            .iter()
+            .enumerate()
+            .position(|(k, (c, _))| (16..40).contains(c) && side1.is_none_or(|s| k > s));
+        let text_of = |k: Option<usize>| k.map_or(String::new(), |k| entries[k].1.clone());
+        let mut side1 = text_of(side1);
+        let mut side2 = text_of(side2);
+        if let Some(prev) = rows.last() {
+            for (side, above) in [(&mut side1, &prev.1), (&mut side2, &prev.2)] {
+                if let Some(rest) = side.strip_prefix('"') {
+                    let word = above.split(' ').next().unwrap_or("");
+                    *side = format!("{word}{rest}");
+                }
+            }
+        }
+        rows.push((letters.clone(), side1, side2));
+    }
+    rows
+}
+
+/// The backplane list's name for an entry in the specification's slot
+/// tables: `D0` is `D00`, `BUS INIT` is `INIT`, `BG7 IN` the chain `BG7`,
+/// `(gnd)` is `GND`, and `-5` is itself.
+fn spec_name(entry: &str) -> String {
+    let entry = entry.trim_matches(|c| c == '(' || c == ')').to_ascii_uppercase();
+    let first = entry.trim_start_matches("BUS ").split(' ').next().unwrap().to_string();
+    if first.starts_with(['+', '-']) && first[1..].starts_with(|c: char| c.is_ascii_digit()) {
+        first
+    } else {
+        strip_name(&first)
+    }
+}
+
+/// **MIT's Xbus specification puts the bus interface's slot on the same
+/// pins as the bus interface's own list, and its SPC slot on the
+/// backplane list's, and it is where the boot line's two pins are told
+/// apart.** `cadr1/xspec.text.3` gives the pinout of "SLOT 11, BUS
+/// INTERFACE SLOT": rows A and B the Xbus data and address, "identical to
+/// the pin layout of the interface card"; rows C to F the Unibus on side
+/// 2 in DEC's positions and the Xbus control on side 1. Every Xbus entry
+/// is on that pin in `busint.wlr`, page CXBUS, and every Unibus, power
+/// and ground entry in rows C to F is that pin's bus strip or chain in
+/// `dubspc.wires`, whose strips are those rows'. Its "OUR MODIFIED SPC
+/// SLOT" table, the I/O board's kind of slot, has the same strips on
+/// side 2 and nothing on `CP1` or `CR1`.
+///
+/// At slot 11, `CP1` is `-XBUS.SYNC`: the pin the I/O board sends the
+/// boot line out on is taken at the bus interface's end. And `CR1`, where
+/// the bus interface takes `-LM BOOT`, is one of the two side-1 pins in
+/// rows C to F the table marks `--`, which its legend defines: "-- means
+/// bussed through, otherwise pin uncommitted". The other is `CU1`, the
+/// bus interface's `-XBUS POWER RESET`, which the display board's list
+/// has on `CU1` too. So the boot line's two ends differ because they
+/// have to, and its bus-interface end is a bused line.
+#[test]
+fn the_xbus_specification_puts_slot_11_on_the_bus_interfaces_pins_and_tells_the_boot_pins_apart() {
+    let text = mit_text(&["cadr1", "xspec.text.3"]);
+    assert!(text.contains("(-- means bussed through,"), "the legend");
+    assert!(text.contains(" otherwise pin uncommitted)"), "the legend");
+    let (strips, chains) = backplane_list(&mit_text(&["cadr1", "dubspc.wires"]));
+    let (busint, _) = the_two_lists();
+    let on_busint = |name: &str, pin: &str| -> bool {
+        let name = name.replace('.', " ");
+        busint.iter().any(|s| {
+            s.names.contains(&name) && s.pins.iter().any(|p| p.body == "CON" && p.location == pin)
+        })
+    };
+    let mut xbus = 0;
+    let mut unibus = 0;
+    let mut power_ab = 0;
+    let mut bused_through = Vec::new();
+    // Slot 11 is two tables a form feed apart, rows A and B under
+    // "SLOT 11" and rows C to F under the header they share with the TV
+    // slots; the SPC slot is one table of rows C to F.
+    let tables = [
+        ("slot 11", vec!["SLOT 11", "SLOT 15-18"], 108),
+        ("the SPC slot", vec!["OUR MODIFIED \"SPC\" SLOT"], 72),
+    ];
+    for (table, headers, count) in tables {
+        let rows: Vec<_> = headers.iter().flat_map(|h| spec_slot(&text, h)).collect();
+        assert_eq!(rows.len(), count, "{table}: rows");
+        for (letters, side1, side2) in &rows {
+            for (side, entry) in [("1", side1), ("2", side2)] {
+                let pin = format!("{letters}{side}");
+                // "[BRACKETED SIGNALS] INDICATE ONES THAT MAY NEED TO BE
+                // ADDED FOR COMPLETE SPC COMPATABLILITY": not wired.
+                if entry.is_empty() || entry.starts_with('[') {
+                    continue;
+                }
+                if entry == "--" {
+                    bused_through.push(pin);
+                } else if entry.starts_with("-X") || entry.starts_with("XBUS") {
+                    assert_eq!(table, "slot 11");
+                    assert!(on_busint(entry, &pin), "{table}: {entry} on {pin} in busint.wlr");
+                    xbus += 1;
+                } else if letters.starts_with(['A', 'B']) {
+                    // The backplane list's rows A and B are the Unibus
+                    // connectors of an SPC unit; the Xbus slot's carry
+                    // power and ground beside the Xbus.
+                    assert!(
+                        matches!(entry.as_str(), "+5" | "-5" | "GND"),
+                        "{table}: {entry} on {pin}"
+                    );
+                    power_ab += 1;
+                } else {
+                    let want = spec_name(entry);
+                    let got = strips.get(&pin).or_else(|| chains.get(&pin));
+                    assert_eq!(
+                        got.map(|n| n.split(' ').next().unwrap()),
+                        Some(want.as_str()),
+                        "{table}: {entry} on {pin} in dubspc.wires"
+                    );
+                    unibus += 1;
+                }
+            }
+        }
+        let at = |pins: &str| rows.iter().find(|r| r.0 == pins).unwrap().clone();
+        if table == "slot 11" {
+            assert_eq!(at("CP").1, "-XBUS.SYNC", "CP1 at the bus interface's slot");
+            assert_eq!(at("CR").1, "--", "CR1 at the bus interface's slot");
+            assert_eq!(at("CU").1, "--", "CU1 at the bus interface's slot");
+            assert!(on_busint("-LM BOOT", "CR1") && on_busint("-XBUS POWER RESET", "CU1"));
+        } else {
+            assert_eq!((at("CP").1.as_str(), at("CP").2.as_str()), ("", "D5"), "CP in an SPC slot");
+            assert_eq!((at("CR").1.as_str(), at("CR").2.as_str()), ("", "D1"), "CR in an SPC slot");
+        }
+    }
+    // The counts, read back: every Xbus data, address and control line,
+    // and the Unibus with its power and grounds, in both tables.
+    assert_eq!((xbus, unibus, power_ab), (70, 161, 12), "entries checked");
+    bused_through.sort();
+    assert_eq!(bused_through, ["CR1", "CU1"]);
+    let tv = wire_list(
+        &netlist::parse(include_str!("../data/LISPMTV.netlist")).unwrap(),
+        &["cadrtv", "lmtv4b.wlr"],
+    );
+    let reset = signal(&tv, "-XBUS POWER RESET");
+    assert_eq!(backplane_pins(reset), ["CU1"], "the display board's end of the bused line");
 }

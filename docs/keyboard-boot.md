@@ -101,14 +101,35 @@ wires: the console cabling in `mit/cadrio/iob.eco` notes twisted pairs
 "on backplane" from the I/O board's slot to the display's --- "H SYNC
 2FE1,2FC2 15EU1,15ET1", the I/O board's `FE1` in the slot the note
 numbers 2 to `EU1` in slot 15 --- landing on pins named differently at
-the two ends. So either MIT's card cage carried a hand wire from the I/O
-slot's `CP1` to the bus interface slot's `CR1`, or one of the two lists
-is wrong about its pin, or the two were never joined and keyboards
-booted machines some other way. **Unverified.** What would settle it:
-the wire itself --- a photograph of a cage, or an installation note.
+the two ends.
+
+**MIT's Xbus specification says why the two pins differ.**
+`mit/cadr1/xspec.text.3` gives the pinout of every kind of slot, and its
+"SLOT 11, BUS INTERFACE SLOT" is the bus interface's own list pin for
+pin: rows A and B the Xbus data and address, "identical to the pin
+layout of the interface card", rows C to F the Unibus on side 2 in
+DEC's positions and the Xbus control on side 1. There `CP1` is
+`-XBUS.SYNC`: the pin the I/O board sends the boot line out on is taken
+at the bus interface's end, so the line could not arrive on it. And
+`CR1`, where the bus interface takes `-LM BOOT`, is one of two side-1
+pins in rows C to F the table marks `--`, which its legend defines:
+"-- means bussed through, otherwise pin uncommitted". The other is
+`CU1`, the bus interface's `-XBUS POWER RESET`, which
+`mit/cadrtv/lmtv4b.wlr` has on `CU1` at the display board's end. In the
+specification's "OUR MODIFIED SPC SLOT", the I/O board's kind of slot,
+`CP1` and `CR1` are both uncommitted.
+
+So the I/O board's `-BOOT*` leaves on a free pin of its own slot, the
+bus interface's `-LM BOOT` sits on a bused line at its slot, and one
+hand wire from the I/O slot's `CP1` to that line is what joins them,
+the way the video pairs and the power reset were run. **muir assumes
+that wire.** No file shows it, so it stays **unverified** in the code
+that carries it; what would settle it is the wire itself --- a
+photograph of a cage, or an installation note.
 `tests/unibus_backplane_pins.rs` holds the two pins as the lists give
-them, and the forty-two to the backplane list, so that a corrected list
-is noticed.
+them, the forty-two to the backplane list, and the specification's
+slot 11 and SPC slot to the bus interface's list and the backplane
+list, so that a corrected file is noticed.
 
 **Link 3, the bus interface to the processor: established, and it is
 `-BOOT1`.** `data/cables.txt` pairs the bus interface's `J08-12` with the

@@ -31,7 +31,7 @@ itself.
 |---|---|---|---|
 | `cadr/` | the CADR processor, both sections | 126 `.drw` | print sets `cadr.book`, `icmem.book`; `ir.bits`, MIT's microinstruction field diagram and register map |
 | `cadrwd/` | --- | --- | the processor's wire lists: `cadr4.wlr`, `icmem3.wlr`, with `.stf` and `.wls` beside each |
-| `cadr1/` | LISPM bus interface, and the CDC adaptor drawn beside it | 47 `.drw` | `busint.wlr`, `busint.wls`, `busint.stf`, print set `busint.book`; the board's two PROM images, `reqtim.prom` and `uprior.prom`; `dubspc.wires`, MIT's wire list for the 9-slot SPC backplane |
+| `cadr1/` | LISPM bus interface, and the CDC adaptor drawn beside it | 47 `.drw` | `busint.wlr`, `busint.wls`, `busint.stf`, print set `busint.book`; the board's two PROM images, `reqtim.prom` and `uprior.prom`; `dubspc.wires`, MIT's wire list for the 9-slot SPC backplane; `xspec.text.3`, MIT's Xbus specification, with the pinout of every kind of slot |
 | `cadrm/` | 64K-word memory | 29 `.drw` | `mem.wlr`, `mem.wls`, `mem.stf`, `mem.eco` |
 | `cadrio/` | the I/O board | 21 `.drw` | `iob.wlr`, three `.wls`, five `.stf`, four `.eco` |
 | `cadrdc/` | the disk controller | 49 `.drw` | `dc.wlr`, three `.wls`, four `.stf`, four `.eco`; also `newdsk.31`, its microcode source |
@@ -110,6 +110,7 @@ file is load-bearing or reference.
 | `.prom`, `.mcr`, `.31`, `.39` | PROM images and microcode, MIT's own dumps and sources | some |
 | `.wd` | per-page wire-wrap data, carrying the same parts and nets as the `.drw` beside it | no |
 | `.wires` | a backplane's wiring, in prose: `cadr1/dubspc.wires`, MIT's list for the double 9-slot SPC backplane --- the Unibus bus strips pin by pin, the grant chains from slot to slot, and the continuity jumpers that device wiring replaces by hand | **yes**: `tests/unibus_backplane_pins.rs` holds the bus interface's and the I/O board's Unibus pins to its bus strips |
+| `.text.3` | `cadr1/xspec.text.3`, MIT's Xbus specification: the signals, and the pinout of every kind of slot in the cage --- the Unibus, "our modified SPC slot", the bus interface's slot 11 with both buses on it, the TV slots, the memory slot. The `.3` is ITS's version number, kept as the tape had it | **yes**: `tests/unibus_backplane_pins.rs` holds its slot 11 to the bus interface's list and its SPC slot to the backplane list |
 | `.bin` | a packed SUDS archive of a whole board's drawings --- the same pages as the `.drw` files, in a format `soap4` cannot read | no |
 | `.ray`, `.uml`, `.augat`, `.aug`, `.wss` | wire-wrap production data: wire runs by pin, panel data, listings | no |
 | `.txt`, `.fil`, `.prt`, `.memo`, `.hand` | board notes, page lists, parts lists | some. `cadr/framl.txt` and `cadrdc/dm.txt` are page lists a test reads, and four `.prt` are the stuffed locations `tests/parts_mounted.rs` holds the netlists to; the rest is read by people rather than by code |
