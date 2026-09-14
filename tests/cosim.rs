@@ -253,10 +253,16 @@ fn the_engines_hold_the_same_lc_until_their_clocks_part() {
     }
 
     // And the parting itself: both at `INTRX0+2` with different words in
-    // `MD`, differing in exactly the vertical flag, because the two
-    // engines' clocks have put them on different sides of a frame.
+    // `MD`, differing in the vertical flag, because the two engines'
+    // clocks have put them on different sides of a frame --- and in the
+    // sync bits, which are the program's at two different instants.
     let (x, y) = (a.machine(), b.machine());
-    assert_eq!(x.md ^ y.md, muir::simpletv::mode::VERT, "MD differs in the vertical flag alone");
+    let sync = muir::simpletv::mode::VSYNC | muir::simpletv::mode::HSYNC;
+    assert_eq!(
+        (x.md ^ y.md) & !sync,
+        muir::simpletv::mode::VERT,
+        "MD differs in the vertical flag, the sync bits aside"
+    );
     assert_ne!(
         x.simpletv.vert_flag(x.ns),
         y.simpletv.vert_flag(y.ns),

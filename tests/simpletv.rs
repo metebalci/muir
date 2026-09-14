@@ -100,51 +100,66 @@ fn black_on_white_is_one_bit_read_modify_written() {
     assert!(!tv.black_on_white(), "WHITE-ON-BLACK clears it again");
 }
 
-/// Writing the mode register must not invent sync signals.
+/// Writing the mode register must not invent sync signals: bits 5 and 6
+/// are the sync program's, read where it has them clear, and bit 7 is
+/// grounded on this board.
 #[test]
 fn the_read_only_bits_never_stick() {
     let mut tv = SimpleTv::default();
-    tv.write_control(0, !0, 0);
+    // Clock mode 0 kept, so that the program's timing is the PROM's.
+    tv.write_control(0, !mode::CLOCK, 0);
     assert_eq!(
         tv.mode(),
-        mode::CLOCK | mode::BOW | mode::INTERRUPT_ENABLE,
+        mode::BOW | mode::INTERRUPT_ENABLE,
         "the four data pins of the 2519 land, and the read-only bits do not"
     );
-    // Bits 5 to 7 come off the read buffer from nets nothing here drives.
-    assert_eq!(tv.read_control(0, 0) & (mode::VSYNC | mode::HSYNC | mode::SYNC_PROM_ENABLE), 0);
+    // Five milliseconds in: a picture line, sixteen instructions along it,
+    // where `cpt.prom` has neither sync bit up.
+    assert_eq!(
+        tv.read_control(0, 5_000_000) & (mode::VSYNC | mode::HSYNC | mode::SYNC_PROM_ENABLE),
+        0
+    );
+    assert_eq!(tv.read_control(0, 500) & mode::SYNC_PROM_ENABLE, 0, "grounded, whenever");
 }
 
 /// **The vertical flag is a flop of its own, and a mode write loads it.**
-/// `-TVMA CLR` presets it at the start of every frame, [`FRAME_NS`] apart;
-/// a write of the mode register clocks the written bit 4 into it, which is
-/// how `INTRX0` clears it --- read, clear bit 4, write back; and with
-/// `MODE INTR ENB` it is the interrupt the microcode takes as the 60-cycle
-/// clock. The drawing reads as though the bit were not writable; the 74LS74
-/// at NXBCTL 0E14 is what settles it (discrepancy 26).
+/// `-TVMA CLR` presets it where the sync program has it --- for the PROM
+/// program from power-on, as the first line's last instruction completes,
+/// 16.000 us in, and then every [`FRAME_NS`]; a write of the mode register
+/// clocks the written bit 4 into it, which is how `INTRX0` clears it ---
+/// read, clear bit 4, write back; and with `MODE INTR ENB` it is the
+/// interrupt the microcode takes as the 60-cycle clock. The drawing reads
+/// as though the bit were not writable; the 74LS74 at NXBCTL 0E14 is what
+/// settles it (discrepancy 26).
 #[test]
 fn the_vertical_flag_sets_each_frame_and_a_mode_write_clears_it() {
     use muir::simpletv::FRAME_NS;
+    const CLR: u64 = 16_000;
     let mut tv = SimpleTv::default();
     assert!(!tv.vert_flag(0), "cleared by reset");
-    assert!(!tv.vert_flag(FRAME_NS - 1), "and not yet set before the first frame starts");
-    assert!(tv.vert_flag(FRAME_NS), "set by TVMA CLR at the frame");
-    assert_eq!(tv.read_control(0, FRAME_NS) & mode::VERT, mode::VERT, "and read back in bit 4");
-    assert!(!tv.interrupt(FRAME_NS), "no interrupt without the enable");
+    assert!(!tv.vert_flag(CLR - 1), "and not yet set before the first line ends");
+    assert!(tv.vert_flag(CLR), "set by TVMA CLR as it does");
+    assert_eq!(tv.read_control(0, CLR) & mode::VERT, mode::VERT, "and read back in bit 4");
+    assert!(!tv.interrupt(CLR), "no interrupt without the enable");
 
     // The window system's enable, and the microcode's clear: bit 4 written
     // zero with the rest of the register kept.
-    tv.write_control(0, mode::INTERRUPT_ENABLE, FRAME_NS + 1);
-    assert!(!tv.vert_flag(FRAME_NS + 1), "the write cleared it");
-    assert!(!tv.interrupt(FRAME_NS + 1));
-    assert!(tv.vert_flag(2 * FRAME_NS), "the next frame sets it again");
-    assert!(tv.interrupt(2 * FRAME_NS), "and now it interrupts");
-    assert_eq!(tv.read_control(0, 2 * FRAME_NS), mode::INTERRUPT_ENABLE | mode::VERT);
-    tv.write_control(0, mode::INTERRUPT_ENABLE, 2 * FRAME_NS + 1);
-    assert!(!tv.interrupt(2 * FRAME_NS + 1), "dismissed");
+    tv.write_control(0, mode::INTERRUPT_ENABLE, CLR + 1);
+    assert!(!tv.vert_flag(CLR + 1), "the write cleared it");
+    assert!(!tv.interrupt(CLR + 1));
+    assert!(!tv.vert_flag(CLR + FRAME_NS - 1), "and it stays clear for the frame");
+    assert!(tv.vert_flag(CLR + FRAME_NS), "the next frame sets it again");
+    assert!(tv.interrupt(CLR + FRAME_NS), "and now it interrupts");
+    assert_eq!(
+        tv.read_control(0, CLR + FRAME_NS) & !(mode::HSYNC | mode::VSYNC),
+        mode::INTERRUPT_ENABLE | mode::VERT
+    );
+    tv.write_control(0, mode::INTERRUPT_ENABLE, CLR + FRAME_NS + 1);
+    assert!(!tv.interrupt(CLR + FRAME_NS + 1), "dismissed");
 
     // Written one, it is one: the flop takes what it is given.
-    tv.write_control(0, mode::INTERRUPT_ENABLE | mode::VERT, 2 * FRAME_NS + 2);
-    assert!(tv.interrupt(2 * FRAME_NS + 3), "a write of bit 4 set it");
+    tv.write_control(0, mode::INTERRUPT_ENABLE | mode::VERT, CLR + FRAME_NS + 2);
+    assert!(tv.interrupt(CLR + FRAME_NS + 3), "a write of bit 4 set it");
 }
 
 #[test]
@@ -185,9 +200,10 @@ fn the_bus_reaches_the_frame_buffer() {
     assert_eq!(m.bus_read(last), 1);
     assert_eq!(m.bus_error, 0, "the display answers, so nothing times out");
 
-    // The mode register is on the same bus and is not the buffer.
+    // The mode register is on the same bus and is not the buffer; its sync
+    // bits are the program's, wherever it stands.
     m.bus_write(simpletv::CONTROL, mode::BOW);
-    assert_eq!(m.bus_read(simpletv::CONTROL), mode::BOW);
+    assert_eq!(m.bus_read(simpletv::CONTROL) & !(mode::HSYNC | mode::VSYNC), mode::BOW);
     assert!(m.simpletv.black_on_white());
     assert_eq!(m.bus_error, 0);
 }
@@ -346,5 +362,9 @@ fn an_xbus_init_clears_the_vertical_flag_and_nothing_else() {
     assert_eq!(tv.sync.pointer, 0o17, "the 74LS374s at NSYADR have no clear");
     assert_eq!(tv.read_control(1, 11), 0o77, "the 2147s keep the program");
     assert_eq!(tv.read_buffer(3), 0xdead_beef, "the frame buffer is DRAM");
-    assert!(tv.vert_flag(11 + FRAME_NS), "the next frame start presets the flop again");
+    // The RAM selected above holds one word and no program, so nothing
+    // presets the flop; the PROM back in, its program's next TVMA CLR does.
+    assert!(!tv.vert_flag(11 + FRAME_NS), "a RAM with no program in it makes no frame");
+    tv.write_control(3, 0o5, 12);
+    assert!(tv.vert_flag(12 + 16_000), "the PROM program's TVMA CLR presets the flop again");
 }

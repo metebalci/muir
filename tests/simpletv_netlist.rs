@@ -1162,3 +1162,129 @@ fn what_the_board_takes_to_answer_in_the_picture() {
     );
     eprintln!("control {lo}-{hi} ns over {} offsets", control_ns.len());
 }
+
+/// **The mode register's sync bits are the program's own bits, latched an
+/// instruction late, and the monitor's sync outputs carry the same
+/// polarity.** `lmtv.order` names mode bits 5 and 6 "Vertical Sync
+/// (Directly from sync generator)" and "Horizontal Sync", and the 74LS244
+/// at NXBCTL 0F11 reads them off the nets `VSYNC` and `HSYNC`. Measured
+/// here against the program bits coming off the sync PROM, `SYNC 1` and
+/// `SYNC 0`, and against `HSYNC OUT` and `VSYNC OUT`, over the first
+/// sixty lines of `cpt.prom`: the 54 lines of vertical sync and the first
+/// six of the picture.
+///
+/// - `HSYNC` follows `SYNC 0` one instruction, 500 ns, later at every
+///   edge: the register latches the bit at the boundary after the
+///   instruction that carries it. `VSYNC` follows `SYNC 1` the same way.
+/// - `HSYNC OUT` is `HSYNC` and `VSYNC OUT` is `VSYNC`, open-collector
+///   (`Z` for high), not inverted: the sync pulse to the monitor is where
+///   the program bit is one, which for `cpt.prom` is the first six
+///   instructions of every line and the first 54 lines of the frame.
+/// - `-TVMA CLR` pulses low for one instruction as the instruction
+///   carrying the TVMA CLR special function completes, which in `cpt.prom`
+///   is the 32nd instruction of the first line, 16.000 us after the
+///   program starts, and not again for the frame.
+///
+/// `src/simpletv/sync.rs` runs the program on those terms.
+#[test]
+fn the_sync_bits_the_mode_register_reads_are_the_programs() {
+    use muir::part::Level;
+    use muir::xbus::XbusMaster;
+
+    let n = simpletv();
+    let mut b = XbusMaster::new(&n, 0);
+    let names = ["SYNC 0", "SYNC 1", "HSYNC", "VSYNC", "HSYNC OUT", "VSYNC OUT", "-TVMA CLR"];
+    let nets: Vec<_> = names.iter().map(|s| b.net(s)).collect();
+    let (sync0, sync1, hsync, vsync, hsync_out, vsync_out, tvma_clr) = (0, 1, 2, 3, 4, 5, 6);
+    // An open-collector output released is high.
+    let level = |b: &XbusMaster, id| match b.chip.net(id) {
+        Level::Z => Level::High,
+        l => l,
+    };
+    let until = b.now + 60 * LINE_NS;
+    // Every instant a net changed: when, and the levels after.
+    let mut was: Vec<Level> = nets.iter().map(|&id| level(&b, id)).collect();
+    let mut changes: Vec<(u64, Vec<Level>)> = vec![(b.now, was.clone())];
+    while b.now < until {
+        let tap = b.chip.next_tap().unwrap_or(until).clamp(b.now + 1, until);
+        b.run(tap);
+        let now: Vec<Level> = nets.iter().map(|&id| level(&b, id)).collect();
+        if now != was {
+            changes.push((b.now, now.clone()));
+            was = now;
+        }
+    }
+    // A net's transitions, `(when, to)`. With `whole`, a level that stands
+    // less than an instruction is dropped, its two edges with it: a loop's
+    // count word shows on the program's data lines for the half
+    // instruction it is read in, and the latch never sees it.
+    let transitions = |k: usize, whole: bool| -> Vec<(u64, Level)> {
+        let mut raw: Vec<(u64, Level)> = vec![(changes[0].0, changes[0].1[k])];
+        for c in &changes[1..] {
+            if c.1[k] != raw.last().unwrap().1 {
+                raw.push((c.0, c.1[k]));
+            }
+        }
+        if !whole {
+            return raw;
+        }
+        let mut out: Vec<(u64, Level)> = vec![raw[0]];
+        let mut i = 1;
+        while i < raw.len() {
+            let stands = raw.get(i + 1).map_or(u64::MAX, |n| n.0 - raw[i].0);
+            if stands < 500 {
+                // The blip and its return, both dropped.
+                i += 2;
+                continue;
+            }
+            if raw[i].1 != out.last().unwrap().1 {
+                out.push(raw[i]);
+            }
+            i += 1;
+        }
+        out
+    };
+    let edges = |k: usize, to: Level, whole: bool| -> Vec<u64> {
+        transitions(k, whole).into_iter().skip(1).filter(|t| t.1 == to).map(|t| t.0).collect()
+    };
+    let differ_for = |a: usize, b: usize| -> u64 {
+        changes.windows(2).filter(|w| w[0].1[a] != w[0].1[b]).map(|w| w[1].0 - w[0].0).sum()
+    };
+    let sync0_rises = edges(sync0, Level::High, true);
+    let hsync_rises = edges(hsync, Level::High, false);
+    let sync0_falls = edges(sync0, Level::Low, true);
+    let hsync_falls = edges(hsync, Level::Low, false);
+    eprintln!("SYNC 0 rose at {:?}..., HSYNC at {:?}...", &sync0_rises[..3], &hsync_rises[..3]);
+    assert_eq!(hsync_rises.len(), sync0_rises.len(), "one HSYNC rise per SYNC 0 rise");
+    assert_eq!(hsync_falls.len(), sync0_falls.len(), "one HSYNC fall per SYNC 0 fall");
+    for (s, h) in sync0_rises.iter().zip(&hsync_rises) {
+        assert_eq!(h - s, 500, "HSYNC rises one instruction after SYNC 0, at {s}");
+    }
+    for (s, h) in sync0_falls.iter().zip(&hsync_falls) {
+        assert_eq!(h - s, 500, "and falls one instruction after it, at {s}");
+    }
+    let vsync_falls = edges(vsync, Level::Low, false);
+    let sync1_falls = edges(sync1, Level::Low, true);
+    eprintln!(
+        "VSYNC fell at {vsync_falls:?}; SYNC 1 fell for a whole instruction at {sync1_falls:?}"
+    );
+    assert_eq!(vsync_falls.len(), 1, "the vertical sync ends once in sixty lines");
+    assert_eq!(vsync_falls[0] - sync1_falls[0], 500, "VSYNC falls one instruction after SYNC 1");
+    let start = sync0_falls[0] - 6 * 500;
+    assert_eq!(vsync_falls[0] - start, 54 * LINE_NS + 500, "after the 54 lines of vertical sync");
+
+    assert_eq!(differ_for(hsync, hsync_out), 0, "HSYNC OUT is HSYNC");
+    assert_eq!(differ_for(vsync, vsync_out), 0, "VSYNC OUT is VSYNC");
+
+    let clr_falls = edges(tvma_clr, Level::Low, false);
+    let clr_rises = edges(tvma_clr, Level::High, false);
+    eprintln!(
+        "-TVMA CLR fell at {clr_falls:?}, rose at {clr_rises:?}; the program started at {start}"
+    );
+    assert_eq!(
+        clr_falls,
+        vec![start + 32 * 500],
+        "once, as the first line's 32nd instruction completes"
+    );
+    assert_eq!(clr_rises[0] - clr_falls[0], 500, "for one instruction");
+}
