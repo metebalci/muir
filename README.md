@@ -277,7 +277,8 @@ With `--color-tv` the colour screen is served too, at the display above
 this one or wherever `--color-terminal` says. **Pixels only**: the machine
 has one keyboard and one mouse, both on the I/O board, and they stay with
 the terminal that serves the main screen, so what a viewer types or points
-at there is dropped. `--tv-capture` is the main screen as well.
+at there is dropped. `--tv-capture` is the main screen; `--color-tv-capture`
+records this one.
 
 The machine's other way out is its serial port, the Signetics 2651 at J9,
 and `--serial <endpoint>` is where it is reached: a TCP port, or
@@ -345,8 +346,8 @@ moves the connector, and `--no-debug-cable-listen` leaves it empty, which a
 machine that must not be touched from outside wants --- a debugger reads
 and writes the whole Unibus and stops the clock, which is why the connector
 stays on the loopback unless an address is named. `--checkpoint`,
-`--tv-capture` and `--watch` want a machine on its own and leave the
-connector empty too, saying so.
+`--tv-capture`, `--color-tv-capture` and `--watch` want a machine on its own
+and leave the connector empty too, saying so.
 
 There is a third transport, where the debuggee is not a program at all.
 `--debug-cable-connect 0x<address>` is a CADR in the programmable logic of
@@ -367,8 +368,11 @@ the lashup it records both machines on one canvas, the debugger's screen at
 the left and the debuggee's at the right, so that a frame is one instant on
 both: in one process the two are one clock, and a GIF writes each frame's
 length in centiseconds, which two files of the same run could not hold
-together. It is the main screen: the color TV's is served and not
-recorded.
+together. It is the main screen: `--color-tv-capture <gif>` is the colour
+one, to a file of its own, 576 by 454 with the sixteen colours of the map as
+the GIF's own colours --- and a frame taken after the machine has rewritten
+the map carries a colour table of its own, a GIF resolving each frame's
+pixels as it lays them down.
 
 `--checkpoint <file>` writes the machine's whole state when the run stops,
 and `--resume <file>` starts from it instead of booting: the engine that

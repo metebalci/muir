@@ -537,14 +537,50 @@ pub fn wait_for_the_prompt<E: Engine>(e: &mut E) -> u64 {
     ran + 2_000_000
 }
 
-/// A plain GIF reader for two-colour, uninterlaced frames: the rectangle
-/// and a byte a pixel.  What the recorder writes is read back here rather
-/// than trusted, by the recorder's own tests and by the CC diagnostics'.
+/// A frame of a GIF as the two-colour recordings are read back: the
+/// rectangle and a byte a pixel.  What the recorder writes is read back
+/// here rather than trusted, by the recorder's own tests and by the CC
+/// diagnostics'.
 pub type Frame = ((usize, usize, usize, usize), Vec<u8>);
 
 pub fn decode_gif(g: &[u8]) -> Vec<Frame> {
+    decode_gif_fully(g).1.into_iter().map(|f| (f.rect, f.pixels)).collect()
+}
+
+/// One frame of a GIF, read back whole: where it lands on the canvas, the
+/// colour table in force for it, whether that table was the frame's own,
+/// and a byte a pixel.
+pub struct GifFrame {
+    pub rect: (usize, usize, usize, usize),
+    /// The frame's local colour table if it carries one, the file's global
+    /// table otherwise --- which is what a viewer resolves its pixels
+    /// through either way.
+    pub colors: Vec<[u8; 3]>,
+    /// Whether that table was the frame's own.
+    pub local: bool,
+    pub pixels: Vec<u8>,
+}
+
+/// A GIF read back with its colour tables: the canvas size, and every
+/// frame with the table a viewer shows it through.  The colour recording
+/// is checked with this --- its map is the file's colours, and a frame
+/// taken through a changed map carries a table of its own --- and
+/// [`decode_gif`] is this without the colours.
+pub fn decode_gif_fully(g: &[u8]) -> ((usize, usize), Vec<GifFrame>) {
     assert_eq!(&g[..6], b"GIF89a");
-    let mut i = 13 + 6; // header, screen descriptor, two colours
+    let u = |k: usize| u16::from_le_bytes([g[k], g[k + 1]]) as usize;
+    let canvas = (u(6), u(8));
+    // The packed field of a descriptor: bit 7 says a colour table follows
+    // and bits 2-0 give its size, 2^(n+1) entries of three bytes.
+    let table = |at: usize, packed: u8| -> (Vec<[u8; 3]>, usize) {
+        if packed & 0x80 == 0 {
+            return (Vec::new(), at);
+        }
+        let n = 1 << ((packed & 7) + 1);
+        let entries = g[at..at + 3 * n].chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+        (entries, at + 3 * n)
+    };
+    let (global, mut i) = table(13, g[10]);
     let mut frames = Vec::new();
     while i < g.len() {
         match g[i] {
@@ -556,9 +592,10 @@ pub fn decode_gif(g: &[u8]) -> Vec<Frame> {
                 i += 1;
             }
             0x2c => {
-                let u = |k: usize| u16::from_le_bytes([g[k], g[k + 1]]) as usize;
                 let (l, t, w, h) = (u(i + 1), u(i + 3), u(i + 5), u(i + 7));
-                i += 10;
+                let packed = g[i + 9];
+                let (local, after) = table(i + 10, packed);
+                i = after;
                 let min = g[i] as u32;
                 i += 1;
                 let mut data = Vec::new();
@@ -568,13 +605,18 @@ pub fn decode_gif(g: &[u8]) -> Vec<Frame> {
                     i += n + 1;
                 }
                 i += 1;
-                frames.push(((l, t, w, h), lzw_decode(&data, min, w * h)));
+                frames.push(GifFrame {
+                    rect: (l, t, w, h),
+                    local: !local.is_empty(),
+                    colors: if local.is_empty() { global.clone() } else { local },
+                    pixels: lzw_decode(&data, min, w * h),
+                });
             }
             0x3b => break,
             b => panic!("unexpected block {b:#x} at {i}"),
         }
     }
-    frames
+    (canvas, frames)
 }
 
 fn lzw_decode(data: &[u8], min: u32, n: usize) -> Vec<u8> {
