@@ -415,6 +415,57 @@ fn the_display_board_is_named_on_every_engine() {
     assert!(t.contains("TV model lispm-tv"), "chip with the model board:\n{t}");
 }
 
+/// **`--color-tv` takes a word, and the bare flag is the netlist on `chip`
+/// and the model everywhere else.** The second display board is a board
+/// like the others: a netlist on `chip`'s backplane unless a flag says
+/// otherwise, and a model on the two engines that have no backplane to
+/// put one on. `--color-tv netlist` there is refused by the engine's name,
+/// as `--tv netlist` would be.
+///
+/// The chip runs keep every other board a model, there being nothing here
+/// about them and a netlist backplane costing a second a run to build.
+#[test]
+fn the_color_tv_is_a_netlist_on_chip_and_a_model_elsewhere() {
+    let models = ["--main-memory", "model", "--io-board", "model", "--disk-controller", "model"];
+
+    // The bare flag on `chip`: the board on the backplane.
+    let out = muir().args(["--chip", "--color-tv"]).args(models).args(["--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("color TV netlist"), "the boards line says which board:\n{t}");
+    assert!(t.contains("color tv: netlist lispm-tv at 17200000"), "and where it is:\n{t}");
+
+    // And `model` on `chip`, which is what the board was before there was
+    // a netlist of it.
+    let out = muir()
+        .args(["--chip", "--color-tv", "model"])
+        .args(models)
+        .args(["--stop-after", "1"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("color TV model"), "the boards line says which board:\n{t}");
+    assert!(!t.contains("color TV netlist"), "and only one of them:\n{t}");
+
+    // `netlist` on an engine with no backplane is refused by the engine's
+    // name, and `model` is taken there.
+    for engine in ["--micro", "--rtl"] {
+        refused_saying(&[engine, "--color-tv", "netlist", "--stop-after", "1"], "--color-tv");
+        let out = muir().args([engine, "--color-tv", "model", "--stop-after", "1"]).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine} with the model board:\n{t}");
+        assert!(t.contains("color tv: model lispm-tv"), "{engine}:\n{t}");
+    }
+
+    // A word that is neither is refused by the flag's name, and the flag
+    // with nothing after it is still the bare flag.
+    refused(&["--rtl", "--color-tv", "both", "--stop-after", "1"], "--color-tv");
+    let out = muir().args(["--rtl", "--color-tv", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("color tv: model lispm-tv"), "the bare flag off chip is the model:\n{t}");
+}
+
 /// A `.muirrc` of its own for one test, in a directory of its own: the
 /// directory, and the file's path under it.
 fn muirrc(name: &str, text: &str) -> (Scratch, PathBuf) {
@@ -1139,9 +1190,11 @@ fn rfb_screen(addr: &str) -> (u16, u16) {
 }
 
 /// **`--color-tv` fits the second display board on every engine**, and the
-/// start says the board and where its screen is served.  There is no
-/// netlist of a LISPM TV strapped colour, so `chip` takes the model as the
-/// other two do rather than warning the flag away.
+/// start says the board and where its screen is served.  Which board it is
+/// on each engine is
+/// [`the_color_tv_is_a_netlist_on_chip_and_a_model_elsewhere`]; here it is
+/// that the flag is obeyed rather than warned away, and that a run that
+/// did not ask has one screen.
 #[test]
 fn the_color_tv_is_fitted_on_every_engine() {
     for engine in ["--micro", "--rtl"] {
@@ -1159,8 +1212,8 @@ fn the_color_tv_is_fitted_on_every_engine() {
         .run();
     let t = text(&out);
     assert!(out.status.success(), "chip:\n{t}");
-    assert!(t.contains("color tv: model lispm-tv"), "chip has it as the model:\n{t}");
-    assert!(t.contains("no netlist of it on chip"), "and says there is no netlist:\n{t}");
+    assert!(t.contains("color tv: netlist lispm-tv"), "chip has the board itself:\n{t}");
+    assert!(t.contains("color TV netlist"), "and says so beside the other boards:\n{t}");
 
     // Off unless it is asked for: a CADR has one screen unless somebody
     // plugged a second board in.

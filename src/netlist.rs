@@ -215,6 +215,47 @@ pub fn parse_with_multiplexor(text: &str) -> Result<Netlist, String> {
     Ok(n)
 }
 
+/// The netlist of a display board **wrapped as the color TV**: the second
+/// display board, `cadrtv/lmtv.order`'s "For the normal TV, x is 6.  For
+/// the color TV, x is 5", whose buffer "starts at 17200000".  The
+/// addresses themselves are wrapped by [`crate::xbus::straps`] from
+/// [`crate::tv::COLOR_TV`]; what is here is the one strap pin that wrap
+/// cannot reach, because on this board the drawing does not leave it a net
+/// of its own.
+///
+/// **`DEVADR 4` on the LISPM TV is not a one-pin net.** MIT drew the
+/// board's pulled-up straps as one net --- the `PULLUP` at XBADR 0E14,
+/// which `cadrtv/lmtv4b.wlr` heads with twenty-two names at once,
+/// seventeen `DEVADR` ones from `DEVADR 4` to `DEVADR 21`, `MAPADR 18`
+/// through `MAPADR 21` and `HI1`, and which this file carries under the
+/// first of them, `DEVADR 10`.  So
+/// the board's drawings already say which way that pin was wrapped, and
+/// the normal TV's strap is the only one they can express.  The color
+/// TV's control block is at `17377750` against the normal TV's
+/// `17377760`, and those differ in bits 3 and 4: `DEVADR 3` goes up,
+/// which it can, being its own net, and `DEVADR 4` goes down, which it
+/// cannot.  This moves XBADR 0F19 pin 15 --- `A6` of the control block's
+/// low comparator, against `ADR 4` on pin 16 --- off that shared net onto
+/// a net of its own named `DEVADR 4`, which `straps` then wraps to
+/// ground.
+///
+/// **Unverified**: that a color TV was a LISPM TV with `MAPADR 16`,
+/// `DEVADR 3` and `DEVADR 4` wrapped the other way.  `lmtv.order` gives
+/// the color TV's two addresses and no board of MIT's reached us strapped
+/// to them: `cadrtv/lmtv4b.wlr` is a normal TV, with `MAPADR 16` and
+/// `DEVADR 3` on the ground net and `DEVADR 4` on the pull-up.  What would
+/// settle it: a wire list of a second board, or an installation note
+/// saying which pins the colour strap moves.
+///
+/// On a board whose drawings do leave `DEVADR 4` a net of its own --- the
+/// SIMPLE TV, whose `XBADR` names all nineteen separately --- there is
+/// nothing to move and this is [`parse`] exactly.
+pub fn parse_color_tv(text: &str) -> Result<Netlist, String> {
+    let mut n = parse(text)?;
+    n.split_color_tv_strap();
+    Ok(n)
+}
+
 /// The board as it comes back from wire-wrapping, before either stuffing
 /// variant: [`parse_wired`] with the series resistors joined and the wires
 /// MIT added by hand, `Netlist::HAND_JUMPERS`.
@@ -712,6 +753,38 @@ impl Netlist {
             return;
         }
         self.parts.retain(|p| !Self::MULTIPLEXOR_DIPS.contains(&p.reference.as_str()));
+    }
+
+    /// Moves `DEVADR 4` off the board's shared pull-up net onto a net of
+    /// its own, so that [`crate::xbus::straps`] can wrap it to ground for
+    /// the color TV: [`parse_color_tv`], which says why the drawing leaves
+    /// it nowhere else to be wrapped from.
+    ///
+    /// The pin is XBADR 0F19 pin 15, the `A6` input of the 25LS2521 that
+    /// compares the control block's low address bits --- `ADR 4` is on pin
+    /// 16 beside it --- and it is looked up by page, designator, type and
+    /// pin so that a board whose XBADR is another board's cannot be moved
+    /// by accident.  A board that already names the net, the SIMPLE TV,
+    /// keeps what it has.
+    fn split_color_tv_strap(&mut self) {
+        const NAME: &str = "'DEVADR 4'";
+        if self.by_name_id(NAME).is_some() {
+            return;
+        }
+        let Some(part) = self
+            .parts
+            .iter()
+            .position(|p| p.page == "XBADR" && p.reference == "0F19" && p.kind == "25LS2521")
+        else {
+            return;
+        };
+        let id = self.intern(NAME);
+        let pin = self.parts[part]
+            .pins
+            .iter_mut()
+            .find(|&&mut (k, _)| k == 15)
+            .expect("XBADR 0F19 pin 15 is the DEVADR 4 strap");
+        pin.1 = id;
     }
 
     fn apply_hand_jumpers(&mut self) {

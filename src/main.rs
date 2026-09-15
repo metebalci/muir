@@ -12,7 +12,7 @@
 //!          [--chaos-udp [<endpoint>]]
 //!          [--chaos-udp-default-peer <host>[:<port>]]
 //!          [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
-//!          [--color-terminal [<endpoint>]] [--color-tv]
+//!          [--color-terminal [<endpoint>]] [--color-tv [netlist|model]]
 //!          [--color-tv-capture <gif>]
 //!          [--debug-cable-connect [<endpoint>|0x<address>]]
 //!          [--debug-cable-listen [<endpoint>]] [--debug-in-process]
@@ -59,9 +59,12 @@
 //! finds out there is no colour screen; with it, the cold boot's
 //! `COLOR:SETUP` loads the NTSC sync program, starts it in clock mode 3
 //! with vertical spacing 36, and writes the colour map. The picture is 576
-//! by 454 at four bits a pixel through that map. It is the model on every
-//! engine, `chip` included: there is no netlist of this board on the
-//! backplane. `--disk-controller`
+//! by 454 at four bits a pixel through that map. The flag takes a word of
+//! its own, `--color-tv [netlist|model]`, as `--tv` does: the netlist is
+//! `chip`'s, a second LISPM TV on the backplane wrapped to the colour
+//! addresses, and the model is every engine's. The bare flag is the
+//! netlist on `chip` and the model elsewhere, and `--color-tv netlist` off
+//! `chip` is refused by the engine's name. `--disk-controller`
 //! is the disk controller, whose netlist runs its own microcode with the
 //! pack on its cable as a drive and takes the drive's time over every
 //! block, milliseconds where the model takes none. **A run that touches no
@@ -800,7 +803,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--chaos-trace] [--chaos-udp [<endpoint>]]
             [--chaos-udp-default-peer <host>[:<port>]]
             [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
-            [--color-terminal [<endpoint>]] [--color-tv]
+            [--color-terminal [<endpoint>]] [--color-tv [netlist|model]]
             [--color-tv-capture <gif>] [-c|--config <file>]
             [--debug-cable-connect [<endpoint>|0x<address>]]
             [--debug-cable-listen [<endpoint>]] [--debug-in-process]
@@ -900,7 +903,7 @@ A simulator of the MIT CADR Lisp Machine.
                                at here is dropped. It needs --color-tv.
                                [default: the display above the main
                                screen's]
-  --color-tv                   fit the color TV, the second display board:
+  --color-tv [netlist|model]   fit the color TV, the second display board:
                                a LISPM TV strapped to 17200000 with its
                                registers at 17377750, which is MIT's own
                                \"for the color TV, x is 5\". Off by default,
@@ -911,9 +914,15 @@ A simulator of the MIT CADR Lisp Machine.
                                the NTSC sync program, clock mode 3, and the
                                colour map. The picture is 576 x 454 at four
                                bits a pixel through sixteen colours, on
-                               --color-terminal. The model on every engine,
-                               chip included: there is no netlist of this
-                               board.
+                               --color-terminal. netlist puts the board
+                               itself on chip's backplane, a second LISPM
+                               TV wrapped to the colour addresses, and is
+                               chip's alone; model is the behavioural
+                               board and is taken on every engine. Without
+                               a word it is the netlist on chip and the
+                               model elsewhere.
+                               [default: off; with the flag and no word,
+                               netlist on chip and model elsewhere]
   --color-tv-capture <gif>     record the color TV's screen to <gif> as the
                                run goes, as --tv-capture records the main
                                screen: a file of its own, 576 x 454, four
@@ -1773,17 +1782,56 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
     }
 }
 
+/// **What `--color-tv` asked for**: no second display board, the
+/// behavioural one, or the LISPM TV netlist wrapped to the colour
+/// addresses on `chip`'s backplane.
+///
+/// The bare flag is the netlist on `chip` and the model on the other two
+/// engines, as every board on `chip` is a netlist unless a flag says
+/// otherwise; `--color-tv netlist` is `chip`'s alone and is refused by the
+/// engine's name elsewhere, there being no backplane to put a board on.
+/// The model is fitted behind the buses whichever it is, so the colour
+/// picture is read off `machine.color_tv` either way, exactly as the main
+/// screen's is off `machine.tv` beside its netlist board.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ColorTv {
+    /// One screen. `17200000` and `17377750` answer with an NXM, which is
+    /// how `COLOR-EXISTS-P` finds out which machine this is.
+    Off,
+    /// The model, [`muir::machine::Machine::fit_color_tv`].
+    Model,
+    /// The netlist on the backplane, `data/LISPMTV.netlist` through
+    /// [`netlist::parse_color_tv`].
+    Netlist,
+}
+
+impl ColorTv {
+    /// Whether a second display board is fitted at all.
+    fn fitted(self) -> bool {
+        self != ColorTv::Off
+    }
+
+    /// The word the start line, the checkpoint and the refusals carry.
+    fn name(self) -> &'static str {
+        match self {
+            ColorTv::Off => "none",
+            ColorTv::Model => "model",
+            ColorTv::Netlist => "netlist",
+        }
+    }
+}
+
 fn machine(
     prom: &[Insn],
     packs: &[Pack],
     memory_boards: usize,
     tv_board: TvBoard,
-    color_tv: bool,
+    color_tv: ColorTv,
 ) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
     m.load_prom(prom);
     m.tv.set_board(tv_board);
-    if color_tv {
+    if color_tv.fitted() {
         m.fit_color_tv();
     }
     attach(&mut m, packs);
@@ -3152,9 +3200,11 @@ fn write_chip_checkpoint(
     clk: &Behavioural,
     far: &FarEnd,
     tv_board: TvBoard,
+    color_tv: ColorTv,
     ran: u64,
 ) {
-    match muir::cable::write_checkpoint(path, ran, tv_board.name(), cpu, clk, far) {
+    match muir::cable::write_checkpoint(path, ran, tv_board.name(), color_tv.name(), cpu, clk, far)
+    {
         Ok(n) => eprintln!("checkpoint: {} at {ran} microcycles, {n} bytes", path.display()),
         Err(err) => eprintln!("checkpoint: could not write {}: {err}", path.display()),
     }
@@ -3169,7 +3219,7 @@ fn resume_chip(
     clk: &mut Behavioural,
     far: &mut FarEnd,
     tv_board: TvBoard,
-    color_tv: bool,
+    color_tv: ColorTv,
     (path, c): &(PathBuf, Checkpoint),
 ) -> u64 {
     let refuse = |err: std::io::Error| -> ! { stale_checkpoint(path, &err, None) };
@@ -3182,6 +3232,20 @@ fn resume_chip(
             tv_board.name()
         ));
     }
+    // **The color TV before anything is read.** A second display board is
+    // one more board in the file --- the device boards go in one after
+    // another and nothing counts them --- so a checkpoint whose colour
+    // board is not this run's cannot be read at all, and is refused here
+    // by the flag's name rather than a hundred kilobytes later as a board
+    // that does not fit.
+    if it.color_tv != color_tv.name() {
+        usage(&format!(
+            "--resume {}: a checkpoint whose color tv is {}, and --color-tv here is {}",
+            path.display(),
+            it.color_tv,
+            color_tv.name()
+        ));
+    }
     let ran = it.ran;
     it.processor(cpu)
         .and_then(|()| {
@@ -3189,10 +3253,6 @@ fn resume_chip(
             it.far_end(far)
         })
         .unwrap_or_else(|e| refuse(e));
-    // The color TV rides in the machine behind the buses, which the far
-    // end has just been loaded with; the header carries only the board
-    // `--tv-board` named, as it has since the flag existed.
-    refuse_color_tv(path, far.buses.machine.color_tv.is_some(), color_tv);
     far.join(cpu, clk.time_ns());
     eprintln!(
         "resumed: {} at {ran} microcycles, {} ns, {} memory boards",
@@ -3207,6 +3267,12 @@ fn resume_chip(
 /// flag's name**, as `--tv-board` is: the second display board is the
 /// backplane's, and a checkpoint of a machine with one is not a
 /// description of a machine without.
+///
+/// This is `micro`'s and `rtl`'s, where the board is the model or nothing
+/// and the fact is in the machine the body carries. A `chip` checkpoint
+/// carries which kind of colour board it was taken with in its header,
+/// where [`resume_chip`] settles it before anything is read, because a
+/// netlist board is one more board in the file.
 fn refuse_color_tv(path: &Path, had: bool, asked: bool) {
     if had == asked {
         return;
@@ -3294,7 +3360,7 @@ fn resume_engine<E: Engine>(
     name: &str,
     e: &mut E,
     tv_board: TvBoard,
-    color_tv: bool,
+    color_tv: ColorTv,
     (path, c): &(PathBuf, Checkpoint),
 ) {
     if c.engine != name {
@@ -3314,7 +3380,7 @@ fn resume_engine<E: Engine>(
             tv_board.name()
         ));
     }
-    refuse_color_tv(path, e.machine().color_tv.is_some(), color_tv);
+    refuse_color_tv(path, e.machine().color_tv.is_some(), color_tv.fitted());
     let m = e.machine();
     eprintln!(
         "resumed: {} at {} microcycles, {} ns, {} memory boards",
@@ -3400,7 +3466,7 @@ fn chip_machine(
     memory_boards: usize,
     chaos: muir::chaos::Config,
     tv_board: TvBoard,
-    color_tv: bool,
+    color_tv: ColorTv,
     auto_boot: bool,
 ) -> ChipMachine {
     let n = netlist::parse(NETLIST).unwrap();
@@ -3415,10 +3481,13 @@ fn chip_machine(
     // model display on a netlist machine, and it is the board the run
     // named whether or not there is a netlist of it on the backplane.
     machine.tv.set_board(tv_board);
-    // The color TV is the model on every engine: there is no netlist of a
-    // LISPM TV strapped colour on this backplane, so the far end's machine
-    // answers `17200000` and `17377750` as it answers `--tv model`.
-    if color_tv {
+    // The color TV's model, which is fitted whichever board is on the
+    // backplane: with `--color-tv model` it answers `17200000` and
+    // `17377750` as `--tv model` answers the main screen's addresses, and
+    // with `--color-tv netlist` the netlist board answers them and every
+    // write is mirrored in here, so that the colour picture is read off
+    // the same place either way.
+    if color_tv.fitted() {
         machine.fit_color_tv();
     }
     machine.chaos = chaos;
@@ -3606,7 +3675,7 @@ fn time_chip(
     run: Run,
     resume: Option<(PathBuf, Checkpoint)>,
     tv_board: TvBoard,
-    color_tv: bool,
+    color_tv: ColorTv,
     watch: Option<WatchSpec>,
 ) {
     let Run { stop, capture, color_capture, checkpoint, setup, hold, clocks, mut color } = run;
@@ -3977,6 +4046,7 @@ fn time_chip(
                                     &m.clk,
                                     &m.far,
                                     tv_board,
+                                    color_tv,
                                     resumed_at + ran,
                                 );
                             }
@@ -4081,6 +4151,7 @@ fn time_chip(
                     &m.clk,
                     &m.far,
                     tv_board,
+                    color_tv,
                     resumed_at + ran + on,
                 );
             }
@@ -4135,8 +4206,12 @@ fn main() {
     // The color TV, the second display board: off unless `--color-tv`
     // fits it, because a CADR has one screen unless somebody plugged a
     // second board in, and `COLOR-EXISTS-P` is System 100 asking which
-    // kind of machine this is.
+    // kind of machine this is. The word after the flag is which board,
+    // and without one it is the netlist on `chip` and the model
+    // elsewhere; which engine this is is not known until the flags have
+    // all been read, so what is kept here is what was asked for.
     let mut color_tv = false;
+    let mut color_tv_netlist: Option<bool> = None;
     // Absent, or present with or without an endpoint.
     let mut color_terminal: Option<Option<String>> = None;
     // **The disk controller is a netlist like every other board**, since
@@ -4329,7 +4404,17 @@ fn main() {
                 Some("lispm-tv") => tv_board = TvBoard::LispmTv,
                 _ => usage("--tv-board wants simple-tv or lispm-tv"),
             },
-            (None, "--color-tv") => color_tv = true,
+            (None, "--color-tv") => {
+                color_tv = true;
+                // The word is optional, as `--color-terminal`'s endpoint
+                // is: the next word is it unless it is a flag.
+                match args.next_if(|v| !v.starts_with('-')).as_deref() {
+                    Some("netlist") => color_tv_netlist = Some(true),
+                    Some("model") => color_tv_netlist = Some(false),
+                    None => {}
+                    Some(_) => usage("--color-tv wants netlist or model, or nothing"),
+                }
+            }
             (None, "--color-tv-capture") => match args.next() {
                 Some(path) => capture_color_tv = Some(PathBuf::from(path)),
                 None => usage("--color-tv-capture wants a file for the GIF"),
@@ -4504,6 +4589,30 @@ fn main() {
     }
 
     let which = which.unwrap_or(Which::Rtl);
+    // **Which color TV, now that the engine is known.** `--color-tv
+    // netlist` is a board on `chip`'s backplane and there is no backplane
+    // to put one on elsewhere, so it is refused by the engine's name as
+    // `--tv netlist` would be; `--color-tv model` is every engine's, and
+    // the bare flag is the netlist on `chip` and the model on the other
+    // two, as every board on `chip` is a netlist unless a flag says
+    // otherwise.
+    let color_tv = match (color_tv, which) {
+        (false, _) => ColorTv::Off,
+        (true, Which::Chip) if color_tv_netlist.unwrap_or(true) => ColorTv::Netlist,
+        (true, Which::Chip) => ColorTv::Model,
+        (true, engine) => {
+            if color_tv_netlist == Some(true) {
+                usage(&format!(
+                    "--color-tv netlist is chip's: the board is on the backplane, and this run                      is {}",
+                    match engine {
+                        Which::Micro => "micro",
+                        _ => "rtl",
+                    }
+                ));
+            }
+            ColorTv::Model
+        }
+    };
     // The lashups asked for in as many words; the connector nobody placed
     // is not one, being there on every rtl and chip run.
     let cabled = debuggee as u8 + cable_listen.asked as u8 + cable_connect.is_some() as u8;
@@ -4597,7 +4706,7 @@ fn main() {
     // The colour screen's display: it takes the board, and it is not
     // another screen's endpoint.  Settled here, before anything is bound.
     if let Some(spec) = color_terminal.as_ref() {
-        if !color_tv {
+        if !color_tv.fitted() {
             usage("--color-terminal is the color TV's screen: it needs --color-tv");
         }
         // Port 0 is the host's choice, and two of them are never the same
@@ -4615,7 +4724,7 @@ fn main() {
         }
     }
     // The colour screen's recording takes the board, as its terminal does.
-    if capture_color_tv.is_some() && !color_tv {
+    if capture_color_tv.is_some() && !color_tv.fitted() {
         usage("--color-tv-capture records the color TV's screen: it needs --color-tv");
     }
     for (flag, given) in
@@ -4830,7 +4939,7 @@ fn main() {
     // The colour screen's display: the one above the last display bound,
     // so a lashup with a colour board has three and none of them collide,
     // or where the flag says.
-    let color_listen = color_tv.then(|| {
+    let color_listen = color_tv.fitted().then(|| {
         let bound = |t: &Option<Terminal>| t.as_ref().and_then(|t| t.addr().ok());
         let base = bound(&debuggee_terminal).or_else(|| bound(&terminal)).unwrap_or(listen.addr);
         let spec = color_terminal.clone().flatten();
@@ -4936,11 +5045,17 @@ fn main() {
             let tv_kind = tv_board.name();
             writeln!(
                 s,
-                "boards: I/O board {}, TV {} {tv_kind}, disk controller {}{}",
+                "boards: I/O board {}, TV {} {tv_kind}, disk controller {}{}{}",
                 kind(io),
                 kind(tv),
                 kind(disk_controller),
-                if use_multiplexor { " with a multiplexor, eight drive ports" } else { "" }
+                if use_multiplexor { " with a multiplexor, eight drive ports" } else { "" },
+                // The second display board, where there is one: which
+                // kind of it is on the backplane, beside the others.
+                match color_tv {
+                    ColorTv::Off => String::new(),
+                    kind => format!(", color TV {}", kind.name()),
+                }
             )
             .unwrap();
         } else {
@@ -4998,11 +5113,15 @@ fn main() {
         // The second display board and where its screen is served. Both
         // lines, because they are two things: a board on the backplane,
         // and a monitor on it.
-        if color_tv {
+        if color_tv.fitted() {
             writeln!(
                 s,
-                "color tv: model lispm-tv at 17200000, 576 x 454 four-bit; no netlist of it on \
-                 chip"
+                "color tv: {} lispm-tv at 17200000, 576 x 454 four-bit{}",
+                color_tv.name(),
+                match color_tv {
+                    ColorTv::Netlist => "; the board answers and the model holds the picture",
+                    _ => "",
+                }
             )
             .unwrap();
             let at = color_listen.map_or(listen.addr, |a| a.addr);
@@ -5292,10 +5411,17 @@ fn main() {
                 }
             });
             let dm_n = use_multiplexor.then(|| netlist::parse(DM).unwrap());
+            // The second display board, when `--color-tv` asked for the
+            // netlist: the LISPM TV, which is the board `lmtv.order`
+            // specifies and the only one there is a colour strap for,
+            // whatever `--tv-board` put at the main screen's addresses.
+            let color_tv_n =
+                (color_tv == ColorTv::Netlist).then(|| netlist::parse_color_tv(LISPMTV).unwrap());
             let on_the_buses = Boards {
                 memory: netlist_boards,
                 io: io_n.as_ref(),
                 tv: tv_n.as_ref(),
+                color_tv: color_tv_n.as_ref(),
                 disk: disk_n.as_ref(),
                 multiplexor: dm_n.as_ref(),
             };

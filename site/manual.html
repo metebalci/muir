@@ -135,12 +135,12 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
-        <dt>--color-tv</dt>
+        <dt>--color-tv [netlist|model]</dt>
         <dd>
         <p>Fit <b>the color TV</b>, the second display board: a LISPM TV strapped to the other addresses MIT&rsquo;s own <code>cadrtv/lmtv.order</code> gives &mdash; the frame buffer at <code>17200000</code> and the registers at <code>17377750</code>, &ldquo;for the color TV, x is 5&rdquo;. The main screen stays at <code>17000000</code> whichever board <code>--tv-board</code> named, System 100 hardwiring <code>MAIN-SCREEN</code> to one bit a pixel there.</p>
         <p><b>Off by default, and that is how the software finds out.</b> A machine without the board answers those addresses with an NXM, which is what <code>COLOR-EXISTS-P</code> reads when it writes into the colour buffer with the error stop off. With the board there the cold boot sets it up: <code>COLOR:SETUP</code> loads the NTSC sync program, starts it in clock mode 3 with vertical spacing 36, and writes the sixteen colours of the map.</p>
-        <p>The picture is 576 by 454 at four bits a pixel through that map, served on <code>--color-terminal</code>. The model on every engine, <code>chip</code> included: there is no netlist of a board strapped colour.</p>
-        <p>Default: off, and the machine has one screen.</p>
+        <p>The picture is 576 by 454 at four bits a pixel through that map, served on <code>--color-terminal</code>. <code>netlist</code> puts the board itself on <code>chip</code>&rsquo;s backplane &mdash; a second LISPM TV, wrapped to the colour addresses &mdash; and is <code>chip</code>&rsquo;s alone; <code>model</code> is the behavioural board and every engine takes it. Without a word it is the netlist on <code>chip</code> and the model elsewhere. Either way the model is fitted behind the buses and every write to the board is mirrored into it, so the colour picture is read off the same place whichever board drew it.</p>
+        <p>Default: off, and the machine has one screen; with the flag and no word, the netlist on <code>chip</code> and the model elsewhere.</p>
         </dd>
       </div>
       <div>
@@ -633,7 +633,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
     <div class="prose">
       <p>The engine chooses how the processor is computed; it also chooses what stands in for every other board on the backplane. A netlist board is MIT&rsquo;s own wire list run package by package. A model is a behavioural one written from the drawings &mdash; on <code>rtl</code> those are timed to the nanosecond and held against the netlist board, and on <code>micro</code> they run without the clock.</p>
       <p><b>The choice between the two exists only on <code>chip</code>.</b> <code>--main-memory</code>, <code>--io-board</code>, <code>--tv</code> and <code>--disk-controller</code> are refused to the other engines with a warning rather than obeyed quietly, so <code>micro</code> and <code>rtl</code> have one answer a row and <code>chip</code> has two. <b>A bare <code>chip</code> run is an all-netlist machine</b>: main memory, the I/O board, the display and the disk controller all come up as MIT&rsquo;s boards. Each row below marks which side it starts on.</p>
-      <p><b><code>--tv-board</code> is not one of those:</b> it says which display board the machine has, and it is every engine&rsquo;s. One model serves either board, so the flag chooses the netlist <code>chip</code> builds the backplane with and the board the model answers as everywhere else. <code>--color-tv</code> is every engine&rsquo;s too, and is the model on all three.</p>
+      <p><b><code>--tv-board</code> is not one of those:</b> it says which display board the machine has, and it is every engine&rsquo;s. One model serves either board, so the flag chooses the netlist <code>chip</code> builds the backplane with and the board the model answers as everywhere else. <code>--color-tv</code> is every engine&rsquo;s too, and it takes the same two words as the board flags: <code>model</code> anywhere, <code>netlist</code> on <code>chip</code> alone, and the bare flag the netlist on <code>chip</code> and the model elsewhere.</p>
       <p><b>The mixed machines are instruments, not configurations.</b> A run meant to work the machine wants <code>rtl</code>, which runs the models throughout at about twice the hardware and is the engine for ordinary use; whoever asks for <code>chip</code> is asking for the gates, and asking for one board as its model is how that board is taken out of the picture while something else is under investigation &mdash; the two engines are held to each other at every microcycle, so where a board and its model part one of them is wrong, and running the model in its place is how you find out which. The other use is time: <code>--disk-controller model</code> gives a <code>chip</code> run the model&rsquo;s instant transfers in place of the drive&rsquo;s real milliseconds, which is nearly five times fewer microcycles through the boot PROM alone, measured above.</p>
     </div>
 
@@ -682,9 +682,15 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
           </tr>
           <tr>
             <td class="name">Display</td>
-            <td colspan="2">Model: a frame buffer, a mode register and the sync program the board runs, which is where the frame, the vertical flag and the sync bits come from. Either board, as <code>--tv-board</code> says; <code>--color-tv</code> adds a second one, strapped to the colour addresses.</td>
+            <td colspan="2">Model: a frame buffer, a mode register and the sync program the board runs, which is where the frame, the vertical flag and the sync bits come from. Either board, as <code>--tv-board</code> says.</td>
             <td><code>--tv model</code>, for the same model, on the board <code>--tv-board</code> names.</td>
-            <td><b>Default.</b> <code>SIMPLETV.netlist</code>, or <code>--tv-board lispm-tv</code> for <code>LISPMTV.netlist</code>, the four- and eight-bit board that replaced it in 1980. The color TV is the model here as well: there is no netlist of a board strapped colour.</td>
+            <td><b>Default.</b> <code>SIMPLETV.netlist</code>, or <code>--tv-board lispm-tv</code> for <code>LISPMTV.netlist</code>, the four- and eight-bit board that replaced it in 1980.</td>
+          </tr>
+          <tr>
+            <td class="name">Color TV</td>
+            <td colspan="2">Not fitted unless <code>--color-tv</code> asks for it, and then the same model at the colour addresses: the buffer at <code>17200000</code> and the registers at <code>17377750</code>.</td>
+            <td><code>--color-tv model</code>, for that same model.</td>
+            <td><code>--color-tv</code>, for <code>LISPMTV.netlist</code> again &mdash; one more board on the backplane, wrapped to the colour addresses instead of the main screen&rsquo;s. The model is fitted beside it and every write is mirrored in, so the picture is read off the model whichever board drew it.</td>
           </tr>
           <tr>
             <td class="name">Debug cable</td>

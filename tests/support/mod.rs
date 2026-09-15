@@ -201,6 +201,10 @@ pub fn no_net_has_two_push_pull_drivers(n: &Netlist) {
 /// and `2` went low during the cycle, and what `COLOR 0..7` and
 /// `COLOR VALUE 0..7` read while one was.
 ///
+/// `strap` is which board this is, `x` being 6 on the normal TV and 5 on
+/// the color TV: [`muir::xbus::straps`]. The register is the same circuit
+/// at either address.
+///
 /// Both display boards have the page --- `COLOR` on the LISPM TV and
 /// `NRACOL`, titled "COLOR MAP", on the SIMPLE TV --- so both are measured
 /// with this, and `tests/tv.rs` holds the model to what they do.
@@ -209,7 +213,11 @@ pub fn no_net_has_two_push_pull_drivers(n: &Netlist) {
 /// is one 16 MHz period wide and is gone by the time the cycle ends: the
 /// bus is watched every 5 ns from the request to the end of the settle, as
 /// `cycle` itself watches for the acknowledgement.
-pub fn colour_write(b: &mut muir::xbus::XbusMaster, word: u32) -> (Vec<usize>, Option<(u64, u64)>) {
+pub fn colour_write(
+    b: &mut muir::xbus::XbusMaster,
+    strap: muir::tv::Strap,
+    word: u32,
+) -> (Vec<usize>, Option<(u64, u64)>) {
     use muir::xbus::XbusMaster;
 
     let strobes: Vec<u32> = (0..3).map(|k| b.net(&format!("-LOAD COLOR {k}"))).collect();
@@ -229,7 +237,7 @@ pub fn colour_write(b: &mut muir::xbus::XbusMaster, word: u32) -> (Vec<usize>, O
     };
 
     let t0 = b.now;
-    b.request(muir::tv::CONTROL + 4, Some(word));
+    b.request(strap.control + 4, Some(word));
     while !b.acked() {
         assert!(b.now < t0 + 40_000, "the board never acknowledged");
         b.run(b.now + 5);

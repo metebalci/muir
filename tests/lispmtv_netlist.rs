@@ -323,7 +323,8 @@ fn the_colour_register_strobes_one_map_with_the_colour_and_the_value() {
     let mut b = XbusMaster::new(&n, 0);
     // (DPB value 1010 (DPB channel 0602 colour)), as `WRITE-COLOR-MAP` writes.
     for (value, channel, colour) in [(0o252u32, 0u32, 5u32), (0o123, 1, 0o17), (0o077, 2, 0)] {
-        let (low, sampled) = support::colour_write(&mut b, value << 8 | channel << 6 | colour);
+        let (low, sampled) =
+            support::colour_write(&mut b, muir::tv::NORMAL_TV, value << 8 | channel << 6 | colour);
         let (on_colour, on_value) = sampled
             .unwrap_or_else(|| panic!("channel {channel}: no -LOAD COLOR n fell during the cycle"));
         eprintln!(
@@ -338,8 +339,146 @@ fn the_colour_register_strobes_one_map_with_the_colour_and_the_value() {
 
     // The fourth channel the field can name strobes nothing, and the
     // register answers all the same.
-    let (low, _) = support::colour_write(&mut b, 0o377 << 8 | 3 << 6 | 5);
+    let (low, _) = support::colour_write(&mut b, muir::tv::NORMAL_TV, 0o377 << 8 | 3 << 6 | 5);
     assert!(low.is_empty(), "channel 3 decodes to the 74S139's unconnected output: {low:?}");
     let (took, _) = b.cycle(CONTROL + 4, Some(0));
     assert!(took < 1_000, "and the register acknowledges a write in {took} ns");
+}
+
+/// **The board wrapped as the color TV answers at the other addresses and
+/// at no others.** `cadrtv/lmtv.order`: "Note: For the normal TV, x is 6.
+/// For the color TV, x is 5", and of the buffer, "The normal TV has x
+/// equal to 0, so the buffer starts at 17000000.  The color TV has x equal
+/// to 2, and so the buffer starts at 17200000."  That is
+/// [`muir::tv::COLOR_TV`], and what puts the board there is three straps:
+/// `MAPADR 16` up, `DEVADR 3` up, `DEVADR 4` down, which
+/// [`muir::xbus::straps`] wraps and
+/// [`muir::netlist::parse_color_tv`] gives the third of them a net to be
+/// wrapped on.
+///
+/// The normal TV's own addresses are read back as well, and the board must
+/// not answer at either: two display boards on one backplane is the
+/// machine this is for, and a colour board that still answered at
+/// `17000000` would be a second driver on the main screen's every cycle.
+/// A cycle nobody answers never ends, so those two are run with a bound
+/// rather than through [`muir::xbus::XbusMaster::cycle`], which asserts at
+/// 40 us.
+#[test]
+fn the_board_wrapped_as_the_color_tv_answers_at_the_other_addresses() {
+    use muir::tv::{BUFFER, COLOR_TV, CONTROL, mode};
+    use muir::xbus::XbusMaster;
+
+    let n = netlist::parse_color_tv(LISPMTV).unwrap();
+    let mut b = XbusMaster::strapped(&n, 0, COLOR_TV);
+
+    // The mode register at 17377750, and the frame buffer at 17200000.
+    let (took, _) = b.cycle(COLOR_TV.control, Some(mode::BOW));
+    assert!(took < 1_000, "the mode register answered a write in {took} ns");
+    let (took, word) = b.cycle(COLOR_TV.control, None);
+    assert!(took < 1_000, "and a read in {took} ns");
+    assert_eq!(word & mode::WRITABLE, mode::BOW, "and gave the bit back");
+    let (took_w, _) = b.cycle(COLOR_TV.buffer + 5, Some(0x1234_5678));
+    let (took_r, word) = b.cycle(COLOR_TV.buffer + 5, None);
+    eprintln!("color frame buffer: write in {took_w} ns, read in {took_r} ns");
+    assert_eq!(word, 0x1234_5678, "the word written at 17200005 reads back");
+
+    // And nothing at the normal TV's. Two microseconds is three times the
+    // 757 ns a frame-buffer cycle takes when the board does answer.
+    for addr in [BUFFER, BUFFER + 5, CONTROL, CONTROL + 4] {
+        b.request(addr, None);
+        let until = b.now + 2_000;
+        while b.now < until && !b.acked() {
+            b.run(b.now + 5);
+        }
+        assert!(!b.acked(), "the color TV answered at {addr:o}, which is the main screen's");
+        b.release();
+        b.run(b.now + 600);
+    }
+}
+
+/// **The colour register is the same circuit at the colour strap**, and
+/// register 4 there latches `COLOR 0..7` and `COLOR VALUE 0..7` and
+/// strobes one map exactly as
+/// [`the_colour_register_strobes_one_map_with_the_colour_and_the_value`]
+/// measures it at the normal TV's `17377764`.  The address is the whole of
+/// the difference: `lmtv.order` numbers the registers `173777x0` to
+/// `173777x7` and the colour one is the fifth of them on either board.
+#[test]
+fn the_colour_register_is_the_same_register_at_the_colour_strap() {
+    use muir::tv::COLOR_TV;
+    use muir::xbus::XbusMaster;
+
+    let n = netlist::parse_color_tv(LISPMTV).unwrap();
+    let mut b = XbusMaster::strapped(&n, 0, COLOR_TV);
+    for (value, channel, colour) in [(0o252u32, 0u32, 5u32), (0o123, 1, 0o17), (0o077, 2, 0)] {
+        let (low, sampled) =
+            support::colour_write(&mut b, COLOR_TV, value << 8 | channel << 6 | colour);
+        let (on_colour, on_value) = sampled
+            .unwrap_or_else(|| panic!("channel {channel}: no -LOAD COLOR n fell during the cycle"));
+        eprintln!(
+            "17377754: value {value:o} channel {channel} colour {colour:o}: \
+             -LOAD COLOR {low:?} low, COLOR {on_colour:o}, COLOR VALUE {on_value:o}"
+        );
+        assert_eq!(low, vec![channel as usize], "one map's strobe, and one only");
+        assert_eq!(on_colour & 0o17, colour as u64, "the colour is XDI3..0 on COLOR 3..0");
+        assert_eq!(on_colour >> 6 & 3, channel as u64, "and the channel rides out on COLOR 7..6");
+        assert_eq!(on_value, value as u64, "the value is XDI15..8 on COLOR VALUE 7..0");
+    }
+}
+
+/// **The three straps the colour wrap moves, and no others.** Read off
+/// [`muir::xbus::straps`] for both boards: what it drives on the netlist
+/// `parse_color_tv` makes against what it drives on the one the board's
+/// own wire list describes.
+///
+/// `cadrtv/lmtv4b.wlr` is a normal TV, and it puts `MAPADR 16`, `MAPADR
+/// 17` and `MAPADR BANK` on the ground net wrapped from the `BT1` ground
+/// pin (XBADR 0F22 pins 06, 08 and 04) and every other strap on the
+/// pull-up at XBADR 0E14, which it heads with `DEVADR 4` through `DEVADR
+/// 21` and `MAPADR 18` through `MAPADR 21` at once.  `17000000` and
+/// `17377760` are what that comes to, and `17200000` and `17377750` are
+/// three pins away from it: `MAPADR 16` (0F22-06) up, `DEVADR 3` (0F19-13)
+/// up and `DEVADR 4` (0F19-15) down.  The last is on the pull-up net on
+/// MIT's board and is what `parse_color_tv` splits off.
+#[test]
+fn the_colour_wrap_moves_three_pins() {
+    use muir::part::Level;
+    use muir::tv::{COLOR_TV, NORMAL_TV};
+
+    let plain = lispmtv();
+    let coloured = netlist::parse_color_tv(LISPMTV).unwrap();
+    // By name, so that the two netlists' own net numbering cannot make
+    // two straps look like one.
+    let levels = |n: &Netlist, strap| {
+        let mut out: BTreeMap<String, Level> = BTreeMap::new();
+        for (net, level) in muir::xbus::straps(n, strap) {
+            out.insert(n.net(net).trim_matches('\'').to_string(), level);
+        }
+        out
+    };
+    let normal = levels(&plain, NORMAL_TV);
+    let colour = levels(&coloured, COLOR_TV);
+    assert_eq!(normal.get("MAPADR 16"), Some(&Level::Low), "the normal TV's buffer is 17000000");
+    assert_eq!(normal.get("DEVADR 3"), Some(&Level::Low), "and its registers 17377760");
+    assert!(!normal.contains_key("DEVADR 4"), "DEVADR 4 is on the pull-up net on MIT's board");
+    assert_eq!(colour.get("MAPADR 16"), Some(&Level::High), "the color TV's buffer is 17200000");
+    assert_eq!(colour.get("DEVADR 3"), Some(&Level::High), "and its registers 17377750");
+    assert_eq!(colour.get("DEVADR 4"), Some(&Level::Low), "which wants DEVADR 4 wrapped to ground");
+
+    // Every other strap is wrapped the way MIT's board is.
+    let moved: Vec<&String> = normal
+        .keys()
+        .chain(colour.keys())
+        .filter(|k| normal.get(*k) != colour.get(*k))
+        .collect::<BTreeSet<&String>>()
+        .into_iter()
+        .collect();
+    assert_eq!(moved, ["DEVADR 3", "DEVADR 4", "MAPADR 16"], "three pins and no more");
+
+    // The split is one pin and one net: XBADR 0F19 pin 15, the A6 input
+    // the board compares `ADR 4` on pin 16 against.
+    let low = at(&coloured, "XBADR", "0F19", "25LS2521");
+    assert_eq!(on(&coloured, low, 15), "DEVADR 4", "the strap");
+    assert_eq!(on(&coloured, low, 16), "ADR 4", "and the address bit it is compared with");
+    assert_eq!(coloured.parts.len(), plain.parts.len(), "no part is added or taken away");
 }

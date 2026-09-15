@@ -45,8 +45,14 @@
 //! bit a pixel there and defines `COLOR-SCREEN` at `17200000`
 //! ([`Tv::color`]). Its picture is 576 by 454 at four bits a pixel
 //! ([`Tv::pixel4`]) through the sixteen colours of the map
-//! ([`Tv::rgb`]). On `chip` it is the model too: there is no netlist of
-//! a LISPM TV strapped colour on the backplane.
+//! ([`Tv::rgb`]). On `chip` the board is a netlist on the backplane like
+//! the others --- `data/LISPMTV.netlist` through
+//! [`crate::netlist::parse_color_tv`], wrapped to [`COLOR_TV`] by
+//! [`crate::xbus::straps`] --- and `--color-tv model` keeps this model
+//! there instead. Either way the model is fitted: every write to the
+//! netlist board is mirrored into it, so the colour picture is read off
+//! the same place whichever board drew it, exactly as the main screen's
+//! is.
 //!
 //! **The sync program is run.** The board's timing is the program in its
 //! sync RAM, or in its PROM until the software selects the RAM, and the

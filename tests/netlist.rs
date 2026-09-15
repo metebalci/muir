@@ -546,7 +546,7 @@ fn no_strap_or_jumper_lands_on_a_driven_net() {
                 conflicts.push(format!("{board} {what} {} against {}", n.net(net), who.join(", ")));
             }
         };
-        for (net, _) in muir::xbus::straps(&n) {
+        for (net, _) in muir::xbus::straps(&n, muir::tv::NORMAL_TV) {
             against("strap", net);
         }
         for &(page, jumpers) in netlist::Netlist::HAND_JUMPERS {

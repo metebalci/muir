@@ -1360,7 +1360,8 @@ fn the_colour_register_strobes_one_map_here_as_well() {
     let mut b = XbusMaster::new(&n, 0);
     // (DPB value 1010 (DPB channel 0602 colour)), as `WRITE-COLOR-MAP` writes.
     for (value, channel, colour) in [(0o252u32, 0u32, 5u32), (0o123, 1, 0o17), (0o077, 2, 0)] {
-        let (low, sampled) = support::colour_write(&mut b, value << 8 | channel << 6 | colour);
+        let (low, sampled) =
+            support::colour_write(&mut b, muir::tv::NORMAL_TV, value << 8 | channel << 6 | colour);
         let (on_colour, on_value) = sampled
             .unwrap_or_else(|| panic!("channel {channel}: no -LOAD COLOR n fell during the cycle"));
         eprintln!(
@@ -1372,6 +1373,6 @@ fn the_colour_register_strobes_one_map_here_as_well() {
         assert_eq!(on_colour >> 6 & 3, channel as u64, "and the channel rides out on COLOR 7..6");
         assert_eq!(on_value, value as u64, "the value is XDI15..8 on COLOR VALUE 7..0");
     }
-    let (low, _) = support::colour_write(&mut b, 0o377 << 8 | 3 << 6 | 5);
+    let (low, _) = support::colour_write(&mut b, muir::tv::NORMAL_TV, 0o377 << 8 | 3 << 6 | 5);
     assert!(low.is_empty(), "channel 3 decodes to the 74S139's unconnected output: {low:?}");
 }

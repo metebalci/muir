@@ -341,9 +341,46 @@ and enable, and the 16 x 3 colour map. `--tv-board simple-tv|lispm-tv` says
 which board, on every engine, and the only thing it changes is what mode
 bit 7 reads. `--color-tv` fits a second board, a LISPM TV at the color TV's
 strap; without it the bus decode gives those addresses an NXM, which is the
-answer `COLOR-EXISTS-P` needs. On `chip` the normal TV may be either
-netlist board or the model under `--tv model`; the color TV is the model
-there too, there being no netlist of a board strapped colour.
+answer `COLOR-EXISTS-P` needs.
+
+**On `chip` either display is a netlist board or the model**, and the
+second one is `--color-tv [netlist|model]`: `netlist` is the board itself,
+`model` is this model at the colour addresses, and the bare flag is the
+netlist on `chip` and the model on the other two engines, where `netlist`
+is refused by the engine's name. The colour board's netlist is
+`data/LISPMTV.netlist` again, whatever `--tv-board` put at the main
+screen's addresses, brought up by `netlist::parse_color_tv` and wrapped by
+`xbus::straps` to `tv::COLOR_TV`.
+
+**Three wire-wrap straps are the whole difference between the two boards**
+(`src/xbus.rs`). `MAPADR 16` goes high, moving the buffer from `17000000`
+to `17200000`; `DEVADR 3` goes high and `DEVADR 4` goes low, moving the
+registers from `17377760` to `17377750`. On MIT's own board those are
+XBADR 0F22 pin 06, and XBADR 0F19 pins 13 and 15, and `cadrtv/lmtv4b.wlr`
+has all three wrapped the normal TV's way: 0F22-06 and 0F19-13 on the
+ground net --- 0F22-06 in the run wrapped from the `BT1` ground pin and
+0F19-13 in the one from `CF1` --- and 0F19-15 on the
+pull-up at XBADR 0E14, the net that list heads with `DEVADR 4` through
+`DEVADR 21`, `MAPADR 18` through `MAPADR 21` and `HI1` at once --- one net
+where the SIMPLE TV's drawings leave each strap a net of its own. So
+`DEVADR 4` is not a net muir can wrap: `netlist::parse_color_tv` moves
+0F19-15 onto a net of its own first, and `xbus::straps` refuses a display
+board handed the colour strap without it rather than leave it answering at
+the main screen's address.
+`tests/lispmtv_netlist.rs::the_colour_wrap_moves_three_pins` holds the
+three, `::the_board_wrapped_as_the_color_tv_answers_at_the_other_addresses`
+holds that the wrapped board answers at `17200000` and `17377750` and at
+neither of the normal TV's blocks, and
+`tests/chip.rs::two_display_boards_answer_at_their_own_straps` holds the
+two boards on one backplane, each answering its own cycles while the models
+behind the buses hold both pictures.
+
+**A write to a netlist display board is mirrored into its model**
+(`src/buses.rs`), the main screen's into `machine.tv` and the colour one's
+into `machine.color_tv`, so the picture is read off the model whichever
+board drew it; and a model whose netlist board is on the backplane does not
+put its own vertical interrupt on `-XBUS INTR`, the board driving that
+wire itself.
 
 **The sync program is run** (`src/tv/sync.rs`). The program in the RAM
 while the enable selects it, and `cpt.prom` otherwise, is executed by the
@@ -378,6 +415,14 @@ mouse, both on the I/O board, and they stay with the terminal that serves
 the main screen.
 
 ## Unverified
+
+**The color TV's own wrap.** `lmtv.order` gives the board's two addresses
+and MIT left no wire list of a board strapped to them: `cadrtv/lmtv4b.wlr`
+is a normal TV. So the three pins above are read off that list wrapped the
+other way, and that they are the three --- and that a colour board was a
+LISPM TV and not a board of its own --- is inference from the addresses.
+**What would settle it:** a wire list of a second board, or an installation
+note naming the pins the colour strap moves.
 
 **What the off-board D-A makes of a stored map byte.** muir renders a gun
 as `255 - stored`, and the only reference for that is the software's own

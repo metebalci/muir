@@ -102,6 +102,13 @@ pub struct Buses {
     /// the machine's model either way, so `machine.tv` is the
     /// picture whichever board drew it.
     pub tv_board: bool,
+    /// The same for the color TV, the second display board: whether it is
+    /// a netlist on the backplane rather than the model answering
+    /// `17200000` and `17377750`. Only ever true where
+    /// `machine.color_tv` is fitted, the model beside the board being
+    /// where the colour picture is read off, and a machine with no second
+    /// screen at all has neither.
+    pub color_tv_board: bool,
     /// Whether the disk controller is a netlist on the backplane. Then its
     /// registers are its own and the machine's model is not consulted:
     /// the netlist reads and writes the pack through the drive on its
@@ -176,6 +183,7 @@ impl Buses {
             xbus_pending: None,
             io_board: false,
             tv_board: false,
+            color_tv_board: false,
             disk_board: false,
             asserting: vec![None; n.nets.len()],
             xrq: net("-XBUS RQ"),
@@ -204,21 +212,23 @@ impl Buses {
         }
     }
 
-    /// Whether an Xbus address is the netlist display board's: its frame
+    /// Whether an Xbus address is a netlist display board's: its frame
     /// buffer or its control registers.
     ///
-    /// The normal TV's strap alone. The color TV is a model on every
-    /// engine --- there is no netlist of a LISPM TV strapped colour on
-    /// this backplane --- so its addresses fall through to the machine
-    /// behind the buses, as `--tv model`'s do.
-    fn is_display(phys: u32) -> bool {
-        crate::tv::NORMAL_TV.answers(phys)
+    /// Either strap, and only a board that is on the backplane: the main
+    /// screen's board under `--tv netlist` and the second display board's
+    /// under `--color-tv netlist`, each answering its own two blocks.
+    /// Where a display is the model instead, its addresses fall through to
+    /// the machine behind the buses.
+    fn is_display(&self, phys: u32) -> bool {
+        (self.tv_board && crate::tv::NORMAL_TV.answers(phys))
+            || (self.color_tv_board && crate::tv::COLOR_TV.answers(phys))
     }
 
     /// Whether a device board on the backplane answers this address, so
     /// that the model must not.
     fn device_board_answers(&self, phys: u32) -> bool {
-        (self.tv_board && Self::is_display(phys))
+        self.is_display(phys)
             || (self.disk_board && crate::disk_controller::register(phys).is_some())
     }
 
@@ -368,10 +378,13 @@ impl Buses {
                         changed = true;
                     }
                 } else if responder == Responder::Device && self.device_board_answers(phys) {
-                    // A device board on the backplane answers. A write to the
-                    // display is mirrored into the model, so that the screen
-                    // can be read off it.
-                    if write && self.tv_board && Self::is_display(phys) {
+                    // A device board on the backplane answers. A write to a
+                    // display is mirrored into the model, so that the
+                    // screen can be read off it --- the main screen into
+                    // `machine.tv` and the colour one into
+                    // `machine.color_tv`, which `Machine::bus_write` picks
+                    // by the address.
+                    if write && self.is_display(phys) {
                         self.machine.ns = now;
                         self.machine.bus_write(phys, Self::word(c, &self.xdata));
                     }
@@ -468,14 +481,15 @@ impl Buses {
         }
 
         // The Xbus interrupt line: the disk controller's request, and the
-        // behavioural displays' vertical interrupts --- the netlist display
-        // board drives the wire itself. The color TV is a model whatever
-        // the engine, there being no netlist of it, so its own is always
-        // this side. The I/O board's is a Unibus one, and goes by the
-        // cycle above or by the netlist board's own.
+        // behavioural displays' vertical interrupts --- a netlist display
+        // board drives the wire itself, so the model beside it must not,
+        // and that goes for the second display board as for the first.
+        // The I/O board's is a Unibus one, and goes by the cycle above or
+        // by the netlist board's own.
         self.machine.disk.advance(now);
         let vertical = (!self.tv_board && self.machine.tv.interrupt(now))
-            || self.machine.color_tv.as_ref().is_some_and(|tv| tv.interrupt(now));
+            || (!self.color_tv_board
+                && self.machine.color_tv.as_ref().is_some_and(|tv| tv.interrupt(now)));
         let want = if self.machine.disk.interrupt() || vertical { Some(Level::Low) } else { None };
         if self.asserting(self.xintr) != want {
             self.asserting[self.xintr as usize] = want;
@@ -633,6 +647,7 @@ impl Buses {
             xbus_pending,
             io_board,
             tv_board,
+            color_tv_board,
             disk_board,
             asserting,
             xrq: _,
@@ -666,6 +681,7 @@ impl Buses {
         w.bool(*memory_twins);
         w.bool(*io_board);
         w.bool(*tv_board);
+        w.bool(*color_tv_board);
         w.bool(*disk_board);
         machine.save(w);
         w.u64(memory.len() as u64);
@@ -705,6 +721,7 @@ impl Buses {
             ("the memory twins", &mut self.memory_twins),
             ("an I/O board netlist", &mut self.io_board),
             ("a display netlist", &mut self.tv_board),
+            ("a color TV netlist", &mut self.color_tv_board),
             ("a disk controller netlist", &mut self.disk_board),
         ] {
             let was = r.bool()?;

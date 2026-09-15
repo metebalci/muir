@@ -30,6 +30,11 @@
 //! wire it has pulled up, reset over `-XBUS INIT` --- plus what its
 //! drawings leave to the wrapper: its address straps (`straps`) and the
 //! images in its PROMs (`roms`).
+//!
+//! **A device is a netlist and a strap** ([`Device`]), because a machine
+//! with two screens carries the same display board twice at two addresses:
+//! the main screen's and the color TV's, `cadrtv/lmtv.order`'s x of 6 and
+//! of 5. Nothing else on the backplane has a strap to move.
 
 use crate::buses::Buses;
 use crate::chip::Chip;
@@ -77,9 +82,9 @@ fn wire_names() -> Vec<String> {
 }
 
 /// Powers a memory board on the backplane: every Xbus wire it has pulled
-/// up, its address switch set to `switches`, reset over `-XBUS INIT`, and
-/// settled at time 0.
-fn bring_up(memory: &Netlist, switches: u8, powered_at: u64) -> Chip {
+/// up, its address switch set to `switches`, its address straps wrapped
+/// for `strap`, reset over `-XBUS INIT`, and settled at time 0.
+fn bring_up(memory: &Netlist, strap: crate::tv::Strap, switches: u8, powered_at: u64) -> Chip {
     let mut c = Chip::new_unclocked(memory);
     c.power_on();
     for name in wire_names() {
@@ -92,7 +97,7 @@ fn bring_up(memory: &Netlist, switches: u8, powered_at: u64) -> Chip {
     if memory.parts.iter().any(|p| p.reference == SWITCH && p.kind == "DIPSW") {
         c.set_switches(SWITCH, switches);
     }
-    for (net, level) in straps(memory) {
+    for (net, level) in straps(memory, strap) {
         c.drive(net, level);
     }
     for (reference, kind, image) in roms(memory) {
@@ -117,9 +122,37 @@ fn bring_up(memory: &Netlist, switches: u8, powered_at: u64) -> Chip {
 /// switch is set when it is installed. `cadrtv/lmtv.order` says what the
 /// normal TV was strapped to --- the buffer at `17000000`, the control
 /// registers at `173777x0` with `x` 6 --- and those are
-/// [`crate::tv::BUFFER`] and [`crate::tv::CONTROL`]. `MAPADR
+/// [`crate::tv::NORMAL_TV`]. `MAPADR
 /// 16..21` compare the buffer's top six address bits; `DEVADR 3..21` the
 /// control block's, bits 0 to 2 picking the register.
+///
+/// **`strap` is which board this is**, the machine's two display boards
+/// being the same board wrapped two ways: `NORMAL_TV` and
+/// [`crate::tv::COLOR_TV`], `lmtv.order`'s x of 6 and of 5, "The normal TV
+/// has x equal to 0, so the buffer starts at 17000000.  The color TV has x
+/// equal to 2, and so the buffer starts at 17200000."  Three pins carry
+/// the difference and nothing else does: `MAPADR 16` goes up, the buffer
+/// moving by 2^16 words; `DEVADR 3` goes up and `DEVADR 4` goes down, the
+/// control block moving from `17377760` to `17377750`.  On the LISPM TV
+/// those are XBADR 0F22 pin 06 and XBADR 0F19 pins 13 and 15 --- `A2` of
+/// the map comparator and `A5` and `A6` of the control block's low one,
+/// against `ADR 16`, `ADR 3` and `ADR 4` on the pins beside them.  Every
+/// other board takes `NORMAL_TV` and is unmoved by it, having none of
+/// these nets.
+///
+/// **Unverified**: the colour wrap itself. `lmtv.order` gives the color
+/// TV's two addresses and nothing in `mit/` gives its wire list: MIT's
+/// own, `cadrtv/lmtv4b.wlr`, is a normal TV, with 0F22-06 and 0F19-13 on
+/// the ground net and 0F19-15 on the pull-up at XBADR 0E14.  So the three
+/// are read off that list wrapped the other way, and that they are the
+/// three is inference from the two addresses. What would settle it: a wire
+/// list of a second board, or an installation note naming the pins the
+/// strap moves.
+/// `DEVADR 4` is not even a net on that board ---
+/// [`crate::netlist::parse_color_tv`] is what makes it one --- so a
+/// display board handed the colour strap without having been parsed that
+/// way is refused here rather than left answering at the normal TV's
+/// address.
 ///
 /// `ADR BANK SEL` and `MAPADR BANK` are the two sides of one more pair, and
 /// only one of them is a strap. The LISPM TV, the board that replaced this
@@ -151,23 +184,46 @@ fn bring_up(memory: &Netlist, switches: u8, powered_at: u64) -> Chip {
 /// of their own, discrepancy 35 --- and the level had to go when it
 /// landed. `MAPADR15` has no net on this board, so the pair's other join
 /// does nothing and `MAPADR BANK` stays the one-pin strap it reads as.
-pub fn straps(board: &Netlist) -> Vec<(NetId, Level)> {
+pub fn straps(board: &Netlist, strap: crate::tv::Strap) -> Vec<(NetId, Level)> {
     let mut out = Vec::new();
     let bit = |addr: u32, k: u32| if addr >> k & 1 != 0 { Level::High } else { Level::Low };
+    // A strap this board has no net for is one the drawing wrapped for it
+    // and this cannot move. That is right wherever the two straps agree,
+    // and wrong wherever they do not: the board would answer at the other
+    // one's address, quietly. So a bit that differs must be a net here.
+    // Only on a display board: the memory board and the disk controller
+    // have no address straps at all, and take the strap they are given
+    // without being moved by it.
+    let display = find(board, "MAPADR BANK").is_some();
+    let wrappable = |net: Option<NetId>, name: &str, differs: bool| {
+        assert!(
+            net.is_some() || !(differs && display),
+            "{name} is wrapped the normal TV's way on this board and cannot be moved: \
+             netlist::parse_color_tv is what gives it a net of its own"
+        );
+        net
+    };
     for k in 16..22 {
-        if let Some(net) = find(board, &format!("MAPADR {k}")) {
-            out.push((net, bit(crate::tv::BUFFER, k)));
+        let net = find(board, &format!("MAPADR {k}"));
+        let differs = strap.buffer >> k & 1 != crate::tv::NORMAL_TV.buffer >> k & 1;
+        if let Some(net) = wrappable(net, &format!("MAPADR {k}"), differs) {
+            out.push((net, bit(strap.buffer, k)));
         }
     }
     for k in 3..22 {
-        if let Some(net) = find(board, &format!("DEVADR {k}")) {
-            out.push((net, bit(crate::tv::CONTROL, k)));
+        let net = find(board, &format!("DEVADR {k}"));
+        let differs = strap.control >> k & 1 != crate::tv::NORMAL_TV.control >> k & 1;
+        if let Some(net) = wrappable(net, &format!("DEVADR {k}"), differs) {
+            out.push((net, bit(strap.control, k)));
         }
     }
     // `MAPADR BANK` only: `ADR BANK SEL` is `ADR15` off the bus, not a
-    // strap, and driving it here fights the address buffer.
+    // strap, and driving it here fights the address buffer. It is the
+    // buffer's bit 15, which is low in both straps: 17000000 and 17200000
+    // are 64K-word boundaries apart, and the pair that moves is `MAPADR
+    // 16` above.
     if let Some(net) = find(board, "MAPADR BANK") {
-        out.push((net, Level::Low));
+        out.push((net, bit(strap.buffer, 15)));
     }
     // The disk controller's six lines from the DISK MULTIPLEXOR board ---
     // `UNIT0-2`, `MULTIPLE SELECT`, `ANY ATTENTION` and `SEL UNIT
@@ -286,6 +342,34 @@ pub(crate) fn roms(board: &Netlist) -> Vec<(&'static str, &'static str, &'static
     out
 }
 
+/// **A device board in a slot**: the netlist it is built from and the
+/// address strap it was wrapped with. Two boards of a two-screen machine
+/// are one netlist and two straps ([`crate::tv::NORMAL_TV`] and
+/// [`crate::tv::COLOR_TV`]), so a device on the backplane is the pair and
+/// not the netlist alone.
+///
+/// Every board that is not a display takes `NORMAL_TV` and is unmoved by
+/// it, having no address straps at all: [`Device::new`] is that, and
+/// [`Device::strapped`] the colour board.
+#[derive(Clone, Copy)]
+pub struct Device<'a> {
+    pub netlist: &'a Netlist,
+    pub strap: crate::tv::Strap,
+}
+
+impl<'a> Device<'a> {
+    /// A board at the addresses its drawings were wrapped for: the normal
+    /// TV's strap, which every board that has no straps takes too.
+    pub fn new(netlist: &'a Netlist) -> Device<'a> {
+        Device { netlist, strap: crate::tv::NORMAL_TV }
+    }
+
+    /// A board wrapped to `strap`; see [`straps`].
+    pub fn strapped(netlist: &'a Netlist, strap: crate::tv::Strap) -> Device<'a> {
+        Device { netlist, strap }
+    }
+}
+
 /// A master for one board on its own: the harness that measures a board
 /// without the machine. It holds the Xbus wires the interface would ---
 /// open collector, pulled up at rest --- puts the 220 ns master clock the
@@ -317,11 +401,19 @@ impl<'a> XbusMaster<'a> {
     pub const SYNC_HALF_NS: u64 = 110;
 
     /// Brings a board up as [`Xbus::new`] does, switched to `switches`,
-    /// and lets it run two microseconds.
+    /// wrapped at the addresses its drawings carry, and lets it run two
+    /// microseconds.
     pub fn new(board: &'a Netlist, switches: u8) -> XbusMaster<'a> {
+        Self::strapped(board, switches, crate::tv::NORMAL_TV)
+    }
+
+    /// The same with the board wrapped to `strap`: the color TV is a
+    /// display board at [`crate::tv::COLOR_TV`], and its netlist is
+    /// [`crate::netlist::parse_color_tv`]'s. See [`straps`].
+    pub fn strapped(board: &'a Netlist, switches: u8, strap: crate::tv::Strap) -> XbusMaster<'a> {
         let net = |name: &str| find(board, name).unwrap_or_else(|| panic!("no net {name}"));
         let mut m = XbusMaster {
-            chip: bring_up(board, switches, 0),
+            chip: bring_up(board, strap, switches, 0),
             now: 0,
             netlist: board,
             sync: find(board, "-XBUS.SYNC"),
@@ -472,9 +564,10 @@ pub struct Xbus {
     /// Each device board's net for each wire, if it has the wire: the
     /// display has no `-XBUS SYNC` and no `-XBUS PAR`.
     device_wires: Vec<Vec<Option<NetId>>>,
-    /// The device boards' netlists, kept to bring a board up again at a
-    /// resume from a checkpoint that has none: [`Xbus::repower_devices`].
-    device_sources: Vec<Netlist>,
+    /// The device boards' netlists and address straps, kept to bring a
+    /// board up again at a resume from a checkpoint that has none:
+    /// [`Xbus::repower_devices`].
+    device_sources: Vec<(Netlist, crate::tv::Strap)>,
     /// What each end was last given, per wire: the interface first, then
     /// the boards. `None` is a pull-up.
     given: Vec<Vec<Option<Level>>>,
@@ -643,7 +736,7 @@ impl Xbus {
         busint: &Netlist,
         memory: &Netlist,
         boards: usize,
-        devices: &[&Netlist],
+        devices: &[Device],
         powered_at: u64,
     ) -> Xbus {
         let mut wires = Vec::new();
@@ -664,13 +757,14 @@ impl Xbus {
                 wires
                     .iter()
                     .map(|w| match w.name.as_str() {
-                        "-XBUS EXTGRANT OUT" => find(d, "-XBUS.EXTGRANT.IN"),
-                        name => find(d, &name.replace(' ', ".")),
+                        "-XBUS EXTGRANT OUT" => find(d.netlist, "-XBUS.EXTGRANT.IN"),
+                        name => find(d.netlist, &name.replace(' ', ".")),
                     })
                     .collect()
             })
             .collect();
-        let masters = devices.iter().filter(|d| find(d, "-XBUS.EXTGRANT.IN").is_some()).count();
+        let masters =
+            devices.iter().filter(|d| find(d.netlist, "-XBUS.EXTGRANT.IN").is_some()).count();
         assert!(masters <= 1, "the grant chain is one wire here: one device can take the bus");
         assert!(boards <= 64, "the switch has six bits");
         let mut drams = [[usize::MAX; 33]; 4];
@@ -692,9 +786,12 @@ impl Xbus {
             drams.iter().flatten().all(|&i| i != usize::MAX),
             "every bit of every bank has a DRAM"
         );
-        let chips: Vec<Chip> = (0..boards).map(|k| bring_up(memory, k as u8, powered_at)).collect();
-        let device_chips: Vec<Chip> = devices.iter().map(|d| bring_up(d, 0, powered_at)).collect();
-        let scratch = (boards == 0).then(|| bring_up(memory, 0, powered_at));
+        let normal = crate::tv::NORMAL_TV;
+        let chips: Vec<Chip> =
+            (0..boards).map(|k| bring_up(memory, normal, k as u8, powered_at)).collect();
+        let device_chips: Vec<Chip> =
+            devices.iter().map(|d| bring_up(d.netlist, d.strap, 0, powered_at)).collect();
+        let scratch = (boards == 0).then(|| bring_up(memory, normal, 0, powered_at));
         let ends = 1 + boards + devices.len();
         let given = vec![vec![None; ends]; wires.len()];
         let contrib = vec![vec![None; wires.len()]; ends];
@@ -707,7 +804,7 @@ impl Xbus {
             boards: chips,
             devices: device_chips,
             device_wires,
-            device_sources: devices.iter().map(|d| (*d).clone()).collect(),
+            device_sources: devices.iter().map(|d| (d.netlist.clone(), d.strap)).collect(),
             given,
             drams,
             changed: vec![false; ends],
@@ -729,7 +826,7 @@ impl Xbus {
             let controller = self
                 .device_sources
                 .iter()
-                .position(OnCable::fits)
+                .position(|(n, _)| OnCable::fits(n))
                 .expect("a disk controller on the backplane to plug a drive into");
             self.disks = Some(Disks {
                 controller,
@@ -769,7 +866,7 @@ impl Xbus {
         // it. The multiplexor would then be driving nets tied to ground
         // and to each other, and would go on running as if it were not:
         // the same shape of silence as indexing the wrong board.
-        let dc = &self.device_sources[j];
+        let dc = &self.device_sources[j].0;
         assert!(
             find(dc, "UNIT0") != find(dc, "GND"),
             "the controller's netlist is not the one `parse_with_multiplexor` makes: \
@@ -793,8 +890,8 @@ impl Xbus {
             unit == 0 || d.dm.is_some(),
             "unit {unit} wants a multiplexor: the controller has one port"
         );
-        let per_unit = d.dm.as_ref().map_or(&self.device_sources[j], |(n, _)| n);
-        let ports = Ports { per_unit, unit: unit as u8, shared: &self.device_sources[j] };
+        let per_unit = d.dm.as_ref().map_or(&self.device_sources[j].0, |(n, _)| n);
+        let ports = Ports { per_unit, unit: unit as u8, shared: &self.device_sources[j].0 };
         let cable = OnCable::on(ports, drive);
         self.disks().units[unit] = Some(cable);
         let n = self.disks.as_mut().expect("just made").apply(unit, &mut self.devices[j], now);
@@ -1092,6 +1189,12 @@ impl Xbus {
     /// Writes the device boards, for the end of a checkpoint: after the
     /// interface, the memory boards and the I/O board, so that a checkpoint
     /// from before there were any still reads.
+    ///
+    /// **Nothing here says how many there are**, so a file written with a
+    /// second display board on the backplane is not one a machine without
+    /// it can read. What settles that before a board is asked to load
+    /// anything is the word at the front of the checkpoint:
+    /// [`crate::cable::write_checkpoint`].
     pub fn save_devices(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
         for d in &self.devices {
             d.save(w)?;
@@ -1202,8 +1305,8 @@ impl Xbus {
     pub fn repower_devices(&mut self, powered_at: u64) {
         let first = 1 + self.boards.len();
         self.recombine = true;
-        for (j, src) in self.device_sources.iter().enumerate() {
-            self.devices[j] = bring_up(src, 0, powered_at);
+        for (j, (src, strap)) in self.device_sources.iter().enumerate() {
+            self.devices[j] = bring_up(src, *strap, 0, powered_at);
             let e = first + j;
             self.seen[e] = u64::MAX;
             self.changed[e] = false;
@@ -1213,7 +1316,7 @@ impl Xbus {
             }
         }
         if let Some(d) = self.disks.as_mut() {
-            let controller = &self.device_sources[d.controller];
+            let controller = &self.device_sources[d.controller].0;
             if let Some((src, dm)) = d.dm.as_mut() {
                 *dm = Dm::new(controller, src, powered_at);
             }
