@@ -157,6 +157,14 @@ which is where a server nobody authenticates belongs, so reaching another
 host means naming an address to listen on. Two muirs on one host are two
 peers on the loopback and want no other transport between them.
 
+The frame is `cbridge`'s: one Chaos packet behind a four-byte header, every
+16-bit word most significant byte first, and a trailer of three words ---
+the address on this subnet the frame is for, the sender's own, and an
+Internet checksum over everything before it. A frame whose checksum is wrong
+is dropped, as `cbridge` drops it; `--chaos-trace` says so. The check word
+the CADR's own hardware makes is the modeled cable's and is not what the
+datagram carries.
+
 muir is a leaf and not a router: a frame goes out over UDP only when a
 station of this machine put it on the cable, so what arrives from one peer
 is never carried on to another. A `cbridge` beside muir is what routes, and
@@ -175,7 +183,7 @@ any other address is still dropped.
 
 **An endpoint and no Chaosnet address**, which is what tells it from
 `--chaos-udp-peer`: the CHUDP frame carries the real destination in its
-hardware trailer and the bridge routes on that. A port, an address or
+trailer and the bridge routes on that. A port, an address or
 address:port, a name resolved once at the start, and `42042` if no port is
 given.
 

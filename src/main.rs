@@ -579,7 +579,7 @@ fn resolved(lives: &str) -> Option<SocketAddr> {
 /// **It takes no Chaosnet address**, which is what tells it from
 /// `--chaos-udp-peer <address>@<host>`. It is not a host at an address;
 /// it is where what is not named goes, and the CHUDP frame carries the
-/// real destination in its hardware trailer for the bridge there to
+/// real destination in its trailer for the bridge there to
 /// route on. So it is an endpoint as the other endpoint flags take one
 /// --- a bare port on the loopback, an address at the protocol's own
 /// port, or address:port --- or a name, resolved here as a peer's is.
