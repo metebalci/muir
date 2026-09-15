@@ -343,6 +343,22 @@ bit 7 reads. `--color-tv` fits a second board, a LISPM TV at the color TV's
 strap; without it the bus decode gives those addresses an NXM, which is the
 answer `COLOR-EXISTS-P` needs.
 
+**Only the four-bit LISPM TV, and four bits a pixel.** MIT built the board
+two ways, and the tapes have both page lists: `cadrtv/lmtv4b.fil` with
+`GEN4B` and `cadrtv/lmtv8b.fil` with its eight-bit page, the other 24
+pages the same, each with a clock PROM of its own --- `lmtv4b.prom`, "4B
+LMTV Clock PROM", and `lmtv8b.prom`, "8B LMTV Clock PROM 74S288 1/24/80",
+whose own comment reads "16 MHZ, 4B PIXELS SHIFTED AT 64 MHZ".
+`data/LISPMTV.netlist` is the four-bit build and carries the four-bit PROM,
+and the model draws the color picture at four bits a pixel through the
+sixteen-entry map; **the eight-bit build is not built and eight-bit mode
+is not modeled.** ECO 2 of `cadrtv/lmtv4b.eco` (2 June 1981) reroutes the
+output bits "in four bit mode as opposed to '8 bit mode'" and says "for
+true 8 bit mode, yet more corrections will be needed later", and nothing
+on the tapes says they were made; and System 100 asks for four: `COLOR:
+MAKE-SCREEN` in `sys/window/color.lisp` defines the color screen with
+`:BITS-PER-PIXEL 4`, and `%COLOR-TRANSFORM` takes `ART-4B` arrays alone.
+
 **On `chip` either display is a netlist board or the model**, and the
 second one is `--color-tv [netlist|model]`: `netlist` is the board itself,
 `model` is this model at the color addresses, and the bare flag is the

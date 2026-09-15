@@ -166,7 +166,7 @@ level order.
 | `CADRIO.netlist` | I/O board: keyboard, mouse, clocks, the serial port, and the Chaosnet half of the same board | 173 |
 | `CADRDC.netlist` | disk controller | 171 |
 | `SIMPLETV.netlist` | the black-and-white TV, MIT's word for the screen | 171 |
-| `LISPMTV.netlist` | LISPM TV, the four- and eight-bit display that replaced the SIMPLE TV in 1980 | 172 |
+| `LISPMTV.netlist` | LISPM TV, the four-bit build of the display that replaced the SIMPLE TV in 1980; the eight-bit build is not built | 172 |
 
 A part is one device at one board location --- the chips, the oscillators,
 the delay lines, the switches, the LED digits --- and not the bypass
