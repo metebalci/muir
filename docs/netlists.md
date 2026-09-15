@@ -182,9 +182,17 @@ it came from. It took 2 days 14 hours and 301 million microcycles, 51 of
 those hours the copy, because the netlist disk controller spends the drive's
 real milliseconds on every block where its behavioral model spends none.
 
+**The eighth board booted the system too.** On 15 September 2026 the same
+boot was made again with the DISK MULTIPLEXOR on the controller's cable as
+well --- its eight drive ports, and the six one-board jumpers left off,
+which is what `cadrdc/dc.eco` says to do when that board is fitted --- and
+the system came up the same way, in 2 days 21 hours and 306 million
+microcycles. `DM.netlist` is held to `dm.stf` and the drawings rather than
+to MIT's wiring, there being no wire list for that board on the tapes, and
+what it did with that is carry a whole cold boot.
+
 That is what the netlists are for. A board held pin for pin to MIT's wire
 list is a claim about the wiring; a board that carries the machine's own
 software, through its own microcode, at gate level, for two and a half days
-without a wrong answer, is that claim tested. The one board not in the run
-is the DISK MULTIPLEXOR, which is the one board with no wire list on the
-tapes to hold it to.
+without a wrong answer, and for close to three with the multiplexor fitted
+as well, is that claim tested.
