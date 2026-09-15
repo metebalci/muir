@@ -599,7 +599,17 @@ impl Interface {
         self.advance(now);
         self.invalidate();
         match uaddr {
-            interface::CSR => self.csr(),
+            interface::CSR => {
+                if self.trace && self.receive_done {
+                    eprintln!(
+                        "chaos {now:>6}: interface {:o} read its CSR with a packet waiting, {} of {} words read",
+                        self.address,
+                        self.rcv_at,
+                        self.rcv.len()
+                    );
+                }
+                self.csr()
+            }
             interface::MY_ADDRESS => self.address,
             interface::READ_BUFFER => {
                 let w = self.rcv.get(self.rcv_at).copied().unwrap_or(0);
@@ -628,6 +638,15 @@ impl Interface {
                     self.reset();
                 }
                 if v & csr::CLEAR_RECEIVER != 0 {
+                    if self.trace {
+                        eprintln!(
+                            "chaos {now:>6}: interface {:o} cleared its receiver, {} of {} words read{}",
+                            self.address,
+                            self.rcv_at,
+                            self.rcv.len(),
+                            if self.receive_done { "" } else { ", buffer already free" }
+                        );
+                    }
                     self.receive_done = false;
                     self.crc_error = false;
                     self.rcv.clear();
@@ -643,6 +662,12 @@ impl Interface {
                 }
             }
             interface::WRITE_BUFFER => {
+                if self.trace && self.xmit.is_empty() {
+                    eprintln!(
+                        "chaos {now:>6}: interface {:o} began filling its transmit buffer",
+                        self.address
+                    );
+                }
                 // The outgoing buffer is the 2147 at LMTBUF 0C10, 4K by 1,
                 // addressed by `TBCT<11:0>` from the three 25LS193s at
                 // 0C11-0C13: 4,096 bits, 256 sixteen-bit words, and a word
@@ -683,6 +708,13 @@ impl Interface {
     /// ([`Turn`]).
     fn start(&mut self, now: u64) {
         let buffer = std::mem::take(&mut self.xmit);
+        if self.trace {
+            eprintln!(
+                "chaos {now:>6}: interface {:o} read START, {} words in its transmit buffer",
+                self.address,
+                buffer.len()
+            );
+        }
         self.turn.ready = Some((now + TSR_READY_NS, buffer));
     }
 }
