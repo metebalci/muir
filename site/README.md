@@ -14,8 +14,9 @@ Hand-written files, no build step and no generator:
     index.html    the front page, drawn in the hand of Cold Boot --- the
                   manga-style zine about the same machine by the same
                   author. The zine is the story; this is the machine
-    lashup.html   that recording at its own size, which a browser showing
-                  the file itself would shrink to the window
+    lashup.html   the recording alone at its own size, black behind it and
+                  nothing else: a browser showing the file itself would
+                  shrink it to the window, and 1-bit text scaled is mush
     lashup.gif    the acceptance test recorded as it ran: 1538 x 985, the
                   size the machines drew it and the size to read it at.
                   Made by

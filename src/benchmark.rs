@@ -419,20 +419,27 @@ pub fn chip(
     chip_with(cpu, busint, memory, io, tv, None)
 }
 
-/// [`chip`] with the color TV on the backplane too, when `color_tv` is
+/// [`chip`] with everything on the backplane too, when `extra` is given:
 /// the LISPM TV netlist wrapped to the color addresses
-/// ([`crate::netlist::parse_color_tv`]): what `muir --chip --color-tv`
-/// runs, for measuring what the second display board costs. The model is
-/// fitted behind the buses beside it, as the run does.
+/// ([`crate::netlist::parse_color_tv`]), with the model fitted behind the
+/// buses beside it as the run does, and MIT's disk controller parsed for
+/// the multiplexor ([`crate::netlist::parse_with_multiplexor`]) with the
+/// multiplexor on its cable --- what `muir --chip --color-tv
+/// --disk-multiplexor` runs, for the worst-case figure. No pack is on the
+/// drive, and the programs never ask for one.
 pub fn chip_with(
     cpu: &Netlist,
     busint: &Netlist,
     memory: &Netlist,
     io: &Netlist,
     tv: &Netlist,
-    color_tv: Option<&Netlist>,
+    extra: Option<(&Netlist, &Netlist, &Netlist)>,
 ) -> (Chip, Behavioral, FarEnd) {
-    let boards = Boards { memory: 32, io: Some(io), tv: Some(tv), color_tv, ..Default::default() };
+    let (color_tv, disk, multiplexor) = match extra {
+        Some((c, d, m)) => (Some(c), Some(d), Some(m)),
+        None => (None, None, None),
+    };
+    let boards = Boards { memory: 32, io: Some(io), tv: Some(tv), color_tv, disk, multiplexor };
     let mut m = Machine::new();
     if color_tv.is_some() {
         m.fit_color_tv();
