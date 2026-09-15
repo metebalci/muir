@@ -6,6 +6,7 @@
 //! `README.md`, `data/README.md` and `site/index.html` each carry a table
 //! of the netlists and how many parts are on each board, and
 //! `data/README.md` carries the pages and the `part` records with them.
+//! `site/manual.html` says the same totals in prose.
 //! **Nothing read any of them.** `tests/parts_mounted.rs` asserts the same
 //! figures against the netlists and says in a comment that the documents
 //! quote them, but it restates the constants rather than reading them, so
@@ -189,11 +190,16 @@ fn the_data_inventory_counts_every_netlist_correctly() {
 ///
 /// The whole machine's total is quoted in prose rather than in a table, so
 /// it is read out of the sentence that makes the claim and summed here from
-/// the same netlists.
+/// the same netlists. The front page prints that total a second time as a
+/// numeral standing on its own, with the words beside it rather than round
+/// it, so that one is found by the name the page gives it --- and it is
+/// found, because a figure the reader sees first is the worst one to leave
+/// unchecked.
 #[test]
 fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
     const README: &str = include_str!("../README.md");
     const SITE: &str = include_str!("../site/index.html");
+    const MANUAL: &str = include_str!("../site/manual.html");
     let files = netlists();
     for (what, t) in [
         ("README.md", markdown(README, &["Netlist", "Board", "Parts"])),
@@ -230,9 +236,10 @@ fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
         ("README.md", README, "of them, and ", " with all thirty-two", full),
         ("site/index.html", SITE, "own drawings: ", " on the processor", processor),
         ("site/index.html", SITE, "on the processor, ", " in the machine", machine),
-        ("site/index.html", SITE, "the full netlist &mdash; the ", " parts of MIT", machine),
-        ("site/index.html", SITE, "A whole machine is ", " parts with one memory board", machine),
-        ("site/index.html", SITE, "the color TV, and ", " with all thirty-two", full),
+        ("site/index.html", SITE, "the SIMPLE TV and the color TV, and ", " with all thirty-two", full),
+        ("site/index.html", SITE, "id=\"whole-machine\">", "</p>", machine),
+        ("site/manual.html", MANUAL, "A whole machine is ", " parts with one memory board", machine),
+        ("site/manual.html", MANUAL, "the color TV, and ", " with all thirty-two", full),
     ] {
         assert_eq!(quoted(what, text, before, after), want, "{what}: {before:?}");
     }
@@ -280,6 +287,7 @@ fn the_documents_say_how_many_netlists_there_are_in_words() {
         ("README.md", include_str!("../README.md")),
         ("data/README.md", include_str!("../data/README.md")),
         ("site/index.html", include_str!("../site/index.html")),
+        ("site/manual.html", include_str!("../site/manual.html")),
     ] {
         for word in WORDS {
             let said = format!("the {word} netlists");
