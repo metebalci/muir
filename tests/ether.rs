@@ -14,7 +14,9 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use muir::chaos::ether::{ABORT_HOLD_NS, ABORT_NS, Ether, Event, Node};
+use muir::chaos::ether::{
+    ABORT_HOLD_NS, ABORT_NS, BUSY_ABORT_NS, Ether, Event, Node, SLOT_NS, refill, turn_byte,
+};
 use muir::chaos::packet::Framed;
 use muir::chaos::wire;
 
@@ -285,7 +287,8 @@ fn the_boards_frame_goes_at_its_instant_and_the_board_is_told() {
     run(&mut e, start + 5_000, start + 200_000);
     let h = heard(&e);
     assert!(h.len() == 1 && !h[0].2, "the wreckage, its check bad: {h:?}");
-    let (_, r) = e.board_heard().expect("the board heard the wreckage too");
+    let (_, r, taken) = e.board_heard().expect("the board heard the wreckage too");
+    assert!(taken, "with its buffer free, its receiver was active for it");
     assert!(!r.framed.check_ok, "and can judge it by its check, and by its {} bits", r.bits);
 }
 
@@ -337,4 +340,137 @@ fn interference_is_two_transceivers_driving_high_at_once() {
     assert!(!e.interference(), "then lets go");
     e.board(x + ABORT_HOLD_NS, false);
     assert!(!e.level(), "and the line is low with the board's driver off too");
+}
+
+// --- A station on the cable, and the turn timer's round ------------------
+
+/// The words of a packet with `data` data words, and the bits it takes on
+/// the cable: the buffer, the source and check words the interface adds,
+/// and the zero bit at the end.
+fn on_the_cable(data: usize) -> (usize, u64) {
+    let words = 9 + data;
+    (words, ((words + 2) * 16 + 1) as u64 * wire::CELL_NS)
+}
+
+/// **A station's next frame waits for its host to refill the buffer, and
+/// then for its turn to come round.** A station's software cannot reload
+/// the transmitter within a slot: it writes the packet a sixteen-bit word
+/// at a time down the Unibus and reads `START`, which is [`refill`], and
+/// by then the one count after the cable idled --- its own turn, its own
+/// source word having loaded the counter with zero --- has gone by. Bit 7
+/// of the counter comes round again 256 counts later, so two short frames
+/// from one station are 257 slots apart and two full ones 513, which is
+/// what the netlist board takes with microcode 323 driving it
+/// (`two_packets_back_to_back_wait_a_whole_round` in
+/// `tests/chaos_netlist.rs`).
+#[test]
+fn a_stations_next_frame_waits_for_its_host_to_refill() {
+    for (what, data, slots) in [("short frames", 4usize, 257u64), ("full packets", 244, 513)] {
+        let mut e = Ether::new();
+        e.keep_log(true);
+        let frames = vec![packet(0o3060, 0o3062, data), packet(0o3060, 0o3062, data)];
+        let (a, _) = host(0o3060, frames, false);
+        e.attach(a);
+        run(&mut e, 0, 5_000_000);
+        let sent = sent(&e);
+        assert_eq!(sent.len(), 2, "{what}: both went: {sent:?}");
+        let (words, bits) = on_the_cable(data);
+        let end = sent[0].0 + bits;
+        let gap = sent[1].0 - end;
+        eprintln!(
+            "{what}: {words} words, the first frame {} to {end}, the second at {}: {gap} ns, \
+             {} slots; the refill is {} ns",
+            sent[0].0,
+            sent[1].0,
+            gap / SLOT_NS,
+            refill(words)
+        );
+        assert!(sent[1].0 >= end + refill(words), "{what}: not before its host had it ready");
+        assert_eq!(gap / SLOT_NS, slots, "{what}: {gap} ns after its own frame");
+    }
+}
+
+/// **A station's refill holds up its own next frame and nobody else's.**
+/// The turn timer is one counter a station, loaded by every frame that
+/// station hears: 3060 sends, and its second frame waits for its host;
+/// 3057, whose address is one below the source it last heard and whose
+/// turn is therefore the first count after the cable idles, takes the
+/// cable in the meantime. 3060's turn is then reckoned from the frame it
+/// heard last, 3057's --- 255 counts and one --- and not from its own.
+#[test]
+fn a_stations_refill_holds_up_only_its_own_next_frame() {
+    let mut e = Ether::new();
+    e.keep_log(true);
+    let frames = vec![packet(0o3060, 0o3062, 4), packet(0o3060, 0o3062, 4)];
+    let (a, _) = host(0o3060, frames, false);
+    e.attach(a);
+    run(&mut e, 0, 100_000);
+    let [(first, 0o3060)] = sent(&e)[..] else { panic!("3060 went once: {:?}", sent(&e)) };
+    let (_, bits) = on_the_cable(4);
+    assert!(!e.busy(100_000), "its frame is over and its second is waiting");
+
+    // A station that hears 3060's frame gets its turn at the first count.
+    let (c, _) = host(0o3057, vec![packet(0o3057, 0o3062, 4)], false);
+    e.attach(c);
+    run(&mut e, 100_000, 5_000_000);
+    let sent = sent(&e);
+    eprintln!("3060's frame at {first}, ending {}; then {:?}", first + bits, &sent[1..]);
+    assert_eq!(sent.len(), 3, "all three frames went: {sent:?}");
+    assert_eq!(sent[1].1, 0o3057, "3057 took the cable while 3060's host refilled");
+    assert_eq!(sent[2].1, 0o3060, "and 3060's second frame came after it");
+    // 3060's turn is reckoned from the frame it heard last, 3057's, whose
+    // source word loaded its counter with 3057 - 3060: a whole round of
+    // 255 counts and one, measured from the cable going idle a bit cell
+    // or so after the frame's nominal end.
+    let round = (turn_byte(0o3057, 0o3060) as u64 + 1) * SLOT_NS;
+    let after = sent[2].0 - (sent[1].0 + bits);
+    eprintln!("3060 went {after} ns after 3057's frame ended, a round being {round} ns");
+    assert!(
+        (round.saturating_sub(wire::CELL_NS)..round + wire::IDLE_NS).contains(&after),
+        "3060 waited a whole round after 3057's frame: {sent:?}"
+    );
+}
+
+/// **A receiver whose buffer is full aborts what is addressed to it, and
+/// counts what it would have taken.** AIM-628 §2.5's hardware flow
+/// control, which the netlist board does in its gates and the ether does
+/// for a behavioral board: [`BUSY_ABORT_NS`] into the frame, the bit cell
+/// after the destination word, the board's driver goes on for
+/// [`ABORT_HOLD_NS`] and the sender stops at its next clock edge with its
+/// words handed back. A broadcast is counted and not aborted; either way
+/// the receiver was never active for the frame, so nothing of it is
+/// offered to the board.
+#[test]
+fn a_full_buffer_aborts_what_is_addressed_to_it_and_counts_it() {
+    for (what, dest, abort) in [("addressed to it", 0o3050u16, true), ("a broadcast", 0, false)] {
+        let mut e = Ether::new();
+        e.keep_log(true);
+        e.attach_board(0o3050);
+        // A packet in the buffer already, and not spying.
+        e.board_receiver(true, false);
+        let (a, log_a) = host(0o3060, vec![packet(0o3060, dest, 4)], false);
+        e.attach(a);
+        run(&mut e, 0, 200_000);
+        let [(s, 0o3060)] = sent(&e)[..] else { panic!("{what}: one frame: {:?}", sent(&e)) };
+        let at = s + BUSY_ABORT_NS;
+        let mut lost = Vec::new();
+        while let Some(x) = e.board_lost() {
+            lost.push(x);
+        }
+        eprintln!("{what}: the frame at {s}, counted {lost:?}, the host {:?}", log_a.lock());
+        assert_eq!(lost, [(at, 0o3060, abort)], "{what}: counted once, at the destination word");
+        // At its next clock edge with its own driver high: interference
+        // that is not there at an edge is missed, and the sender goes on
+        // until one finds it, which is within the cell.
+        let stopped = log_a.lock().unwrap().iter().any(|h| {
+            matches!(h, Happened::Aborted(t, _)
+            if (at..=at + wire::CELL_NS).contains(t))
+        });
+        assert_eq!(stopped, abort, "{what}: whether the sender was stopped within a cell");
+        let (_, r, taken) =
+            e.board_heard().unwrap_or_else(|| panic!("{what}: the board heard it go by"));
+        assert!(!taken, "{what}: its receiver was never active for it");
+        assert_eq!(r.framed.check_ok, !abort, "{what}: aborted, it ends as wreckage");
+        assert!(e.board_heard().is_none(), "{what}: and nothing else came");
+    }
 }

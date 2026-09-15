@@ -20,7 +20,7 @@ mod support;
 
 use support::Run;
 
-use muir::chaos::ether::{Ether, Event, Node, SLOT_NS};
+use muir::chaos::ether::{Ether, Event, Node, ROUND_NS, SLOT_NS};
 use muir::chaos::packet::{self, Framed, Packet, op};
 use muir::chaos::udp::{self, Link};
 
@@ -923,4 +923,56 @@ fn file_serves_the_hosts_it_was_given() {
     let alone = server().for_hosts(vec![ME]);
     assert_eq!(answer_to(&alone, ME), op::OPN);
     assert_eq!(answer_to(&alone, PEER), op::CLS);
+}
+
+/// **A frame a busy receiver aborts goes again, and is given up on after
+/// three tries.** The node is a station on the cable, and what stands in
+/// for its driver is the CADR's: `uc-chaos.lisp` loads
+/// `A-CHAOS-TRANSMIT-RETRY-COUNT` with `CHAOS-NUMBER-TRANSMIT-RETRIES`,
+/// which is 3 --- "Send once and retry twice if aborted" --- counts it
+/// down on every Transmit Abort, and at zero is done with the packet and
+/// leaves it to the transport. So a peer's packet, handed to a machine
+/// whose buffer never empties, goes on the cable three times and no more,
+/// each try a whole round of the turn timer after the last: the abort,
+/// the host writing the buffer again --- which is what the driver does,
+/// halfword by halfword through `CHAOS-XMT-2`, before reading `START`
+/// --- and the first turn that comes round after that.
+#[test]
+fn a_frame_a_busy_receiver_aborts_is_retried_and_then_given_up_on() {
+    let (peer, peer_at) = peer_socket();
+    let l = link(vec![(PEER, peer_at)], None);
+    let mut e = Ether::new();
+    e.keep_log(true);
+    // A machine whose receive buffer is full and stays full.
+    e.attach_board(ME);
+    e.board_receiver(true, false);
+    e.attach(Box::new(l.node(&[ME, SERVER], false)));
+    send_packet(&peer, l.at, &status_rfc(), ME, PEER);
+    let tries = udp::TRANSMIT_TRIES as usize;
+    assert!(
+        run_until(&mut e, |e| sent(e).len() >= tries),
+        "the frame went {tries} times: {:?}",
+        sent(&e)
+    );
+    // And no more, however long the cable stays free.
+    let after = sent(&e).last().unwrap().0 + 10 * ROUND_NS;
+    run(&mut e, after - 10 * ROUND_NS, after);
+    let sent = sent(&e);
+    let mut lost = Vec::new();
+    while let Some(x) = e.board_lost() {
+        lost.push(x);
+    }
+    eprintln!("the frame on the cable at {sent:?}; the receiver counted {lost:?}");
+    assert_eq!(sent.len(), tries, "three tries and no fourth: {sent:?}");
+    assert!(sent.iter().all(|&(_, from)| from == PEER), "all of them the peer's: {sent:?}");
+    assert_eq!(lost.len(), tries, "each counted in Lost Count: {lost:?}");
+    assert!(lost.iter().all(|&(_, from, aborted)| from == PEER && aborted), "each aborted");
+    for w in sent.windows(2) {
+        let gap = w[1].0 - w[0].0;
+        eprintln!("a try {gap} ns after the last, a round being {ROUND_NS} ns");
+        assert!(
+            (ROUND_NS..2 * ROUND_NS).contains(&gap),
+            "a try comes a whole round after the last, not at once: {gap} ns"
+        );
+    }
 }

@@ -143,6 +143,21 @@ const SOFTWARE_HEADER: usize = 16;
 /// length rather than read as a truncated packet.
 pub const MAX_FRAME: usize = HEADER + SOFTWARE_HEADER + MAX_DATA + TRAILER;
 
+/// How many times one frame is put on the cable before it is given up
+/// on: microcode 323's `uc-chaos.lisp` assigns
+/// `CHAOS-NUMBER-TRANSMIT-RETRIES 3` --- "Send once and retry twice if
+/// aborted" --- loads `A-CHAOS-TRANSMIT-RETRY-COUNT` with it for a fresh
+/// packet, counts it down on every Transmit Abort in `CHAOS-XMT-INTR`,
+/// and at zero jumps to `CHAOS-XMT-DONE`, which takes the packet off the
+/// transmit list and is done with it.  The packet is then the transport's
+/// to retransmit, as it is for anything else the cable loses.
+///
+/// The station at the far end of a CHUDP link is not modeled --- muir has
+/// no model of the host at the other end of the socket --- so what stands
+/// in for its driver is the one driver this project can read, the CADR's,
+/// and this is its bound.
+pub const TRANSMIT_TRIES: u8 = 3;
+
 /// How many datagrams are taken from the socket at one turn on the
 /// cable. The cable carries one frame at a time, so the rest wait in
 /// [`Chudp`]'s queue; this only bounds how long one call spends in the
@@ -295,6 +310,7 @@ impl Link {
             local: local.to_vec(),
             out: VecDeque::new(),
             source: 0,
+            tries: 0,
             trace,
         }
     }
@@ -322,12 +338,13 @@ pub struct Chudp {
     default_peer: Option<SocketAddr>,
     /// The addresses that are on this cable in this process.
     local: Vec<u16>,
-    /// Frames waiting for a turn on the cable: whose each is, and the
-    /// buffer.
-    out: VecDeque<(u16, Vec<u16>)>,
+    /// Frames waiting for a turn on the cable: whose each is, the
+    /// buffer, and how many times it has been put on the cable already.
+    out: VecDeque<(u16, Vec<u16>, u8)>,
     /// Whose frame the node is putting on the cable, which is its
-    /// address there.
+    /// address there, and how many times that frame has been sent.
     source: u16,
+    tries: u8,
     trace: bool,
 }
 
@@ -387,7 +404,7 @@ impl Chudp {
                 super::packet::op_name(p.opcode)
             );
         }
-        self.out.push_back((f.source, f.buffer));
+        self.out.push_back((f.source, f.buffer, 0));
     }
 
     /// Where a frame off the cable goes: the peer it is addressed to,
@@ -462,15 +479,42 @@ impl Node for Chudp {
 
     fn transmit(&mut self, now: u64) -> Option<Vec<u16>> {
         self.drain(now);
-        let (source, buffer) = self.out.pop_front()?;
+        let (source, buffer, tries) = self.out.pop_front()?;
         self.source = source;
+        self.tries = tries + 1;
         Some(buffer)
     }
 
-    /// A frame aborted on interference goes again at the next turn,
-    /// ahead of anything that arrived since, as an interface's driver
-    /// retries on Transmit Abort.
-    fn aborted(&mut self, _now: u64, buffer: Vec<u16>) {
-        self.out.push_front((self.source, buffer));
+    /// A frame aborted --- on interference, or by a receiver whose buffer
+    /// was full --- goes again at the next turn, ahead of anything that
+    /// arrived since, as an interface's driver retries on Transmit Abort:
+    /// `CHAOS-XMT-INTR` finds `A-CHAOS-TRANSMIT-ABORTED` set, falls into
+    /// `CHAOS-XMT-0`, and takes the packet still on the transmit list.
+    /// It **writes the whole buffer again**, halfword by halfword through
+    /// `CHAOS-XMT-2`, before reading `START`, so a retry costs a station
+    /// as much as a fresh packet; the ether charges it from the abort.
+    ///
+    /// After [`TRANSMIT_TRIES`] the frame is dropped and its transport
+    /// retransmits, which is what the driver does.
+    ///
+    /// **The driver's abort timeout is not waited here.**  Between two
+    /// tries it sets `A-CHAOS-TRANSMIT-ABORTED` to -1, which disables
+    /// transmit-done interrupts until the roughly 60-cycle clock
+    /// interrupt of `uc-interrupt.lisp` wakes Chaosnet --- but it also
+    /// retransmits at once "if we get woken up or receive a packet during
+    /// a transmit abort delay", which on a connection that is carrying
+    /// traffic is what happens.  The node takes that case: the frame goes
+    /// again at the first turn its refill allows.
+    fn aborted(&mut self, now: u64, buffer: Vec<u16>) {
+        if self.tries >= TRANSMIT_TRIES {
+            if self.trace {
+                eprintln!(
+                    "chudp {now:>6}: {:o}'s frame aborted {} times, given up on",
+                    self.source, self.tries
+                );
+            }
+            return;
+        }
+        self.out.push_front((self.source, buffer, self.tries));
     }
 }
