@@ -419,6 +419,11 @@ pub struct Tv {
     /// When that was, in the machine's nanoseconds: the flag is that bit,
     /// or the `TVMA CLR` that has come since.
     written_at: u64,
+    /// The first `-TVMA CLR` after `written_at` under the program running,
+    /// in the machine's nanoseconds; the end of time while no program makes
+    /// a frame. Kept so that [`Tv::vert_flag`], which every microcycle asks,
+    /// is one comparison: [`Tv::flag_written_at`].
+    next_clr: u64,
     /// The program running, laid out in time; `None` while the RAM is
     /// selected and holds no program that makes a frame, as it does before
     /// and part way through the software's loading of it.
@@ -449,6 +454,7 @@ impl Default for Tv {
             color_map: [[0; CHANNELS]; COLORS],
             flag_written: false,
             written_at: 0,
+            next_clr: timeline.as_ref().map_or(u64::MAX, |t| t.next_tvma_clr_after(0)),
             timeline,
             origin: 0,
             // Power-on is the program started from a register holding
@@ -541,19 +547,26 @@ impl Tv {
     /// and the register keeps its bits until the new program's first
     /// instruction lands.
     fn restart(&mut self, ns: u64) {
-        self.flag_written = self.vert_flag(ns);
-        self.written_at = ns;
+        let flag = self.vert_flag(ns);
         self.sync_held = self.sync_at(ns);
         self.timeline = Timeline::of(self.sync.program(), self.mode & mode::CLOCK);
         self.origin = ns;
+        self.flag_written_at(flag, ns);
     }
 
-    /// `-TVMA CLR`s from the running program's start to `ns` inclusive.
-    fn tvma_clrs_by(&self, ns: u64) -> u64 {
-        match &self.timeline {
-            Some(t) if ns >= self.origin => t.tvma_clrs_by(ns - self.origin),
-            _ => 0,
-        }
+    /// The flag's flop as of `ns`: `flag` in it, and the next `-TVMA CLR`
+    /// to preset it looked up once, under the program running from
+    /// `origin`. Every write of the flop comes through here, so that the
+    /// instant is never stale.
+    fn flag_written_at(&mut self, flag: bool, ns: u64) {
+        self.flag_written = flag;
+        self.written_at = ns;
+        self.next_clr = match &self.timeline {
+            Some(t) => {
+                self.origin.saturating_add(t.next_tvma_clr_after(ns.saturating_sub(self.origin)))
+            }
+            None => u64::MAX,
+        };
     }
 
     /// The sync bits the program has in the register at `ns`: `(hsync,
@@ -697,7 +710,7 @@ impl Tv {
     /// set, if a frame has started since --- `-TVMA CLR` presets it once
     /// every [`FRAME_NS`], the frames counted from power-on.
     pub fn vert_flag(&self, ns: u64) -> bool {
-        self.flag_written || self.tvma_clrs_by(ns) > self.tvma_clrs_by(self.written_at)
+        self.flag_written || ns >= self.next_clr
     }
 
     /// `SEND INTR`: the vertical flag with [`mode::INTERRUPT_ENABLE`] up,
@@ -747,8 +760,7 @@ impl Tv {
             0 => {
                 let clock_changed = (v ^ self.mode) & mode::CLOCK != 0;
                 self.mode = v & mode::WRITABLE;
-                self.flag_written = v & mode::VERT != 0;
-                self.written_at = ns;
+                self.flag_written_at(v & mode::VERT != 0, ns);
                 if clock_changed {
                     self.restart(ns);
                 }
@@ -840,8 +852,7 @@ impl Tv {
     /// **unverified** whether that third input carries the reset, which
     /// what drives 0D03 pin 11 would settle.
     pub fn xbus_init(&mut self, ns: u64) {
-        self.flag_written = false;
-        self.written_at = ns;
+        self.flag_written_at(false, ns);
     }
 }
 
@@ -912,6 +923,8 @@ impl Tv {
             color_map,
             flag_written,
             written_at,
+            // Looked up again at the load, from the program and the write.
+            next_clr: _,
             timeline: _,
             origin,
             sync_held,
@@ -958,6 +971,10 @@ impl Tv {
         self.origin = r.u64()?;
         self.sync_held = (r.bool()?, r.bool()?);
         self.timeline = Timeline::of(self.sync.program(), self.mode & mode::CLOCK);
+        // The next preset is not in the checkpoint: it is the program and the
+        // write's instant looked up, and is looked up again here.
+        let (flag, at) = (self.flag_written, self.written_at);
+        self.flag_written_at(flag, at);
         Ok(())
     }
 }

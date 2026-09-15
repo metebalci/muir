@@ -310,4 +310,19 @@ impl Timeline {
         let into = since_start % self.period_ns;
         runs * self.tvma_clr.len() as u64 + self.tvma_clr.partition_point(|&c| c <= into) as u64
     }
+
+    /// The first `-TVMA CLR` strictly after `since_start`, as an offset
+    /// from the program's start; the end of time for a program that has
+    /// none. What [`super::Tv::vert_flag`] compares the clock against, so
+    /// that the poll every microcycle makes is one comparison and the
+    /// division and the search are paid once, when the flag is written.
+    pub fn next_tvma_clr_after(&self, since_start: u64) -> u64 {
+        let Some(&first) = self.tvma_clr.first() else { return u64::MAX };
+        let runs = since_start / self.period_ns;
+        let into = since_start % self.period_ns;
+        match self.tvma_clr.get(self.tvma_clr.partition_point(|&c| c <= into)) {
+            Some(&next) => runs * self.period_ns + next,
+            None => (runs + 1) * self.period_ns + first,
+        }
+    }
 }
