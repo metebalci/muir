@@ -81,9 +81,9 @@ microcycle boundary. Run the fast one, check it against the slow one.
 
 | | | Measured |
 |---|---|---|
-| `micro` | No timing model. It keeps a clock, so devices that read time see it pass, but nothing waits for an instant. | ~15x real |
+| `micro` | No timing model. It keeps a clock, so devices that read time see it pass, but nothing waits for an instant. | ~9x real |
 | `rtl` | The timing model: every datapath signal on the machine's two-phase clock, and everything that is a matter of *when* --- bus waits and hangs, arbitration, timeouts, the debug cable. | ~2x real |
-| `chip` | The parts themselves, resolved net by net from whatever drives each, with every board on both buses a netlist too. The reference: where it and `rtl` part, the drawings decide which is wrong. | ~1/4,000 |
+| `chip` | The parts themselves, resolved net by net from whatever drives each, with every board on both buses a netlist too. The reference: where it and `rtl` part, the drawings decide which is wrong. | ~1/5,000 |
 
 Those figures are microcycles against the machine's own 145 ns microcycle,
 and **the disk is outside them**. With the disk controller as a behavioral
@@ -97,7 +97,7 @@ amount that depends on the program.
 
 `chip` runs the netlist controller, and there it inverts: the drive takes
 its own time and that polling loop runs through every gate on the board, so
-a program that waits on the disk comes out slower than 1/4,000 rather than
+a program that waits on the disk comes out slower than 1/5,000 rather than
 faster. **A run that touches no pack pays about 3% for that; a run that
 reads one pays days.** System 100 booted through the netlist controller on
 12 September 2026 in 2 days 14 hours and 301 million microcycles --- 51

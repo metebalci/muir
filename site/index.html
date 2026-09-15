@@ -14,11 +14,6 @@
      the tired face are drawn for this page in the same hand. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
-    <pattern id="chips" width="12" height="10" patternUnits="userSpaceOnUse">
-      <rect x="2" y="2" width="7" height="4" fill="#141414"/>
-      <path d="M0 8.5h12" stroke="#ff48b0" stroke-width="1.2"/>
-    </pattern>
-
     <g id="cadr-body">
       <rect x="48" y="112" width="24" height="14" fill="#141414"/>
       <rect x="14" y="4" width="92" height="112" rx="7" fill="#fff" stroke="#141414" stroke-width="4"/>
@@ -50,20 +45,23 @@
       <path d="M111 22l3 5M120 18v6M129 22l-3 5" stroke="#141414" stroke-width="2.2" stroke-linecap="round"/>
     </g>
 
-    <!-- New for this page: CADR looks at its own board through a glass, which
-         is what the chip engine does. The lens is filled with the same chip
-         pattern the muir character is drawn from. -->
-    <g id="arm-glass">
-      <path d="M104 78q13 2 12-15" fill="none" stroke="#141414" stroke-width="4" stroke-linecap="round"/>
-      <path d="M122 48l-6 12" stroke="#141414" stroke-width="5.5" stroke-linecap="round"/>
-      <circle cx="115" cy="62" r="6.5" fill="#fff" stroke="#141414" stroke-width="3"/>
-      <circle cx="128" cy="30" r="17" fill="url(#chips)"/>
-      <circle cx="128" cy="30" r="19" fill="none" stroke="#141414" stroke-width="4"/>
-      <path d="M116 23a17 17 0 0 1 10-6" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>
+    <!-- New for this page: the slow one. Weary lids, a wavy mouth and two
+         sweat drops --- the chip engine at 1,400 microcycles a second. -->
+    <!-- New for this page: a rocket beside the engine with no timing model,
+         which is the quick one. Drawn in the same hand as the waving arm:
+         a capsule with a nose, a porthole, two fins and a flame, the fins
+         and the flame in the spot color, climbing up and away from the
+         monitor, off to space. -->
+    <g id="rocket">
+      <g transform="translate(28 -12) rotate(24 128 84)">
+        <path d="M118 100q0-40 10-52q10 12 10 52z" fill="#fff" stroke="#141414" stroke-width="3.5" stroke-linejoin="round"/>
+        <path d="M118 88l-9 14h9zM138 88l9 14h-9z" fill="#ff48b0" stroke="#141414" stroke-width="3" stroke-linejoin="round"/>
+        <circle cx="128" cy="72" r="5" fill="#141414" stroke="#fff" stroke-width="2"/>
+        <path d="M121 102q7 4 14 0q-2 12-7 18q-5-6-7-18z" fill="#ff48b0" stroke="#141414" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M122 124l-3 11M134 124l3 11" fill="none" stroke="#141414" stroke-width="2.2" stroke-linecap="round"/>
+      </g>
     </g>
 
-    <!-- New for this page: the slow one. Weary lids, a wavy mouth and two
-         sweat drops --- the chip engine at 1,900 microcycles a second. -->
     <g id="face-tired">
       <path d="M36 47q9 10 18 0" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/>
       <path d="M66 47q9 10 18 0" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/>
@@ -96,9 +94,9 @@
 
     <div class="panels two">
       <div class="panel focus center" style="min-height: 19rem;">
-        <div class="sfx" style="position:absolute; top:0.8rem; left:0.8rem; z-index:2;">カチッ<small>KACHI</small></div>
-        <svg class="chara" viewBox="0 0 152 150" style="width:74%;" role="img" aria-label="CADR, looking at its own board through a magnifying glass">
-          <use href="#cadr-body"/><use href="#face-happy"/><use href="#arm-glass"/>
+        <div class="sfx" style="position:absolute; top:0.8rem; left:0.8rem; z-index:2;">ドン<small>DON</small></div>
+        <svg class="chara" viewBox="0 0 152 150" style="width:74%;" role="img" aria-label="CADR, waving">
+          <use href="#cadr-body"/><use href="#face-happy"/><use href="#arm-wave"/>
         </svg>
       </div>
 
@@ -179,39 +177,39 @@ BUILT      about 30</pre>
       <p class="small" style="margin-top:0.4rem;">One machine, three fidelity levels. All three reach the same architectural state at every microcycle boundary, so the fast one can be checked against the slow one.</p>
     </div>
 
-    <div class="panels three">
+    <div class="panels three engines">
       <div class="panel">
-        <p class="cap"><span class="mono">micro</span> &middot; the quick one</p>
-        <svg class="chara" viewBox="0 0 132 150" style="width:66%; align-self:center;" role="img" aria-label="CADR, waving">
-          <use href="#cadr-body"/><use href="#face-happy"/><use href="#arm-wave"/>
+        <p class="cap"><span class="mono">micro</span> &middot; no timing model</p>
+        <svg class="chara" viewBox="0 0 184 150" style="width:90%; align-self:center;" role="img" aria-label="CADR, with a rocket taking off beside it">
+          <use href="#cadr-body"/><use href="#face-happy"/><use href="#rocket"/>
         </svg>
-        <p class="big-number" style="margin-top:auto;">107 M/s</p>
-        <p class="small"><b>about 15x the machine</b></p>
-        <p class="small">One evaluation: decode, execute, write back. No timing model at all.</p>
+        <p class="big-number">60 M/s</p>
+        <p class="small"><b>about 9x the machine</b></p>
+        <p class="small">One evaluation a microinstruction: decode, execute, write back. Nothing waits for an instant.</p>
       </div>
 
       <div class="panel">
-        <p class="cap"><span class="mono">rtl</span> &middot; the steady one</p>
+        <p class="cap"><span class="mono">rtl</span> &middot; the timing model</p>
         <svg class="chara" viewBox="0 0 132 150" style="width:66%; align-self:center;" role="img" aria-label="CADR">
           <use href="#cadr-body"/><use href="#face-happy"/>
         </svg>
-        <p class="big-number" style="margin-top:auto;">16 M/s</p>
+        <p class="big-number">16 M/s</p>
         <p class="small"><b>about 2x the machine</b></p>
-        <p class="small">A read phase and a write phase, for every datapath signal, on the machine's own clock.</p>
+        <p class="small">Every datapath signal on the machine's own two-phase clock, and everything that is a matter of <em>when</em>: bus waits, arbitration, timeouts, the debug cable.</p>
       </div>
 
       <div class="panel tone">
-        <p class="cap"><span class="mono">chip</span> &middot; the slow one</p>
+        <p class="cap"><span class="mono">chip</span> &middot; the netlist</p>
         <svg class="chara" viewBox="0 0 132 150" style="width:66%; align-self:center;" role="img" aria-label="CADR, sweating">
           <use href="#cadr-body"/><use href="#face-tired"/>
         </svg>
-        <p class="big-number" style="margin-top:auto;">1,900/s</p>
-        <p class="small"><b>about 1/4,000 of the machine</b></p>
-        <p class="small">985 parts, settled in level order. This is the reference the other two answer to.</p>
+        <p class="big-number">1,400/s</p>
+        <p class="small"><b>about 1/5,000 of the machine</b></p>
+        <p class="small">MIT's own drawings as netlists, every board on both buses, the parts resolved net by net. Netlist-accurate: the reference the other two are held to.</p>
       </div>
     </div>
 
-    <p class="small">Rates from <code>cargo run --release --example benchmark</code> on one core of an Apple M4, rounded. The machine's own microcycle is 145&nbsp;ns, so the hardware runs 6.9 M of them a second. What each engine computes on the way to the next one is <a href="https://github.com/metebalci/muir/blob/main/docs/engines.md">in the manual</a>.</p>
+    <p class="small">The worst case, with everything fitted: the color TV on every engine, and on <code>chip</code> MIT's disk controller with its multiplexor as well, every board a netlist. Rates from <code>cargo run --release --example benchmark -- --everything</code> on one core of an Apple M4, rounded down; without the second display board <code>chip</code> runs about 2,000/s and the other two the same. The machine's own microcycle is 145 ns, so the hardware runs 6.9 M of them a second. What each engine computes on the way to the next one is <a href="https://github.com/metebalci/muir/blob/main/docs/engines.md">in the manual</a>.</p>
 
     <footer class="wholine">
       <div class="label">muir &middot; Three engines</div>

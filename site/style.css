@@ -180,6 +180,11 @@ code { font-family: var(--mono); font-size: var(--fs-mono); font-weight: 400; }
 }
 
 .panels { display: grid; gap: 0.9rem; }
+/* The three engines' figures on one line: the panels share their rows, so
+   the mascot, the rate, the ratio and the note line up across the three
+   however long each note runs. */
+.engines { grid-template-rows: auto auto auto auto auto; }
+.engines > .panel { display: grid; grid-template-rows: subgrid; grid-row: span 5; row-gap: 0.6rem; }
 .two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .wide { grid-column: 1 / -1; }
@@ -577,6 +582,7 @@ figcaption p:last-child { margin-bottom: 0; }
   body { padding-inline: 0.6rem; }
   .page > section { padding: 0.9rem 0.9rem 0.7rem; }
   .panels { grid-template-columns: minmax(0, 1fr); }
+  .engines > .panel { display: flex; grid-row: auto; }
   .panel.wide, .panels > .panel { grid-column: auto; }
   .masthead { grid-template-columns: minmax(0, 1fr); }
   .masthead .vertical { display: none; }

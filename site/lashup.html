@@ -4,43 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The acceptance test, recorded &mdash; muir</title>
-<meta name="description" content="Two CADR screens on one canvas: the console program CC on the left machine seizes the right one through the debug cable and tests it. The recording at its own size, 1538 by 985.">
-<link rel="stylesheet" href="style.css">
+<meta name="description" content="Two CADR screens on one canvas, the recording of the acceptance test at the size the machines drew it.">
+<!-- The recording and nothing else: black behind it, the file at its own
+     size, 1538 by 985, which is the size to read 1-bit screens at. Scaled
+     text goes to mush, which is why this is a page and not the file
+     itself, which a browser fits to its window. What the recording shows
+     is told on the front page and in the manual under Two machines. -->
+<style>
+  body { margin: 0; background: #000; }
+  img { display: block; width: 1538px; height: 985px; max-width: none; margin: 0 auto; }
+</style>
 </head>
 <body>
-
-<p class="desk-note"><b>muir</b> &middot; the recording &middot; <a href="index.html">the front page</a></p>
-
-<div class="page">
-
-  <section id="recording" aria-label="The acceptance test, recorded">
-    <span class="eyebrow">Proof</span>
-    <h2 class="title t-l">The acceptance test, recorded</h2>
-
-    <div class="panel">
-      <div class="full">
-        <img src="lashup.gif" width="1538" height="985" alt="Two CADR screens side by side. The left machine runs CC; the right machine&rsquo;s screen stops changing when CC halts it through the debug cable.">
-      </div>
-    </div>
-
-    <div class="prose">
-      <p>This is the recording itself, at the size the machines drew it, which is the size to read the screens at. Two machines on one canvas: 768 by 963 each, with a two-pixel rule between them, and the line below the screens carrying the machine&rsquo;s own time at the left and the wall clock at the right. The frames are timed by the machine&rsquo;s clock, so it plays at the machine&rsquo;s speed.</p>
-      <p>The debugger is at the left. It boots the band, logs in, and loads the console program CC from the Chaosnet, file by file &mdash; CC is not in the band, so it has to come over the network, the way it would have on a real machine. It then seizes the machine at the right through the debug cable and runs MIT&rsquo;s own test of it.</p>
-      <p>The machine at the right is where the acceptance test is won or lost. It boots a band of its own &mdash; it has a Chaosnet of its own to take the time from, and comes up to a Lisp listener the same way the left one does &mdash; and then it goes still the moment CC halts it, and never moves again. That freeze is the signal: from then on nothing of that machine&rsquo;s own software is running, and every register and bus cycle the diagnostic reads is being driven through the cable by the other machine.</p>
-    </div>
-
-    <div class="actions">
-      <a class="key" href="index.html">The front page</a>
-      <a class="key lm" href="https://github.com/metebalci/muir/blob/main/docs/manual.md#two-machines">Two machines</a>
-    </div>
-
-    <footer class="wholine">
-      <div class="label">muir &middot; The acceptance test, recorded</div>
-      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>01</span></div>
-    </footer>
-  </section>
-
-</div>
-
+<img src="lashup.gif" width="1538" height="985" alt="Two CADR screens side by side. The left machine runs CC; the right machine&rsquo;s screen stops changing when CC halts it through the debug cable.">
 </body>
 </html>

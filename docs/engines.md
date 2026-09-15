@@ -41,7 +41,7 @@ faster than the machine itself.
 from what is actually driving each, and every board on both buses a netlist
 too. It is the reference: where it and `rtl` disagree, the drawings decide
 which is wrong, and it is usually `rtl`. It is also much the slowest ---
-approximately 4,000 times slower than the hardware.
+approximately 5,000 times slower than the hardware.
 
 **Those figures count microcycles, and the disk is not in them.** With the
 disk controller as a behavioral model --- which is what `micro` and `rtl`
@@ -58,7 +58,7 @@ it is not worth guessing at.
 `chip` runs the netlist controller, and it goes the other way. There the
 drive takes its own time over every block, so those 380,000 polling
 microcycles are executed for real, through every gate on the board, and a
-program that waits on the disk is slower than the 4,000 figure rather than
+program that waits on the disk is slower than the 5,000 figure rather than
 faster. **A run that touches no pack pays about 3% for that; a boot pays
 days.** System 100 came up this way on 12 September 2026, after 2 days 14
 hours. `--disk-controller model` is how a `chip` run that does not care
@@ -69,7 +69,7 @@ at about twice the hardware, is the engine for ordinary use.
 micro    +---------------------------------------------+
          | one evaluation: decode, execute, write back |
          +---------------------------------------------+
-         107 M/s --- about 15x the machine
+         60 M/s --- about 9x the machine
 
 rtl      +---------------------------+    +---------------------------+
          | read phase                |--->| write phase               |
@@ -81,34 +81,38 @@ rtl      +---------------------------+    +---------------------------+
 chip     +------------------+    +-----------------------------------+
          | clock generator  |--->| 985 parts, settled in level order |
          +------------------+    +-----------------------------------+
-         1,900/s --- about 1/4,000 of the machine
+         1,400/s --- about 1/5,000 of the machine
 ```
 
 *One microinstruction through three engines: micro computes one evaluation,
 rtl the read and write phases of every datapath signal, chip the 985 parts
 in level order.*
 
-The same microinstruction, through each engine. Rates from `cargo run
---release --example benchmark` on one core of an Apple M4, rounded: run it
-yourself and you should see about these. The machine's own microcycle is 145
+The same microinstruction, through each engine. The rates are the worst
+case, with everything fitted: the color TV on every engine, and on `chip`
+MIT's disk controller with its multiplexor as well, every board a netlist
+--- `cargo run --release --example benchmark -- --everything` on one core
+of an Apple M4, rounded down. Run it yourself and you should see about
+these; without the second display board `chip` runs about 2,000/s and the
+other two the same. The machine's own microcycle is 145
 ns at normal speed, read off the delay-line taps, so the hardware runs 6.9 M
 of them a second.
 
 | Engine | What it computes | Rate |
 |---|---|---|
-| micro | No timing model. One step per microinstruction, on the machine's own periods but without its bus waits. Fast enough to get somewhere and see what happens. | 107 M/s |
+| micro | No timing model. One step per microinstruction, on the machine's own periods but without its bus waits. Fast enough to get somewhere and see what happens. | 60 M/s |
 | rtl | The timing model. Every datapath signal, on the machine's own two-phase clock, with the real memory cycle in nanoseconds: `MEMSTART`, `MEMRQ`, `MBUSY`, the acknowledgement back, and the clock held off by `WAIT` and `HANG` meanwhile. | 16 M/s |
-| chip | The full netlist. The parts themselves: 985 of them on the processor and control-store boards, sorted into levels, on four-valued nets, with the bus interface, main memory, the I/O board and the TV as netlists behind the cables. This is the reference the other two are checked against. | 1,900/s |
+| chip | The full netlist. The parts themselves: 985 of them on the processor and control-store boards, sorted into levels, on four-valued nets, with the bus interface, main memory, the I/O board and the TV as netlists behind the cables. This is the reference the other two are checked against. | 1,400/s |
 
-> The 1,900/s above is the `chip` engine with the processor, the
-> interface, main memory, the I/O board and the display all netlists, on
-> two programs that touch no disk --- so the disk controller in that
-> machine is the behavioral model. A run as `chip` comes up has MIT's
-> controller there as well, which costs about 3% while nothing reads a
-> pack and days once something does. Any board can be run instead as the
-> behavioral model the `rtl` engine uses, one at a time, which is faster.
-> Which model each engine uses for each part of the machine, and which
-> flag changes it, is [the table
+> The 1,400/s above is the `chip` engine with every board a netlist ---
+> the processor, the interface, main memory, the I/O board, both display
+> boards, and MIT's disk controller with the multiplexor on its cable ---
+> on two programs that touch no pack, so the disk boards only sit on the
+> bus. Without the color TV it is about 2,000/s; a run that reads a pack
+> pays the drive's real milliseconds on top. Any board can be run instead
+> as the behavioral model the `rtl` engine uses, one at a time, which is
+> faster. Which model each engine uses for each part of the machine, and
+> which flag changes it, is [the table
 > below](#what-each-engine-models).
 
 ## What each engine models
