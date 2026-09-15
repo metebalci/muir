@@ -394,8 +394,8 @@ fn a_stations_next_frame_waits_for_its_host_to_refill() {
 /// The turn timer is one counter a station, loaded by every frame that
 /// station hears: 3060 sends, and its second frame waits for its host;
 /// 3057, whose address is one below the source it last heard and whose
-/// turn is therefore the first count after the cable idles, takes the
-/// cable in the meantime. 3060's turn is then reckoned from the frame it
+/// turn is therefore the first count after the cable idles, is asked
+/// before that count comes and takes the cable in the meantime. 3060's turn is then reckoned from the frame it
 /// heard last, 3057's --- 255 counts and one --- and not from its own.
 #[test]
 fn a_stations_refill_holds_up_only_its_own_next_frame() {
@@ -404,15 +404,15 @@ fn a_stations_refill_holds_up_only_its_own_next_frame() {
     let frames = vec![packet(0o3060, 0o3062, 4), packet(0o3060, 0o3062, 4)];
     let (a, _) = host(0o3060, frames, false);
     e.attach(a);
-    run(&mut e, 0, 100_000);
+    run(&mut e, 0, 62_500);
     let [(first, 0o3060)] = sent(&e)[..] else { panic!("3060 went once: {:?}", sent(&e)) };
     let (_, bits) = on_the_cable(4);
-    assert!(!e.busy(100_000), "its frame is over and its second is waiting");
+    assert!(!e.busy(62_500), "its frame is over and its second is waiting");
 
     // A station that hears 3060's frame gets its turn at the first count.
     let (c, _) = host(0o3057, vec![packet(0o3057, 0o3062, 4)], false);
     e.attach(c);
-    run(&mut e, 100_000, 5_000_000);
+    run(&mut e, 62_500, 5_000_000);
     let sent = sent(&e);
     eprintln!("3060's frame at {first}, ending {}; then {:?}", first + bits, &sent[1..]);
     assert_eq!(sent.len(), 3, "all three frames went: {sent:?}");
@@ -472,5 +472,100 @@ fn a_full_buffer_aborts_what_is_addressed_to_it_and_counts_it() {
         assert!(!taken, "{what}: its receiver was never active for it");
         assert_eq!(r.framed.check_ok, !abort, "{what}: aborted, it ends as wreckage");
         assert!(e.board_heard().is_none(), "{what}: and nothing else came");
+    }
+}
+
+use muir::chaos::ether::{Capture, RACT_NS, ROUND_NS};
+
+/// **A station asked for a frame long after the cable went idle goes on
+/// its turn timer's cadence, not at the instant it was asked.** The board's
+/// counter runs free while the cable is idle (`Turn::tc` and
+/// `Turn::idle_run` in `src/chaos/board.rs`), so a turn missed is gone and
+/// the next is a whole round on. 3060 sends; long after, 3057 --- whose turn
+/// after 3060's frame is the first count --- is given a frame. Asked twice in
+/// one round, at 700,000 and 700,300 ns, it goes at the same instant; asked a
+/// round later, a round later; and every time one count after the cable went
+/// idle, modulo a round. `Capture`, the harness's instrument, keeps the
+/// ether's old rule and goes one slot after it was asked.
+#[test]
+fn a_station_after_a_long_idle_goes_on_the_turn_timers_cadence() {
+    let (_, bits) = on_the_cable(4);
+    let go = |asked: u64, station: bool| -> (u64, u64) {
+        let mut e = Ether::new();
+        e.keep_log(true);
+        let (a, _) = host(0o3060, vec![packet(0o3060, 0o3062, 4)], false);
+        e.attach(a);
+        run(&mut e, 0, asked);
+        if station {
+            let (c, _) = host(0o3057, vec![packet(0o3057, 0o3062, 4)], false);
+            e.attach(c);
+        } else {
+            let mut c = Capture::new(0o3057);
+            c.to_send.push_back(packet(0o3057, 0o3062, 4));
+            e.attach(Box::new(c));
+        }
+        run(&mut e, asked, asked + 2 * ROUND_NS);
+        let sent = sent(&e);
+        assert_eq!(sent.len(), 2, "asked at {asked}: both frames went: {sent:?}");
+        (sent[0].0, sent[1].0)
+    };
+    let mut starts = Vec::new();
+    for asked in [700_000, 700_300, 700_000 + ROUND_NS] {
+        let (first, at) = go(asked, true);
+        let since = (at - (first + bits)) % ROUND_NS;
+        eprintln!(
+            "asked at {asked}: 3060's frame at {first}, 3057's at {at}, {since} ns past a round"
+        );
+        assert!(at >= asked && at - asked < ROUND_NS, "asked at {asked}, it went at {at}");
+        assert!(
+            (SLOT_NS..SLOT_NS + wire::IDLE_NS + 1).contains(&since),
+            "one count after the cable went idle, modulo a round: {since} ns"
+        );
+        starts.push(at);
+    }
+    assert_eq!(starts[0], starts[1], "two asks in one round go at the same instant");
+    assert_eq!(starts[2] - starts[0], ROUND_NS, "asked a round later, it goes a round later");
+    let (_, at) = go(700_000, false);
+    assert_eq!(at, 700_000 + SLOT_NS, "the harness's instrument goes one slot after it was asked");
+}
+
+/// **The receiver decides at `START^`, and keeps it for the frame.** `RACT`,
+/// the 74S74 at LMRCLK 0C06, clocks `-RDONE` in on `START^`, [`RACT_NS`]
+/// after the frame's first edge, and holds it while the cable is busy. A
+/// Clear Receiver just before that instant lets the frame in; just after,
+/// or anywhere before the destination word, it does not: nothing is stored,
+/// and the frame is counted and aborted as if the buffer were still full.
+#[test]
+fn the_receiver_decides_at_start_and_keeps_it_for_the_frame() {
+    for (what, cleared, taken) in [
+        ("cleared before START^", SLOT_NS + RACT_NS - 1, true),
+        ("cleared at START^'s own instant, after it", SLOT_NS + RACT_NS + 1, false),
+        ("cleared well inside the frame", SLOT_NS + 5_000, false),
+    ] {
+        let mut e = Ether::new();
+        e.keep_log(true);
+        e.attach_board(0o3050);
+        e.board_receiver(true, false);
+        let (a, log_a) = host(0o3060, vec![packet(0o3060, 0o3050, 4)], false);
+        e.attach(a);
+        run(&mut e, 0, cleared);
+        e.board_receiver(false, false);
+        run(&mut e, cleared, 200_000);
+        let [(s, 0o3060)] = sent(&e)[..] else { panic!("{what}: one frame: {:?}", sent(&e)) };
+        assert_eq!(s, SLOT_NS, "{what}: the frame at its first turn");
+        let mut lost = Vec::new();
+        while let Some(x) = e.board_lost() {
+            lost.push(x);
+        }
+        let aborted = log_a.lock().unwrap().iter().any(|h| matches!(h, Happened::Aborted(..)));
+        let (_, r, took) =
+            e.board_heard().unwrap_or_else(|| panic!("{what}: the board heard it go by"));
+        eprintln!("{what}: counted {lost:?}, aborted {aborted}, taken {took}");
+        assert_eq!(took, taken, "{what}: whether the receiver was active for it");
+        assert_eq!(aborted, !taken, "{what}: aborted when it was not taken");
+        assert_eq!(r.framed.check_ok, taken, "{what}: whole, or wreckage");
+        let want: Vec<(u64, u16, bool)> =
+            if taken { Vec::new() } else { vec![(s + BUSY_ABORT_NS, 0o3060, true)] };
+        assert_eq!(lost, want, "{what}: counted when it was not taken");
     }
 }

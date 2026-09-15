@@ -524,16 +524,19 @@ fn buffer_full(b: &mut UnibusMaster, m: &mut Model, spy: bool, frames: &[Vec<u16
     both(b, m, chaos::CSR, Some(csr::CLEAR_RECEIVER | spying), "clear receiver");
     b.plug_chaos(ether_with(frames));
     m.io.chaos.as_mut().unwrap().plug(ether_with(frames));
+    // Watched off the board's `RDONE` and the model's CSR without a Unibus
+    // cycle, so that this returns as the first packet lands, before the
+    // second frame has started on either cable.
     let until = b.now + 1_000_000;
     loop {
-        b.run(b.now + 1_000);
+        let next = b.chip.next_tap().map_or(b.now + 50, |t| t.max(b.now + 1)).min(b.now + 50);
+        b.run(next);
         m.run(b.now);
-        let (_, c) = b.cycle(chaos::CSR, None);
-        let cm = m.cycle(chaos::CSR, None, b.now);
-        if c & csr::RECEIVE_DONE != 0 && cm & csr::RECEIVE_DONE != 0 {
+        let model = m.io.chaos.as_ref().unwrap().csr();
+        if b.level("RDONE") == Level::High && model & csr::RECEIVE_DONE != 0 {
             return;
         }
-        assert!(b.now < until, "the first packet landed: board {c:#08o}, model {cm:#08o}");
+        assert!(b.now < until, "the first packet landed: model {model:#08o}");
     }
 }
 
@@ -721,4 +724,90 @@ fn the_lost_count_wraps_at_sixteen_on_both_alike() {
     assert_eq!((on_board, on_model), (18, 18), "eighteen frames went by on each");
     assert_eq!((c & csr::LOST_COUNT) >> 9, 1, "seventeen counted, the field wrapped: {c:#08o}");
     assert!(c & csr::RECEIVE_DONE != 0, "the first one is still in the buffer");
+}
+
+/// **A Clear Receiver written inside a frame does not let that frame in,
+/// on both alike.** `RACT`, the 74S74 at LMRCLK 0C06, clocks `-RDONE` in on
+/// `START^` and holds it while the cable is busy, its clear being `RRESET`
+/// or `-CBLBSY` through the 74S02 at 0B08; and `-LOST.ONE` at LMMYNM 0D02
+/// takes `-RACT`, not `-RDONE`. So with the buffer full at a frame's
+/// `START^`, a Clear Receiver written before its destination word leaves
+/// the receiver off for it: nothing is stored, Receive Done stays down, and
+/// the frame is counted in the Lost Count the clear just emptied --- and
+/// aborted if it was addressed to the board by name, a broadcast not.
+/// `START^` is watched on the board as well, [`RACT_NS`] after the frame's
+/// first edge, which is where the model samples.
+#[test]
+fn a_clear_receiver_inside_a_frame_does_not_let_it_in_on_both_alike() {
+    use muir::chaos::ether::{BUSY_ABORT_NS, RACT_NS};
+    for (what, dest, abort) in [("addressed to it", MY_ADDRESS, true), ("a broadcast", 0, false)] {
+        let n = cadrio();
+        let mut b = board(&n);
+        let mut m = Model::new(None);
+        buffer_full(&mut b, &mut m, false, &[rfc_time(SERVER, MY_ADDRESS), rfc_time(SERVER, dest)]);
+        let second = |e: &Ether| {
+            e.log
+                .iter()
+                .filter_map(|ev| if let Event::Sent(t, _, _) = ev { Some(*t) } else { None })
+                .nth(1)
+        };
+        // Until the second frame is past `START^` on both cables.
+        let until = b.now + 1_000_000;
+        let mut was = b.level("START^");
+        let mut rise = None;
+        let (on_board, on_model) = loop {
+            let next = b.chip.next_tap().map_or(b.now + 25, |t| t.max(b.now + 1)).min(b.now + 25);
+            b.run(next);
+            m.run(b.now);
+            let sb = second(&b.chaos.as_ref().unwrap().ether);
+            let sm = second(m.io.chaos.as_ref().unwrap().ether().unwrap());
+            let level = b.level("START^");
+            if level != was {
+                if level == Level::High && sb.is_some() {
+                    rise.get_or_insert(b.now);
+                }
+                was = level;
+            }
+            if let (Some(x), Some(y)) = (sb, sm)
+                && rise.is_some()
+                && b.now >= x.max(y) + RACT_NS + 25
+            {
+                break (x, y);
+            }
+            assert!(b.now < until, "{what}: the second frame went out on both: {sb:?} {sm:?}");
+        };
+        let rise = rise.unwrap();
+        eprintln!(
+            "{what}: the second frame on the board at {on_board}, START^ {} ns after it; on the \
+             model at {on_model}",
+            rise - on_board
+        );
+        assert!(rise.abs_diff(on_board + RACT_NS) <= 25, "{what}: START^ where the model samples");
+        both(&mut b, &mut m, chaos::CSR, Some(csr::CLEAR_RECEIVER), &format!("{what}: clear"));
+        let into = b.now - on_board.max(on_model);
+        eprintln!("{what}: Clear Receiver written, {into} ns into the frame");
+        assert!(
+            b.now < on_board.min(on_model) + BUSY_ABORT_NS,
+            "{what}: the write landed before the destination word"
+        );
+        let [netlist, model] = watch_the_drivers(&mut b, &mut m, 150_000);
+        for (side, (sent, on, off)) in [("board", netlist), ("model", model)] {
+            let sent = sent.unwrap();
+            match (on, off) {
+                (Some(on), Some(off)) if abort => {
+                    assert!(
+                        (48 * wire::CELL_NS..50 * wire::CELL_NS).contains(&(on - sent)),
+                        "{what}, {side}: the abort in the cell after the destination word"
+                    );
+                    assert!((1_000..1_250).contains(&(off - on)), "{what}, {side}: four cells");
+                }
+                (None, _) if !abort => {}
+                other => panic!("{what}, {side}: the driver {other:?}"),
+            }
+        }
+        let c = both(&mut b, &mut m, chaos::CSR, None, &format!("{what}: the CSR after"));
+        eprintln!("{what}: CSR {c:#08o}");
+        assert!(c & csr::RECEIVE_DONE == 0, "{what}: nothing was stored: {c:#08o}");
+        assert_eq!((c & csr::LOST_COUNT) >> 9, 1, "{what}: and the frame was counted: {c:#08o}");
+    }
 }
