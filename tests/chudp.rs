@@ -4,11 +4,12 @@
 //! Chaosnet over UDP: the frame's bytes, and the node that carries it on
 //! and off the modeled cable.
 //!
-//! The frame is pinned here as a byte sequence rather than left implicit
-//! in the packing code, because its byte order is **unverified** ---
-//! `chaos::udp::PACKET_ORDER` and `chaos::udp::TRAILER_ORDER` say what
-//! is believed and why --- and a correction should be a change to two
-//! constants and to one test.
+//! The frame is pinned here as bytes rather than left implicit in the
+//! packing code, and two datagrams are the whole of the evidence for it:
+//! one muir writes for a known packet, and one `cbridge` itself wrote.
+//! Both were taken from a running `cbridge` on 15 September 2026, which
+//! is how muir knows that every 16-bit word goes most significant byte
+//! first and that the trailer's third word is the Internet checksum.
 
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
@@ -71,46 +72,105 @@ fn trailer(buffer: &[u16], source: u16) -> (u16, u16) {
 
 /// **The frame is these bytes.** Four header bytes --- version 1,
 /// function 1, two arguments --- then the Chaos packet's eight header
-/// words and its data, each word least significant byte first, and then
-/// the hardware trailer's destination, source and check word, each most
-/// significant byte first.
+/// words and its data, and then the trailer's destination, source and
+/// checksum. **Every word most significant byte first**, in the header,
+/// in the data and in the trailer.
 ///
-/// The mixed order is what makes this worth pinning, and the data is
-/// what shows it is not arbitrary: AIM-628 §3.6 puts the first byte of a
-/// pair in the word's least significant half, so `STATUS` comes out of a
-/// little-endian frame as `STATUS` and out of a big-endian one as
-/// `TSTASU`. Bytes 20 to 25 below read `STATUS`.
+/// These 32 bytes are an RFC for `STATUS` from 3040 to 3050 as a running
+/// `cbridge` takes it. The data is what shows the order is not arbitrary:
+/// AIM-628 §3.6 puts the first byte of a pair in the word's least
+/// significant half, and the word then goes out most significant byte
+/// first, so `STATUS` appears on the wire as `TSTASU`. Bytes 20 to 25
+/// below read `TSTASU`.
 ///
-/// The check word `0o171007` is the CADR's own hardware CRC-16 over
-/// these words, `packet::check_word`; what a CHUDP peer puts in that
-/// field is unverified, and nothing here or in `chaos::udp` drops a
-/// packet on it.
+/// The trailer's third word is the Internet checksum, `udp::checksum`,
+/// and **not** the CADR's own CRC-16: no CADR ever sent a UDP datagram,
+/// and the check word the machine's own hardware makes is the cable's.
 #[test]
 fn the_frame_is_these_bytes() {
     let p = status_rfc();
     let buffer = p.to_buffer(ME);
-    let (source, check) = trailer(&buffer, PEER);
-    assert_eq!(check, 0o171007, "the hardware's check word for these words");
-    let frame = udp::wrap(&buffer, source, check).expect("a frame");
+    let frame = udp::wrap(&buffer, PEER).expect("a frame");
     #[rustfmt::skip]
     let want: [u8; 32] = [
-        // version, function, and two argument bytes
+        // version 1, function 1, two zero bytes
         0x01, 0x01, 0x00, 0x00,
-        0x00, 0x01, // opcode: RFC in the high byte of the word
-        0x06, 0x00, // count: no forwarding, six data bytes
-        0x28, 0x06, // destination 3050
+        0x01, 0x00, // opcode RFC (1) in the high byte
+        0x00, 0x06, // forwarding count 0, six data bytes
+        0x06, 0x28, // destination 3050
         0x00, 0x00, // destination index
-        0x20, 0x06, // source 3040
-        0x11, 0x00, // source index 21
-        0x01, 0x00, // packet number
-        0x00, 0x00, // acknowledge
-        b'S', b'T', b'A', b'T', b'U', b'S',
-        0x06, 0x28, // the trailer, in network order: destination 3050
         0x06, 0x20, // source 3040
-        0xf2, 0x07, // check word 171007
+        0x00, 0x11, // source index 21
+        0x00, 0x01, // packet number 1
+        0x00, 0x00, // acknowledgement 0
+        b'T', b'S', b'T', b'A', b'S', b'U', // "STATUS", pairwise swapped
+        0x06, 0x28, // the trailer: destination 3050
+        0x06, 0x20, // source 3040
+        0xea, 0x6d, // the Internet checksum
     ];
     assert_eq!(frame, want, "the frame as it goes into the datagram");
-    assert_eq!(&frame[20..26], b"STATUS", "the data reads in order, which is the packet's order");
+    assert_eq!(&frame[20..26], b"TSTASU", "the data pairwise swapped, which is network order");
+    // The checksum is muir's own, over the words before it: the eight
+    // header words, the data words, and the trailer's destination and
+    // source.
+    let mut over = buffer.clone();
+    over.push(PEER);
+    assert_eq!(udp::checksum(&over), 0xea6d, "the checksum these words make");
+    // And the frame is good when every word, the checksum included, sums
+    // to 0xffff --- which is to say the whole lot checksums to zero.
+    over.push(0xea6d);
+    assert_eq!(udp::checksum(&over), 0, "a good frame's words sum to 0xffff");
+    // The CADR's own CRC-16 over the same words is another number
+    // altogether, and it is the cable's and not the datagram's.
+    assert_eq!(trailer(&buffer, PEER).1, 0o171007, "the hardware's check word for these words");
+}
+
+/// **`cbridge`'s own answer reads back, and muir writes it again byte for
+/// byte.** 94 bytes captured from a running `cbridge` on 15 September
+/// 2026: its answer to a STATUS request, from the bridge at 177020, which
+/// named itself `cbtest`, to the host at 177022 that asked. Its name
+/// appears on the wire as `bcetts`, pairwise swapped as any data is, and
+/// its checksum verifies as the one muir computes.
+#[rustfmt::skip]
+const CBRIDGE_STATUS: [u8; 94] = [
+    0x01, 0x01, 0x00, 0x00, 0x05, 0x00, 0x00, 0x44, 0xfe, 0x12, 0x00, 0x12, 0xfe, 0x10, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x62, 0x63, 0x65, 0x74, 0x74, 0x73, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0xfe, 0x00, 0x10, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x12, 0xfe, 0x10, 0xc4, 0x05,
+];
+
+/// The bridge that sent [`CBRIDGE_STATUS`], and the host it answered.
+const CBRIDGE: u16 = 0o177020;
+const ASKER: u16 = 0o177022;
+
+#[test]
+fn cbridges_own_answer_reads_back() {
+    let f = udp::unwrap(&CBRIDGE_STATUS).expect("it reads");
+    let (p, cable_dest) = Packet::from_buffer(&f.buffer).expect("a packet");
+    assert_eq!(p.opcode, op::ANS, "an ANS, which is what a STATUS request is answered with");
+    assert_eq!(p.forward, 0, "no forwarding count");
+    assert_eq!(p.data.len(), 0o104, "68 data bytes, the count word's low twelve bits");
+    assert_eq!((p.dest, p.dest_index), (ASKER, 0o22), "the host that asked, and its index");
+    assert_eq!((p.source, p.source_index), (CBRIDGE, 0), "the bridge answering");
+    assert_eq!((p.number, p.ack), (0, 0), "an ANS is uncontrolled: no number, no acknowledgement");
+    // AIM-628 §4.4: the answer opens with the host's name in 32 bytes.
+    assert_eq!(&p.data[..6], b"cbtest", "the name it called itself");
+    assert_eq!(&p.data[6..32], [0u8; 26], "padded to 32 bytes");
+    assert_eq!(&CBRIDGE_STATUS[20..26], b"bcetts", "and on the wire it is pairwise swapped");
+    // The trailer: the next hop, the sender, and the checksum.
+    assert_eq!(cable_dest, ASKER, "the trailer's destination");
+    assert_eq!(f.source, CBRIDGE, "the trailer's source");
+    let mut over = f.buffer.clone();
+    over.push(f.source);
+    assert_eq!(udp::checksum(&over), 0xc405, "the checksum it carries, which muir makes too");
+    // What goes on the modeled cable carries the CADR's own check word,
+    // made here for it, because that is what the interface checks.
+    assert!(f.check_ok, "and it is good");
+    assert_eq!(f.check, trailer(&f.buffer, f.source).1, "the hardware's, made at this edge");
+    // And back out again, the same bytes.
+    assert_eq!(udp::wrap(&f.buffer, f.source).expect("a frame"), CBRIDGE_STATUS);
 }
 
 /// **The frame goes out and comes back.** What `wrap` writes, `unwrap`
@@ -122,46 +182,50 @@ fn a_frame_goes_out_and_comes_back() {
         let p = Packet { data, ..status_rfc() };
         let buffer = p.to_buffer(ME);
         let (source, check) = trailer(&buffer, PEER);
-        let frame = udp::wrap(&buffer, source, check).expect("a frame");
+        let frame = udp::wrap(&buffer, source).expect("a frame");
         let back = udp::unwrap(&frame).expect("it reads back");
         assert_eq!(back, Framed { buffer, source, check, check_ok: true }, "{p:?}");
         assert_eq!(Packet::from_buffer(&back.buffer).expect("a packet").0, p);
     }
 }
 
-/// **An odd data count is taken padded or not.** The data is a whole
-/// number of 16-bit words on the cable, so this pads it; the trailer is
-/// found from the end of the datagram rather than from the count, so a
-/// peer that does not pad is read all the same. Which a peer does is
-/// **unverified**; one interoperation settles it, and until then neither
-/// reading is refused.
+/// **An odd data count is padded to a whole word, and the pad byte comes
+/// first.** The data is a whole number of 16-bit words on the cable, and
+/// the odd byte sits in the word's least significant half, AIM-628 §3.6,
+/// so the zero that pads it is the high half --- which is the byte that
+/// goes out first. `cbridge` always pads.
+///
+/// **A frame that is not a whole number of words is refused**, because
+/// the checksum is over words: there is no reading of a lone trailing
+/// byte that can be summed, so such a frame cannot be checked and is not
+/// taken on faith.
 #[test]
-fn an_odd_data_count_is_taken_padded_or_not() {
+fn an_odd_data_count_is_padded_to_a_word() {
     let p = Packet { data: b"odd".to_vec(), ..status_rfc() };
     let buffer = p.to_buffer(ME);
-    let (source, check) = trailer(&buffer, PEER);
-    let padded = udp::wrap(&buffer, source, check).expect("a frame");
+    let padded = udp::wrap(&buffer, PEER).expect("a frame");
     assert_eq!(padded.len(), 4 + 16 + 4 + 6, "the data padded to a word");
+    assert_eq!(&padded[4 + 16..4 + 16 + 4], b"do\0d", "the pad byte first in its word");
+    let back = udp::unwrap(&padded).expect("padded reads");
+    assert_eq!(back.buffer, buffer, "and to the words that were written");
+    assert_eq!(Packet::from_buffer(&back.buffer).expect("a packet").0.data, b"odd");
     // The same frame with the pad byte taken out.
     let mut unpadded = padded.clone();
-    unpadded.remove(4 + 16 + 3);
+    unpadded.remove(4 + 16 + 2);
     assert_eq!(unpadded.len(), 4 + 16 + 3 + 6);
-    let a = udp::unwrap(&padded).expect("padded reads");
-    let b = udp::unwrap(&unpadded).expect("unpadded reads too");
-    assert_eq!(a.buffer, b.buffer, "and to the same words");
-    assert_eq!(Packet::from_buffer(&b.buffer).expect("a packet").0.data, b"odd");
+    udp::unwrap(&unpadded).expect_err("a body that is not whole words");
 }
 
 /// **A version this does not speak is refused, and so is a function.**
-/// The protocol's author has said a version 2 may differ from version 1
-/// in nothing but byte order, so a version 2 peer read as a version 1
-/// one would exchange nonsense; it is refused by number instead.
+/// What a version 2 would lay out differently is not known here --- the
+/// byte order of version 1 was itself only settled by watching `cbridge`
+/// --- so a version 2 peer read as a version 1 one would exchange
+/// nonsense. It is refused by number instead.
 #[test]
 fn an_unknown_version_is_refused() {
     let p = status_rfc();
     let buffer = p.to_buffer(ME);
-    let (source, check) = trailer(&buffer, PEER);
-    let good = udp::wrap(&buffer, source, check).expect("a frame");
+    let good = udp::wrap(&buffer, PEER).expect("a frame");
     assert!(udp::unwrap(&good).is_ok());
     for (byte, what) in [(0, "version"), (1, "function")] {
         for value in [0u8, 2, 255] {
@@ -181,8 +245,7 @@ fn an_unknown_version_is_refused() {
 fn a_length_that_is_not_the_count_is_refused() {
     let p = status_rfc();
     let buffer = p.to_buffer(ME);
-    let (source, check) = trailer(&buffer, PEER);
-    let good = udp::wrap(&buffer, source, check).expect("a frame");
+    let good = udp::wrap(&buffer, PEER).expect("a frame");
     let mut short = good.clone();
     short.truncate(good.len() - 2);
     udp::unwrap(&short).expect_err("two bytes fewer than the count wants");
@@ -199,6 +262,64 @@ fn a_length_that_is_not_the_count_is_refused() {
 /// The header and the trailer with no packet between them: shorter than
 /// any frame.
 const HEADER_AND_TRAILER: usize = 4 + 6;
+
+/// The frame muir wrote before it spoke `cbridge`'s framing: the packet's
+/// words least significant byte first, the trailer's most significant
+/// first, and the CADR's own CRC-16 in the trailer's third word.
+fn old_framing(buffer: &[u16], source: u16) -> Vec<u8> {
+    let (&dest, words) = buffer.split_last().expect("a destination");
+    let mut out = vec![1u8, 1, 0, 0];
+    for &w in words {
+        out.extend(w.to_le_bytes());
+    }
+    for w in [dest, source, trailer(buffer, source).1] {
+        out.extend(w.to_be_bytes());
+    }
+    out
+}
+
+/// **A frame whose checksum is wrong is refused, and the refusal names
+/// it** --- which is the line `--chaos-trace` prints and what
+/// `cbridge` calls "Bad checksum".
+///
+/// The frame here is the one muir used to send in network order: the
+/// trailer's third word holding the CADR's own CRC-16 rather than the
+/// Internet checksum. That is exactly the frame a running `cbridge`
+/// refused, printing the one's complement sum over the frame as sent.
+#[test]
+fn a_frame_with_a_wrong_checksum_is_refused() {
+    let buffer = status_rfc().to_buffer(ME);
+    let good = udp::wrap(&buffer, PEER).expect("a frame");
+    assert!(udp::unwrap(&good).is_ok(), "the Internet checksum is what it wants");
+    let mut crc = good.clone();
+    let n = crc.len();
+    crc[n - 2..].copy_from_slice(&trailer(&buffer, PEER).1.to_be_bytes());
+    let err = udp::unwrap(&crc).expect_err("the CADR's CRC-16 is not the checksum");
+    assert!(err.contains("checksum"), "the refusal names it: {err}");
+    // And one bit anywhere in the frame is enough.
+    for k in [4, 12, 20, good.len() - 3, good.len() - 1] {
+        let mut bad = good.clone();
+        bad[k] ^= 1;
+        let err = udp::unwrap(&bad).expect_err("one bit changed is enough");
+        assert!(err.contains("checksum"), "byte {k}: {err}");
+    }
+}
+
+/// **A frame in the old byte order is refused as not a packet.** Its
+/// count word comes out of the other half and no longer accounts for the
+/// datagram, so muir can say that much; it cannot say what `cbridge` says
+/// of such a frame, which is "bogus", because what it can see is a count
+/// and a length that do not agree. The checksum would refuse it as well,
+/// the words being byte-swapped, but the shape is what is looked at
+/// first.
+#[test]
+fn a_frame_in_the_old_byte_order_is_refused() {
+    let buffer = status_rfc().to_buffer(ME);
+    let old = old_framing(&buffer, PEER);
+    assert_eq!(old.len(), udp::wrap(&buffer, PEER).expect("a frame").len(), "the same length");
+    let err = udp::unwrap(&old).expect_err("the old framing is not this one");
+    assert!(err.contains("count"), "and the refusal says what muir can see: {err}");
+}
 
 // --- the node on the cable ----------------------------------------------
 
@@ -306,8 +427,7 @@ fn link(peers: Vec<(u16, SocketAddr)>, default_peer: Option<SocketAddr>) -> Link
 /// to `cable_dest` and sourced there by `hardware_source`.
 fn send_packet(from: &UdpSocket, to: SocketAddr, p: &Packet, cable_dest: u16, hardware: u16) {
     let buffer = p.to_buffer(cable_dest);
-    let (source, check) = trailer(&buffer, hardware);
-    let frame = udp::wrap(&buffer, source, check).expect("a frame");
+    let frame = udp::wrap(&buffer, hardware).expect("a frame");
     from.send_to(&frame, to).expect("it goes");
 }
 
@@ -367,7 +487,8 @@ fn a_frame_for_a_peer_goes_out_as_a_datagram() {
     assert_eq!(from, l.at, "from the link's own socket");
     let f = udp::unwrap(&buf[..n]).expect("it reads");
     assert_eq!(f.source, ME, "the hardware source the cable carried");
-    assert!(f.check_ok, "and the check word the cable's hardware made");
+    assert!(f.check_ok, "and a check word made for the cable at this edge");
+    assert_eq!(f.check, trailer(&f.buffer, ME).1, "which is the CADR's own CRC-16");
     assert_eq!(Packet::from_buffer(&f.buffer).expect("a packet"), (p, PEER));
 }
 
@@ -376,9 +497,9 @@ fn a_frame_for_a_peer_goes_out_as_a_datagram() {
 /// says that an address lives at an endpoint, so a frame for any other
 /// address has nowhere to go; `--chaos-udp-default-peer` is the route
 /// of last resort, which is what lets a `cbridge` beside muir carry the
-/// traffic on. The frame carries the real destination in its hardware
-/// trailer and the bridge routes on that, which is why the flag takes
-/// an endpoint and no Chaosnet address.
+/// traffic on. The frame carries the real destination in its trailer and
+/// the bridge routes on that, which is why the flag takes an endpoint
+/// and no Chaosnet address.
 #[test]
 fn a_frame_for_an_address_no_entry_names_goes_to_the_default_peer() {
     for default_peer in [false, true] {
@@ -549,6 +670,31 @@ fn a_datagram_from_this_cables_own_address_is_dropped() {
     assert_eq!(sent(&e), [(sent(&e)[0].0, PEER)]);
 }
 
+/// **A frame whose checksum is wrong never reaches the cable.** The node
+/// drops it where it drops any datagram it cannot read, and goes on: the
+/// good frame behind it is heard.
+#[test]
+fn a_frame_with_a_wrong_checksum_never_reaches_the_cable() {
+    let (peer, peer_at) = peer_socket();
+    let l = link(vec![(PEER, peer_at)], None);
+    let mut e = Ether::new();
+    e.keep_log(true);
+    let (machine, heard) = host(ME, vec![]);
+    e.attach(machine);
+    e.attach(Box::new(l.node(&[ME, SERVER], false)));
+    let buffer = status_rfc().to_buffer(ME);
+    let mut bad = udp::wrap(&buffer, PEER).expect("a frame");
+    let n = bad.len();
+    bad[n - 2..].copy_from_slice(&trailer(&buffer, PEER).1.to_be_bytes());
+    peer.send_to(&bad, l.at).expect("it goes");
+    // And a good one after it, so the test waits on something rather than
+    // on nothing happening.
+    send_packet(&peer, l.at, &status_rfc(), ME, PEER);
+    assert!(run_until(&mut e, |e| !sent(e).is_empty()), "the good one reached the cable");
+    let heard = heard.lock().unwrap();
+    assert_eq!(heard.len(), 1, "one frame, not two: {heard:?}");
+}
+
 /// A machine that answers the first frame it hears, which is what shows
 /// whether the node knows where to send the answer. It answers only once
 /// it has heard, so its frame and the node's are never due together and
@@ -686,6 +832,28 @@ fn a_datagram_reaches_a_running_muirs_cable() {
         );
         send_packet(&peer, at, &rfc, ME, PEER);
         if child.stderr().so_far().contains(&landed) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // **And a frame whose checksum is wrong is dropped, and said.** The
+    // trailer's third word here is the CADR's own CRC-16, which is what
+    // muir sent before it spoke `cbridge`'s framing and what `cbridge`
+    // refuses with "Bad checksum".
+    let buffer = rfc.to_buffer(ME);
+    let mut bad = udp::wrap(&buffer, PEER).expect("a frame");
+    let n = bad.len();
+    bad[n - 2..].copy_from_slice(&trailer(&buffer, PEER).1.to_be_bytes());
+    let said = format!("from {peer_at}: a checksum");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the trace never said the checksum was wrong; muir wrote:\n{}",
+            child.stderr().so_far()
+        );
+        peer.send_to(&bad, at).expect("it goes");
+        if child.stderr().so_far().contains(&said) {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
