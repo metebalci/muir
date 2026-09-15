@@ -116,6 +116,22 @@ pub const ABORT_HOLD_NS: u64 = 1_000;
 /// them.
 pub const BUSY_ABORT_NS: u64 = 12_260;
 
+/// From a frame's first edge to `START^`, where the receiver decides
+/// whether it is active for the frame.  `RACT` is the second half of the
+/// 74S74 at LMRCLK 0C06: `-RDONE` on its D input (pin 12), `START^` its
+/// clock (pin 11), its preset tied high, and its clear the 74S02 at
+/// LMRCLK 0B08 NORing `RRESET` with `-CBLBSY`.  So it takes Receive Done
+/// as it stands at `START^` and holds it while the cable stays busy; an
+/// `RRESET` can only clear it.  A frame that finds the buffer full at
+/// `START^` is not received even if the software clears the receiver
+/// before its destination word, and it is still counted, and aborted if
+/// it was addressed by name, because `-LOST.ONE` takes `-RACT` and not
+/// `-RDONE`.  Measured on the netlist board: `START^` 60 ns after the
+/// first edge (`diagnose_the_busy_receiver` in `tests/chaos_netlist.rs`),
+/// held by `a_clear_receiver_inside_a_frame_does_not_let_it_in_on_both_alike`
+/// in `tests/chaos_rtl.rs`.
+pub const RACT_NS: u64 = 60;
+
 /// One whole round of the turn timer: `MY.TURN^` is bit 7 of the
 /// 74LS193s at LMTURN 0A17 and 0A18, so once a station's turn has gone
 /// by, the next comes 256 counts on while the cable stays idle.
@@ -222,9 +238,9 @@ struct Board {
     sending_until: Option<u64>,
     /// The receiver as the interface last left it, [`Ether::board_receiver`]:
     /// whether its buffer is full (Receive Done) and whether it is
-    /// spying.  Both are wanted at the instant a frame's destination word
-    /// goes by, which is microseconds before the interface hears of the
-    /// frame at all.
+    /// spying.  Receive Done is wanted at a frame's `START^`
+    /// ([`RACT_NS`]) and Spy as its destination word goes by, both long
+    /// before the interface hears of the frame at all.
     receive_done: bool,
     spy: bool,
     /// Whether the board's line driver is holding the cable high with the
@@ -238,8 +254,9 @@ struct Board {
     /// receiver inactive.  `RACT`, the 74S74 at LMRCLK 0C06, takes
     /// `-RDONE` on `START^`, so with Receive Done up the receiver never
     /// goes active for the frame and nothing of it reaches the buffer:
-    /// the frame is counted and that is all.  Set when a destination word
-    /// goes by with the buffer full, cleared when the run is delivered.
+    /// the frame is counted and that is all.  Set at the `START^` of a
+    /// frame that finds the buffer full, cleared when the run is
+    /// delivered.
     not_taken: bool,
     /// What the board heard, as a receiver takes it, and whether its
     /// receiver was active for it.
@@ -263,6 +280,12 @@ struct Transmission {
     /// own gates.
     dest: u16,
     dest_at: Option<u64>,
+    /// The instant of the frame's `START^` on the behavioral board,
+    /// [`RACT_NS`] after its first edge, until it is past; and whether the
+    /// receiver found its buffer full then, so that `RACT` is off for the
+    /// rest of the frame.  `None` with no behavioral board, as `dest_at`.
+    ract_at: Option<u64>,
+    ract_off: bool,
     /// The words as the node gave them, to hand back if it is aborted.
     buffer: Vec<u16>,
     /// The level changes still to come, in time.
@@ -580,7 +603,7 @@ impl Ether {
         let contended = self.contended();
         let edges = self.sending.iter().filter_map(|s| s.waveform.front().map(|&(t, _)| t));
         let ticks = self.sending.iter().filter_map(|s| (contended && !s.deaf).then_some(s.tick));
-        let dests = self.sending.iter().filter_map(|s| s.dest_at);
+        let dests = self.sending.iter().flat_map(|s| [s.ract_at, s.dest_at]).flatten();
         let starts = self.waiting.iter().map(|w| w.at);
         let pending = self.board.as_ref().and_then(|b| b.pending.as_ref().map(|&(t, _)| t));
         let abort = self.board.as_ref().and_then(|b| b.abort_until);
@@ -597,8 +620,9 @@ impl Ether {
     /// A frame's destination word has gone by at `t`, [`BUSY_ABORT_NS`]
     /// into it: what the behavioral board's receiver makes of it,
     /// AIM-628 §2.5's hardware flow control as the netlist board wires
-    /// it.  `RACT`, the 74S74 at LMRCLK 0C06, is off while Receive Done
-    /// is up, so the receiver takes nothing of the frame; the 74S10 at
+    /// it.  `RACT`, the 74S74 at LMRCLK 0C06, is off for a frame that
+    /// found Receive Done up at its `START^` ([`RACT_NS`], `ract_off`),
+    /// so the receiver takes nothing of the frame; the 74S10 at
     /// LMMYNM 0D02 makes `-LOST.ONE` from `MATCH SO FAR`, `ITS.ME` and
     /// `-RACT`, which steps Lost Count and presets the `ABORT` flip-flop
     /// at LMMODU 0A09, and the 26LS31 at LMLNDR 0A02 holds the cable
@@ -612,14 +636,11 @@ impl Ether {
     /// neither.  Held to the board by
     /// `the_busy_receiver_aborts_only_what_is_addressed_to_it` in
     /// `tests/chaos_netlist.rs`.
-    fn busy_receiver(&mut self, t: u64, source: u16, dest: u16) {
+    fn busy_receiver(&mut self, t: u64, source: u16, dest: u16, ract_off: bool) {
         let Some(b) = self.board.as_mut() else { return };
-        if !b.receive_done || source == b.address {
+        if !ract_off {
             return;
         }
-        // `RACT` never comes up: nothing of this frame reaches the buffer,
-        // whoever it was for.
-        b.not_taken = true;
         if dest != b.address && dest != 0 && !b.spy {
             return;
         }
@@ -648,6 +669,7 @@ impl Ether {
                     [
                         s.waveform.front().map(|&(t, _)| t),
                         (contended && !s.deaf).then_some(s.tick),
+                        s.ract_at,
                         s.dest_at,
                     ]
                 })
@@ -695,17 +717,30 @@ impl Ether {
                 b.aborting = false;
                 b.abort_until = None;
             }
-            let arrived: Vec<(u16, u16)> = self
+            // `START^` for the frames that began [`RACT_NS`] ago: `RACT`
+            // takes Receive Done as it stands now and keeps it for the
+            // frame, whatever the software writes after.
+            let board = self.board.as_ref().map(|b| (b.address, b.receive_done));
+            let mut inactive = false;
+            for s in self.sending.iter_mut().filter(|s| s.ract_at == Some(t)) {
+                s.ract_at = None;
+                s.ract_off = board.is_some_and(|(me, full)| full && s.source != me);
+                inactive |= s.ract_off;
+            }
+            if inactive && let Some(b) = self.board.as_mut() {
+                b.not_taken = true;
+            }
+            let arrived: Vec<(u16, u16, bool)> = self
                 .sending
                 .iter_mut()
                 .filter(|s| s.dest_at == Some(t))
                 .map(|s| {
                     s.dest_at = None;
-                    (s.source, s.dest)
+                    (s.source, s.dest, s.ract_off)
                 })
                 .collect();
-            for (source, dest) in arrived {
-                self.busy_receiver(t, source, dest);
+            for (source, dest, ract_off) in arrived {
+                self.busy_receiver(t, source, dest, ract_off);
             }
             self.interfere(t);
             self.set_level(t, self.board_high() || self.model_tx());
@@ -764,6 +799,8 @@ impl Ether {
             source: me,
             dest,
             dest_at: self.board.as_ref().map(|_| now + BUSY_ABORT_NS),
+            ract_at: self.board.as_ref().map(|_| now + RACT_NS),
+            ract_off: false,
             buffer,
             waveform,
             level: false,
@@ -852,14 +889,15 @@ impl Ether {
                 }
             }
         }
-        // A frame that has gone by since a waiting node's turn was
-        // reckoned has loaded that station's counter afresh, so its turn
-        // is reckoned again from the frame it heard last.
+        // A frame that has gone by since a waiting station's turn was
+        // reckoned has loaded its counter afresh, so its turn is reckoned
+        // again from the frame it heard last.  The harness's instrument
+        // keeps the instant it was given, as it always has.
         let again: Vec<Option<u64>> = self
             .waiting
             .iter()
             .map(|w| {
-                (!w.committed && w.reckoned != (self.last_edge, self.last_source))
+                (!w.committed && w.station && w.reckoned != (self.last_edge, self.last_source))
                     .then(|| now.max(self.turn(now, w.source, w.station, w.buffer.len())))
             })
             .collect();
@@ -906,17 +944,29 @@ impl Ether {
     /// microsecond --- and goes a whole round later: 257 slots for a
     /// short frame, 513 for a full one, which is what the netlist board
     /// takes with its own software (`two_packets_back_to_back_wait_a_whole_round`
-    /// in `tests/chaos_netlist.rs`).  A node that is not a station,
-    /// [`Node::station`], has no refill to wait for and takes the first
-    /// turn.
+    /// in `tests/chaos_netlist.rs`).
+    ///
+    /// **And the counter runs free.**  While the cable is idle it counts
+    /// down on every other terminal count whether anyone is ready or not
+    /// ([`super::board`]'s `Turn::tc` and `Turn::idle_run`), so a station
+    /// that is asked long after the cable went idle has missed the turns
+    /// in between and takes the next of the same cadence: the first
+    /// `idle + (turn_byte + 1) × SLOT_NS + k × ROUND_NS` that is at or
+    /// after both `now` and its refill, and never the instant it happened
+    /// to be asked.
+    ///
+    /// A node that is not a station, [`Node::station`], is the harness's
+    /// instrument and keeps the ether's old rule: its turn counts and one
+    /// from when the cable went idle or from when it was asked, whichever
+    /// is later.
     fn turn(&self, now: u64, me: u16, station: bool, words: usize) -> u64 {
         let idle_at = self.last_edge.map_or(now, |e| e + wire::IDLE_NS);
         let slots = turn_byte(self.last_source.unwrap_or(me), me) as u64 + 1;
+        if !station {
+            return idle_at.max(now) + slots * SLOT_NS;
+        }
         let first = idle_at + slots * SLOT_NS;
-        let ready = match station {
-            true => self.sent_until.get(&me).map_or(0, |&e| e + refill(words)),
-            false => 0,
-        };
+        let ready = self.sent_until.get(&me).map_or(0, |&e| e + refill(words)).max(now);
         if first >= ready { first } else { first + (ready - first).div_ceil(ROUND_NS) * ROUND_NS }
     }
 }
