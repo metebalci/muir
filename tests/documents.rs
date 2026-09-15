@@ -6,7 +6,7 @@
 //! `README.md`, `data/README.md` and `site/index.html` each carry a table
 //! of the netlists and how many parts are on each board, and
 //! `data/README.md` carries the pages and the `part` records with them.
-//! `site/manual.html` says the same totals in prose.
+//! `docs/netlists.md` says the same totals in prose.
 //! **Nothing read any of them.** `tests/parts_mounted.rs` asserts the same
 //! figures against the netlists and says in a comment that the documents
 //! quote them, but it restates the constants rather than reading them, so
@@ -199,7 +199,7 @@ fn the_data_inventory_counts_every_netlist_correctly() {
 fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
     const README: &str = include_str!("../README.md");
     const SITE: &str = include_str!("../site/index.html");
-    const MANUAL: &str = include_str!("../site/manual.html");
+    const NETLISTS: &str = include_str!("../docs/netlists.md");
     let files = netlists();
     for (what, t) in [
         ("README.md", markdown(README, &["Netlist", "Board", "Parts"])),
@@ -238,8 +238,8 @@ fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
         ("site/index.html", SITE, "on the processor, ", " in the machine", machine),
         ("site/index.html", SITE, "the SIMPLE TV and the color TV, and ", " with all thirty-two", full),
         ("site/index.html", SITE, "id=\"whole-machine\">", "</p>", machine),
-        ("site/manual.html", MANUAL, "A whole machine is ", " parts with one memory board", machine),
-        ("site/manual.html", MANUAL, "the color TV, and ", " with all thirty-two", full),
+        ("docs/netlists.md", NETLISTS, "A whole machine is ", " parts with one memory board", machine),
+        ("docs/netlists.md", NETLISTS, "the color TV, and ", " with all thirty-two", full),
     ] {
         assert_eq!(quoted(what, text, before, after), want, "{what}: {before:?}");
     }
@@ -287,7 +287,11 @@ fn the_documents_say_how_many_netlists_there_are_in_words() {
         ("README.md", include_str!("../README.md")),
         ("data/README.md", include_str!("../data/README.md")),
         ("site/index.html", include_str!("../site/index.html")),
-        ("site/manual.html", include_str!("../site/manual.html")),
+        ("docs/manual.md", include_str!("../docs/manual.md")),
+        ("docs/engines.md", include_str!("../docs/engines.md")),
+        ("docs/machine.md", include_str!("../docs/machine.md")),
+        ("docs/netlists.md", include_str!("../docs/netlists.md")),
+        ("docs/sources.md", include_str!("../docs/sources.md")),
     ] {
         for word in WORDS {
             let said = format!("the {word} netlists");

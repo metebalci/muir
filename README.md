@@ -232,9 +232,8 @@ own address, plugs the cable in with `--chaos-udp`, and names the host with
 ## Running it
 
 The flags below are the ones a first run wants; `muir --help` lists every
-one, and [the manual](https://muir.metebalci.com/manual.html) is the whole
-of it --- every flag, the prompt, the file of flags, and how the engines
-work.
+one, and [the manual](docs/manual.md) is the whole of it --- every flag, the
+prompt, the file of flags, and how the engines work.
 
     muir [--micro|--rtl|--chip] [--prom <file>]
          [--disk-pack <image>[,<unit>][,ro]]
