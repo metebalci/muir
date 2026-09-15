@@ -544,6 +544,17 @@ impl Interface {
     /// and the buffer is free; counted as lost if the buffer was full.
     /// The destination is matched as it came on the wire; wreckage too
     /// short to carry one matched nothing.
+    ///
+    /// **Two things the netlist board does here and this does not**, both
+    /// measured in `tests/chaos_netlist.rs` and left as they are until
+    /// issue 110 is settled.  The board sends AIM-628 §2.5's abort signal
+    /// when a frame addressed to it --- its own address, not a broadcast
+    /// and not Spy --- finds the buffer full: the cable driven high for
+    /// four bit cells from the cell after the destination word, which
+    /// stops the transmitter and tells it the packet did not get through
+    /// (`the_busy_receiver_aborts_a_frame_addressed_to_it`).  And its Lost
+    /// Count is a 74LS161 that wraps at sixteen rather than stopping at
+    /// fifteen (`the_lost_count_wraps_at_sixteen`).
     fn arrive(&mut self, now: u64, r: &Received) {
         let Some(&dest) = r.framed.buffer.last() else { return };
         let mine = dest == self.address || dest == 0 || self.csr & csr::SPY != 0;
