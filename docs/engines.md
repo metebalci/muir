@@ -61,9 +61,11 @@ microcycles are executed for real, through every gate on the board, and a
 program that waits on the disk is slower than the 5,000 figure rather than
 faster. **A run that touches no pack pays about 3% for that; a boot pays
 days.** System 100 came up this way on 12 September 2026, after 2 days 14
-hours. `--disk-controller model` is how a `chip` run that does not care
-about the disk is made quick --- and `rtl`, which runs the models throughout
-at about twice the hardware, is the engine for ordinary use.
+hours, and again on 15 September with the disk multiplexor on the cable as
+well, after 2 days 21 hours. `--disk-controller model` is how a `chip` run
+that does not care about the disk is made quick --- and `rtl`, which runs
+the models throughout at about twice the hardware, is the engine for
+ordinary use.
 
 ```text
 micro    +---------------------------------------------+

@@ -102,10 +102,11 @@ faster. **A run that touches no pack pays about 3% for that; a run that
 reads one pays days.** System 100 booted through the netlist controller on
 12 September 2026 in 2 days 14 hours and 301 million microcycles --- 51
 hours of it the cold boot's copy of all 21,342 pages of the band, at about
-330 pages an hour. The controller's sequencer waits on the drive's clocks
-and on its own delay lines, so it cannot be untimed the way the model is,
-and `--disk-controller model` is how a `chip` run that does not care about
-the disk is made quick.
+330 pages an hour --- and again on 15 September, with the disk multiplexor
+on the cable as well, in 2 days 21 hours and 306 million. The controller's
+sequencer waits on the drive's clocks and on its own delay lines, so it
+cannot be untimed the way the model is, and `--disk-controller model` is how
+a `chip` run that does not care about the disk is made quick.
 
 `rtl` is the engine for ordinary use, and `chip` means the gate-level
 machine throughout: `--main-memory`, `--io-board`, `--tv`, `--color-tv` and

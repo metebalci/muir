@@ -236,9 +236,21 @@ fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
         ("README.md", README, "of them, and ", " with all thirty-two", full),
         ("site/index.html", SITE, "own drawings: ", " on the processor", processor),
         ("site/index.html", SITE, "on the processor, ", " in the machine", machine),
-        ("site/index.html", SITE, "the SIMPLE TV and the color TV, and ", " with all thirty-two", full),
+        (
+            "site/index.html",
+            SITE,
+            "the SIMPLE TV and the color TV, and ",
+            " with all thirty-two",
+            full,
+        ),
         ("site/index.html", SITE, "id=\"whole-machine\">", "</p>", machine),
-        ("docs/netlists.md", NETLISTS, "A whole machine is ", " parts with one memory board", machine),
+        (
+            "docs/netlists.md",
+            NETLISTS,
+            "A whole machine is ",
+            " parts with one memory board",
+            machine,
+        ),
         ("docs/netlists.md", NETLISTS, "the color TV, and ", " with all thirty-two", full),
     ] {
         assert_eq!(quoted(what, text, before, after), want, "{what}: {before:?}");
@@ -300,5 +312,72 @@ fn the_documents_say_how_many_netlists_there_are_in_words() {
                 "{what} says {said:?}, and data/ holds {n}"
             );
         }
+    }
+}
+
+/// **Two `chip` runs took System 100 from the pack to its who-line with
+/// every board a netlist**, and four documents quote how long each took:
+/// the front page, `README.md`, `docs/netlists.md` and `docs/engines.md`.
+///
+/// Nothing here can measure a run again --- each is days of gate-level
+/// simulation --- so what the figures are held to is each other. That is
+/// the failure that would otherwise pass unseen: the front page and the
+/// manual quoting two different boots of the same machine, each looking
+/// right where it stands.
+#[test]
+fn the_documents_agree_on_the_cold_boot_runs() {
+    const SITE: &str = include_str!("../site/index.html");
+    const NETLISTS: &str = include_str!("../docs/netlists.md");
+    const README: &str = include_str!("../README.md");
+    const ENGINES: &str = include_str!("../docs/engines.md");
+
+    /// A run on the wall clock, and the microcycles it executed, in
+    /// millions, from the boot PROM's first to `Cold-booted` on the screen.
+    struct Run {
+        days: usize,
+        hours: usize,
+        millions: usize,
+    }
+    /// 12 September 2026: the processor, the bus interface, main memory,
+    /// the I/O board, the SIMPLE TV and MIT's disk controller.
+    const FIRST: Run = Run { days: 2, hours: 14, millions: 301 };
+    /// 15 September 2026: the same, with the DISK MULTIPLEXOR on the
+    /// controller's cable as well.
+    const SECOND: Run = Run { days: 2, hours: 21, millions: 306 };
+
+    // **The front page says each run is more than 60 hours.** That is a
+    // claim about these figures rather than a fifth one, so it is held to
+    // them here instead of being read off the page as a number of its own.
+    for run in [&FIRST, &SECOND] {
+        assert!(run.days * 24 + run.hours > 60, "a run is over 60 hours of simulation");
+    }
+
+    // `docs/engines.md` quotes the wall clock and not the microcycles, so
+    // the wall clock is all that is read out of it.
+    for (what, text, before, after, want) in [
+        ("site/index.html", SITE, "simulation: ", " days", FIRST.days),
+        ("site/index.html", SITE, "simulation: 2 days ", " hours", FIRST.hours),
+        ("site/index.html", SITE, "2 days 14 hours and ", " million microcycles", FIRST.millions),
+        ("site/index.html", SITE, "12 September 2026, and ", " days", SECOND.days),
+        ("site/index.html", SITE, "2026, and 2 days ", " hours", SECOND.hours),
+        ("site/index.html", SITE, "2 days 21 hours and ", " million", SECOND.millions),
+        ("docs/netlists.md", NETLISTS, "It took ", " days", FIRST.days),
+        ("docs/netlists.md", NETLISTS, "It took 2 days ", " hours", FIRST.hours),
+        ("docs/netlists.md", NETLISTS, "2 days 14 hours and ", " million", FIRST.millions),
+        ("docs/netlists.md", NETLISTS, "came up the same way, in ", " days", SECOND.days),
+        ("docs/netlists.md", NETLISTS, "same way, in 2 days ", " hours", SECOND.hours),
+        ("docs/netlists.md", NETLISTS, "2 days 21 hours and ", " million", SECOND.millions),
+        ("README.md", README, "netlist controller on 12 September 2026 in ", " days", FIRST.days),
+        ("README.md", README, "12 September 2026 in 2 days ", " hours", FIRST.hours),
+        ("README.md", README, "2 days 14 hours and ", " million", FIRST.millions),
+        ("README.md", README, "on the cable as well, in ", " days", SECOND.days),
+        ("README.md", README, "as well, in 2 days ", " hours", SECOND.hours),
+        ("README.md", README, "2 days 21 hours and ", " million", SECOND.millions),
+        ("docs/engines.md", ENGINES, "12 September 2026, after ", " days", FIRST.days),
+        ("docs/engines.md", ENGINES, "2026, after 2 days ", " hours", FIRST.hours),
+        ("docs/engines.md", ENGINES, "on the cable as well, after ", " days", SECOND.days),
+        ("docs/engines.md", ENGINES, "as well, after 2 days ", " hours", SECOND.hours),
+    ] {
+        assert_eq!(quoted(what, text, before, after), want, "{what}: {before:?}");
     }
 }
