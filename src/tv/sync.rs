@@ -266,20 +266,40 @@ impl Timeline {
             }
         }
         // The first change is dated where the first instruction lands, and
-        // what the register shows before it is what it showed at the end
-        // of the previous run --- the program being periodic, that is the
-        // last change's bits, which `sync_at` reads.
+        // what the register shows before it is what the run before it
+        // left there: from the second run on that is this run's own last
+        // change, which `sync_at` reads, and in the first run after a
+        // restart it is the program before this one's, which the caller
+        // holds and hands to `sync_at_since_start`.
         Some(Timeline { period_ns: t, instructions: executed, changes, tvma_clr, lines })
     }
 
     /// The sync bits `(hsync, vsync)` the mode register shows at `offset`
-    /// into the period.
+    /// into the period, the program having been round at least once: an
+    /// offset before the first change is answered with the run's last
+    /// change, which is what the previous run left in the register.
+    /// [`Timeline::sync_at_since_start`] is the first run.
     pub fn sync_at(&self, offset: u64) -> (bool, bool) {
         let offset = offset % self.period_ns;
         // The change at or before the offset, else the period's last.
         match self.changes.partition_point(|c| c.0 <= offset) {
             0 => self.changes.last().map_or((false, false), |c| (c.1, c.2)),
             k => (self.changes[k - 1].1, self.changes[k - 1].2),
+        }
+    }
+
+    /// The sync bits `(hsync, vsync)` at `since_start` nanoseconds since
+    /// the program started, `held` being the bits the register was
+    /// holding then. Before the first instruction of the first run lands
+    /// they are still those: the 74LS175 that latches them has no clear
+    /// and the program's start does not reach it
+    /// (`tests/tv.rs::the_sync_bits_hold_across_a_restart_until_the_first_instruction_lands`).
+    /// From that instruction on, and so through every later run, the
+    /// program's own bits.
+    pub fn sync_at_since_start(&self, since_start: u64, held: (bool, bool)) -> (bool, bool) {
+        match self.changes.first() {
+            Some(first) if since_start < first.0 => held,
+            _ => self.sync_at(since_start),
         }
     }
 

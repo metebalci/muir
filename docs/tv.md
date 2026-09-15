@@ -393,6 +393,22 @@ latched an instruction late, as measured on the board. A change of program,
 of the RAM's selection, or of the clock mode runs the program afresh from
 location 0.
 
+**Running the program afresh leaves the vertical flag and the mode
+register's sync bits where they stood.** Neither part hears the program's
+start: the vertical flag's
+74LS74 at `0E14` takes `-TVMA CLR`, `-LOAD MODE` and `-RESET` and nothing
+else, and the 74LS175 at `0D02` that latches the sync bits has its clear,
+pin 1, on a pull-up --- `HI` at XBADR `0F10` on the SIMPLE TV, `HI5` at
+XBADR `0D04` on the LISPM TV --- so it has no clear at all. So the flag
+keeps the value it had, and the mode register goes on reading the bits the
+previous program left in it until the new program's first instruction
+lands, an instruction after it is fetched; from that instruction on, and
+so through every later run, the bits are the new program's.
+`tests/tv.rs::a_sync_program_run_afresh_leaves_the_vertical_flag_alone`
+and `::the_sync_bits_hold_across_a_restart_until_the_first_instruction_lands`
+hold both, and a checkpoint carries the held bits. Power-on is the same
+start from a register holding nothing, and muir starts the held bits zero.
+
 **What muir does not do is scan.** No dot is fetched, no shift register is
 loaded and no monitor is driven, so **the picture is the frame buffer as it
 stands**: a program that fetches part of the buffer, or none of it, shows
