@@ -3,10 +3,11 @@
 
 //! The engines' rates on the benchmark programs of `src/benchmark.rs`.
 //!
-//!     cargo run --release --example benchmark -- [seconds]
+//!     cargo run --release --example benchmark -- [seconds] [--color-tv]
 //!
 //! Every engine on every program, six runs of five seconds each unless a
-//! different number of seconds is given.  Each run is checked against the
+//! different number of seconds is given; `--color-tv` fits the second
+//! display board as `muir --color-tv` does, to measure what it costs.  Each run is checked against the
 //! count the program left in `VMA`, so a rate is only printed for a run that
 //! did the work.  Nothing is read from `vendor/`.
 
@@ -24,6 +25,7 @@ const BUSINT: &str = include_str!("../data/BUSINT.netlist");
 const CADRM: &str = include_str!("../data/CADRM.netlist");
 const CADRIO: &str = include_str!("../data/CADRIO.netlist");
 const SIMPLETV: &str = include_str!("../data/SIMPLETV.netlist");
+const LISPMTV: &str = include_str!("../data/LISPMTV.netlist");
 
 /// The machine's own microcycle, 145 ns at normal speed.
 const HARDWARE_CYCLES_PER_S: f64 = 1e9 / 145.0;
@@ -59,32 +61,54 @@ fn report(engine: &str, p: &Program, run: &Run) {
     );
 }
 
-fn on_engine<E: Engine>(name: &str, new: fn(Machine) -> E, boot: fn(&mut E), p: &Program, s: Stop) {
+fn on_engine<E: Engine>(
+    name: &str,
+    new: fn(Machine) -> E,
+    boot: fn(&mut E),
+    p: &Program,
+    s: Stop,
+    color_tv: bool,
+) {
     let mut m = Machine::new();
     m.load_prom(&p.prom);
+    if color_tv {
+        m.fit_color_tv();
+    }
     let mut e = new(m);
     boot(&mut e);
     report(name, p, &benchmark::run_engine(&mut e, p, s));
 }
 
-fn on_chip(n: &Netlist, boards: &[Netlist; 4], p: &Program, s: Stop) {
+fn on_chip(n: &Netlist, boards: &[Netlist; 4], color_tv: Option<&Netlist>, p: &Program, s: Stop) {
     let [bus_n, mem_n, io_n, tv_n] = boards;
-    let (mut c, mut clk, mut far) = benchmark::chip(n, bus_n, mem_n, io_n, tv_n);
+    let (mut c, mut clk, mut far) = benchmark::chip_with(n, bus_n, mem_n, io_n, tv_n, color_tv);
     benchmark::boot_chip(&mut c, n, &mut far, &mut clk, p);
     report("chip", p, &benchmark::run_chip(&mut c, n, &mut far, &mut clk, p, s));
 }
 
+/// `benchmark [seconds] [--color-tv]`: the seconds a run is given, and
+/// whether the color TV is fitted --- the model on `micro` and `rtl`, and
+/// on `chip` the LISPM TV netlist wrapped to the color addresses beside the
+/// model, as `muir --color-tv` fits it.
 fn main() {
-    let secs: f64 = match std::env::args().nth(1) {
-        Some(a) => a.parse().expect("seconds"),
-        None => 5.0,
-    };
+    let mut secs = 5.0;
+    let mut color_tv = false;
+    for a in std::env::args().skip(1) {
+        match a.as_str() {
+            "--color-tv" => color_tv = true,
+            s => secs = s.parse().expect("seconds, or --color-tv"),
+        }
+    }
     let stop = Stop::After(Duration::from_secs_f64(secs));
     let n = netlist::parse(NETLIST).unwrap();
     let boards = [BUSINT, CADRM, CADRIO, SIMPLETV].map(|s| netlist::parse(s).unwrap());
+    let color = color_tv.then(|| netlist::parse_color_tv(LISPMTV).unwrap());
+    if color_tv {
+        eprintln!("with the color TV fitted");
+    }
     for p in [benchmark::datapath(), benchmark::control()] {
-        on_engine("micro", Micro::new, Micro::boot, &p, stop);
-        on_engine("rtl", Rtl::new, Rtl::boot, &p, stop);
-        on_chip(&n, &boards, &p, stop);
+        on_engine("micro", Micro::new, Micro::boot, &p, stop, color_tv);
+        on_engine("rtl", Rtl::new, Rtl::boot, &p, stop, color_tv);
+        on_chip(&n, &boards, color.as_ref(), &p, stop);
     }
 }

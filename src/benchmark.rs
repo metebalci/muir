@@ -416,8 +416,28 @@ pub fn chip(
     io: &Netlist,
     tv: &Netlist,
 ) -> (Chip, Behavioral, FarEnd) {
-    let boards = Boards { memory: 32, io: Some(io), tv: Some(tv), ..Default::default() };
-    let far = FarEnd::new(cpu, busint, memory, boards, 0, Machine::new());
+    chip_with(cpu, busint, memory, io, tv, None)
+}
+
+/// [`chip`] with the color TV on the backplane too, when `color_tv` is
+/// the LISPM TV netlist wrapped to the color addresses
+/// ([`crate::netlist::parse_color_tv`]): what `muir --chip --color-tv`
+/// runs, for measuring what the second display board costs. The model is
+/// fitted behind the buses beside it, as the run does.
+pub fn chip_with(
+    cpu: &Netlist,
+    busint: &Netlist,
+    memory: &Netlist,
+    io: &Netlist,
+    tv: &Netlist,
+    color_tv: Option<&Netlist>,
+) -> (Chip, Behavioral, FarEnd) {
+    let boards = Boards { memory: 32, io: Some(io), tv: Some(tv), color_tv, ..Default::default() };
+    let mut m = Machine::new();
+    if color_tv.is_some() {
+        m.fit_color_tv();
+    }
+    let far = FarEnd::new(cpu, busint, memory, boards, 0, m);
     (Chip::new(cpu), Behavioral::new(), far)
 }
 
