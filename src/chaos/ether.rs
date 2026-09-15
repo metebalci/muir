@@ -25,10 +25,25 @@
 //! transmitter whose clock edge finds it aborts and holds the cable high
 //! for [`ABORT_HOLD_NS`], the abort signal, and what was left on the
 //! cable reaches every receiver as wreckage, failing its check.
+//!
+//! Two things the stations on this side of the cable do because the
+//! hardware does them, and both are timed here rather than in the nodes:
+//!
+//! - **The behavioral board's busy receiver aborts**, AIM-628 §2.5: a
+//!   frame addressed to it while its buffer is full is counted and the
+//!   sender stopped, [`BUSY_ABORT_NS`] into the frame. The netlist board
+//!   drives its own cable and does this in its gates; a behavioral board
+//!   has the ether do it for it, from the receiver's state it is given
+//!   through [`Ether::board_receiver`].
+//! - **A station cannot offer its next frame at once.** Its host refills
+//!   the outgoing buffer a word at a time and reads `START`, which is
+//!   [`refill`], and its turn then comes on the turn timer's round,
+//!   [`ROUND_NS`]. [`Node::station`] says which nodes stand for
+//!   stations; [`Capture`] is an instrument and does not.
 
 use super::packet::{Framed, Received, frame, unframe_any};
 use super::wire::{self, Decoder};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 /// Something on the model side of the cable.
 pub trait Node: Send {
@@ -48,6 +63,17 @@ pub trait Node: Send {
     /// on Transmit Abort; the default forgets the frame, which a host
     /// whose transport retransmits can afford.
     fn aborted(&mut self, _now: u64, _buffer: Vec<u16>) {}
+    /// Whether this node stands for a station of its own on the cable,
+    /// with an interface and a host behind it. A station's host must
+    /// refill the outgoing buffer a word at a time before the next frame
+    /// can go ([`refill`]), and its turn then comes on the turn timer's
+    /// round ([`ROUND_NS`]), so two frames of its own are hundreds of
+    /// microseconds apart however fast they were handed in. Nodes are
+    /// stations unless they say otherwise; [`Capture`] is the one that
+    /// does.
+    fn station(&self) -> bool {
+        true
+    }
 }
 
 /// The time-slot of the turn-taking, AIM-628 §2.6: one count of the
@@ -76,6 +102,61 @@ pub const ABORT_NS: u64 = 125;
 /// `ABORT` to 1,000 ns after it, four cells. A model transmitter aborted
 /// holds the cable as long.
 pub const ABORT_HOLD_NS: u64 = 1_000;
+
+/// From a frame's first edge to the busy receiver's abort signal.  The
+/// three hardware words go first, "in the order check, source,
+/// destination" (AIM-628 §2.5), which is 48 cells of [`wire::CELL_NS`],
+/// and the driver comes on in the cell after them.  Measured on the
+/// netlist board, `the_busy_receiver_aborts_a_frame_addressed_to_it` in
+/// `tests/chaos_netlist.rs`: `DEST MATCH` at 12,060 ns, the line driver
+/// on at 12,260 --- the cell and the gate delays through `-LOST.ONE`,
+/// the `ABORT` flip-flop and the 26LS31 --- and Lost Count at 12,310.
+/// One instant serves for the driver and the count here: a Unibus cycle
+/// is microseconds, so no register read can fall in the 50 ns between
+/// them.
+pub const BUSY_ABORT_NS: u64 = 12_260;
+
+/// One whole round of the turn timer: `MY.TURN^` is bit 7 of the
+/// 74LS193s at LMTURN 0A17 and 0A18, so once a station's turn has gone
+/// by, the next comes 256 counts on while the cable stays idle.
+/// `two_packets_back_to_back_wait_a_whole_round` in
+/// `tests/chaos_netlist.rs` measures 257 slots between two packets a
+/// board sends back to back: the one count its software missed and the
+/// 256 of a round.
+pub const ROUND_NS: u64 = 256 * SLOT_NS;
+
+/// What one sixteen-bit word costs a station's host to write into the
+/// outgoing buffer: microcode 323's `CHAOS-XMT-2` loop in
+/// `uc-chaos.lisp`, which reads a pair of halfwords out of memory and
+/// writes each into the hardware --- 18 microinstructions and 3 memory
+/// cycles a pair, which on `micro`'s periods is 9 × 145 + 1.5 × 460 a
+/// word.  Measured against a CADR's own driver over W = 9 to 253 words,
+/// the first word written to the read of `START` fits `1,995 ns × W −
+/// 955` on `micro` and `2,050 × W − 907` on `rtl`; the constant, under a
+/// microsecond either way, is not charged.
+///
+/// **The CADR's own driver is the station modeled here.** The machine at
+/// the other end of a CHUDP link is not modeled at all --- muir has no
+/// model of an ITS or a `cbridge` host --- so what stands in for its
+/// interface is the one interface whose software this project can read:
+/// the CADR's. That fixes the order of magnitude, which is what the
+/// spacing of a burst turns on: hundreds of microseconds between frames
+/// rather than the one slot a queue would take.
+pub const REFILL_WORD_NS: u64 = 1_995;
+
+/// What a station takes from its last frame's end to having the next one
+/// ready to go: `words` writes down the Unibus at [`REFILL_WORD_NS`]
+/// each and the read of `START`, then [`super::board::TSR_READY_NS`] for
+/// the source and check words to be shifted in behind the packet ---
+/// less [`super::board::TDONE_BEFORE_END_NS`], because Transmit Done,
+/// which is what lets the host start writing, comes that much before the
+/// frame's nominal end.
+///
+/// `words` is the buffer as a node offers it, whose last word is the
+/// cable destination: exactly the words the software writes, AIM-628 §7.
+pub fn refill(words: usize) -> u64 {
+    words as u64 * REFILL_WORD_NS + super::board::TSR_READY_NS - super::board::TDONE_BEFORE_END_NS
+}
 
 /// What the I/O board's turn counter is loaded with when it hears a
 /// packet from `source`: page LMMYNM computes `source - me` bit-serially
@@ -106,9 +187,11 @@ pub const ABORT_HOLD_NS: u64 = 1_000;
 /// picture on a real machine is that the software cannot reload the
 /// transmitter within one slot, which
 /// `two_packets_back_to_back_wait_a_whole_round` in
-/// `tests/chaos_netlist.rs` measures at 257 slots; a node on this ether
-/// has no such delay, and takes the cable back one slot after it let it
-/// go.
+/// `tests/chaos_netlist.rs` measures at 257 slots.  A node that stands
+/// for a station is held to the same: [`Ether::turn`] charges it
+/// [`refill`] after a frame of its own and gives it the first turn of
+/// the round at or after that, which for two short frames is the same
+/// 257 slots.
 pub fn turn_byte(source: u16, me: u16) -> u8 {
     let d = source.wrapping_sub(me);
     (0..8).map(|m| (((d >> (14 - m)) & 1) as u8) << m).sum()
@@ -137,8 +220,30 @@ struct Board {
     pending: Option<(u64, Vec<u16>)>,
     /// When the frame being sent ends, once it has started.
     sending_until: Option<u64>,
-    /// What the board heard, as a receiver takes it.
-    heard: VecDeque<(u64, Received)>,
+    /// The receiver as the interface last left it, [`Ether::board_receiver`]:
+    /// whether its buffer is full (Receive Done) and whether it is
+    /// spying.  Both are wanted at the instant a frame's destination word
+    /// goes by, which is microseconds before the interface hears of the
+    /// frame at all.
+    receive_done: bool,
+    spy: bool,
+    /// Whether the board's line driver is holding the cable high with the
+    /// busy receiver's abort signal, and until when.
+    aborting: bool,
+    abort_until: Option<u64>,
+    /// Frames the board counted in Lost Count, oldest first: when, whose,
+    /// and whether it aborted the sender.  [`Ether::board_lost`].
+    lost: VecDeque<(u64, u16, bool)>,
+    /// Whether the run of bits now on the cable found the board's
+    /// receiver inactive.  `RACT`, the 74S74 at LMRCLK 0C06, takes
+    /// `-RDONE` on `START^`, so with Receive Done up the receiver never
+    /// goes active for the frame and nothing of it reaches the buffer:
+    /// the frame is counted and that is all.  Set when a destination word
+    /// goes by with the buffer full, cleared when the run is delivered.
+    not_taken: bool,
+    /// What the board heard, as a receiver takes it, and whether its
+    /// receiver was active for it.
+    heard: VecDeque<(u64, Received, bool)>,
     /// Every frame that started on the cable, the board's own included:
     /// its first edge, its source and its nominal end, for the board's
     /// turn timer, which watches the cable as the receiver does.
@@ -151,6 +256,13 @@ struct Board {
 /// A frame a model transmitter has on the cable.
 struct Transmission {
     source: u16,
+    /// The frame's destination word, the buffer's last, and the instant
+    /// it has gone by on the cable --- where a busy receiver decides,
+    /// [`BUSY_ABORT_NS`] --- until that instant is past.  `None` with no
+    /// behavioral board on the cable: the netlist board decides in its
+    /// own gates.
+    dest: u16,
+    dest_at: Option<u64>,
     /// The words as the node gave them, to hand back if it is aborted.
     buffer: Vec<u16>,
     /// The level changes still to come, in time.
@@ -177,6 +289,24 @@ struct Waiting {
     /// cable is idle.
     committed: bool,
     deaf: bool,
+    /// Whether the frame is a station's, [`Node::station`], and waits for
+    /// its host to refill.
+    station: bool,
+    /// Which node offered it, if a node did.  A node is not asked for
+    /// another frame while one of its own waits --- it has one
+    /// transmitter --- but a station waiting for its turn holds up
+    /// nobody else's.
+    node: Option<usize>,
+    /// The cable's last edge, and the source of the last frame off it,
+    /// when `at` was reckoned.  A station's turn counter is loaded by
+    /// every frame it hears and counts only while the cable is idle, so a
+    /// frame that went by while this one waited moves its turn:
+    /// [`Ether::at`] reckons it again when, and only when, either of
+    /// these is no longer what the cable says.  Both are wanted --- the
+    /// edge for when the counting starts, the source for what was loaded
+    /// --- and the source is not known until the run of bits ends, which
+    /// is after the edge.
+    reckoned: (Option<u64>, Option<u16>),
 }
 
 pub struct Ether {
@@ -194,6 +324,12 @@ pub struct Ether {
     /// Whether two transceivers have driven high at once since the cable
     /// was last idle: one [`Event::Collision`] an overlap.
     collided: bool,
+    /// When each station on the cable last had the cable to itself: its
+    /// last frame's end, or the end of its abort signal if it was
+    /// stopped.  Its host begins writing the next frame from there, which
+    /// is [`refill`] of that frame's own words: a station of this process
+    /// is no faster than an interface, [`Node::station`].
+    sent_until: BTreeMap<u16, u64>,
     /// Whether [`Ether::log`] is kept.
     logging: bool,
     /// The last [`LOG_CAP`] events on the cable, for a test to read back.
@@ -229,6 +365,7 @@ impl Ether {
             last_edge: None,
             last_source: None,
             collided: false,
+            sent_until: BTreeMap::new(),
             // Kept by default so a board or the machine's own ether can be
             // read back by a test as it always could; a long-running,
             // run that wants it turns it on with [`Ether::keep_log`].
@@ -255,6 +392,12 @@ impl Ether {
             address,
             pending: None,
             sending_until: None,
+            receive_done: false,
+            spy: false,
+            aborting: false,
+            abort_until: None,
+            lost: VecDeque::new(),
+            not_taken: false,
             heard: VecDeque::new(),
             frames: VecDeque::new(),
             collisions: VecDeque::new(),
@@ -278,7 +421,16 @@ impl Ether {
     /// a length of cable between it and the rest --- a bridge to a wider
     /// Chaosnet --- looks like from here.
     pub fn send_now(&mut self, now: u64, source: u16, buffer: Vec<u16>) {
-        self.waiting.push(Waiting { at: now, source, buffer, committed: true, deaf: true });
+        self.waiting.push(Waiting {
+            at: now,
+            source,
+            buffer,
+            committed: true,
+            deaf: true,
+            station: false,
+            node: None,
+            reckoned: (self.last_edge, self.last_source),
+        });
         self.at(now);
     }
 
@@ -305,9 +457,33 @@ impl Ether {
 
     /// A frame the behavioral board heard, oldest first, as a receiver
     /// takes it: everything on the cable but its own, wreckage included,
-    /// for the interface to filter as the receiver does.
-    pub fn board_heard(&mut self) -> Option<(u64, Received)> {
+    /// for the interface to filter as the receiver does.  The flag is
+    /// whether the receiver was active for it: false, and the board's
+    /// buffer was full when the frame's destination word went by, so
+    /// `RACT` never came up, nothing of the frame reached the buffer, and
+    /// what there was to count is in [`Ether::board_lost`] already.
+    pub fn board_heard(&mut self) -> Option<(u64, Received, bool)> {
         self.board.as_mut().and_then(|b| b.heard.pop_front())
+    }
+
+    /// The behavioral board's receiver as the interface has it now:
+    /// whether its buffer is full and whether it is spying.  The ether
+    /// decides with this at the instant a frame's destination word goes
+    /// by, AIM-628 §2.5, which is microseconds before the frame lands, so
+    /// the interface hands it over whenever either changes.
+    pub fn board_receiver(&mut self, receive_done: bool, spy: bool) {
+        if let Some(b) = self.board.as_mut() {
+            b.receive_done = receive_done;
+            b.spy = spy;
+        }
+    }
+
+    /// A frame the behavioral board counted in Lost Count, oldest first:
+    /// when, whose it was, and whether the board aborted the sender ---
+    /// AIM-628 §7's packets "which would have been received if the
+    /// incoming packet buffer had not been busy".
+    pub fn board_lost(&mut self) -> Option<(u64, u16, bool)> {
+        self.board.as_mut().and_then(|b| b.lost.pop_front())
     }
 
     pub fn nodes(&self) -> &[Box<dyn Node>] {
@@ -323,9 +499,25 @@ impl Ether {
         self.level
     }
 
+    /// Whether the behavioral board's line driver is on: the busy
+    /// receiver's abort signal, AIM-628 §2.5, which is the only thing
+    /// that board drives the cable with of its own accord --- its frames
+    /// are model transmitters here.  The netlist board's own driver is
+    /// read off `TRANS.DATA+` instead, [`super::cable::OnCable::board_tx`].
+    pub fn board_driving(&self) -> bool {
+        self.board.as_ref().is_some_and(|b| b.aborting)
+    }
+
     /// What the model transmitters drive: high while any of them does.
     fn model_tx(&self) -> bool {
         self.sending.iter().any(|s| s.level)
+    }
+
+    /// What the board's line driver puts on the cable: the netlist
+    /// board's transceiver as it last read, and the behavioral board's
+    /// busy-receiver abort signal while it stands.
+    fn board_high(&self) -> bool {
+        self.board_tx || self.board.as_ref().is_some_and(|b| b.aborting)
     }
 
     /// Whether the board's transceiver would report interference: the
@@ -351,7 +543,7 @@ impl Ether {
     /// How many transceivers drive high: two or more is interference to
     /// each of them, AIM-628 §2.3.
     fn high(&self) -> usize {
-        self.board_tx as usize + self.sending.iter().filter(|s| s.level).count()
+        self.board_high() as usize + self.sending.iter().filter(|s| s.level).count()
     }
 
     /// Interference at `now`, for the record: once an overlap. The
@@ -373,14 +565,14 @@ impl Ether {
         self.play(now);
         self.board_tx = tx;
         self.interfere(now);
-        self.set_level(now, self.board_tx || self.model_tx());
+        self.set_level(now, self.board_high() || self.model_tx());
         self.level != before
     }
 
     /// Whether a model transmitter could hear interference: another
     /// transmitter is on the cable. Its clock edges matter only then.
     fn contended(&self) -> bool {
-        self.board_tx || self.sending.len() >= 2
+        self.board_high() || self.sending.len() >= 2
     }
 
     /// When the ether next has something of its own to do.
@@ -388,9 +580,55 @@ impl Ether {
         let contended = self.contended();
         let edges = self.sending.iter().filter_map(|s| s.waveform.front().map(|&(t, _)| t));
         let ticks = self.sending.iter().filter_map(|s| (contended && !s.deaf).then_some(s.tick));
+        let dests = self.sending.iter().filter_map(|s| s.dest_at);
         let starts = self.waiting.iter().map(|w| w.at);
         let pending = self.board.as_ref().and_then(|b| b.pending.as_ref().map(|&(t, _)| t));
-        edges.chain(ticks).chain(starts).chain(pending).chain(self.decoder.next_due()).min()
+        let abort = self.board.as_ref().and_then(|b| b.abort_until);
+        edges
+            .chain(ticks)
+            .chain(dests)
+            .chain(starts)
+            .chain(pending)
+            .chain(abort)
+            .chain(self.decoder.next_due())
+            .min()
+    }
+
+    /// A frame's destination word has gone by at `t`, [`BUSY_ABORT_NS`]
+    /// into it: what the behavioral board's receiver makes of it,
+    /// AIM-628 §2.5's hardware flow control as the netlist board wires
+    /// it.  `RACT`, the 74S74 at LMRCLK 0C06, is off while Receive Done
+    /// is up, so the receiver takes nothing of the frame; the 74S10 at
+    /// LMMYNM 0D02 makes `-LOST.ONE` from `MATCH SO FAR`, `ITS.ME` and
+    /// `-RACT`, which steps Lost Count and presets the `ABORT` flip-flop
+    /// at LMMODU 0A09, and the 26LS31 at LMLNDR 0A02 holds the cable
+    /// high for [`ABORT_HOLD_NS`] --- the abort signal, which stops the
+    /// sender at its next clock edge as a collision would.
+    ///
+    /// `MATCH SO FAR` is the bit-by-bit comparison alone, so only what is
+    /// **specifically addressed** to the board is aborted; `DEST MATCH`
+    /// is "mine, or zero, or spying", so a broadcast and anything under
+    /// Spy is counted and not aborted, and another station's frame is
+    /// neither.  Held to the board by
+    /// `the_busy_receiver_aborts_only_what_is_addressed_to_it` in
+    /// `tests/chaos_netlist.rs`.
+    fn busy_receiver(&mut self, t: u64, source: u16, dest: u16) {
+        let Some(b) = self.board.as_mut() else { return };
+        if !b.receive_done || source == b.address {
+            return;
+        }
+        // `RACT` never comes up: nothing of this frame reaches the buffer,
+        // whoever it was for.
+        b.not_taken = true;
+        if dest != b.address && dest != 0 && !b.spy {
+            return;
+        }
+        let abort = dest == b.address;
+        b.lost.push_back((t, source, abort));
+        if abort {
+            b.aborting = true;
+            b.abort_until = Some(t + ABORT_HOLD_NS);
+        }
     }
 
     /// The model transmitters' edges and clock edges due by `now`, in
@@ -407,9 +645,14 @@ impl Ether {
                 .sending
                 .iter()
                 .flat_map(|s| {
-                    [s.waveform.front().map(|&(t, _)| t), (contended && !s.deaf).then_some(s.tick)]
+                    [
+                        s.waveform.front().map(|&(t, _)| t),
+                        (contended && !s.deaf).then_some(s.tick),
+                        s.dest_at,
+                    ]
                 })
                 .flatten()
+                .chain(self.board.as_ref().and_then(|b| b.abort_until))
                 .min();
             let Some(t) = due.filter(|&t| t <= now) else { break };
             // As the levels stood up to `t`: what a clock edge at `t`
@@ -442,9 +685,34 @@ impl Ether {
                     over.push(k);
                 }
             }
+            // The board's abort signal run out, then the destination
+            // words that have gone by at `t`: the driver those turn on is
+            // found by the senders at their next clock edge, not at this
+            // one, which is why the decisions come after the edges above.
+            if let Some(b) = self.board.as_mut()
+                && b.abort_until == Some(t)
+            {
+                b.aborting = false;
+                b.abort_until = None;
+            }
+            let arrived: Vec<(u16, u16)> = self
+                .sending
+                .iter_mut()
+                .filter(|s| s.dest_at == Some(t))
+                .map(|s| {
+                    s.dest_at = None;
+                    (s.source, s.dest)
+                })
+                .collect();
+            for (source, dest) in arrived {
+                self.busy_receiver(t, source, dest);
+            }
             self.interfere(t);
-            self.set_level(t, self.board_tx || self.model_tx());
+            self.set_level(t, self.board_high() || self.model_tx());
             for (source, buffer) in aborted {
+                // The frame is over at the end of its abort signal, and
+                // its station's host starts writing again from there.
+                self.sent_until.insert(source, t + ABORT_HOLD_NS);
                 if let Some(b) = self.board.as_mut() {
                     b.collisions.push_back((t, source, t + ABORT_HOLD_NS));
                 }
@@ -488,8 +756,14 @@ impl Ether {
                 b.sending_until = Some(end);
             }
         }
+        // Its host writes the next frame from this one's end; an abort
+        // moves the end in, and moves that with it.
+        self.sent_until.insert(me, end);
+        let dest = buffer.last().copied().unwrap_or(0);
         self.sending.push(Transmission {
             source: me,
+            dest,
+            dest_at: self.board.as_ref().map(|_| now + BUSY_ABORT_NS),
             buffer,
             waveform,
             level: false,
@@ -524,10 +798,12 @@ impl Ether {
                     n.receive(now, &r.framed);
                 }
             }
-            if let Some(b) = self.board.as_mut()
-                && b.address != from
-            {
-                b.heard.push_back((now, r.clone()));
+            if let Some(b) = self.board.as_mut() {
+                // Whether its receiver was active for this run of bits.
+                let taken = !std::mem::take(&mut b.not_taken);
+                if b.address != from {
+                    b.heard.push_back((now, r.clone(), taken));
+                }
             }
             self.record(Event::Heard(now, r.framed));
         }
@@ -539,24 +815,59 @@ impl Ether {
         {
             let (at, buffer) = b.pending.take().unwrap();
             let source = b.address;
-            self.waiting.push(Waiting { at, source, buffer, committed: true, deaf: false });
+            self.waiting.push(Waiting {
+                at,
+                source,
+                buffer,
+                committed: true,
+                deaf: false,
+                station: false,
+                node: None,
+                reckoned: (self.last_edge, self.last_source),
+            });
         }
-        // A node is asked when the cable is free and no frame of the
-        // nodes' is waiting or going.
-        if !self.busy(now) && self.sending.is_empty() && !self.waiting.iter().any(|w| !w.committed)
-        {
+        // A node is asked when the cable is free and it has no frame of
+        // its own waiting: one node is one transmitter, and a station
+        // whose turn is a long way off --- its host still refilling ---
+        // does not keep the others from theirs.
+        if !self.busy(now) && self.sending.is_empty() {
             for k in 0..self.nodes.len() {
+                if self.waiting.iter().any(|w| w.node == Some(k)) {
+                    continue;
+                }
                 if let Some(buffer) = self.nodes[k].transmit(now) {
                     let source = self.nodes[k].address();
-                    let at = now.max(self.turn(now, source));
+                    let station = self.nodes[k].station();
+                    let at = now.max(self.turn(now, source, station, buffer.len()));
                     self.waiting.push(Waiting {
                         at,
                         source,
                         buffer,
                         committed: false,
                         deaf: false,
+                        station,
+                        node: Some(k),
+                        reckoned: (self.last_edge, self.last_source),
                     });
                 }
+            }
+        }
+        // A frame that has gone by since a waiting node's turn was
+        // reckoned has loaded that station's counter afresh, so its turn
+        // is reckoned again from the frame it heard last.
+        let again: Vec<Option<u64>> = self
+            .waiting
+            .iter()
+            .map(|w| {
+                (!w.committed && w.reckoned != (self.last_edge, self.last_source))
+                    .then(|| now.max(self.turn(now, w.source, w.station, w.buffer.len())))
+            })
+            .collect();
+        let cable = (self.last_edge, self.last_source);
+        for (w, at) in self.waiting.iter_mut().zip(again) {
+            if let Some(at) = at {
+                w.at = at;
+                w.reckoned = cable;
             }
         }
         // Frames due: a transmitter's own instant goes; a turn goes if the
@@ -584,10 +895,29 @@ impl Ether {
     /// its turn comes [`turn_byte`] counts and one later, as the board's
     /// timer would have it --- the nodes stand in for interfaces built to
     /// the same rule, without a timer's phase of their own.
-    fn turn(&self, now: u64, me: u16) -> u64 {
+    ///
+    /// **A station's turn comes round again every [`ROUND_NS`] while the
+    /// cable stays idle**, and it takes the first that is not before its
+    /// host has this frame ready: its last frame's end and [`refill`] of
+    /// the `words` this one takes to write.  So a station that has just
+    /// sent, whose counter its own source word loaded with zero, has its
+    /// turn at the first count after the cable idles --- and misses it,
+    /// because no host can write a packet into the buffer in a
+    /// microsecond --- and goes a whole round later: 257 slots for a
+    /// short frame, 513 for a full one, which is what the netlist board
+    /// takes with its own software (`two_packets_back_to_back_wait_a_whole_round`
+    /// in `tests/chaos_netlist.rs`).  A node that is not a station,
+    /// [`Node::station`], has no refill to wait for and takes the first
+    /// turn.
+    fn turn(&self, now: u64, me: u16, station: bool, words: usize) -> u64 {
         let idle_at = self.last_edge.map_or(now, |e| e + wire::IDLE_NS);
         let slots = turn_byte(self.last_source.unwrap_or(me), me) as u64 + 1;
-        idle_at.max(now) + slots * SLOT_NS
+        let first = idle_at + slots * SLOT_NS;
+        let ready = match station {
+            true => self.sent_until.get(&me).map_or(0, |&e| e + refill(words)),
+            false => 0,
+        };
+        if first >= ready { first } else { first + (ready - first).div_ceil(ROUND_NS) * ROUND_NS }
     }
 }
 
@@ -615,6 +945,14 @@ impl Capture {
 impl Node for Capture {
     fn address(&self) -> u16 {
         self.address
+    }
+    /// **Not a station.**  This is the harness's end of the cable: the
+    /// tests that use it put frames on back to back on purpose, to see
+    /// what a board makes of a second frame arriving while it is busy
+    /// with the first, which is exactly what a station's refill would
+    /// prevent.
+    fn station(&self) -> bool {
+        false
     }
     fn receive(&mut self, now: u64, packet: &Framed) {
         self.heard.push((now, packet.clone()));

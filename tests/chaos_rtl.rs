@@ -10,9 +10,10 @@
 //! at the cable's rate and its turn, the board takes what its counters
 //! take.
 
-use muir::chaos::ether::{Capture, Ether, turn_byte};
+use muir::chaos::ether::{Capture, Ether, Event, turn_byte};
 use muir::chaos::interface::{self as chaos, csr};
 use muir::chaos::packet::{Packet, op};
+use muir::chaos::wire;
 use muir::ioboard::IoBoard;
 use muir::netlist::Netlist;
 use muir::part::Level;
@@ -494,4 +495,230 @@ fn the_turn_timer_loads_the_address_difference_bit_reversed() {
         assert_eq!((loads[1] & 0xff) as u8, want, "the server's packet loads turn_byte");
         assert_eq!(counts, [1, want as u32 + 1], "the counts to the turn after each");
     }
+}
+
+// --- The busy receiver, AIM-628 §2.5's hardware flow control -------------
+
+/// A cable with a node at [`SERVER`] and these frames queued in it.
+/// [`Capture`] is the harness's instrument and not a station, so the
+/// frames go one after another at the cable's own turn, which is how a
+/// second frame is made to arrive while the board is busy with the first.
+fn ether_with(frames: &[Vec<u16>]) -> Ether {
+    let mut node = Capture::new(SERVER);
+    node.to_send.extend(frames.iter().cloned());
+    let mut e = Ether::new();
+    e.keep_log(true);
+    e.attach(Box::new(node));
+    e
+}
+
+/// Both interfaces reset, spying or not, their receivers cleared and a
+/// cable of their own with `frames` queued on it: the first for this
+/// address, so that it fills the buffer, and the rest behind it.  Returns
+/// with the first packet in both buffers.
+fn buffer_full(b: &mut UnibusMaster, m: &mut Model, spy: bool, frames: &[Vec<u16>]) {
+    both(b, m, chaos::CSR, Some(csr::RESET), "reset");
+    b.run(b.now + 2_000);
+    m.run(b.now);
+    let spying = if spy { csr::SPY } else { 0 };
+    both(b, m, chaos::CSR, Some(csr::CLEAR_RECEIVER | spying), "clear receiver");
+    b.plug_chaos(ether_with(frames));
+    m.io.chaos.as_mut().unwrap().plug(ether_with(frames));
+    let until = b.now + 1_000_000;
+    loop {
+        b.run(b.now + 1_000);
+        m.run(b.now);
+        let (_, c) = b.cycle(chaos::CSR, None);
+        let cm = m.cycle(chaos::CSR, None, b.now);
+        if c & csr::RECEIVE_DONE != 0 && cm & csr::RECEIVE_DONE != 0 {
+            return;
+        }
+        assert!(b.now < until, "the first packet landed: board {c:#08o}, model {cm:#08o}");
+    }
+}
+
+/// What each board's line driver did while `for_ns` passed, and when the
+/// second frame started on each cable: `(sent, on, off)` a side, the
+/// netlist board's driver read off `TRANS.DATA+` and the model's off its
+/// ether.  Both are stepped to the same instants.
+#[allow(clippy::type_complexity)]
+fn watch_the_drivers(
+    b: &mut UnibusMaster,
+    m: &mut Model,
+    for_ns: u64,
+) -> [(Option<u64>, Option<u64>, Option<u64>); 2] {
+    let until = b.now + for_ns;
+    let mut edges = [(None, None, None), (None, None, None)];
+    let mut was = [
+        b.chaos.as_ref().unwrap().board_tx(&b.chip),
+        m.io.chaos.as_ref().unwrap().ether().unwrap().board_driving(),
+    ];
+    while b.now < until {
+        let next = b.chip.next_tap().map_or(b.now + 25, |t| t.max(b.now + 1)).min(b.now + 25);
+        b.run(next);
+        m.run(b.now);
+        let now = [
+            b.chaos.as_ref().unwrap().board_tx(&b.chip),
+            m.io.chaos.as_ref().unwrap().ether().unwrap().board_driving(),
+        ];
+        for k in 0..2 {
+            if now[k] != was[k] {
+                if now[k] {
+                    edges[k].1.get_or_insert(b.now);
+                } else if edges[k].1.is_some() {
+                    edges[k].2.get_or_insert(b.now);
+                }
+                was[k] = now[k];
+            }
+        }
+    }
+    let second = |e: &Ether| {
+        e.log
+            .iter()
+            .filter_map(|ev| if let Event::Sent(t, _, _) = ev { Some(*t) } else { None })
+            .nth(1)
+    };
+    edges[0].0 = second(&b.chaos.as_ref().unwrap().ether);
+    edges[1].0 = second(m.io.chaos.as_ref().unwrap().ether().unwrap());
+    edges
+}
+
+/// The frames each cable carried whole or in pieces: whether each check
+/// word was good.
+fn heard(e: &Ether) -> Vec<bool> {
+    e.log
+        .iter()
+        .filter_map(|ev| if let Event::Heard(_, f) = ev { Some(f.check_ok) } else { None })
+        .collect()
+}
+
+/// **A frame addressed to a full buffer is aborted on both alike.**
+/// AIM-628 §2.5: "When a receiving interface determines that an incoming
+/// packet is addressed to it, but its receive buffer already contains a
+/// packet, it sends an abort signal which causes the transmitter to
+/// stop."  The netlist board does it in its gates --- `-LOST.ONE` out of
+/// the 74S10 at LMMYNM 0D02 presetting the `ABORT` flip-flop at LMMODU
+/// 0A09, measured by `the_busy_receiver_aborts_a_frame_addressed_to_it`
+/// in `tests/chaos_netlist.rs` --- and the behavioral interface has the
+/// ether do it for it.  Held here to the same four things: the driver on
+/// in the bit cell after the destination word, held four bit cells, Lost
+/// Count at one, the packet already in the buffer untouched, and the
+/// sender's frame ending as wreckage.
+#[test]
+fn a_frame_addressed_to_a_full_buffer_is_aborted_on_both_alike() {
+    let n = cadrio();
+    let mut b = board(&n);
+    let mut m = Model::new(None);
+    let first = rfc_time(SERVER, MY_ADDRESS);
+    buffer_full(&mut b, &mut m, false, &[first.clone(), rfc_time(SERVER, MY_ADDRESS)]);
+    let [netlist, model] = watch_the_drivers(&mut b, &mut m, 100_000);
+    for (what, (sent, on, off)) in [("board", netlist), ("model", model)] {
+        let sent = sent.unwrap_or_else(|| panic!("{what}: the second frame went on the cable"));
+        let on = on.unwrap_or_else(|| panic!("{what}: the driver went on"));
+        let off = off.unwrap_or_else(|| panic!("{what}: and off again"));
+        eprintln!(
+            "{what}: the second frame at {sent}, the driver on at {on} ({} ns, {} cells, in) and \
+             off {} ns later",
+            on - sent,
+            (on - sent) / wire::CELL_NS,
+            off - on
+        );
+        assert!(
+            (48 * wire::CELL_NS..50 * wire::CELL_NS).contains(&(on - sent)),
+            "{what}: the abort starts in the cell after the destination word"
+        );
+        assert!((1_000..1_250).contains(&(off - on)), "{what}: four bit cells of abort signal");
+    }
+    let c = both(&mut b, &mut m, chaos::CSR, None, "the CSR after the abort");
+    eprintln!("CSR after the abort: {c:#08o}");
+    assert_eq!((c & csr::LOST_COUNT) >> 9, 1, "the frame is counted lost: {c:#08o}");
+    assert!(c & csr::RECEIVE_DONE != 0, "the first packet is still there: {c:#08o}");
+    assert!(c & csr::CRC_ERROR == 0, "and its check is still good: {c:#08o}");
+    let bits = both(&mut b, &mut m, chaos::BIT_COUNT, None, "the bit count");
+    assert_eq!(bits as usize, (first.len() + 2) * 16 - 1, "the bit count is the first packet's");
+    let mut back = Vec::new();
+    for k in 0..first.len() + 2 {
+        back.push(both(&mut b, &mut m, chaos::READ_BUFFER, None, &format!("word {k} back")));
+    }
+    assert_eq!(&back[..first.len()], &first[..], "the first packet, unharmed by the abort");
+    for (what, e) in [
+        ("board", &b.chaos.as_ref().unwrap().ether),
+        ("model", m.io.chaos.as_ref().unwrap().ether().unwrap()),
+    ] {
+        let checks = heard(e);
+        eprintln!("{what}: frames off the cable, check good: {checks:?}");
+        assert_eq!(checks.len(), 2, "{what}: two frames went by");
+        assert!(checks[0], "{what}: the first whole");
+        assert!(!checks[1], "{what}: the second stopped before its end, its check bad");
+    }
+}
+
+/// **A full buffer aborts only what is addressed to it, on both alike.**
+/// AIM-628 §2.5: "Note that a receiver whose packet buffer is full will
+/// only generate an abort signal if the packet was specifically addressed
+/// to it."  On the board that is the `MATCH SO FAR` term on the 74S10 at
+/// LMMYNM 0D02, the bit-by-bit comparison alone, against `DEST MATCH`'s
+/// "mine, or zero, or spying"; so a broadcast, and anything at all under
+/// Spy, is counted in Lost Count and not aborted, and another station's
+/// packet is neither.  `the_busy_receiver_aborts_only_what_is_addressed_to_it`
+/// in `tests/chaos_netlist.rs` measures the board; the model must say the
+/// same of all three.
+#[test]
+fn a_full_buffer_aborts_only_what_is_addressed_to_it_on_both_alike() {
+    for (what, dest, spy, lost) in [
+        ("another station's packet", 0o3070, false, 0),
+        ("a broadcast", 0, false, 1),
+        ("another station's packet, spying", 0o3070, true, 1),
+    ] {
+        let n = cadrio();
+        let mut b = board(&n);
+        let mut m = Model::new(None);
+        buffer_full(&mut b, &mut m, spy, &[rfc_time(SERVER, MY_ADDRESS), rfc_time(SERVER, dest)]);
+        let [netlist, model] = watch_the_drivers(&mut b, &mut m, 100_000);
+        eprintln!("{what}: board {netlist:?}, model {model:?}");
+        assert!(netlist.0.is_some() && model.0.is_some(), "{what}: the second frame went out");
+        assert_eq!(netlist.1, None, "{what}: the board does not drive the cable");
+        assert_eq!(model.1, None, "{what}: nor does the model");
+        let c = both(&mut b, &mut m, chaos::CSR, None, &format!("{what}: the CSR"));
+        eprintln!("{what}: CSR {c:#08o}, Lost Count {}", (c & csr::LOST_COUNT) >> 9);
+        assert!(c & csr::RECEIVE_DONE != 0, "{what}: the first packet is still there");
+        assert_eq!(
+            (c & csr::LOST_COUNT) >> 9,
+            lost,
+            "{what}: what would have been received is counted lost, and nothing else"
+        );
+    }
+}
+
+/// **Lost Count wraps at sixteen on both alike.** AIM-628 §7 has the
+/// field as four bits of packets "which would have been received if the
+/// incoming packet buffer had not been busy"; the board counts them in
+/// the 74LS161 at LMMYNM 0F04, and a '161 wraps.  Eighteen frames with
+/// the buffer taken by the first leave seventeen counted and the field
+/// reading 1 --- measured on the board by `the_lost_count_wraps_at_sixteen`
+/// in `tests/chaos_netlist.rs`, and the behavioral interface's count
+/// wraps with it.
+#[test]
+fn the_lost_count_wraps_at_sixteen_on_both_alike() {
+    let n = cadrio();
+    let mut b = board(&n);
+    let mut m = Model::new(None);
+    let frames: Vec<Vec<u16>> = (0..18).map(|_| rfc_time(SERVER, MY_ADDRESS)).collect();
+    buffer_full(&mut b, &mut m, false, &frames);
+    let until = b.now + 1_400_000;
+    while b.now < until {
+        b.run(b.now + 500);
+        m.run(b.now);
+    }
+    let sent = |e: &Ether| e.log.iter().filter(|ev| matches!(ev, Event::Sent(..))).count();
+    let on_board = sent(&b.chaos.as_ref().unwrap().ether);
+    let on_model = sent(m.io.chaos.as_ref().unwrap().ether().unwrap());
+    let c = both(&mut b, &mut m, chaos::CSR, None, "the CSR after eighteen frames");
+    eprintln!(
+        "frames on the cable: board {on_board}, model {on_model}; CSR {c:#08o}, Lost Count {}",
+        (c & csr::LOST_COUNT) >> 9
+    );
+    assert_eq!((on_board, on_model), (18, 18), "eighteen frames went by on each");
+    assert_eq!((c & csr::LOST_COUNT) >> 9, 1, "seventeen counted, the field wrapped: {c:#08o}");
+    assert!(c & csr::RECEIVE_DONE != 0, "the first one is still in the buffer");
 }

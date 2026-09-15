@@ -324,6 +324,7 @@ impl Interface {
         ether.attach_board(self.address);
         self.ether = Some(Box::new(ether));
         self.invalidate();
+        self.tell_the_cable();
     }
 
     /// The CSR as read: AIM-628 §7's bits.
@@ -439,6 +440,22 @@ impl Interface {
             .min();
     }
 
+    /// The cable is told how the receiver stands.  The busy receiver's
+    /// answer to a frame --- counted, and aborted if it was addressed to
+    /// this interface by name --- is decided as the frame's destination
+    /// word goes by, microseconds before the interface hears of the frame
+    /// at all, so the ether is given Receive Done and Spy whenever either
+    /// moves: a packet taken, a Clear Receiver, a CSR write, a reset.
+    /// [`Interface::read`] and [`Interface::write`] advance the cable
+    /// before they change anything, so what the ether decided up to that
+    /// instant it decided with the state that stood then.
+    fn tell_the_cable(&mut self) {
+        let (receive_done, spy) = (self.receive_done, self.csr & csr::SPY != 0);
+        if let Some(e) = self.ether.as_mut() {
+            e.board_receiver(receive_done, spy);
+        }
+    }
+
     /// Whatever the interface last worked out about when it is next due is
     /// no longer to be trusted: something outside [`Interface::advance`]
     /// has touched the cable, the buffers or the turn timer.
@@ -489,8 +506,35 @@ impl Interface {
                 }
             }
         }
-        while let Some((at, r)) = e.board_heard() {
-            if loop_back {
+        // What the busy receiver counted while the interface was not
+        // looking: the ether times it at the instant the frame's
+        // destination word went by, [`super::ether::BUSY_ABORT_NS`], and
+        // drives the abort signal for what was addressed to this
+        // interface by name.  Lost Count is the 74LS161 at LMMYNM 0F04
+        // and wraps at sixteen (`the_lost_count_wraps_at_sixteen` in
+        // `tests/chaos_netlist.rs`).
+        let mut counted = Vec::new();
+        while let Some(x) = e.board_lost() {
+            counted.push(x);
+        }
+        for (t, source, aborted) in counted {
+            self.lost = (self.lost + 1) & 0o17;
+            if self.trace {
+                eprintln!(
+                    "chaos {t:>6}: interface {:o} {} a frame from {:o}, its buffer full ({} lost)",
+                    self.address,
+                    if aborted { "aborted" } else { "lost" },
+                    source,
+                    self.lost
+                );
+            }
+        }
+        let Some(e) = self.ether.as_mut() else { return };
+        while let Some((at, r, taken)) = e.board_heard() {
+            // A frame that found the receiver inactive --- `RACT` off with
+            // Receive Done up --- puts nothing in the buffer and has been
+            // counted already.
+            if loop_back || !taken {
                 continue;
             }
             let from = r.framed.source;
@@ -541,20 +585,20 @@ impl Interface {
 
     /// A frame off the cable, wreckage included: taken if it is for this
     /// interface --- its address, a broadcast, or anything under Spy ---
-    /// and the buffer is free; counted as lost if the buffer was full.
-    /// The destination is matched as it came on the wire; wreckage too
-    /// short to carry one matched nothing.
+    /// and the buffer is free.  The destination is matched as it came on
+    /// the wire; wreckage too short to carry one matched nothing.
     ///
-    /// **Two things the netlist board does here and this does not**, both
-    /// measured in `tests/chaos_netlist.rs` and left as they are until
-    /// issue 110 is settled.  The board sends AIM-628 §2.5's abort signal
-    /// when a frame addressed to it --- its own address, not a broadcast
-    /// and not Spy --- finds the buffer full: the cable driven high for
-    /// four bit cells from the cell after the destination word, which
-    /// stops the transmitter and tells it the packet did not get through
-    /// (`the_busy_receiver_aborts_a_frame_addressed_to_it`).  And its Lost
-    /// Count is a 74LS161 that wraps at sixteen rather than stopping at
-    /// fifteen (`the_lost_count_wraps_at_sixteen`).
+    /// **A frame that finds the buffer full never gets here off the
+    /// cable.**  The board decides that as the frame's destination word
+    /// goes by, twelve microseconds in and long before it lands:
+    /// `RACT` is off with Receive Done up, so the receiver stores nothing,
+    /// the frame is counted in Lost Count, and one addressed to this
+    /// interface by name is aborted on the cable
+    /// ([`super::ether::Ether::board_lost`], and
+    /// `the_busy_receiver_aborts_a_frame_addressed_to_it` in
+    /// `tests/chaos_netlist.rs`).  What can still arrive with the buffer
+    /// full is a frame looped back inside the interface, where the cable
+    /// is unused and the ether sees nothing: it is counted here.
     fn arrive(&mut self, now: u64, r: &Received) {
         let Some(&dest) = r.framed.buffer.last() else { return };
         let mine = dest == self.address || dest == 0 || self.csr & csr::SPY != 0;
@@ -563,7 +607,9 @@ impl Interface {
         }
         let (f, bits) = (&r.framed, r.bits);
         if self.receive_done {
-            self.lost = (self.lost + 1).min(15);
+            // Off the cable this cannot happen; looped back it can, and
+            // Lost Count is a 74LS161 that wraps at sixteen.
+            self.lost = (self.lost + 1) & 0o17;
             if self.trace {
                 eprintln!(
                     "chaos {now:>6}: interface {:o} lost a frame from {:o}, its buffer full ({} lost)",
@@ -592,6 +638,7 @@ impl Interface {
         self.rcv_bits = bits;
         self.crc_error = !f.check_ok;
         self.receive_done = true;
+        self.tell_the_cable();
     }
 
     /// A read of one of the registers at `now`.
@@ -681,6 +728,7 @@ impl Interface {
             }
             _ => {}
         }
+        self.tell_the_cable();
     }
 
     /// Reset (write only): "completely resets the interface, just as at
@@ -700,6 +748,7 @@ impl Interface {
         self.tdone_at = None;
         self.incoming.clear();
         self.turn.ready = None;
+        self.tell_the_cable();
     }
 
     /// A read of [`interface::START`]: the buffer, with this address as
@@ -810,6 +859,7 @@ impl Interface {
         self.turn.load(r)?;
         self.polled = r.u64()?;
         self.next_event = None;
+        self.tell_the_cable();
         Ok(())
     }
 }
