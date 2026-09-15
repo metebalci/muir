@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! The boot sequence from the keyboard's boot word to the processor's
-//! `-BOOT`: on `micro` and `rtl` the behavioural I/O board's decode
+//! `-BOOT`: on `micro` and `rtl` the behavioral I/O board's decode
 //! pressing the engine's boot, and on `chip` the netlist board's `-BOOT*`
 //! carried to the processor's `-BOOT1` by the far end. `tests/keyboard.rs`
 //! holds the keyboard's side --- the keys, the word, the held-back key-ups
-//! --- and `tests/ioboard.rs` the behavioural board's decode;
+//! --- and `tests/ioboard.rs` the behavioral board's decode;
 //! `docs/keyboard-boot.md` has the whole path with its citations.
 
 use muir::engine::Engine;

@@ -20,7 +20,7 @@
 //! boards, [`busint_board`] builds the interface powered and plugged into
 //! its buses, and [`FarEnd`] is the three together with the Xbus and the
 //! Unibus behind them answered from [`Machine`] by [`Buses`]. `rtl` runs on
-//! a behavioural model of the same interface, `src/busint.rs`, and the two
+//! a behavioral model of the same interface, `src/busint.rs`, and the two
 //! are held to each other by `chip_agrees_with_rtl`: where the boards and
 //! the model part, one of them is the board, and every time so far it has
 //! been the netlist.
@@ -49,7 +49,7 @@ use std::collections::VecDeque;
 use crate::buses::Buses;
 use crate::busint::{DEBUG_CYCLE, DEBUG_MSYN_NS, DebugRequest};
 use crate::chip::Chip;
-use crate::clock::{Behavioural, Clock, Speed};
+use crate::clock::{Behavioral, Clock, Speed};
 use crate::lashup::CableEnd;
 use crate::machine::{Halt, Machine};
 use crate::netlist::{NetId, Netlist};
@@ -62,7 +62,7 @@ use crate::xbus::Xbus;
 ///
 /// `data/cables.txt` gives the 92 wires pin by pin, read off MIT's wire
 /// lists, and each end is found by a part pin on it rather than a name,
-/// because the two readers spelt some of them differently. A wire is
+/// because the two readers spelled some of them differently. A wire is
 /// carried the way it is driven: whichever board's own drivers hold it ---
 /// [`Chip::board_level`], which leaves the cable's driver out --- the other
 /// board is given that level; a wire neither drives is released at both
@@ -80,7 +80,7 @@ pub struct Cables {
     /// is skipped.
     seen: (u64, u64),
     /// Whether it is. Off, every wire is carried at every exchange, the
-    /// slow way: [`FarEnd::unoptimised`].
+    /// slow way: [`FarEnd::unoptimized`].
     pub skip_unchanged: bool,
 }
 
@@ -375,7 +375,7 @@ pub fn busint_board(n: &Netlist) -> Chip {
 /// five cables, the memory boards on the Xbus behind it, and the rest of
 /// the Xbus and the Unibus answered from [`Machine`] by [`Buses`].
 ///
-/// This is what `chip` runs against. `rtl` runs against the behavioural
+/// This is what `chip` runs against. `rtl` runs against the behavioral
 /// interface in `src/busint.rs`, and `tests/cables.rs` holds the two to
 /// each other through the boot PROM and into microcode 323.
 pub struct FarEnd {
@@ -440,7 +440,7 @@ impl FarEnd {
     /// memory from `machine` through the same [`crate::busint::MemoryBoard`]
     /// twins `rtl` runs, one a board, so that the timing is the board's
     /// either way; with no I/O board netlist, its registers likewise from
-    /// the behavioural board on the twin's times. `chip` runs the
+    /// the behavioral board on the twin's times. `chip` runs the
     /// netlists unless told otherwise (`--main-memory model`,
     /// `--io-board model`, `--tv model`, `--disk-controller model` on
     /// `muir`; `MUIR_MAIN_MEMORY=model`, `MUIR_IO_BOARD=model`,
@@ -476,7 +476,7 @@ impl FarEnd {
         buses.io_board = boards.io.is_some();
         buses.tv_board = boards.tv.is_some();
         buses.color_tv_board = boards.color_tv.is_some();
-        // The netlist colour board wants the model fitted beside it, as
+        // The netlist color board wants the model fitted beside it, as
         // the main screen's netlist board has `machine.tv` beside it: the
         // picture is read off the model, and it is the model's presence
         // that makes `busint::decode_with` answer `Device` at `17200000`
@@ -488,7 +488,7 @@ impl FarEnd {
         );
         buses.disk_board = boards.disk.is_some();
         // The device boards on the backplane, the displays first and the
-        // main screen's before the colour one's. Each is a netlist and the
+        // main screen's before the color one's. Each is a netlist and the
         // strap it was wrapped with, the two displays being one board at
         // two addresses: [`crate::xbus::straps`].
         let devices: Vec<crate::xbus::Device> = boards
@@ -600,7 +600,7 @@ impl FarEnd {
 
     /// Settles everything against everything at `now`: the cables between
     /// the processor and the interface, the backplane between the
-    /// interface and the memory boards, the behavioural far end on the
+    /// interface and the memory boards, the behavioral far end on the
     /// buses, and again, until a pass moves nothing. After a build and
     /// after a load, before the first step; and at every step.
     pub fn join(&mut self, cpu: &mut Chip, now: u64) {
@@ -655,7 +655,7 @@ impl FarEnd {
     }
 
     /// Pages the disk controller has just put into `main` go into the
-    /// memory boards' cells the same way: the controller is behavioural and
+    /// memory boards' cells the same way: the controller is behavioral and
     /// so is its path to memory.
     fn dma(&mut self) {
         let pages: Vec<usize> = std::mem::take(&mut self.buses.machine.disk.dma_written);
@@ -722,7 +722,7 @@ impl FarEnd {
             self.join(cpu, e);
             // A memory board whose one-shot runs out in the instant a
             // clock edge reaches it must see both in one transition, so
-            // that its synchroniser samples the line as it was, as a flop
+            // that its synchronizer samples the line as it was, as a flop
             // does. A hang's release comes through a tap, restarts the
             // clock, and the clock's edge in that same instant is the next
             // tick's; so while one is due the boards' taps wait for it,
@@ -744,11 +744,11 @@ impl FarEnd {
         }
     }
 
-    /// Turns every optimisation off: every board stepped at every edge of
+    /// Turns every optimization off: every board stepped at every edge of
     /// its own clock, every wire carried at every exchange. The slow way,
-    /// and the reference the optimisations are held to in
+    /// and the reference the optimizations are held to in
     /// `tests/cables.rs`.
-    pub fn unoptimised(&mut self) {
+    pub fn unoptimized(&mut self) {
         self.cables.skip_unchanged = false;
         self.xbus.sleep = false;
         self.xbus.skip_unchanged = false;
@@ -855,7 +855,7 @@ impl FarEnd {
     /// back from a checkpoint that has them; they come after the I/O
     /// board. A checkpoint from before they were stored leaves them fresh,
     /// which for the display means an empty frame buffer until the
-    /// software draws again, the behavioural twin in [`Buses`] keeping the
+    /// software draws again, the behavioral twin in [`Buses`] keeping the
     /// picture meanwhile.
     pub fn load_device_boards(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
         self.xbus.load_devices(r)
@@ -965,7 +965,7 @@ pub fn write_checkpoint(
     tv_board: &str,
     color_tv: &str,
     cpu: &Chip,
-    clk: &Behavioural,
+    clk: &Behavioral,
     far: &FarEnd,
 ) -> std::io::Result<u64> {
     let mut w = crate::checkpoint::Writer::new();
@@ -1006,8 +1006,8 @@ impl<'a> Resuming<'a> {
     }
 
     /// Its clock, which comes after the processor.
-    pub fn clock(&mut self) -> std::io::Result<Behavioural> {
-        Behavioural::load(&mut self.body)
+    pub fn clock(&mut self) -> std::io::Result<Behavioral> {
+        Behavioral::load(&mut self.body)
     }
 
     /// The far end, which comes last and is the rest of the body: the
@@ -1069,7 +1069,7 @@ pub fn read_checkpoint(c: &crate::checkpoint::Checkpoint) -> std::io::Result<Res
 /// before a held request's own instant, so the debugger waits at it.
 pub struct DebugIn {
     pub cpu: Chip,
-    pub clk: Behavioural,
+    pub clk: Behavioral,
     pub far: FarEnd,
     /// Microcycles run: the processor's clock phase wrapping.
     pub microcycles: u64,
@@ -1114,7 +1114,7 @@ impl Due {
 
 impl DebugIn {
     /// The connector on `busint`'s board, with the machine behind it.
-    pub fn new(busint: &Netlist, cpu: Chip, clk: Behavioural, far: FarEnd) -> DebugIn {
+    pub fn new(busint: &Netlist, cpu: Chip, clk: Behavioral, far: FarEnd) -> DebugIn {
         let net = |name: &str| {
             busint
                 .by_name_id(name)

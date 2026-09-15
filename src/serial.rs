@@ -8,7 +8,7 @@
 //! Four things are here. The facts read off the Signetics sheet
 //! (`2651.pdf`, the 1978 preliminary specification) that every engine
 //! shares: the register bits, the baud-rate table and the character frame.
-//! [`Pci`], the chip as the behavioural engines have it, a character at a
+//! [`Pci`], the chip as the behavioral engines have it, a character at a
 //! time on the machine's clock, which `src/ioboard.rs` answers the bus
 //! with. [`OnCable`], the far end of the cable for the netlist board,
 //! a bit at a time on the EIA wires, which `tests/serial_cable.rs` holds
@@ -242,7 +242,7 @@ impl Framing {
     }
 }
 
-/// The RS-232 cable on J9, as the behavioural engines carry it: a
+/// The RS-232 cable on J9, as the behavioral engines carry it: a
 /// character at a time, each way, and the three inputs the far end holds.
 ///
 /// Nothing is plugged in until [`Cable::plug`]: then the far end asserts
@@ -332,7 +332,7 @@ fn crystal_rise_at_or_after(t: u64) -> u64 {
     j
 }
 
-/// The 2651 as the behavioural engines have it: its registers, and its
+/// The 2651 as the behavioral engines have it: its registers, and its
 /// transmitter and receiver a character at a time on the machine's clock.
 ///
 /// Time enters through the `now` each access carries, and the chip's own
@@ -385,7 +385,7 @@ fn crystal_rise_at_or_after(t: u64) -> u64 {
 /// a real part --- load the holding register, reset, enable the
 /// transmitter, and see whether the character goes out.
 ///
-/// Not modelled, and what each would need: synchronous mode (`MR1` rate
+/// Not modeled, and what each would need: synchronous mode (`MR1` rate
 /// `00`), in which this transmits and receives nothing; the break the
 /// transmitter can force and the framing and parity errors the receiver
 /// can raise, which need a far end that sends bits rather than characters
@@ -1371,7 +1371,7 @@ impl Endpoint {
         (change, typed)
     }
 
-    /// One turn for the behavioural far end at `now` on the machine's
+    /// One turn for the behavioral far end at `now` on the machine's
     /// clock: what the port has finished sending goes to the socket, and
     /// what was typed at the socket goes on the cable as sent now.
     ///

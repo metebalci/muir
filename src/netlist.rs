@@ -245,7 +245,7 @@ pub fn parse_with_multiplexor(text: &str) -> Result<Netlist, String> {
 /// to them: `cadrtv/lmtv4b.wlr` is a normal TV, with `MAPADR 16` and
 /// `DEVADR 3` on the ground net and `DEVADR 4` on the pull-up.  What would
 /// settle it: a wire list of a second board, or an installation note
-/// saying which pins the colour strap moves.
+/// saying which pins the color strap moves.
 ///
 /// On a board whose drawings do leave `DEVADR 4` a net of its own --- the
 /// SIMPLE TV, whose `XBADR` names all nineteen separately --- there is
@@ -309,7 +309,7 @@ impl Netlist {
     /// `PROG.UNIBUS.RESET` is the interrupt
     /// control register's bit 28 on FLAG, and `PROG.BUS.RESET` is what
     /// OLORD2 turns into `-BUS.RESET` for the bus interface; unjoined, the
-    /// Unibus stays in reset for ever, which the behavioural far end never
+    /// Unibus stays in reset for ever, which the behavioral far end never
     /// notices and the netlist one does. `tests/netlist.rs` regenerates this
     /// list from the wire lists.
     /// `-64 MHz CLK` is the last of them, and the only one that is a
@@ -481,7 +481,7 @@ impl Netlist {
         (
             // `nsyclk.drw`, "MECL VIDEO" of 17 May 1980. `CLK0 64B SR` runs
             // into pin 2 of the 74S37 at D09 and carries a stub off a junction
-            // dot labelled `8B SR LOAD`: one wire, two names, as the sheet's
+            // dot labeled `8B SR LOAD`: one wire, two names, as the sheet's
             // own waveform says by drawing it once as `CLK0 64B/LOAD 8B`. The
             // 74S374 at E12 pin 5 drives it; unjoined, the 74S37 at D09 and
             // the 10124 translator at NECCLK 0F07 had nothing on their inputs
@@ -563,9 +563,9 @@ impl Netlist {
     /// `sys/doc/disk.text` means by "The address can be changed by changing
     /// jumpers". Without them those seven are open 74LS inputs and read
     /// high anyway, so this is the address made definite rather than a
-    /// change of behaviour.
+    /// change of behavior.
     ///
-    /// The timeout enable is a change of behaviour. `J5-16` is `-TIMEOUT
+    /// The timeout enable is a change of behavior. `J5-16` is `-TIMEOUT
     /// ENB`, which is pin 6, the enable, of the 74LS124 at DCTMOT 0B04
     /// section 1 and nothing else on the board. Open, it reads high, and by
     /// the part's own sheet the output is then held high: `TIMEOUT.CLK`
@@ -827,7 +827,7 @@ impl Netlist {
     /// where 2C15 touches it and `@2C15,p3` where 2C20 does --- two names,
     /// one wire, and without this every one of them is broken in half.
     ///
-    /// The rule is mechanical and needs no judgement, unlike the two aliases
+    /// The rule is mechanical and needs no judgment, unlike the two aliases
     /// above: a pin carrying `@REF,pN` is on the same wire as pin `N` of
     /// `REF`, on the same page.
     ///

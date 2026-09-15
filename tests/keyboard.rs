@@ -186,7 +186,7 @@ fn what_the_viewer_types_is_what_the_machine_reads() {
     assert_eq!(downs, ups, "every key up: {octal:?}");
 }
 
-/// **The word reaches the behavioural I/O board and reads back.** `KBD
+/// **The word reaches the behavioral I/O board and reads back.** `KBD
 /// READY` rises, the low half reads at `764100` and the high at `764102`
 /// with the floating byte above it, and the next word waits until the
 /// board has been read --- the keyboard's `DONE`.

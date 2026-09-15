@@ -276,7 +276,7 @@ impl Machine {
         }
     }
 
-    /// Fetches from the control store, honouring the PROM overlay.
+    /// Fetches from the control store, honoring the PROM overlay.
     pub fn fetch(&self, pc: u16) -> Insn {
         let pc = pc as usize & (IMEM_WORDS - 1);
         if self.mode.prom_disable || pc >= PROM_WORDS { self.imem[pc] } else { self.prom[pc] }
@@ -446,13 +446,13 @@ impl Machine {
     /// --- puts that on `-XBUS.INTR`; the nets are the same on both
     /// boards' netlists.  So the line is the boards ORed, and a second
     /// board fitted adds its own `SEND INTR` to it.  Nothing in
-    /// System 100 turns the colour board's on: `COLOR:SETUP` starts its
+    /// System 100 turns the color board's on: `COLOR:SETUP` starts its
     /// sync with `(SI:START-SYNC 3 0 36.)`, and `CC-TV-START-SYNC` in
     /// `sys/cc/dmon.lisp` --- the same call, written out --- writes the
     /// mode as `(+ (LSH BOW 2) CLOCK)`, which is 3: the clock mode alone,
     /// with [`tv::mode::INTERRUPT_ENABLE`] clear.  That matters because
     /// `INTRX0` in microcode 323 reads `A-TV-REGS-BASE`, the normal TV's
-    /// register, and clears the flag there; a colour-board interrupt would
+    /// register, and clears the flag there; a color-board interrupt would
     /// have nothing to take it.
     pub fn xbus_interrupt(&self) -> bool {
         // The controller was told the time at the last bus access; a run's
@@ -845,7 +845,7 @@ impl Default for Machine {
 /// The board has no answer to give. A 74S373 has no clear, and what it is
 /// transparent onto is the second-level map, whose 93425As on VMEM0 to
 /// VMEM2 come up holding whatever they come up holding; so this is a
-/// modelling choice and not a fact about the hardware. What it has to be
+/// modeling choice and not a fact about the hardware. What it has to be
 /// is unobservable, and it is:
 /// the only read of the map before the first memory cycle is
 /// `SET-UP-THE-MAP` in `sys/ucadr/promh.text`, which takes

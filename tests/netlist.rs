@@ -402,7 +402,7 @@ fn the_boards_are_joined_as_the_cables_join_them() {
 /// ran with no pull-down. The alias is safe to make explicitly because
 /// nothing else in any board collides --- which is what this measures. A
 /// new netlist that brings a second clash fails here, and then the question
-/// is whether that one is one signal too, not whether to normalise every
+/// is whether that one is one signal too, not whether to normalize every
 /// name in the tree.
 ///
 /// Read off the files rather than through [`netlist::parse`], which has
@@ -440,7 +440,7 @@ fn only_the_dot_clock_is_named_twice_by_case() {
 }
 
 /// **No board has two net names that differ only in spacing or case.**
-/// MIT's draughtsmen wrote a wire's name twice on a sheet and did not
+/// MIT's draftsmen wrote a wire's name twice on a sheet and did not
 /// always write it the same way, and soap4 takes two spellings for two
 /// nets --- leaving the pins on one half with no driver, which is a broken
 /// board rather than a cosmetic difference. `-11CLRTDN` on the I/O board

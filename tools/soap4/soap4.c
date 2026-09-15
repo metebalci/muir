@@ -14,7 +14,7 @@
  *
  * cadr4 and this project are both AGPL-3.0.  Brad Parker's original states
  * no terms --- not here, and not in lisper/cpus-cadr, the repository it was
- * published from, which carries no licence file --- so the AGPL covers the
+ * published from, which carries no license file --- so the AGPL covers the
  * work done on it and cannot make a grant for what came before.
  * `tools/README.md` has the detail.
  *
@@ -935,7 +935,7 @@ parse_points(void)
             // 23 SUDS writes for a line break inside one -- comes back
             // empty from fix_signal_name.  It names no signal, so leave the
             // point unnamed and let it take the net's name from a
-            // neighbouring point or from assign_anonymous_net_names.
+            // neighboring point or from assign_anonymous_net_names.
             // Keeping the empty string instead loses the whole net: the
             // vhdl output asserts on it and a netlist reader drops every
             // pin on it.  LMTBFC of the Chaosnet half of the I/O board has

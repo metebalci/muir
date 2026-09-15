@@ -155,7 +155,7 @@ pub const IDEAL_DEVICE_NS: u64 = 0;
 /// `IN1` and `NPG2 IN T100` off `OUT1`.
 pub const UNIBUS_SELECT_NS: u64 = 200;
 
-/// From the request synchroniser's grant to `-UB MSYN`: the address is on
+/// From the request synchronizer's grant to `-UB MSYN`: the address is on
 /// the Unibus at `LMUB GRANT`, and `MSYN OUT` is `UNIBUS REQUEST`, the
 /// 74S74 at REQUB 0B10 clocked by `INT BUSY T100`, the TD100 at 0B06.
 pub const UNIBUS_ADDRESS_NS: u64 = 100;
@@ -186,7 +186,7 @@ pub const MFINISHD_NS: u64 = 30;
 
 /// What an interface with no cycle in its arbitration promises about its
 /// next debug request: `-MEMRQ` is sampled at an edge, the request
-/// synchroniser at the next, and the grant, `SACK`, mastery and `-UB
+/// synchronizer at the next, and the grant, `SACK`, mastery and `-UB
 /// MSYN` come after that --- 860 ns at the least on the board.  Two
 /// generator cycles at the slowest speed is the promise made, so that two
 /// machines each promising the other, cabled both ways, can both run:
@@ -208,7 +208,7 @@ pub const IDLE_OUT_PROMISE_NS: u64 = 440;
 /// own Unibus cycle is in flight: 109 fails there and so does 111.
 ///
 /// Do not conclude from a sweep that deletes this arm that nothing checks
-/// it.  At 110 the arm is *behaviour-preserving*: `-MEMRQ` plus 110 is
+/// it.  At 110 the arm is *behavior-preserving*: `-MEMRQ` plus 110 is
 /// exactly the instant the long way round --- `Granted` to `Selected` at
 /// the next master clock edge --- reaches, so removing the arm leaves every
 /// sequence in that file passing while changing the constant by one
@@ -314,7 +314,7 @@ pub const DEBUG_OUT_REQUEST_NS: u64 = 100;
 /// 12.3.  Measured on the netlist board in `tests/chip.rs`.
 pub const DEBUG_TIMEOUT_NS: u64 = 13 * NXM_VCO_NS;
 
-/// The memory board's timing, as `rtl` runs it: a behavioural twin of the
+/// The memory board's timing, as `rtl` runs it: a behavioral twin of the
 /// control logic of `data/CADRM.netlist`, measured on the netlist board in
 /// `tests/cadrm_netlist.rs` and held to it by `chip_agrees_with_rtl`.
 ///
@@ -349,7 +349,7 @@ pub struct MemoryBoard {
     /// When `TIME FOR REFRESH` last fell, or will: the end of the refresh
     /// cycle's busy, where the one-shot is restarted.
     time_off_at: u64,
-    /// The synchroniser: 0 waiting for the time, 1 one stage in, 2
+    /// The synchronizer: 0 waiting for the time, 1 one stage in, 2
     /// `REFRESH RQ` up since `refresh_rq_at`.
     refresh_stage: u8,
     refresh_rq_at: u64,
@@ -426,7 +426,7 @@ pub const MEMORY_RELEASE_STAGES: u64 = 10;
 /// while the button is held; `-REFRESH NOW` is low through the first, so
 /// only the second's fall of it, at its twenty-third edge, triggers the
 /// one-shot, and every refresh after that is [`REFRESH_NS`] and the
-/// synchroniser from the one before. Measured on the first board in
+/// synchronizer from the one before. Measured on the first board in
 /// `chip_agrees_with_rtl`.
 pub const MEMORY_POWER_ON_EDGE: u64 = 22;
 
@@ -447,7 +447,7 @@ impl Default for MemoryBoard {
 }
 
 impl MemoryBoard {
-    /// An Xbus clock edge: the refresh synchroniser's two stages. A refresh
+    /// An Xbus clock edge: the refresh synchronizer's two stages. A refresh
     /// cycle due since the last edge runs whether or not anything asked.
     /// An edge in the same instant as the one-shot's end does not count:
     /// the flop samples `TIME FOR REFRESH` as it was, which the band
@@ -464,7 +464,7 @@ impl MemoryBoard {
 
     /// The processor's Unibus reset going on or off at `now`: the interface
     /// puts it on `-XBUS INIT`, and the board's `-RESET` holds its `BUSY`
-    /// flop clear. A refresh the synchroniser asks for meanwhile starts its
+    /// flop clear. A refresh the synchronizer asks for meanwhile starts its
     /// chain, which shifts through once and sticks; on release the chain
     /// shifts back, and the cycle ends, `-BUSY` up and the one-shot
     /// restarted, 400 ns after the first oscillator edge past the release.
@@ -486,7 +486,7 @@ impl MemoryBoard {
         }
     }
 
-    /// Runs the refresh cycle the synchroniser has requested, if its edge
+    /// Runs the refresh cycle the synchronizer has requested, if its edge
     /// comes before `before`.
     fn refresh_before(&mut self, before: u64) -> bool {
         // A request in flight whose release has not been seen keeps the
@@ -521,7 +521,7 @@ impl MemoryBoard {
     /// through `Busint`, which asks again.
     pub fn next_change(&self) -> u64 {
         if self.refresh_stage < 2 {
-            // The synchroniser shifts at the first edge *after* the
+            // The synchronizer shifts at the first edge *after* the
             // one-shot's end.
             return self.refresh_time_at.saturating_add(1);
         }
@@ -564,7 +564,7 @@ impl MemoryBoard {
     }
 }
 
-/// The I/O board's timing, as `rtl` runs it: a behavioural twin of the
+/// The I/O board's timing, as `rtl` runs it: a behavioral twin of the
 /// answer of `data/CADRIO.netlist`, measured on the netlist board in
 /// `tests/cadrio_netlist.rs` (`the_answer_rule_for_the_twin`).
 ///
@@ -619,7 +619,7 @@ pub const IOB_FCLK_NS: u64 = 125;
 /// edge; 33 and 34 are the two setups the 2 ns steps allow.
 pub const IOB_RBUF_SETUP_NS: u64 = 33;
 
-/// The half-microsecond clock the serial port's select is synchronised
+/// The half-microsecond clock the serial port's select is synchronized
 /// to, through the two 74LS74s at IOBSER 0F29: an edge every 500 ns, at
 /// 203 modulo 500 from power-on on the netlist board.  Measured; which
 /// divider makes it is not identified.
@@ -1024,7 +1024,7 @@ pub fn decode(phys: u32, memory_words: usize) -> Responder {
 /// there.  `color_tv` is whether the second display board, the color TV
 /// at `17200000` and `17377750`, is on the backplane.
 ///
-/// **The colour ranges answer only when the board is fitted.**
+/// **The color ranges answer only when the board is fitted.**
 /// `COLOR-EXISTS-P` in `sys/window/color.lisp` is how System 100 finds out
 /// whether a machine has one: it writes 1 into the first buffer word with
 /// the error stop off and reads it back, and a machine with no board there
@@ -1075,7 +1075,7 @@ enum State {
     /// A Unibus cycle, in the arbitration. `-MEMGRANT` stays high through
     /// it: the board is the Unibus arbiter in local mode and its own request
     /// goes through the priority PROM, the grant chain and `SACK` like any
-    /// other master's, then through the request synchroniser on RQSYNC.
+    /// other master's, then through the request synchronizer on RQSYNC.
     /// `stage` is how far the master clock has taken it, and `sack_at` when
     /// the grant comes back as `SACK`, which the arbiter sees at the edge
     /// after. See [`Busint::mclk_edge`].
@@ -1133,7 +1133,7 @@ enum Debug {
     Strobe { until: u64 },
     /// `-DB NEED UB` is down, and with it `-DB BUS REQ` at UBMAST 0D06 and
     /// `NPR` on the Unibus through the 74S00 at 0D05 and the 8838 at
-    /// UPRIOR 0F15; the synchroniser at UPRIOR 0D10 has not registered it.
+    /// UPRIOR 0F15; the synchronizer at UPRIOR 0D10 has not registered it.
     NeedUb,
     /// `NPRD` registered; waiting for the priority PROM's grant.
     Nprd,
@@ -1365,7 +1365,7 @@ impl Busint {
     ///
     /// 1. `LM NEED UB` at REQU 0B10 takes the request, and `-LM BUS REQ`
     ///    puts `NPR` on the Unibus.
-    /// 2. The synchroniser at UPRIOR 0D10 registers `NPRD`, and the
+    /// 2. The synchronizer at UPRIOR 0D10 registers `NPRD`, and the
     ///    priority PROM grants.
     /// 3. The grant register at 0D07 puts `NPG` out on the chain, which in
     ///    local mode comes straight back to the board. Two sections of
@@ -1373,7 +1373,7 @@ impl Busint {
     ///    board is `LM UB SELECTED` and answers `SACK`.
     /// 4. At the first edge after that, `SACKD` withdraws the grant, the
     ///    bus is ready, and `LMUB MASTER` sets.
-    /// 5. The request synchroniser at RQSYNC 0A08 registers `LMUBRQS`.
+    /// 5. The request synchronizer at RQSYNC 0A08 registers `LMUBRQS`.
     /// 6. The grant register at 0A06 sets `LMUB GRANT`: `-MEMGRANT` goes low
     ///    and the address goes out on the Unibus. `-UB MSYN` follows
     ///    [`UNIBUS_ADDRESS_NS`] later, the slave answers `-UB SSYN`, and
@@ -1391,7 +1391,7 @@ impl Busint {
         self.msyn_down_before_edge =
             matches!(self.state, State::Granted { .. } | State::Acked { .. });
         // The Xbus clock is this clock, and the memory boards' refresh
-        // synchronisers run on it --- when an edge can move one at all.
+        // synchronizers run on it --- when an edge can move one at all.
         if now >= self.memory_next {
             for b in &mut self.memory {
                 b.xbus_clock(now);
@@ -1415,7 +1415,7 @@ impl Busint {
         match self.state {
             State::Requested if responder.on_unibus() => {
                 // With `LMUB MASTER` still set from the last cycle, `LMUB RQ`
-                // goes straight to the request synchroniser.
+                // goes straight to the request synchronizer.
                 let stage = if self.unibus_master { 4 } else { 1 };
                 self.state = State::Arbitrating { stage, sack_at: u64::MAX };
             }
@@ -1476,7 +1476,7 @@ impl Busint {
                     4 => State::Arbitrating { stage: 5, sack_at },
                     // Selected and waiting for the debug master to let go.
                     // `LMUB MASTER` sets the instant `-UB BBSY` lifts, and
-                    // `LMUB RQ` with it; the request synchroniser at RQSYNC
+                    // `LMUB RQ` with it; the request synchronizer at RQSYNC
                     // 0A08 registers it at the first edge after --- this
                     // one, if the bus came free before it.
                     7 if !self.debug_holds_bbsy(now) => {
@@ -1902,7 +1902,7 @@ impl Busint {
     /// The debug master's synchronous steps, at a master clock edge.
     fn debug_edge(&mut self, now: u64) {
         match self.debug {
-            // The synchroniser at UPRIOR 0D10 registers `NPR` --- at an edge
+            // The synchronizer at UPRIOR 0D10 registers `NPR` --- at an edge
             // after the request came, not one this machine has yet to run
             // to when a request in its future is posted.  A grant already
             // out on the chain for the processor's own request, its `SACK`
@@ -2007,7 +2007,7 @@ impl Busint {
     /// twin saying when it answers, `XACK` deskewed for a read, and `SSYN`
     /// [`UB_XBUS_READ_ACK_NS`] after `-UBACK` for a read and with it for a
     /// write.  The processor asking for the Xbus meanwhile, and a mapped
-    /// page nothing answers, are **not modelled**: the debuggee CC works on
+    /// page nothing answers, are **not modeled**: the debuggee CC works on
     /// is halted, and its map points at memory.
     fn debug_xbus_edge(&mut self, now: u64) {
         let Debug::Master { since, msyn, until, xbus, .. } = self.debug else { return };

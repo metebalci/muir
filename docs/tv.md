@@ -48,7 +48,7 @@ The eight registers:
 | `173777x1` | Sync Program `[Sync Ptr]`, read/write, eight bits |
 | `173777x2` | Sync Ptr, write only, twelve bits |
 | `173777x3` | bit 7 Sync Enable, bits 6-0 Vertical Spacing, write only |
-| `173777x4` | Colour: 15-8 value, 7-6 channel, 3-0 colour, write only |
+| `173777x4` | Color: 15-8 value, 7-6 channel, 3-0 color, write only |
 | `173777x5,6,7` | "These addresses respond but don't do anything" |
 
 The board decodes exactly those eight. On the SIMPLE TV the write decode is
@@ -199,11 +199,11 @@ picture, a frame of 16.528 ms and 60.5 Hz to the whole line; the 70
 overhead lines are its fixed loops of 1, 53, 8, 7 and 1.
 
 **`COLOR:SYNC`** in `sys/window/color.lisp`, under MIT's comment "This is
-really NTSC standard video", is the colour board's. In clock mode 3 it is
+really NTSC standard video", is the color board's. In clock mode 3 it is
 **525 lines in two fields** of 102 instructions each --- 63.75 us a line
 against NTSC's 63.56, a frame of 33.47 ms --- with 454 lines fetching 37
 video cycles each and a `TVMA CLR` at the top of each field. 36 video
-cycles of 64 bits is 576 pixels of four bits, the colour screen's width,
+cycles of 64 bits is 576 pixels of four bits, the color screen's width,
 and 454 lines is its height; the 37th is the blanked end-of-line cycle that
 steps `TVMA` by the vertical spacing.
 
@@ -240,9 +240,9 @@ ECO blames for the check, is called from `sys/sys/ltop.lisp` and
 file the release ships; nor are `SI:STOP-SYNC`, `SI:FILL-SYNC` and
 `SI:START-SYNC`, which `color.lisp` calls. The band has them compiled. So
 what the software does with the bit is the ECO's word and not a line of
-code we have, and both boards are modelled as the boards read.
+code we have, and both boards are modeled as the boards read.
 
-## The colour register
+## The color register
 
 `lmtv.order`'s `173777x4`: "15-8 Value to write into color map, 7-6 Select
 which color map (up to 4 channels), 3-0 Color (i.e. address into color
@@ -265,12 +265,12 @@ register acknowledges all the same. The two pages differ in the 74S257's
 select and in the name of the pull-up rail on the 241's second enable,
 neither of which is this write. Measured on both boards, tap by tap through
 a bus write:
-`tests/lispmtv_netlist.rs::the_colour_register_strobes_one_map_with_the_colour_and_the_value`
+`tests/lispmtv_netlist.rs::the_color_register_strobes_one_map_with_the_color_and_the_value`
 and
-`tests/simpletv_netlist.rs::the_colour_register_strobes_one_map_here_as_well`.
+`tests/simpletv_netlist.rs::the_color_register_strobes_one_map_here_as_well`.
 
 `XDI4` and `XDI5` leave the board too, on `COLOR 4` and `COLOR 5`, where
-the 64-entry map would take them as address; `lmtv.order` gives the colour
+the 64-entry map would take them as address; `lmtv.order` gives the color
 four bits and `WRITE-COLOR-MAP` writes `(LOGAND LOC 17)`, so MIT's own
 software never sets them. The map RAMs and their D-As are off the board.
 
@@ -285,7 +285,7 @@ screens `WINDOW-INITIALIZE` exposes at cold boot.
 **The release finds out whether there is a board by writing to it.** The
 `(COLOR-SCREEN :EXPOSE)` wrapper asks `COLOR-EXISTS-P`, "T if this machine
 has color screen hardware", which is `XBUS-LOCATION-EXISTS-P` on the first
-word of the colour buffer: `(%XBUS-WRITE XBUS-ADDR BITS)` and then
+word of the color buffer: `(%XBUS-WRITE XBUS-ADDR BITS)` and then
 `(BIT-TEST BITS (XBUS-READ-NO-PARITY XBUS-ADDR))` --- a write of 1 with the
 error stop off, read back. A machine without the board has to answer that
 with an NXM.
@@ -306,7 +306,7 @@ mode register under the mask `100` --- bit 6, `HSYNC` --- until the value
 differs from `100`, then until it matches, and only then writes. Its own
 `SYNCHRONIZE` argument spins on `(LOGAND 40 (%XBUS-READ TV-ADR))`, bit 5,
 `VSYNC`; `BLT-COLOR-MAP` does the same twice over, "We wait for vertical
-retrace to tell the hardware". So the colour map is written at all only on
+retrace to tell the hardware". So the color map is written at all only on
 a board whose sync program is running.
 
 **The map is stored inverted.** `WRITE-COLOR-MAP`'s arguments are "numbers
@@ -321,10 +321,10 @@ pack and the board fitted --- about 13 million microcycles to the listener
 --- and holds what the release left on the board: clock mode 3, `MODE BOW`
 clear, the interrupt enable clear, the sync RAM in with spacing 36, a
 loaded program that makes NTSC's 525 lines with a `TVMA CLR` a field and
-454 picture lines, the main board untouched, and the sixteen colours
+454 picture lines, the main board untouched, and the sixteen colors
 `R-G-B-COLOR-MAP` wrote, stored inverted.
 
-**Nothing in the release enables the colour board's interrupt.** Both
+**Nothing in the release enables the color board's interrupt.** Both
 boards drive the one `-XBUS.INTR`: on each, the 74S08 at `0D10` ands
 `MODE INTR ENB` with `VERT FLAG` into `SEND INTR` and the 26S10 at `0F14`
 puts that on the line, the same nets in both netlists, so the line is the
@@ -337,7 +337,7 @@ holds the OR and holds `-XBUS INIT` reaching both flags.
 
 **One model serves both boards and both straps** (`src/tv.rs`): the frame
 buffer, the mode register, the vertical flag, the sync RAM with its pointer
-and enable, and the 16 x 3 colour map. `--tv-board simple-tv|lispm-tv` says
+and enable, and the 16 x 3 color map. `--tv-board simple-tv|lispm-tv` says
 which board, on every engine, and the only thing it changes is what mode
 bit 7 reads. `--color-tv` fits a second board, a LISPM TV at the color TV's
 strap; without it the bus decode gives those addresses an NXM, which is the
@@ -345,9 +345,9 @@ answer `COLOR-EXISTS-P` needs.
 
 **On `chip` either display is a netlist board or the model**, and the
 second one is `--color-tv [netlist|model]`: `netlist` is the board itself,
-`model` is this model at the colour addresses, and the bare flag is the
+`model` is this model at the color addresses, and the bare flag is the
 netlist on `chip` and the model on the other two engines, where `netlist`
-is refused by the engine's name. The colour board's netlist is
+is refused by the engine's name. The color board's netlist is
 `data/LISPMTV.netlist` again, whatever `--tv-board` put at the main
 screen's addresses, brought up by `netlist::parse_color_tv` and wrapped by
 `xbus::straps` to `tv::COLOR_TV`.
@@ -365,9 +365,9 @@ pull-up at XBADR 0E14, the net that list heads with `DEVADR 4` through
 where the SIMPLE TV's drawings leave each strap a net of its own. So
 `DEVADR 4` is not a net muir can wrap: `netlist::parse_color_tv` moves
 0F19-15 onto a net of its own first, and `xbus::straps` refuses a display
-board handed the colour strap without it rather than leave it answering at
+board handed the color strap without it rather than leave it answering at
 the main screen's address.
-`tests/lispmtv_netlist.rs::the_colour_wrap_moves_three_pins` holds the
+`tests/lispmtv_netlist.rs::the_color_wrap_moves_three_pins` holds the
 three, `::the_board_wrapped_as_the_color_tv_answers_at_the_other_addresses`
 holds that the wrapped board answers at `17200000` and `17377750` and at
 neither of the normal TV's blocks, and
@@ -376,7 +376,7 @@ two boards on one backplane, each answering its own cycles while the models
 behind the buses hold both pictures.
 
 **A write to a netlist display board is mirrored into its model**
-(`src/buses.rs`), the main screen's into `machine.tv` and the colour one's
+(`src/buses.rs`), the main screen's into `machine.tv` and the color one's
 into `machine.color_tv`, so the picture is read off the model whichever
 board drew it; and a model whose netlist board is on the backplane does not
 put its own vertical interrupt on `-XBUS INTR`, the board driving that
@@ -397,7 +397,7 @@ location 0.
 loaded and no monitor is driven, so **the picture is the frame buffer as it
 stands**: a program that fetches part of the buffer, or none of it, shows
 the whole of it all the same, and `MODE BOW` is applied to the
-black-and-white picture by inverting it. The colour picture is 576 by 454,
+black-and-white picture by inverting it. The color picture is 576 by 454,
 a pixel being a nibble of the buffer with the low nibble of a word first
 --- `COLOR:MAKE-SCREEN` displaces an `ART-4B` array onto it,
 `sys/cold/qcom.lisp` gives `ART-4B` eight elements a word, and
@@ -409,7 +409,7 @@ on the board that bit reaches the 10124 at `0F06` and nothing but the 10102
 sections at `0F04` that exclusive-or `8B SR 0` into `-MECL VIDEO`, which is
 the one-bit video path, and `COLOR:SETUP` leaves it clear in any case.
 
-The main screen is served over RFB on `--terminal` and the colour screen on
+The main screen is served over RFB on `--terminal` and the color screen on
 `--color-terminal`, pixels only: the machine has one keyboard and one
 mouse, both on the I/O board, and they stay with the terminal that serves
 the main screen.
@@ -419,10 +419,10 @@ the main screen.
 **The color TV's own wrap.** `lmtv.order` gives the board's two addresses
 and MIT left no wire list of a board strapped to them: `cadrtv/lmtv4b.wlr`
 is a normal TV. So the three pins above are read off that list wrapped the
-other way, and that they are the three --- and that a colour board was a
+other way, and that they are the three --- and that a color board was a
 LISPM TV and not a board of its own --- is inference from the addresses.
 **What would settle it:** a wire list of a second board, or an installation
-note naming the pins the colour strap moves.
+note naming the pins the color strap moves.
 
 **What the off-board D-A makes of a stored map byte.** muir renders a gun
 as `255 - stored`, and the only reference for that is the software's own

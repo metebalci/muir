@@ -13,7 +13,7 @@ mod support;
 
 use muir::cable::{Boards, FarEnd};
 use muir::chip::Chip;
-use muir::clock::{Behavioural, Clock};
+use muir::clock::{Behavioral, Clock};
 use muir::machine::Machine;
 use muir::netlist;
 use muir::part::Level;
@@ -47,7 +47,7 @@ fn net_named(n: &netlist::Netlist, name: &str) -> netlist::NetId {
 /// `at-535000.chk` is from before the boot's first Unibus cycle, so a
 /// board built fresh here is the right one: not yet Unibus master, its
 /// error register clear.
-fn resume(label: &str) -> Option<(Chip, Behavioural, u64)> {
+fn resume(label: &str) -> Option<(Chip, Behavioral, u64)> {
     let Some(p) = support::vendor(&["run", "chk", &format!("{label}.chk")]) else {
         eprintln!("  {MAKES_IT}");
         return None;
@@ -286,16 +286,16 @@ fn the_interface_writes_the_parity_the_boards_are_filled_with() {
     assert_eq!(agree, 256, "the interface's parity is `parity`'s");
 }
 
-/// **The optimisations are on the same nets as the slow way.**
+/// **The optimizations are on the same nets as the slow way.**
 ///
 /// A memory board asleep on its own clock skips its oscillator edges
 /// (`Chip::asleep`), and a board or the processor that has not moved since
 /// the last exchange is not asked about its wires again
 /// (`Chip::generation`). Stepped at every edge and asked about every wire
-/// at every exchange instead, the slow way (`FarEnd::unoptimised`), every
+/// at every exchange instead, the slow way (`FarEnd::unoptimized`), every
 /// board must be on the same nets at every step. Two far ends on the same
 /// processor checkpoint run in lockstep through the boot's Unibus reset,
-/// its parity loop and a few dozen refreshes, one optimised and one not,
+/// its parity loop and a few dozen refreshes, one optimized and one not,
 /// with the I/O board on both, whose microsecond clock never lets it
 /// sleep.
 #[test]
@@ -303,7 +303,7 @@ fn the_interface_writes_the_parity_the_boards_are_filled_with() {
             -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
             --checkpoint vendor/run/chk/at-535000.chk` writes it, in about five minutes, with the \
             System 100 pack fetched"]
-fn the_optimisations_are_on_the_same_nets_as_the_slow_way() {
+fn the_optimizations_are_on_the_same_nets_as_the_slow_way() {
     let cpu_n = netlist::parse(CPU).unwrap();
     let bus_n = netlist::parse(BUSINT).unwrap();
     let mem_n = netlist::parse(CADRM).unwrap();
@@ -326,11 +326,11 @@ fn the_optimisations_are_on_the_same_nets_as_the_slow_way() {
         clk_b.time_ns(),
         Machine::new(),
     );
-    b.unoptimised();
+    b.unoptimized();
     a.join(&mut cpu_a, clk_a.time_ns());
     b.join(&mut cpu_b, clk_b.time_ns());
-    // The optimised run's steps are a subset of the slow run's, so the slow
-    // run is brought to each time the optimised run stops at, and both are
+    // The optimized run's steps are a subset of the slow run's, so the slow
+    // run is brought to each time the optimized run stops at, and both are
     // let finish everything due at that time before they are compared.
     let t0 = clk_a.time_ns();
     let mut steps = 0u64;
@@ -347,7 +347,7 @@ fn the_optimisations_are_on_the_same_nets_as_the_slow_way() {
         assert_eq!(
             clk_b.time_ns(),
             t,
-            "the slow run has no step at the optimised run's step {steps}"
+            "the slow run has no step at the optimized run's step {steps}"
         );
         // A sleeping board's own clock net is stale until it wakes; nothing
         // on the board reads it meanwhile, and every other net must agree.
@@ -359,7 +359,7 @@ fn the_optimisations_are_on_the_same_nets_as_the_slow_way() {
                 .collect();
             assert!(
                 differing.is_empty(),
-                "{what} at {t} ns, step {steps}: the optimised and the slow run differ on {differing:?}"
+                "{what} at {t} ns, step {steps}: the optimized and the slow run differ on {differing:?}"
             );
         };
         same(&cpu_a, &cpu_b, &cpu_n, "the processor");
@@ -375,7 +375,7 @@ fn the_optimisations_are_on_the_same_nets_as_the_slow_way() {
         );
     }
     eprintln!(
-        "from microcycle {at}, {steps} steps over {} ns: {} memory board and {} I/O board transitions optimised, {} and {} the slow way",
+        "from microcycle {at}, {steps} steps over {} ns: {} memory board and {} I/O board transitions optimized, {} and {} the slow way",
         clk_a.time_ns() - t0,
         a.xbus.transitions,
         a.unibus.as_ref().unwrap().transitions,
@@ -385,5 +385,5 @@ fn the_optimisations_are_on_the_same_nets_as_the_slow_way() {
     // The window is mostly bus traffic and the reset, which keep the boards
     // awake; the saving is in the band, where a board is idle for tens of
     // microseconds at a time.
-    assert!(a.xbus.transitions < b.xbus.transitions, "the optimised run did less work");
+    assert!(a.xbus.transitions < b.xbus.transitions, "the optimized run did less work");
 }

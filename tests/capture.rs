@@ -3,7 +3,7 @@
 
 //! The display recorder: its frames read back by a GIF reader of the
 //! tests' own, its clock line, the lashup's two screens on one canvas, and
-//! the colour screen's recording with the map it was taken through.
+//! the color screen's recording with the map it was taken through.
 //! Nothing here needs `vendor/`.
 
 mod support;
@@ -211,98 +211,96 @@ fn the_clock_line_spans_the_pair() {
     );
 }
 
-// --- The colour screen ------------------------------------------------------
+// --- The color screen ------------------------------------------------------
 
-/// One write of the colour register, `lmtv.order`'s `173777x4`: the byte
-/// at `15-8`, the channel at `7-6`, the colour at `3-0`, as
+/// One write of the color register, `lmtv.order`'s `173777x4`: the byte
+/// at `15-8`, the channel at `7-6`, the color at `3-0`, as
 /// `WRITE-COLOR-MAP` lays them out.
-fn write_map(m: &mut Machine, colour: u32, channel: u32, value: u32) {
-    m.bus_write(0o17377754, value << 8 | channel << 6 | colour);
+fn write_map(m: &mut Machine, color: u32, channel: u32, value: u32) {
+    m.bus_write(0o17377754, value << 8 | channel << 6 | color);
 }
 
-/// The whole map in one go: colour `c`'s three guns from `f`.
+/// The whole map in one go: color `c`'s three guns from `f`.
 fn write_whole_map(m: &mut Machine, f: impl Fn(usize, usize) -> u32) {
-    for colour in 0..COLORS {
+    for color in 0..COLORS {
         for channel in 0..CHANNELS {
-            write_map(m, colour as u32, channel as u32, f(colour, channel));
+            write_map(m, color as u32, channel as u32, f(color, channel));
         }
     }
 }
 
-/// The colour screen as the recorder should have it: a byte a pixel, the
+/// The color screen as the recorder should have it: a byte a pixel, the
 /// four-bit index of [`Tv::pixel4`], row by row.
-fn colour_canvas(tv: &Tv) -> Vec<u8> {
+fn color_canvas(tv: &Tv) -> Vec<u8> {
     (0..COLOR_HEIGHT)
         .flat_map(|y| (0..COLOR_WIDTH).map(move |x| (x, y)))
         .map(|(x, y)| tv.pixel4(x, y))
         .collect()
 }
 
-/// The sixteen colours as the monitor shows them: [`Tv::rgb`] of each.
-fn colours(tv: &Tv) -> Vec<[u8; 3]> {
+/// The sixteen colors as the monitor shows them: [`Tv::rgb`] of each.
+fn colors(tv: &Tv) -> Vec<[u8; 3]> {
     (0..COLORS).map(|c| tv.rgb(c)).collect()
 }
 
-/// **The colour recording is the four-bit picture through the map that was
-/// in force when the frame was taken.** Two samples of the colour screen
+/// **The color recording is the four-bit picture through the map that was
+/// in force when the frame was taken.** Two samples of the color screen
 /// with the map written between them: each frame's pixels are
-/// [`Tv::pixel4`] and the colour table a viewer resolves them through is
-/// [`Tv::rgb`] of the sixteen colours as they stood at that frame --- the
+/// [`Tv::pixel4`] and the color table a viewer resolves them through is
+/// [`Tv::rgb`] of the sixteen colors as they stood at that frame --- the
 /// second frame carrying a table of its own, the map having changed, and
-/// covering the whole canvas, since a map that has changed recolours
+/// covering the whole canvas, since a map that has changed recolors
 /// everything already on it.
 #[test]
-fn the_colour_recording_carries_the_map_it_was_taken_through() {
+fn the_color_recording_carries_the_map_it_was_taken_through() {
     let mut m = Machine::new();
     m.fit_color_tv();
     // Line 0's first eight pixels are the nibbles of word 0, low one
     // first: 8, 9, ..., 15.  Line 1's are word `COLOR_WORDS_PER_LINE`.
     m.bus_write(0o17200000, 0xfedc_ba98);
     m.bus_write(0o17200000 + COLOR_WORDS_PER_LINE as u32, 0x0000_0123);
-    write_whole_map(&mut m, |colour, channel| (16 * colour + 5 * channel) as u32);
+    write_whole_map(&mut m, |color, channel| (16 * color + 5 * channel) as u32);
 
     let mut rec = ColorRecorder::new(false);
     rec.sample(m.color_tv.as_ref().unwrap(), 1_000, 0);
-    let first =
-        (colours(m.color_tv.as_ref().unwrap()), colour_canvas(m.color_tv.as_ref().unwrap()));
+    let first = (colors(m.color_tv.as_ref().unwrap()), color_canvas(m.color_tv.as_ref().unwrap()));
 
     // A pixel and the map both changed: one frame, the whole canvas, its
     // own table.
     m.bus_write(0o17200000 + 2 * COLOR_WORDS_PER_LINE as u32, 0x0000_000f);
-    write_whole_map(&mut m, |colour, channel| (3 * colour + 80 * channel) as u32);
+    write_whole_map(&mut m, |color, channel| (3 * color + 80 * channel) as u32);
     rec.sample(m.color_tv.as_ref().unwrap(), 501_000_000, 0);
-    let second =
-        (colours(m.color_tv.as_ref().unwrap()), colour_canvas(m.color_tv.as_ref().unwrap()));
+    let second = (colors(m.color_tv.as_ref().unwrap()), color_canvas(m.color_tv.as_ref().unwrap()));
     assert_ne!(first.0, second.0, "the map changed");
     assert_eq!(rec.frames(), 2, "a frame for the first picture and one for the change");
 
     let (canvas, frames) = decode_gif_fully(&rec.gif());
     assert_eq!(canvas, (COLOR_WIDTH, COLOR_HEIGHT), "COLOR:MAKE-SCREEN's 576 by 454");
     assert_eq!(frames.len(), 2);
-    for (k, (want_colours, want_pixels)) in [first, second].into_iter().enumerate() {
+    for (k, (want_colors, want_pixels)) in [first, second].into_iter().enumerate() {
         let f = &frames[k];
         assert_eq!(f.rect, (0, 0, COLOR_WIDTH, COLOR_HEIGHT), "frame {k} is the whole canvas");
-        assert_eq!(f.colors.len(), COLORS, "frame {k}: sixteen colours");
-        assert_eq!(f.colors, want_colours, "frame {k}: the map as Tv::rgb shows it");
+        assert_eq!(f.colors.len(), COLORS, "frame {k}: sixteen colors");
+        assert_eq!(f.colors, want_colors, "frame {k}: the map as Tv::rgb shows it");
         assert_eq!(f.pixels.len(), want_pixels.len(), "frame {k}: the canvas");
         let differs = f.pixels.iter().zip(&want_pixels).position(|(a, b)| a != b);
         assert_eq!(differs, None, "frame {k}: the pixels are Tv::pixel4's indices");
     }
-    assert!(!frames[0].local, "the first frame's colours are the file's global table");
+    assert!(!frames[0].local, "the first frame's colors are the file's global table");
     assert!(frames[1].local, "and the second carries its own, the map having changed");
 }
 
-/// **The clocks below the colour picture are drawn past the map's sixteen
-/// colours**, so the line reads the same whatever the machine wrote into
+/// **The clocks below the color picture are drawn past the map's sixteen
+/// colors**, so the line reads the same whatever the machine wrote into
 /// the map: the canvas is [`TIME_H`] taller, the picture's pixels are the
 /// map's indices and the line's are not, and the table is long enough to
 /// hold both.
 #[test]
-fn the_colour_clock_line_is_not_drawn_in_the_machines_colours() {
+fn the_color_clock_line_is_not_drawn_in_the_machines_colors() {
     let mut m = Machine::new();
     m.fit_color_tv();
-    // Every colour of the map black, which is what the line would be
-    // drawn in if it were drawn in the machine's colours.
+    // Every color of the map black, which is what the line would be
+    // drawn in if it were drawn in the machine's colors.
     write_whole_map(&mut m, |_, _| 0o377);
     let mut rec = ColorRecorder::new(true);
     rec.sample(m.color_tv.as_ref().unwrap(), 0, 0);
@@ -310,7 +308,7 @@ fn the_colour_clock_line_is_not_drawn_in_the_machines_colours() {
     assert_eq!(canvas, (COLOR_WIDTH, COLOR_HEIGHT + TIME_H), "a line below the picture");
     let f = &frames[0];
     assert_eq!(f.rect, (0, 0, COLOR_WIDTH, COLOR_HEIGHT + TIME_H));
-    assert!(f.colors.len() > COLORS, "the table holds the line's colours too");
+    assert!(f.colors.len() > COLORS, "the table holds the line's colors too");
     assert!(
         f.pixels[..COLOR_WIDTH * COLOR_HEIGHT].iter().all(|&p| (p as usize) < COLORS),
         "the picture is the map's sixteen"

@@ -7,7 +7,7 @@
 //! changed, as the rectangle that changed, laid over the frame before it,
 //! and timed by the machine's own clock so the playback runs at the
 //! machine's speed --- ten milliseconds of machine time a centisecond of
-//! the GIF, its smallest unit.  Two colours and LZW, so it stays small
+//! the GIF, its smallest unit.  Two colors and LZW, so it stays small
 //! while the screen stays still: a blinking cursor is a few dozen bytes a
 //! blink, and an idle screen one small frame a second, the clock ticking.
 //!
@@ -29,13 +29,13 @@
 //!
 //! The color TV's screen is recorded by a [`ColorRecorder`] beside it,
 //! 576 by 454, and the picture is the four-bit buffer through the map:
-//! a frame's pixels are [`Tv::pixel4`]'s indices and the GIF's colour
-//! table for that frame is the sixteen colours as [`Tv::rgb`] shows them.
+//! a frame's pixels are [`Tv::pixel4`]'s indices and the GIF's color
+//! table for that frame is the sixteen colors as [`Tv::rgb`] shows them.
 //! The map is the machine's to rewrite as it runs, so **a frame whose map
 //! differs from the file's global table carries a local table of its own
 //! and is the whole canvas**: a GIF resolves each frame's pixels to
-//! colours as it lays them down, so a changed map recolours everything
-//! already on the canvas and a rectangle would recolour only itself.
+//! colors as it lays them down, so a changed map recolors everything
+//! already on the canvas and a rectangle would recolor only itself.
 
 use crate::tv::{CHANNELS, COLOR_HEIGHT, COLOR_WIDTH, COLORS, HEIGHT, Tv, WIDTH};
 
@@ -239,14 +239,14 @@ impl Recorder {
     }
 }
 
-// --- The colour screen ------------------------------------------------------
+// --- The color screen ------------------------------------------------------
 
-/// The sixteen colours of the colour map as the monitor shows them,
-/// [`Tv::rgb`] of each: what a frame of a colour recording is resolved
+/// The sixteen colors of the color map as the monitor shows them,
+/// [`Tv::rgb`] of each: what a frame of a color recording is resolved
 /// through.
 type Palette = [[u8; CHANNELS]; COLORS];
 
-/// The clock line's ground and ink, as indices into a colour frame's
+/// The clock line's ground and ink, as indices into a color frame's
 /// table: past the map's sixteen, so the line reads the same whatever the
 /// machine wrote into the map --- the line belongs to the recording, as
 /// the rule between the lashup's two screens does, and not to the
@@ -257,14 +257,14 @@ const CLOCK_INK: u8 = COLORS as u8 + 1;
 
 /// A recorder for the color TV's screen, growing a GIF frame by frame as
 /// [`Recorder`] does for the main screen: 576 by 454, a four-bit pixel an
-/// index into the map, and the map itself the frame's colour table.
+/// index into the map, and the map itself the frame's color table.
 pub struct ColorRecorder {
     /// Whether the machine's clock and the wall clock are drawn on a line
     /// below the picture.
     show_time: bool,
     /// The canvas height: the picture, and the clock line if shown.
     height: usize,
-    /// The last canvas sampled, a byte a pixel: a colour, or the clock
+    /// The last canvas sampled, a byte a pixel: a color, or the clock
     /// line's two.
     prev: Option<Vec<u8>>,
     /// The map the last frame was taken through.
@@ -295,7 +295,7 @@ impl ColorFrame {
 }
 
 impl ColorRecorder {
-    /// A recorder for the colour screen, with the machine's clock and the
+    /// A recorder for the color screen, with the machine's clock and the
     /// wall clock on a line below it if `show_time`.
     pub fn new(show_time: bool) -> ColorRecorder {
         ColorRecorder {
@@ -315,13 +315,13 @@ impl ColorRecorder {
         self.frames.len()
     }
 
-    /// The colour screen at `ns` of the machine's time, the wall clock
+    /// The color screen at `ns` of the machine's time, the wall clock
     /// reading `wall_ns` since midnight: a frame if the canvas or the map
     /// differs from the last.
     pub fn sample(&mut self, tv: &Tv, ns: u64, wall_ns: u64) {
         let mut map: Palette = [[0; CHANNELS]; COLORS];
-        for (colour, out) in map.iter_mut().enumerate() {
-            *out = tv.rgb(colour);
+        for (color, out) in map.iter_mut().enumerate() {
+            *out = tv.rgb(color);
         }
         let mut cur = vec![0u8; COLOR_WIDTH * self.height];
         for y in 0..COLOR_HEIGHT {
@@ -337,7 +337,7 @@ impl ColorRecorder {
             let right = COLOR_WIDTH - TIME_MARGIN - TIME_W;
             draw_time(&mut cur, COLOR_WIDTH, COLOR_HEIGHT, wall_ns, right, CLOCK_INK);
         }
-        // A map that has changed recolours every pixel on the canvas, not
+        // A map that has changed recolors every pixel on the canvas, not
         // only the ones this frame lays down, so the frame is the whole
         // of it.
         let whole = (0, 0, COLOR_WIDTH, self.height);
@@ -361,7 +361,7 @@ impl ColorRecorder {
                 width: w as u16,
                 height: h as u16,
                 map,
-                // The clock line's two colours take the table from
+                // The clock line's two colors take the table from
                 // sixteen entries to thirty-two, and a code from four
                 // bits to five.
                 data: if self.show_time {
@@ -377,14 +377,14 @@ impl ColorRecorder {
         self.sampled_at = ns;
     }
 
-    /// The recording as a GIF: the first frame's map is the global colour
+    /// The recording as a GIF: the first frame's map is the global color
     /// table, and a later frame taken through another map carries its own.
     pub fn gif(&self) -> Vec<u8> {
         let global = self.frames.first().map_or([[0; CHANNELS]; COLORS], |f| f.map);
         let table = self.table(&global);
         let mut out = head(COLOR_WIDTH, self.height, &table);
         // The bits a code takes: the table's length, sixteen or, with the
-        // clock line's two colours, thirty-two.
+        // clock line's two colors, thirty-two.
         let min = if self.show_time { 5 } else { 4 };
         for (k, f) in self.frames.iter().enumerate() {
             let local = if f.map == global { Vec::new() } else { self.table(&f.map) };
@@ -395,7 +395,7 @@ impl ColorRecorder {
         out
     }
 
-    /// A frame's colour table: the map's sixteen, and, when the clocks are
+    /// A frame's color table: the map's sixteen, and, when the clocks are
     /// shown, the line's two and the fourteen a power-of-two table is
     /// padded out with.
     fn table(&self, map: &Palette) -> Vec<[u8; CHANNELS]> {
@@ -444,7 +444,7 @@ fn changed_rect(
     (x0 < x1).then(|| (x0, y0, x1 - x0, y1 - y0))
 }
 
-/// A GIF's header, the canvas, the global colour table and the block that
+/// A GIF's header, the canvas, the global color table and the block that
 /// makes it loop for ever.  The table is a power of two long and its size
 /// is written as the exponent less one.
 fn head(width: usize, height: usize, table: &[[u8; CHANNELS]]) -> Vec<u8> {
@@ -453,15 +453,15 @@ fn head(width: usize, height: usize, table: &[[u8; CHANNELS]]) -> Vec<u8> {
     out.extend_from_slice(&(width as u16).to_le_bytes());
     out.extend_from_slice(&(height as u16).to_le_bytes());
     out.extend_from_slice(&[0x80 | size_bits(table.len()), 0, 0]);
-    for colour in table {
-        out.extend_from_slice(colour);
+    for color in table {
+        out.extend_from_slice(color);
     }
     out.extend_from_slice(b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00");
     out
 }
 
 /// One frame: the graphic control block with how long it stays up, the
-/// image descriptor and its local colour table if it carries one ---
+/// image descriptor and its local color table if it carries one ---
 /// `table` empty is a frame shown through the global one --- then the LZW
 /// data in sub-blocks.  `delay_ns` is written in centiseconds, the
 /// smallest unit a GIF has.
@@ -492,7 +492,7 @@ fn frame_bytes(
     out.push(0);
 }
 
-/// How a colour table's length is written in a descriptor's packed field:
+/// How a color table's length is written in a descriptor's packed field:
 /// the table holds `2^(n+1)` entries and `n` is the three bits.
 fn size_bits(entries: usize) -> u8 {
     entries.trailing_zeros() as u8 - 1
@@ -679,11 +679,11 @@ const GLYPHS: [[u8; GLYPH_H]; 11] = [
 // --- GIF's LZW --------------------------------------------------------------
 
 /// GIF's LZW over pixels of `N` values with a minimum code size of `min`,
-/// which is the bits an index into the frame's colour table takes: the
+/// which is the bits an index into the frame's color table takes: the
 /// clear code is `1 << min` and the end code the one above it, codes from
 /// the one above that, the code width from `min + 1` bits to 12, and a
-/// clear when the table is full.  The main screen's two colours are
-/// `lzw::<2>(_, 2)`, GIF's smallest code size; the colour screen's are
+/// clear when the table is full.  The main screen's two colors are
+/// `lzw::<2>(_, 2)`, GIF's smallest code size; the color screen's are
 /// sixteen or, with the clock line's two, thirty-two.
 fn lzw<const N: usize>(pixels: &[u8], min: u32) -> Vec<u8> {
     const NONE: u16 = u16::MAX;
@@ -691,7 +691,7 @@ fn lzw<const N: usize>(pixels: &[u8], min: u32) -> Vec<u8> {
     let end: u16 = clear + 1;
     let first_code: u16 = end + 1;
     let mut bits = BitWriter::default();
-    // On the heap: 4096 rows of `N`, which for the colour screen's
+    // On the heap: 4096 rows of `N`, which for the color screen's
     // thirty-two values is a quarter of a megabyte.  Clippy cannot size a
     // const-generic row and offers the stack for it.
     #[allow(clippy::useless_vec)]

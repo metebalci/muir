@@ -556,7 +556,7 @@ fn the_checkword_leaves_the_register_at_zero() {
     assert_eq!(Ecc::over(&[]), [0, 0, 0, 0]);
 }
 
-/// **A sector serialised parses back**, header and data, both checkwords
+/// **A sector serialized parses back**, header and data, both checkwords
 /// good; and a bit flipped in the data is caught by its checkword alone.
 #[test]
 fn a_sector_image_parses_back() {
@@ -752,7 +752,7 @@ fn a_drive_can_be_told_to_pulse_where_none_belongs() {
 
 /// **A checkpoint holds the drive where it stood.** A drive part way
 /// round its spindle, part way through a seek, and part way through
-/// serialising a sector, saved and read back into a drive built fresh,
+/// serializing a sector, saved and read back into a drive built fresh,
 /// puts the same thing on the cable at the same times as the drive it
 /// came from --- through the end of the sector and through the seek
 /// completing.
@@ -820,10 +820,10 @@ fn a_checkpoint_holds_the_drive_where_it_stood() {
     assert!(differed > 0, "a drive built fresh is not this drive: that is what the save is for");
 }
 
-/// **Under read gate the drive serialises the sector under the head**, in
+/// **Under read gate the drive serializes the sector under the head**, in
 /// MIT's format, one bit a clock from the sector pulse, ones in the gap.
 #[test]
-fn under_read_gate_the_drive_serialises_the_sector_under_the_head() {
+fn under_read_gate_the_drive_serializes_the_sector_under_the_head() {
     let data = words(11);
     let mut unit = Unit::blank(Geometry::T300);
     assert!(unit.write_block_at(0, 0, 2, &data));
@@ -1160,7 +1160,7 @@ fn codes_14_and_15_are_the_seek_and_at_ease_of_their_sectors() {
 /// [`TIMEOUT_NS`] is not a figure of its own: it is the 74LS124 VCO at
 /// DCTMOT 0B04 section 1, whose period is the drawing's property on that
 /// body, counted down by the 74393 at 0C03. The netlist engine runs those
-/// two parts and reaches the instant by itself; this holds the behavioural
+/// two parts and reaches the instant by itself; this holds the behavioral
 /// model to the same arithmetic, so the two cannot drift apart again.
 ///
 /// They did drift, and the figure they drifted to was wrong as well. This
@@ -1763,7 +1763,7 @@ fn the_reversed_channel_answers_as_the_board_does() {
 ///
 /// Century Data's figures for the T-300 are 6 ms to the next cylinder and 55
 /// ms across the full 814, which is what `disk_unit::seek_ns` interpolates,
-/// so the length of a seek is the distance travelled and not a constant. The
+/// so the length of a seek is the distance traveled and not a constant. The
 /// controller reports `STATUS<0>` clear for the whole of it --- that is the
 /// thing a driver waits on.
 #[test]

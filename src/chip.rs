@@ -4,7 +4,7 @@
 //! The `chip` engine: the board as its parts.
 //!
 //! Every other engine collapses something.  This one does not: it takes the
-//! packages out of [`crate::netlist`], gives each the behaviour
+//! packages out of [`crate::netlist`], gives each the behavior
 //! [`crate::part`] records for its type, and resolves every net from what is
 //! actually driving it.  It is the slowest of the three and the one the other
 //! two are checked against, so it is allowed no opinions.
@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use crate::clock;
 use crate::netlist::{NetId, Netlist};
-use crate::part::{self, Behaviour, Drive, Driver, Level, Pins, State};
+use crate::part::{self, Behavior, Drive, Driver, Level, Pins, State};
 
 /// One gate of one package: which package, and which of its gates.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -36,7 +36,7 @@ pub struct Instance {
     pub page: String,
     pub reference: String,
     pub kind: String,
-    behaviour: Behaviour,
+    behavior: Behavior,
     /// Net on each pin, indexed by pin number.
     net_of: [Option<NetId>; crate::part::MAX_PINS],
     /// How each pin drives, indexed by pin number, from the part's pinout
@@ -51,7 +51,7 @@ pub struct Instance {
 impl Instance {
     /// How many gates this package has.
     pub fn gate_count(&self) -> usize {
-        self.behaviour.gates.len()
+        self.behavior.gates.len()
     }
 
     /// The net on a pin, if it is wired.
@@ -61,12 +61,12 @@ impl Instance {
 
     /// The output pin of one of this package's gates.
     pub fn gate_out(&self, gate: u16) -> u8 {
-        self.behaviour.gates[gate as usize].out
+        self.behavior.gates[gate as usize].out
     }
 
     /// The input pins of one of this package's gates.
     pub fn gate_ins(&self, gate: u16) -> &'static [u8] {
-        self.behaviour.gates[gate as usize].ins
+        self.behavior.gates[gate as usize].ins
     }
 
     pub fn name(&self) -> String {
@@ -291,7 +291,7 @@ pub fn supply(name: &str) -> Option<Level> {
 ///
 /// Not the whole of CLOCK1 and CLOCK2 --- only what is genuinely analog or
 /// genuinely cyclic. The delay lines drop out on their own, having no
-/// behaviour to give. What is listed is the speed multiplexer, the
+/// behavior to give. What is listed is the speed multiplexer, the
 /// `CYCLECOMPLETED` latch, and the three cross-coupled pairs that make
 /// `TPCLK`, `TPTSE` and the two write pulses.
 ///
@@ -336,7 +336,7 @@ pub const DELAYED_GATES: &[(&str, &str, u8, u8, u32, bool)] = &[("MEMCTL", "0F07
 
 /// Whether a gate is one of [`DELAYED_GATES`].
 fn delayed(inst: &Instance, gate: usize) -> bool {
-    let out = inst.behaviour.gates[gate].out;
+    let out = inst.behavior.gates[gate].out;
     DELAYED_GATES
         .iter()
         .any(|&(p, r, o, _, _, _)| inst.page == p && inst.reference == r && o == out)
@@ -413,7 +413,7 @@ struct Delay {
 /// periods and six and a half. `tests/busint_netlist.rs` measures that
 /// band on the board at five phases.
 ///
-/// **What is modelled, and what is chosen.** The internal oscillator toggles
+/// **What is modeled, and what is chosen.** The internal oscillator toggles
 /// every half period from `t = 0`, high first, at [`toggle_at`]. That phase
 /// is a choice --- on the machine it is whatever the part did when the
 /// power came up --- and it is fixed against absolute time rather than the
@@ -549,11 +549,11 @@ pub fn gated_rise_after(period: (u64, u64), enabled_at: u64, t: u64) -> u64 {
 /// signal. 1e-4 over 1e-10 is 1 MHz, a 1,000 ns period at the formula's
 /// conditions.
 ///
-/// **The figure is a band, 0.7 to 1.0 us, and 850 sits near its centre
+/// **The figure is a band, 0.7 to 1.0 us, and 850 sits near its center
 /// with one correction applied and another noted.** The formula holds
 /// "under the conditions used in Figure 3", both control inputs at 2 V, and
 /// this board straps both to +5, so 1,000 measures a bias point the board
-/// does not have. Figure 4, the frequency normalised against the two
+/// does not have. Figure 4, the frequency normalized against the two
 /// control voltages, is drawn for the S part and only to 4.5 V on the range
 /// input; every curve on it converges near 1.17 at 5 V on the frequency
 /// input, and the sheet says of the LS only that "the concept also
@@ -607,7 +607,7 @@ pub fn gated_rise_after(period: (u64, u64), enabled_at: u64, t: u64) -> u64 {
 ///
 /// **Unverified** to a point: what would settle the period within the band
 /// is a scope on a board built to the December 1980 list, or an LS sheet
-/// with its own normalised curve. The labels need nothing: they are right
+/// with its own normalized curve. The labels need nothing: they are right
 /// for the other board.
 pub const VCO_PERIOD: (u64, u64) = (850, 1);
 
@@ -752,7 +752,7 @@ fn dip_oscillator_period(page: &str, reference: &str) -> (u64, u64) {
 /// drawing holds the clear high, grounds `I1` and drives `I0` from
 /// `-REFRESH NOW`, so the pulse starts when a refresh cycle begins, and
 /// pin 7, `TIME FOR REFRESH`, is high before the first pulse and after
-/// each one ends, which is when the synchroniser at 0F01 requests a
+/// each one ends, which is when the synchronizer at 0F01 requests a
 /// refresh cycle. The pulse width is the drawing's timing components at
 /// 0F02 through the sheet's formula: [`MEMCTL_REFRESH_NS`].
 struct OneShot {
@@ -847,7 +847,7 @@ struct ClockIn {
 }
 
 impl Chip {
-    /// Builds the board. Parts whose type has no behaviour --- the delay
+    /// Builds the board. Parts whose type has no behavior --- the delay
     /// lines, the oscillators and the one-shots --- are not instances:
     /// `build` skips them, and `wire_delays`, `wire_oscillators` and
     /// `wire_one_shots` run them by time from the netlist instead.
@@ -870,7 +870,7 @@ impl Chip {
     fn build(n: &Netlist, clocked: bool) -> Chip {
         let mut instances = Vec::new();
         for pkg in n.packages() {
-            let Some(behaviour) = part::behaviour(&pkg.kind) else { continue };
+            let Some(behavior) = part::behavior(&pkg.kind) else { continue };
             let mut net_of = [None; crate::part::MAX_PINS];
             for &(pin, net) in &pkg.pins {
                 if (pin as usize) < net_of.len() {
@@ -887,7 +887,7 @@ impl Chip {
                 page: pkg.page,
                 reference: pkg.reference,
                 kind: pkg.kind,
-                behaviour,
+                behavior,
                 net_of,
                 drive_of,
                 state: State::default(),
@@ -896,7 +896,7 @@ impl Chip {
 
         let mut drivers: Vec<Vec<GateId>> = vec![Vec::new(); n.nets.len()];
         for (i, inst) in instances.iter().enumerate() {
-            for (g, gate) in inst.behaviour.gates.iter().enumerate() {
+            for (g, gate) in inst.behavior.gates.iter().enumerate() {
                 if delayed(inst, g) {
                     continue;
                 }
@@ -910,12 +910,12 @@ impl Chip {
         let mut gates_total = 0u32;
         for inst in &instances {
             gate_base.push(gates_total);
-            gates_total += inst.behaviour.gates.len() as u32;
+            gates_total += inst.behavior.gates.len() as u32;
         }
         let mut readers: Vec<Vec<u32>> = vec![Vec::new(); n.nets.len()];
         let mut touchers: Vec<Vec<u32>> = vec![Vec::new(); n.nets.len()];
         for (i, inst) in instances.iter().enumerate() {
-            for (g, gate) in inst.behaviour.gates.iter().enumerate() {
+            for (g, gate) in inst.behavior.gates.iter().enumerate() {
                 for &pin in gate.ins {
                     if let Some(net) = inst.net_of[pin as usize] {
                         readers[net as usize].push(gate_base[i] + g as u32);
@@ -925,7 +925,7 @@ impl Chip {
             // Every pin, not only the ones the update names: a part that
             // remembers may read any of them, and marking too often is safe
             // where marking too seldom is not.
-            if inst.behaviour.update.is_some() {
+            if inst.behavior.update.is_some() {
                 for net in inst.net_of.iter().flatten() {
                     touchers[*net as usize].push(i as u32);
                 }
@@ -1057,7 +1057,7 @@ impl Chip {
             .enumerate()
             .filter(|(_, inst)| !skip(inst))
             .flat_map(|(i, inst)| {
-                (0..inst.behaviour.gates.len())
+                (0..inst.behavior.gates.len())
                     .filter(move |&g| !delayed(inst, g))
                     .map(move |g| GateId { part: i as u32, gate: g as u16 })
             })
@@ -1071,7 +1071,7 @@ impl Chip {
         let mut feeds: Vec<Vec<usize>> = vec![Vec::new(); gates.len()];
         for (k, id) in gates.iter().enumerate() {
             let inst = &self.instances[id.part as usize];
-            for &pin in inst.behaviour.gates[id.gate as usize].ins {
+            for &pin in inst.behavior.gates[id.gate as usize].ins {
                 let Some(net) = inst.net_of[pin as usize] else { continue };
                 for d in &self.drivers[net as usize] {
                     if let Some(&j) = at.get(&(d.part, d.gate)) {
@@ -1397,11 +1397,7 @@ impl Chip {
     /// The pins a gate reads, and the nets they are on.
     pub fn gate_inputs(&self, id: GateId) -> Vec<Option<NetId>> {
         let inst = &self.instances[id.part as usize];
-        inst.behaviour.gates[id.gate as usize]
-            .ins
-            .iter()
-            .map(|&p| inst.net_of[p as usize])
-            .collect()
+        inst.behavior.gates[id.gate as usize].ins.iter().map(|&p| inst.net_of[p as usize]).collect()
     }
 
     /// The feedback groups, largest first.
@@ -1820,7 +1816,7 @@ impl Chip {
             for i in 0..self.delays.len() {
                 r.read_exact(&mut count)?;
                 // Not reserved up front, as the clock's pending events are
-                // not ([`crate::clock::Behavioural::load`]): the count is
+                // not ([`crate::clock::Behavioral::load`]): the count is
                 // the file's, a line carries a handful, and a count past
                 // what the file holds fails on the first tap that is not
                 // there.
@@ -1849,7 +1845,7 @@ impl Chip {
     /// not describe. **It does not cover what a gate computes** --- editing
     /// the body of a function in [`crate::part`] leaves it unchanged --- so
     /// a checkpoint is only as good as the build that wrote it, and one kept
-    /// across a change to part behaviour will be silently stale.
+    /// across a change to part behavior will be silently stale.
     pub fn fingerprint(&self) -> u64 {
         let mut h = fnv(0xcbf2_9ce4_8422_2325, &(self.nets.len() as u64).to_le_bytes());
         for inst in &self.instances {
@@ -1857,11 +1853,11 @@ impl Chip {
             for slot in &inst.net_of {
                 h = fnv(h, &slot.unwrap_or(u32::MAX).to_le_bytes());
             }
-            for gate in inst.behaviour.gates {
+            for gate in inst.behavior.gates {
                 h = fnv(h, &[gate.out]);
                 h = fnv(h, gate.ins);
             }
-            h = fnv(h, inst.behaviour.update_ins);
+            h = fnv(h, inst.behavior.update_ins);
         }
         h
     }
@@ -1895,7 +1891,7 @@ impl Chip {
     /// not come through its update.
     fn soil_part(&mut self, i: usize) {
         let base = self.gate_base[i] as usize;
-        for f in base..base + self.instances[i].behaviour.gates.len() {
+        for f in base..base + self.instances[i].behavior.gates.len() {
             self.soil(f);
         }
     }
@@ -2500,7 +2496,7 @@ impl Chip {
                 continue;
             }
             self.part_dirty[i] = false;
-            let Some(update) = self.instances[i].behaviour.update else { continue };
+            let Some(update) = self.instances[i].behavior.update else { continue };
             let mut now: Pins = [Level::Z; crate::part::MAX_PINS];
             let mut was: Pins = [Level::Z; crate::part::MAX_PINS];
             for (pin, slot) in self.instances[i].net_of.iter().enumerate() {
@@ -2523,7 +2519,7 @@ impl Chip {
     /// The net a gate drives, if it is wired.
     fn out_net(&self, id: GateId) -> Option<NetId> {
         let inst = &self.instances[id.part as usize];
-        inst.net_of[inst.behaviour.gates[id.gate as usize].out as usize]
+        inst.net_of[inst.behavior.gates[id.gate as usize].out as usize]
     }
 
     /// Recomputes one net from every gate driving it.
@@ -2579,7 +2575,7 @@ impl Chip {
     /// Evaluates a gate from the nets as they stand.
     fn eval_gate(&self, id: GateId) -> Level {
         let inst = &self.instances[id.part as usize];
-        let gate = &inst.behaviour.gates[id.gate as usize];
+        let gate = &inst.behavior.gates[id.gate as usize];
         // Only the pins this gate reads. A pin with no net is not wired
         // to anything, and a TTL input with nothing on it floats high.
         // OLORD2 1A20 is why that matters: it is the power-on reset, a
@@ -2597,7 +2593,7 @@ impl Chip {
     /// How a gate's output pin drives.
     fn drive_of(&self, id: GateId) -> Drive {
         let inst = &self.instances[id.part as usize];
-        inst.drive_of[inst.behaviour.gates[id.gate as usize].out as usize]
+        inst.drive_of[inst.behavior.gates[id.gate as usize].out as usize]
     }
 }
 
@@ -2611,7 +2607,7 @@ fn split_number(name: &str) -> (&str, Option<u32>) {
 /// Finds the delay lines of [`DELAY_LINES`] and their taps.
 ///
 /// They are not [`Instance`]s: a delay line computes nothing, so
-/// [`part::behaviour`] has nothing for it and [`Chip::new`] skips it. It is
+/// [`part::behavior`] has nothing for it and [`Chip::new`] skips it. It is
 /// still a part on the board, and these two are wired here from the netlist.
 fn wire_delays(n: &Netlist, clocked: bool) -> Vec<Delay> {
     // Pins 12, 4, 10, 6 and 8 are one fifth to five fifths of the line. MIT

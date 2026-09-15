@@ -933,7 +933,7 @@ fn let_it_run(peer: &mut std::net::TcpStream) -> Vec<Message> {
 fn board() -> muir::cable::DebugIn {
     use muir::cable::{Boards, DebugIn, FarEnd};
     use muir::chip::Chip;
-    use muir::clock::{Behavioural, Clock};
+    use muir::clock::{Behavioral, Clock};
     use muir::part::Level;
 
     let n = muir::netlist::parse(include_str!("../data/CADR.netlist")).unwrap();
@@ -943,7 +943,7 @@ fn board() -> muir::cable::DebugIn {
     c.power_on();
     c.load_prom(&n, &muir::prom::boot_prom_image());
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let mut far = FarEnd::new(&n, &bus_n, &mem_n, Boards::default(), 0, Machine::new());
     far.join(&mut c, clk.time_ns());
     let boot = n.by_name_id("-BOOT1").unwrap();

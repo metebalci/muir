@@ -358,7 +358,7 @@ fn netlist_devices(n: &Netlist) -> Devices<'_> {
 /// `cadrio/dm.stf` and `cadrio/iob1.stf` are byte for byte the same files
 /// as `cadrdc/dm.stf` and `cadrdc/iob1.stf`; `iob1.stf` is the I/O board of
 /// May 1979 and `cadrio/dc.stf` the disk controller of March 1979, both
-/// earlier boards than the ones modelled here; `cadrdc/mk.stf` and
+/// earlier boards than the ones modeled here; `cadrdc/mk.stf` and
 /// `cadrio/mk.stf` are the Marksman controller, which muir does not model;
 /// and `cadrtv/lmtv.stf` is the SIMPLE TV's, at a revision the drawings
 /// have moved past. It names the pages under their pre-rename names ---

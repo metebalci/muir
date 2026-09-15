@@ -37,11 +37,11 @@ is not this project's own work throughout:
   stored in Alan Bawden's evacuated format; its header keeps John Wilson's.
   It came here the same way, under the AGPL through `ams/cadr4`.
 
-**Neither original carries a licence**, and that was checked at the source
+**Neither original carries a license**, and that was checked at the source
 rather than assumed from the copies here. Both are published in
 `lisper/cpus-cadr`, Brad Parker's own repository: `suds/soap.c` and
 `suds/unpack.c` there give authorship and a description in their headers and
-state no terms, and the repository holds no licence file. So for whatever
+state no terms, and the repository holds no license file. So for whatever
 survives of the two originals in these files there is no grant to point at
 --- not a permissive one, and not a refusal either. The terms were never
 written down.
@@ -52,7 +52,7 @@ the changes listed in `soap4.c`'s own header --- and it cannot make a grant
 for what came before it, which is why the copyright lines at the top of both
 files name the original authors beside this project's. Anyone redistributing
 these two files should know the position is unsettled rather than settled in
-their favour. It is the one open licensing question in this repository.
+their favor. It is the one open licensing question in this repository.
 
 Everything else in this directory is this project's, under the repository's
-licence.
+license.

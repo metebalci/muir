@@ -31,7 +31,7 @@
 //! the image file of a pack opened read-write ([`Unit::open_rw`]), and into
 //! memory for the run on a pack opened read-only or blank ([`Unit::open`],
 //! [`Unit::blank`]).  The interrupt request is
-//! modelled, as the level MIT describes: microcode 323 enables it on every
+//! modeled, as the level MIT describes: microcode 323 enables it on every
 //! transfer and takes it in `DISK-SWAP-HANDLER`.
 
 use crate::disk_unit::{self, BLOCK_WORDS, Unit, format};
@@ -115,7 +115,7 @@ pub struct Controller {
     /// decision about all of those numbers rather than about this model.
     ///
     /// On, an operation takes what the drive takes: a seek is
-    /// [`crate::disk_unit::seek_ns`] of the distance travelled, and a
+    /// [`crate::disk_unit::seek_ns`] of the distance traveled, and a
     /// transfer waits for its block to come round and then spends a
     /// sector's time on each. So software that starts an operation and
     /// polls sees the controller busy, which is what a driver's wait loop
@@ -236,7 +236,7 @@ impl Controller {
     /// **The drive on the netlist controller's cable already had it
     /// right**, which is the second source: [`crate::disk_unit::Trident`]
     /// raises it where the seek settles, and `tests/disk.rs` holds it
-    /// there. So this is the behavioural model catching up with the
+    /// there. So this is the behavioral model catching up with the
     /// gate-level one.
     ///
     /// Charged like [`Controller::done_in`], so a model that is not
@@ -287,7 +287,7 @@ impl Controller {
     /// The status word.  Every bit here is `DCSTS`'s own name for the signal
     /// on that Xbus line, and MIT's text says the same.
     ///
-    /// What is not modelled: `<23>` internal parity, `<19:18>` the
+    /// What is not modeled: `<23>` internal parity, `<19:18>` the
     /// memory-parity and header-compare errors, `<16:15>` the data ECC
     /// ones, and of `<17>` only the failing checkword --- its other cause,
     /// running off the end of the pack, is here; `<12>` the start-block error
@@ -427,7 +427,7 @@ impl Controller {
     /// readings.  The spindle is the one [`crate::disk_unit::turn`] gives the drive
     /// on the cable, with an index pulse at time zero of the machine's
     /// clock: this controller has one drive, the multiplexor not being
-    /// modelled, so one spindle is the machine.  With no drive there are no
+    /// modeled, so one spindle is the machine.  With no drive there are no
     /// pulses; the board's counter holds whatever it last had, and here
     /// that is zero.
     ///
@@ -746,8 +746,8 @@ impl Controller {
             //   stops it: **Timeout and Transfer Aborted**. So it is
             //   [`Controller::hang`], the same as a reserved code.
             //
-            // What is modelled here is the status, which is what software
-            // reads. What is **not** modelled is the data: the words the
+            // What is modeled here is the status, which is what software
+            // reads. What is **not** modeled is the data: the words the
             // channel stores are the shift registers' own contents
             // cycling --- 3, c000000, 0, 300000, 0, c000 on the board ---
             // and there is no fifo here to produce them. So 01 and 03
@@ -769,7 +769,7 @@ impl Controller {
             // codes nothing writes**, so the status being right for them
             // is already more than anything asks for.
             //
-            // Modelling the data would mean writing `3, c000000, 0,
+            // Modeling the data would mean writing `3, c000000, 0,
             // 300000, 0, c000` in here as a constant, and that is one
             // board's fifo holding what one prior state left in it ---
             // not a value this model could derive from anything it has.

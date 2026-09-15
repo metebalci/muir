@@ -261,7 +261,7 @@ fn the_read_decoders_select_the_sixteen_registers() {
 
 /// What one read select puts on `SPY<15:0>`: for every 74LS244 or 74LS240
 /// enabled by it, the net on each buffer's input, by the `SPY` bit its
-/// output drives.  The input-to-output pairs come from `muir::part::behaviour`
+/// output drives.  The input-to-output pairs come from `muir::part::behavior`
 /// and not from a table typed here.  Returns the kind of buffer too, since a
 /// 74LS240 inverts and a 74LS244 does not.
 fn spy_sources(n: &Netlist, select: &str) -> Vec<(String, &'static str)> {
@@ -277,7 +277,7 @@ fn spy_sources(n: &Netlist, select: &str) -> Vec<(String, &'static str)> {
             "74LS240" => "74LS240",
             other => panic!("{select} enables a {other} at {} {}", p.page, p.reference),
         };
-        let b = muir::part::behaviour(kind).expect("buffer behaviour");
+        let b = muir::part::behavior(kind).expect("buffer behavior");
         for g in b.gates {
             let (enable, input) = (g.ins[0], g.ins[1]);
             if net_at(n, p, enable) != select {
@@ -666,7 +666,7 @@ use muir::micro::Micro;
 use muir::rtl::Rtl;
 
 /// A machine whose whole boot PROM is [`filler`], with `A3` set to a value
-/// the console can recognise.
+/// the console can recognize.
 fn straight_line_machine() -> Machine {
     let mut m = Machine::new();
     m.amem[3] = 0o123456;
@@ -675,7 +675,7 @@ fn straight_line_machine() -> Machine {
 }
 
 /// CC's clock protocol on an engine: write the clock control register, let
-/// the synchroniser take it and the microcycle run, then write zero and let
+/// the synchronizer take it and the microcycle run, then write zero and let
 /// `SSDONE` clear.  `SSTEP` follows `STEP` one master clock on, the one
 /// microcycle runs in the next, and `SSDONE` follows `SSTEP` after that; two
 /// steps a write is what the board needs, where CC's Unibus writes take

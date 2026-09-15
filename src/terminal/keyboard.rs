@@ -4,7 +4,7 @@
 //! The keyboard on the I/O board's cable: MIT's "new keyboard" of November
 //! 1980, the one with the 24-bit shift register.
 //!
-//! Three things are modelled and all are MIT's own. **The character on the
+//! Three things are modeled and all are MIT's own. **The character on the
 //! cable**, from the "Protocol documentation" section at the end of
 //! `sys/io1/ukbd.lisp` in the System 100 release --- the 8748 firmware of
 //! the keyboard itself: 24 bits, low-order first, a start bit that is low,
@@ -22,7 +22,7 @@
 //! goes until the next key-down (`Keyboard::check_boot`); which Controls
 //! and Metas it needs is the one setting in it, [`BootKeys`]. This is
 //! **not** the Knight keyboard, which is source ID `111` with a different
-//! word and is not modelled.
+//! word and is not modeled.
 //!
 //! **The keyboard sends positions and the machine does the shifting.**
 //! `ukbd.lisp`: "All key-encoding, including hacking of shifts, will be
@@ -42,7 +42,7 @@
 //! Everything under it is MIT's.
 //!
 //! What reaches the I/O board is the same 24-bit word by either route:
-//! [`Keyboard::deliver`] presses it into the behavioural board, and
+//! [`Keyboard::deliver`] presses it into the behavioral board, and
 //! `crate::terminal::cable` clocks it down the wire into the netlist one.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1421,7 +1421,7 @@ impl Keyboard {
         self.queue.front().copied()
     }
 
-    /// Hands the next word to the behavioural I/O board, if the board has
+    /// Hands the next word to the behavioral I/O board, if the board has
     /// taken the last: the board's `KBD READY` is the keyboard's `DONE`
     /// the other way up.
     pub fn deliver(&mut self, board: &mut IoBoard) -> bool {

@@ -43,7 +43,7 @@ fn tap(sym: u32) -> [(u32, bool); 2] {
 
 /// **The built-in default is the mapping muir already had.** Every keysym
 /// the hard-coded `positions` and `modifier` answered answers the same
-/// way, so turning the mapping into data changed no behaviour.
+/// way, so turning the mapping into data changed no behavior.
 #[test]
 fn the_default_is_the_mapping_muir_already_had() {
     let m = Mapping::default();

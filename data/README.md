@@ -137,7 +137,7 @@ read a leading `-` as a trailing ` L`.
 
 ### Nets the drawing leaves unnamed
 
-An unlabelled wire has no name to carry, so it is named **after a pin at its
+An unlabeled wire has no name to carry, so it is named **after a pin at its
 other end**: `@2C20,p13` is *the wire that reaches 2C20 pin 13*. The wire
 between ALUC4 2C15 pin 3 and 2C20 pin 13 is therefore written `@2C20,p13`
 where 2C15 touches it and `@2C15,p3` where 2C20 does --- one wire under two
@@ -188,7 +188,7 @@ The file is not soap4's output alone.
 
 **Reconciliation against MIT's wire list**, by `examples/reconcile.rs`, run
 by every generating script but `tools/cadrm-netlist.sh`. A wire the drawings label twice comes out of the
-reader as two nets; a name spelt with and without a space, likewise. MIT's
+reader as two nets; a name spelled with and without a space, likewise. MIT's
 list is the board as it was wrapped, so where a wire of the list falls on
 more than one net of the file, every pin of it is put on one net under MIT's
 name. The scripts print what they moved: for `CADR.netlist` it is two pins,
@@ -243,12 +243,12 @@ files still match, so a re-extracted netlist cannot leave them behind
 quietly. The prose header of each is written by hand and kept; only the rows
 below it are derived, so only those are written and only those compared.
 
-## Licence
+## License
 
 Everything here is made from `mit/` by this project's tools, so two things
 are in each file. The extraction --- the scripts in `tools/`, the readers and
 assemblers in `examples/`, the form the files take --- is this project's,
-under the repository's licence. What is extracted is MIT's: the netlists are
+under the repository's license. What is extracted is MIT's: the netlists are
 MIT's circuits read off MIT's drawings and wire lists, the three disk
 controller images are MIT's microcode `mit/cadrdc/newdsk.31` in its
 assembled form, and the two Trident tables, `cables.txt` and

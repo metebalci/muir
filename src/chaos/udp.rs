@@ -26,7 +26,7 @@
 //! of muir's routing --- nothing here reads a routing packet.
 //!
 //! **The link is a [`super::ether::Node`] and nothing else.** It waits
-//! its turn on the modelled cable as any other station does, so the board
+//! its turn on the modeled cable as any other station does, so the board
 //! sees a station taking its turn rather than a transceiver that has
 //! failed. What comes in over UDP goes on the cable at the node's turn;
 //! what the board puts on the cable for a peer goes out as a datagram.
@@ -69,7 +69,7 @@
 //! forbids language models to read or process it; that is the author's
 //! decision about the author's own work and it is kept here.
 //!
-//! Most of the frame was modelled already: [`super::packet::Packet`] is
+//! Most of the frame was modeled already: [`super::packet::Packet`] is
 //! the eight header words and the data, and [`super::packet::frame`]
 //! adds the source and the check word to a buffer whose last word is the
 //! cable destination --- which is the hardware trailer, in the trailer's
@@ -196,7 +196,7 @@ pub const PACKET_ORDER: Order = Order::Little;
 /// change to these two constants and to that one test.
 pub const TRAILER_ORDER: Order = Order::Big;
 
-/// A frame as it stood on the modelled cable, as a CHUDP datagram.
+/// A frame as it stood on the modeled cable, as a CHUDP datagram.
 ///
 /// `buffer` is the buffer the software wrote, its last word the cable
 /// destination, and `source` and `check` are the two words the hardware
@@ -226,7 +226,7 @@ pub fn wrap(buffer: &[u16], source: u16, check: u16) -> Option<Vec<u8>> {
 /// and the trailer has also been described as carrying an Internet
 /// checksum --- so this reports the answer and leaves the packet alone.
 /// A run with `--chaos-trace` against a real peer settles it, and until
-/// then the frame that goes on the modelled cable carries a check word
+/// then the frame that goes on the modeled cable carries a check word
 /// the model computes itself.
 ///
 /// The data is a whole number of 16-bit words on the cable, and this
@@ -334,7 +334,7 @@ impl Link {
 /// **Its address on the cable is the address of the peer whose frame it
 /// is carrying.** A CHUDP peer is a station on this machine's cable ---
 /// that is what a leaf's link is --- so a packet from 3040 goes onto the
-/// modelled cable with 3040 in the hardware source, exactly as 3040's
+/// modeled cable with 3040 in the hardware source, exactly as 3040's
 /// own interface would have put it there, and the board's turn timer
 /// loads from it as it would from any other station. Between frames it
 /// is 0, which is no station's address: the ether uses it only to keep a

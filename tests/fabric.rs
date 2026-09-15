@@ -5,7 +5,7 @@
 //! and no board.
 //!
 //! Nothing exists in the programmable logic yet, so the register window
-//! [`muir::fabric`] proposes is modelled here in two ways.  [`Adapter`] is
+//! [`muir::fabric`] proposes is modeled here in two ways.  [`Adapter`] is
 //! the window with **the netlist's own DBGIN connector behind it** ---
 //! [`muir::cable::DebugIn`], the interface board and a processor, MIT's
 //! own logic --- which is what the driver and the transport are run
@@ -45,7 +45,7 @@ use muir::rtl::Rtl;
 fn board() -> (DebugIn, Netlist) {
     use muir::cable::{Boards, FarEnd};
     use muir::chip::Chip;
-    use muir::clock::{Behavioural, Clock};
+    use muir::clock::{Behavioral, Clock};
     use muir::part::Level;
 
     let n = muir::netlist::parse(include_str!("../data/CADR.netlist")).unwrap();
@@ -55,7 +55,7 @@ fn board() -> (DebugIn, Netlist) {
     c.power_on();
     c.load_prom(&n, &muir::prom::boot_prom_image());
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let mut far = FarEnd::new(&n, &bus_n, &mem_n, Boards::default(), 0, Machine::new());
     far.join(&mut c, clk.time_ns());
     let boot = n.by_name_id("-BOOT1").unwrap();

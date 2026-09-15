@@ -5,8 +5,8 @@
 //! what the boards make of the same programs: MIT's PROM program against
 //! the netlist SIMPLE TV's measured raster, the program the window system
 //! loads for the main screen against its own arithmetic, and the program
-//! the colour software loads against NTSC. Nothing here needs `vendor/`
-//! but the colour program, whose test says so when it is skipped.
+//! the color software loads against NTSC. Nothing here needs `vendor/`
+//! but the color program, whose test says so when it is skipped.
 
 use muir::tv::sync::{INSTRUCTION_NS, Timeline, prom};
 use muir::tv::{FRAME_NS, Tv, mode};
@@ -168,20 +168,20 @@ fn the_window_systems_program_at_sixty_hertz() {
     assert!((hz - 60.5).abs() < 0.01, "the refresh rate asked for, to the whole line: {hz}");
 }
 
-/// **The colour program is two fields of NTSC.** `COLOR:SYNC` in
+/// **The color program is two fields of NTSC.** `COLOR:SYNC` in
 /// `sys/window/color.lisp`, "This is really NTSC standard video": 525
 /// lines in two fields of 262 and 263, each field's 227 picture lines
 /// fetching 36 video cycles of the picture --- 36 x 64 bits is 576 pixels
-/// of 4 bits, the colour screen's width --- and a 37th, blanked,
+/// of 4 bits, the color screen's width --- and a 37th, blanked,
 /// end-of-line cycle that steps the address by the vertical spacing; 454
-/// picture lines in all, the colour screen's height, and a `TVMA CLR` at
+/// picture lines in all, the color screen's height, and a `TVMA CLR` at
 /// the top of each field. In clock mode 3 an instruction is 625 ns, so a
 /// line of 102 is 63.75 us and the frame 33.47 ms: NTSC's 63.56 us line
 /// to within the program's whole instructions.
 ///
 /// Read from the vendored release; skipped without it.
 #[test]
-fn the_colour_program_is_two_fields_of_ntsc() {
+fn the_color_program_is_two_fields_of_ntsc() {
     let Some(src) = support::release("window/color.lisp") else {
         eprintln!("skipped: needs vendor/system-100-0 (tools/fetch-system-100.sh)");
         return;

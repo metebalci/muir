@@ -724,7 +724,7 @@ fn the_prom_the_machine_runs_is_the_file_named() {
 
 /// **`--version` says what this build is**, and says it on stdout so a
 /// script can read it. The name, the crate's version, and whether it was
-/// built with optimisations off --- a run says the same line first, so a
+/// built with optimizations off --- a run says the same line first, so a
 /// report of a run says which muir made it.
 #[test]
 fn version_says_what_this_build_is() {
@@ -760,7 +760,7 @@ fn version_says_what_this_build_is() {
 /// flag.
 ///
 /// The model controller is refused nothing, because it wants no board: it
-/// is behavioural and has addressed eight units all along,
+/// is behavioral and has addressed eight units all along,
 /// `disk_controller::UNITS`.
 #[test]
 fn a_drive_past_unit_0_wants_the_multiplexor_named() {
@@ -844,7 +844,7 @@ fn the_multiplexor_is_the_netlist_controllers_board() {
 ///
 /// **The answer arrives while the machine runs**, which is the point: a
 /// reader that held the run would be no use for the timing runs this
-/// exists for. Measured over the same 20,000-microcycle window, signalled
+/// exists for. Measured over the same 20,000-microcycle window, signaled
 /// three times against not at all: both end at PC 240 having run 20,000,
 /// in 8.926 s against 8.903, which is the cost of the three lines printed.
 /// So asking neither changes the answer nor slows the run.
@@ -858,7 +858,7 @@ fn a_running_chip_says_where_it_is_when_asked() {
     // Long enough to still be running when the signal lands, short enough
     // that the test is a second or two: `chip` does about 2,200
     // microcycles a second.
-    // **Signalled once the run says it is listening, not after a guess at
+    // **Signaled once the run says it is listening, not after a guess at
     // how long that takes.**  The default action for `SIGUSR1` is to kill
     // the process, so a signal sent before the handler is installed kills
     // the run --- and building a `chip` machine takes as long as it takes,
@@ -1223,15 +1223,15 @@ fn the_color_tv_is_fitted_on_every_engine() {
     assert!(!t.contains("color tv:"), "no second board unasked:\n{t}");
 }
 
-/// **The colour screen is a second RFB server of 576 by 454**, at the
+/// **The color screen is a second RFB server of 576 by 454**, at the
 /// display above the main one or where `--color-terminal` says; and the
 /// flag without the board is refused, as is the main screen's endpoint.
 #[test]
-fn the_color_terminal_serves_the_colour_screen() {
+fn the_color_terminal_serves_the_color_screen() {
     refused(&["--rtl", "--color-terminal", "--stop-after", "1"], "--color-terminal");
 
     // Both displays on ports the host picks, each said on stderr as it is
-    // bound.  The run is killed once the colour screen has answered.
+    // bound.  The run is killed once the color screen has answered.
     let run = muir()
         .args(["--rtl", "--color-tv", "--terminal", "127.0.0.1:0"])
         .args(["--color-terminal", "127.0.0.1:0", "--stop-after", "400000000"])
@@ -1241,7 +1241,7 @@ fn the_color_terminal_serves_the_colour_screen() {
             .find_map(|l| l.trim().strip_prefix("color terminal: vnc://"))
             .map(|rest| rest.split([' ', ';']).next().unwrap().to_string())
     };
-    run.stderr().wait_until(|t| endpoint(t).is_some(), "the colour screen said where it is");
+    run.stderr().wait_until(|t| endpoint(t).is_some(), "the color screen said where it is");
     let said = run.stderr().so_far();
     let at = endpoint(&said).unwrap();
     let main = said
@@ -1259,15 +1259,15 @@ fn the_color_terminal_serves_the_colour_screen() {
     );
 }
 
-/// **`--color-tv-capture` records the colour screen, and it needs the
+/// **`--color-tv-capture` records the color screen, and it needs the
 /// board.** Its own GIF, 576 by 454 with the clocks below it;
 /// `--tv-capture-no-time` is both recordings' and leaves this one 454
 /// high; and an end of the debug cable is refused it as it is refused
 /// `--tv-capture`, the two machines being two clocks.
 #[test]
-fn the_color_tv_capture_records_the_colour_screen() {
+fn the_color_tv_capture_records_the_color_screen() {
     let dir = scratch("color-capture");
-    let gif = dir.join("colour.gif");
+    let gif = dir.join("color.gif");
     let path = gif.to_str().unwrap();
     // The board is what there is to record: the refusal names both flags.
     refused(&["--rtl", "--color-tv-capture", path, "--stop-after", "1"], "--color-tv-capture");
@@ -1287,7 +1287,7 @@ fn the_color_tv_capture_records_the_colour_screen() {
             "the start says where it goes:\n{t}"
         );
         assert!(
-            t.contains(&format!("frames of the colour screen at {}", gif.display())),
+            t.contains(&format!("frames of the color screen at {}", gif.display())),
             "and the stop says what it wrote:\n{t}"
         );
         (

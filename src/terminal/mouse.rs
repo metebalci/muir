@@ -24,7 +24,7 @@
 //! What reaches the board is the same by either route: the counts go to
 //! a pair of [`Encoders`], which step the quadrature pairs a phase at a
 //! time --- on the netlist board's lines through
-//! [`super::cable::MouseOnCable`], and on the behavioural board's through
+//! [`super::cable::MouseOnCable`], and on the behavioral board's through
 //! [`IoBoard::mouse_move`], which samples them on its own clock as the
 //! board does.
 
@@ -60,7 +60,7 @@ impl Default for Encoders {
     /// has no phase of its own to start from and this is the model's
     /// choice: high on the cable is what the board's 74LS14s read with
     /// nothing plugged in, so a mouse that has not yet moved reads as no
-    /// mouse, and `tests/cadrio_netlist.rs` can hold the behavioural board
+    /// mouse, and `tests/cadrio_netlist.rs` can hold the behavioral board
     /// to the netlist one with its mouse lines open. Only until it moves:
     /// a mouse that stops stays at whatever phase it stopped at, as an
     /// encoder does.
@@ -180,7 +180,7 @@ impl Mouse {
         self.dx != 0 || self.dy != 0 || self.buttons != board_buttons
     }
 
-    /// Hands the behavioural I/O board what has happened: the counts,
+    /// Hands the behavioral I/O board what has happened: the counts,
     /// whole, and the buttons.
     pub fn deliver(&mut self, board: &mut IoBoard) {
         let (dx, dy) = self.take_motion();

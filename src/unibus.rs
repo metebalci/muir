@@ -175,7 +175,7 @@ struct Wire {
 /// MIT's files says which pins of C20 the resistor joins, and a part model
 /// that paired them would be inventing a connection rather than reading
 /// one. What the drawings do settle is that the mains reaches the trigger,
-/// and that is what is modelled; the conditioning between is analogue and
+/// and that is what is modeled; the conditioning between is analog and
 /// has no logic level to carry.
 pub const MAINS_PERIOD: (u64, u64) = (1_000_000_000, 60);
 
@@ -199,7 +199,7 @@ pub struct Unibus {
     /// last exchange: while neither has moved, no wire has.
     seen: [u64; 2],
     /// Whether that skips the exchange. Off, every wire is carried every
-    /// time, the slow way: [`crate::cable::FarEnd::unoptimised`].
+    /// time, the slow way: [`crate::cable::FarEnd::unoptimized`].
     pub skip_unchanged: bool,
     /// The Chaosnet cable, with whatever stations are on it, if plugged
     /// in: [`Unibus::plug`]. Not in a checkpoint, like the drive: a resume

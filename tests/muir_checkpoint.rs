@@ -221,12 +221,12 @@ fn a_resume_has_the_checkpoint_s_display_board() {
 /// **A checkpoint carries the color TV too**, and a resume onto a machine
 /// `--color-tv` disagrees with is refused by the flag's name, as
 /// `--tv-board` is.  The second display board is the backplane's: a
-/// machine with a colour screen is not the machine without one, and the
+/// machine with a color screen is not the machine without one, and the
 /// probe `COLOR-EXISTS-P` makes answers differently on each.
 #[test]
 fn a_resume_has_the_checkpoint_s_color_tv() {
     let dir = scratch("checkpoint-color-tv");
-    let chk = dir.join("colour.chk");
+    let chk = dir.join("color.chk");
     let out = muir()
         .args(["--micro", "--color-tv", "--stop-after", "100", "--checkpoint"])
         .arg(&chk)
@@ -256,7 +256,7 @@ fn a_resume_has_the_checkpoint_s_color_tv() {
 /// the flag's name --- none against one, and the netlist board against the
 /// model.
 ///
-/// It is refused before anything is read, as `--tv-board` is: the colour
+/// It is refused before anything is read, as `--tv-board` is: the color
 /// board is one more device board in the file, and the device boards go in
 /// one after another with no count, so a checkpoint with one cannot be
 /// read at all by a machine built without it. Hence the word at the front
@@ -268,7 +268,7 @@ fn a_resume_has_the_checkpoint_s_color_tv() {
 #[test]
 fn a_chip_resume_has_the_checkpoint_s_color_tv() {
     let dir = scratch("checkpoint-chip-color-tv");
-    let chk = dir.join("colour.chk");
+    let chk = dir.join("color.chk");
     let chip = [
         "--chip",
         "--main-memory-boards",

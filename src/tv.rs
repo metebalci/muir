@@ -31,7 +31,7 @@
 //! December 1980 --- `data/LISPMTV.netlist` through
 //! `tools/lispmtv-netlist.sh`, the board `lmtv.order` is the specification
 //! of. **They program alike but for one bit**, mode
-//! bit 7 ([`mode::SYNC_PROM_ENABLE`]); register 4, the colour map's write
+//! bit 7 ([`mode::SYNC_PROM_ENABLE`]); register 4, the color map's write
 //! port ([`Tv::color_map`]), is the same circuit on both, measured on each
 //! board in `tests/simpletv_netlist.rs` and `tests/lispmtv_netlist.rs`.
 //! Either board is strapped here as the normal TV, at `17000000` and
@@ -44,13 +44,13 @@
 //! `--tv-board` named, because System 100 hardwires `MAIN-SCREEN` to one
 //! bit a pixel there and defines `COLOR-SCREEN` at `17200000`
 //! ([`Tv::color`]). Its picture is 576 by 454 at four bits a pixel
-//! ([`Tv::pixel4`]) through the sixteen colours of the map
+//! ([`Tv::pixel4`]) through the sixteen colors of the map
 //! ([`Tv::rgb`]). On `chip` the board is a netlist on the backplane like
 //! the others --- `data/LISPMTV.netlist` through
 //! [`crate::netlist::parse_color_tv`], wrapped to [`COLOR_TV`] by
 //! [`crate::xbus::straps`] --- and `--color-tv model` keeps this model
 //! there instead. Either way the model is fitted: every write to the
-//! netlist board is mirrored into it, so the colour picture is read off
+//! netlist board is mirrored into it, so the color picture is read off
 //! the same place whichever board drew it, exactly as the main screen's
 //! is.
 //!
@@ -59,7 +59,7 @@
 //! model runs that program as the board does ([`sync`]): the vertical flag
 //! is preset where the program's `TVMA CLR` falls, and `VSYNC` and `HSYNC`
 //! in the mode register are the program's own bits, which is what the
-//! colour software's `%XBUS-WRITE-SYNC` waits on. What the model does not
+//! color software's `%XBUS-WRITE-SYNC` waits on. What the model does not
 //! do is scan: no dot is fetched and no monitor is driven, so the picture
 //! is the frame buffer as it stands, and a program that fetches part of it
 //! or none shows the whole of it all the same.
@@ -157,7 +157,7 @@ impl Strap {
     }
 }
 
-/// `(:WIDTH 576.)` of `COLOR:MAKE-SCREEN` --- the colour picture's width in
+/// `(:WIDTH 576.)` of `COLOR:MAKE-SCREEN` --- the color picture's width in
 /// pixels, which is `lmtv.order`'s "successive 4-bit pixels of the video
 /// buffer at a 12 MHz rate" over the 36 video cycles of 64 bits a line
 /// that `COLOR:SYNC` fetches (`tests/sync_program.rs`).
@@ -167,11 +167,11 @@ pub const COLOR_WIDTH: usize = 576;
 /// of each of `COLOR:SYNC`'s two NTSC fields.
 pub const COLOR_HEIGHT: usize = 454;
 
-/// `(:BITS-PER-PIXEL 4)` of `COLOR:MAKE-SCREEN`: a pixel is a colour, the
+/// `(:BITS-PER-PIXEL 4)` of `COLOR:MAKE-SCREEN`: a pixel is a color, the
 /// four-bit address into the map.
 pub const COLOR_BITS_PER_PIXEL: usize = 4;
 
-/// Words of the buffer a colour line takes: 576 pixels of 4 bits is 2304
+/// Words of the buffer a color line takes: 576 pixels of 4 bits is 2304
 /// bits, 72 words of 32.  The screen array `COLOR:MAKE-SCREEN` displaces
 /// onto the buffer is `ART-4B` and this is its row.
 pub const COLOR_WORDS_PER_LINE: usize = COLOR_WIDTH * COLOR_BITS_PER_PIXEL / 32;
@@ -187,7 +187,7 @@ pub const COLOR_WORDS_PER_LINE: usize = COLOR_WIDTH * COLOR_BITS_PER_PIXEL / 32;
 /// differs**, [`mode::SYNC_PROM_ENABLE`], mode bit 7, and that is what
 /// this says.
 ///
-/// Register 4, the colour map's write port, is **not** a difference: the
+/// Register 4, the color map's write port, is **not** a difference: the
 /// SIMPLE TV carries the same page, `RAMCOL.DRW` in `lmtv.stf`'s own
 /// words "SIMPLE TV / COLOR MAP", revised to `nracol` in May 1980, and
 /// part for part it is the LISPM TV's `COLOR`. Both boards strobe it,
@@ -219,12 +219,12 @@ impl Board {
     }
 }
 
-/// Colours the colour map holds: `lmtv.order`'s "3-0 Color (i.e. address
+/// Colors the color map holds: `lmtv.order`'s "3-0 Color (i.e. address
 /// into color map)" and "we only use a 16x8 subset of it", and
 /// `WRITE-COLOR-MAP`'s `(LOGAND LOC 17)`.
 pub const COLORS: usize = 16;
 
-/// Channels the colour map has: `lmtv.order`'s "7-6 Select which color
+/// Channels the color map has: `lmtv.order`'s "7-6 Select which color
 /// map (up to 4 channels)", of which three are wired --- the 74S139 at
 /// 0E10, on the LISPM TV's COLOR page and the SIMPLE TV's NRACOL, decodes
 /// them into `-LOAD COLOR 0`, `1` and `2` and leaves its fourth output
@@ -308,7 +308,7 @@ pub mod mode {
     /// `color.lisp` calls and the same file exports as `SYS: WINDOW;
     /// COLOR`. So what the software does with the bit is **the ECO's word
     /// and not a line of code we have**: it tells a new board from an old
-    /// one. Both boards are modelled as the boards read, which is what
+    /// one. Both boards are modeled as the boards read, which is what
     /// either answer of that check would find.
     pub const SYNC_PROM_ENABLE: u32 = 0o200;
 
@@ -396,7 +396,7 @@ impl SyncRam {
 }
 
 /// The frame buffer, the mode register, the vertical flag, the sync
-/// program RAM with the program running, and the colour map.
+/// program RAM with the program running, and the color map.
 #[derive(Clone)]
 pub struct Tv {
     /// Which of the two boards this is: what mode bit 7 reads.
@@ -409,7 +409,7 @@ pub struct Tv {
     mode: u32,
     /// Registers 1 to 3.
     pub sync: SyncRam,
-    /// The colour map as written, `[colour][channel]`: [`Tv::color_map`].
+    /// The color map as written, `[color][channel]`: [`Tv::color_map`].
     color_map: [[u8; CHANNELS]; COLORS],
     /// The bit the last mode write clocked into the vertical flag's flop.
     flag_written: bool,
@@ -475,8 +475,8 @@ impl Tv {
         self.board = board;
     }
 
-    /// The colour map as the software has written it, `[colour][channel]`:
-    /// sixteen colours of three channels, red, green and blue. Written on
+    /// The color map as the software has written it, `[color][channel]`:
+    /// sixteen colors of three channels, red, green and blue. Written on
     /// either board, both having the circuit that strobes it.
     ///
     /// **These are the bytes written, not brightnesses.**
@@ -556,7 +556,7 @@ impl Tv {
         self.buffer[bit / 32] >> (bit % 32) & 1 != 0
     }
 
-    /// The four-bit pixel at `x`, `y` of the colour picture: the colour,
+    /// The four-bit pixel at `x`, `y` of the color picture: the color,
     /// which is an address into [`Tv::color_map`].
     ///
     /// `COLOR:MAKE-SCREEN` displaces an `ART-4B` array onto the buffer, so
@@ -574,7 +574,7 @@ impl Tv {
         (self.buffer[at] >> (x % 8 * COLOR_BITS_PER_PIXEL)) as u8 & 0o17
     }
 
-    /// What the monitor shows a pixel of colour `colour` as: the three
+    /// What the monitor shows a pixel of color `color` as: the three
     /// guns, red, green and blue, from the map.
     ///
     /// **This is a property decision and not a fact about the D-A**, which
@@ -587,9 +587,9 @@ impl Tv {
     /// reference for it. **Unverified**: a drawing or a parts list of the
     /// paddles that carry the map RAMs and their D-As would settle what a
     /// stored byte really makes at the monitor.
-    pub fn rgb(&self, colour: usize) -> [u8; CHANNELS] {
+    pub fn rgb(&self, color: usize) -> [u8; CHANNELS] {
         let mut out = [0; CHANNELS];
-        for (gun, stored) in out.iter_mut().zip(self.color_map[colour & (COLORS - 1)]) {
+        for (gun, stored) in out.iter_mut().zip(self.color_map[color & (COLORS - 1)]) {
             *gun = u8::MAX - stored;
         }
         out
@@ -611,7 +611,7 @@ impl Tv {
     /// The screen as the monitor shows it, as a PNG: 768 by 963, one bit a
     /// pixel, a one white unless [`mode::BOW`] is set.
     ///
-    /// The encoder is here rather than a crate: a 1-bit greyscale PNG is a
+    /// The encoder is here rather than a crate: a 1-bit grayscale PNG is a
     /// header, the rows behind stored deflate blocks, and two checksums.
     pub fn png(&self) -> Vec<u8> {
         let mut raw = Vec::with_capacity(HEIGHT * (WIDTH / 8 + 1));
@@ -641,7 +641,7 @@ impl Tv {
         let mut ihdr = Vec::new();
         ihdr.extend_from_slice(&(WIDTH as u32).to_be_bytes());
         ihdr.extend_from_slice(&(HEIGHT as u32).to_be_bytes());
-        ihdr.extend_from_slice(&[1, 0, 0, 0, 0]); // 1 bit, greyscale, deflate, none, no interlace
+        ihdr.extend_from_slice(&[1, 0, 0, 0, 0]); // 1 bit, grayscale, deflate, none, no interlace
         chunk(&mut out, b"IHDR", &ihdr);
         chunk(&mut out, b"IDAT", &z);
         chunk(&mut out, b"IEND", &[]);
@@ -705,7 +705,7 @@ impl Tv {
 
     /// The four pins of the 2519 land, bit 4 lands in the vertical flag's
     /// flop, the sync program's three registers take theirs, and register 4
-    /// writes one byte of the colour map; everything
+    /// writes one byte of the color map; everything
     /// else the write carries has nowhere to be stored. A write
     /// that changes the program the generator runs --- the clock mode, the
     /// RAM's selection, or a word of the RAM while it is selected --- runs
@@ -735,7 +735,7 @@ impl Tv {
                     self.restart(ns);
                 }
             }
-            // The colour register, `lmtv.order`'s "173777x4 Color (write
+            // The color register, `lmtv.order`'s "173777x4 Color (write
             // only), 15-8 Value to write into color map, 7-6 Select which
             // color map (up to 4 channels), 3-0 Color (i.e. address into
             // color map)". On the board, page COLOR: the 74LS244 at 0D13
@@ -753,12 +753,12 @@ impl Tv {
             // same circuit; the two differ only in the 74S257's select and
             // the 241's pull-up net, neither of which is this write.
             // `tests/simpletv_netlist.rs` measures that board strobing the
-            // map with the same colour and value, so the write is the same
+            // map with the same color and value, so the write is the same
             // here.
             //
             // **`XDI4` and `XDI5` leave the board too**, on `COLOR 4` and
             // `COLOR 5`, where a 64-entry map would take them as address;
-            // `lmtv.order` gives the colour four bits and `WRITE-COLOR-MAP`
+            // `lmtv.order` gives the color four bits and `WRITE-COLOR-MAP`
             // writes `(LOGAND LOC 17)`, so MIT's own software never sets
             // them. What an off-board map does with them is
             // **unverified** --- see [`Tv::color_map`].
@@ -865,7 +865,7 @@ impl SyncRam {
 
 impl Tv {
     /// The display into a checkpoint: which board it is, the frame buffer,
-    /// the mode, the sync RAM, the colour map and the vertical flag.
+    /// the mode, the sync RAM, the color map and the vertical flag.
     pub fn save(&self, w: &mut crate::checkpoint::Writer) {
         // The strap is the backplane's and not the board's state: which
         // screen this is, is where the checkpoint keeps it --- the
@@ -890,8 +890,8 @@ impl Tv {
         w.u32s(buffer);
         w.u32(*mode);
         sync.save(w);
-        for colour in color_map {
-            for channel in colour {
+        for color in color_map {
+            for channel in color {
                 w.u8(*channel);
             }
         }
@@ -913,8 +913,8 @@ impl Tv {
         r.u32s_into(&mut self.buffer)?;
         self.mode = r.u32()?;
         self.sync.load(r)?;
-        for colour in &mut self.color_map {
-            for channel in colour {
+        for color in &mut self.color_map {
+            for channel in color {
                 *channel = r.u8()?;
             }
         }

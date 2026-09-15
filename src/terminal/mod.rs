@@ -52,15 +52,15 @@ use rfb::{ClientMessage, PixelFormat, Version};
 /// What the viewer's window is called.
 pub const NAME: &str = "muir: CADR";
 
-/// The sixteen colours of the colour screen's map as the monitor shows
+/// The sixteen colors of the color screen's map as the monitor shows
 /// them, a byte a gun in red, green, blue order: [`tv::Tv::rgb`] of every
-/// colour a four-bit pixel can be.
-pub type Colours = [[u8; tv::CHANNELS]; tv::COLORS];
+/// color a four-bit pixel can be.
+pub type Colors = [[u8; tv::CHANNELS]; tv::COLORS];
 
 /// A screen for the terminal to draw: one bit a pixel, `words_per_line`
 /// words to a line, which is how the frame buffer holds it and how a
-/// monitor's raster is accumulated --- or, with [`Frame::colours`] set,
-/// four bits a pixel through the colour map, which is the color TV's
+/// monitor's raster is accumulated --- or, with [`Frame::colors`] set,
+/// four bits a pixel through the color map, which is the color TV's
 /// picture.
 #[derive(Clone, Copy)]
 pub struct Frame<'a> {
@@ -71,9 +71,9 @@ pub struct Frame<'a> {
     /// Whether a one bit shows black rather than white: the display
     /// board's [`tv::mode::BOW`].
     pub black_on_white: bool,
-    /// The colour map, for a four-bit picture; `None` is the
+    /// The color map, for a four-bit picture; `None` is the
     /// black-and-white screen, one bit a pixel.
-    pub colours: Option<Colours>,
+    pub colors: Option<Colors>,
 }
 
 impl<'a> Frame<'a> {
@@ -90,9 +90,9 @@ impl<'a> Frame<'a> {
     /// whichever of the two boards is there.
     pub fn of(tv: &'a Tv) -> Frame<'a> {
         if tv.strap() == tv::COLOR_TV {
-            let mut colours = [[0; tv::CHANNELS]; tv::COLORS];
-            for (colour, out) in colours.iter_mut().enumerate() {
-                *out = tv.rgb(colour);
+            let mut colors = [[0; tv::CHANNELS]; tv::COLORS];
+            for (color, out) in colors.iter_mut().enumerate() {
+                *out = tv.rgb(color);
             }
             return Frame {
                 words: tv.buffer(),
@@ -110,7 +110,7 @@ impl<'a> Frame<'a> {
                 // clear in any case: `(SI:START-SYNC 3 0 36.)` writes the
                 // mode as the clock mode alone.
                 black_on_white: false,
-                colours: Some(colours),
+                colors: Some(colors),
             };
         }
         Frame {
@@ -119,7 +119,7 @@ impl<'a> Frame<'a> {
             height: tv::HEIGHT,
             words_per_line: tv::WORDS_PER_LINE,
             black_on_white: tv.black_on_white(),
-            colours: None,
+            colors: None,
         }
     }
 
@@ -254,7 +254,7 @@ struct Viewer {
 struct Pixels {
     /// Bytes a pixel takes on the wire.
     n: usize,
-    /// What the viewer asked for, for the colour table below, which is
+    /// What the viewer asked for, for the color table below, which is
     /// rebuilt when the map changes rather than when the format does.
     format: PixelFormat,
     /// 256 entries of eight pixels, `8 * n` bytes each: entry `b` is the
@@ -265,12 +265,12 @@ struct Pixels {
     /// inside a byte of the frame buffer.
     white: Vec<u8>,
     black: Vec<u8>,
-    /// The colour screen's sixteen colours in this format, `n` bytes
-    /// each: a four-bit pixel indexes it.  Empty until a colour frame has
-    /// come; rebuilt by [`Pixels::colours`] when the map changes.
-    colours: Vec<u8>,
-    /// The map [`Pixels::colours`] was built from.
-    of_map: Option<Colours>,
+    /// The color screen's sixteen colors in this format, `n` bytes
+    /// each: a four-bit pixel indexes it.  Empty until a color frame has
+    /// come; rebuilt by [`Pixels::colors`] when the map changes.
+    colors: Vec<u8>,
+    /// The map [`Pixels::colors`] was built from.
+    of_map: Option<Colors>,
 }
 
 impl Pixels {
@@ -287,26 +287,25 @@ impl Pixels {
                 table.extend_from_slice(if byte >> bit & 1 != 0 { &white } else { &black });
             }
         }
-        Pixels { n, format, table, white, black, colours: Vec::new(), of_map: None }
+        Pixels { n, format, table, white, black, colors: Vec::new(), of_map: None }
     }
 
-    /// The sixteen colours of `map` made ready to copy, if they are not
+    /// The sixteen colors of `map` made ready to copy, if they are not
     /// already: `true` when they were remade, which is when a viewer's
     /// copy of the screen says nothing about it any more.
     ///
-    /// A true-colour viewer gets the colour itself in every pixel; one
+    /// A true-color viewer gets the color itself in every pixel; one
     /// that asked for a mapped format gets the four-bit pixel as its own
-    /// index, and the caller sends it [`rfb::colour_map_of`] to say what
+    /// index, and the caller sends it [`rfb::color_map_of`] to say what
     /// the indices mean.
-    fn colours(&mut self, map: Colours) -> bool {
+    fn colors(&mut self, map: Colors) -> bool {
         if self.of_map == Some(map) {
             return false;
         }
-        self.colours.clear();
-        for (colour, rgb) in map.iter().enumerate() {
-            let value =
-                if self.format.true_colour { self.format.colour(*rgb) } else { colour as u32 };
-            self.format.put(&mut self.colours, value);
+        self.colors.clear();
+        for (color, rgb) in map.iter().enumerate() {
+            let value = if self.format.true_color { self.format.color(*rgb) } else { color as u32 };
+            self.format.put(&mut self.colors, value);
         }
         self.of_map = Some(map);
         true
@@ -333,8 +332,8 @@ impl Pixels {
     /// normally asks for the whole screen, whose 768 pixels are 96 whole
     /// bytes, and then there are no ends.
     fn put_row(&self, out: &mut Vec<u8>, frame: Frame, y: usize, x: usize, w: usize) {
-        if frame.colours.is_some() {
-            self.put_colour_row(out, frame, y, x, w);
+        if frame.colors.is_some() {
+            self.put_color_row(out, frame, y, x, w);
             return;
         }
         let row = &frame.words[y * frame.words_per_line..];
@@ -366,17 +365,17 @@ impl Pixels {
     /// Row `y` of a four-bit frame, from pixel `x` for `w` of them.
     ///
     /// A pixel is a nibble of the row, the low nibble of a word first, as
-    /// `tv::Tv::pixel4` states it; its value indexes the sixteen colours
-    /// [`Pixels::colours`] made ready in the viewer's format. A byte of
+    /// `tv::Tv::pixel4` states it; its value indexes the sixteen colors
+    /// [`Pixels::colors`] made ready in the viewer's format. A byte of
     /// the buffer is two pixels rather than the mono screen's eight, so
     /// there is nothing to gain by a table of bytes: the copy is one
-    /// colour a pixel.
-    fn put_colour_row(&self, out: &mut Vec<u8>, frame: Frame, y: usize, x: usize, w: usize) {
+    /// color a pixel.
+    fn put_color_row(&self, out: &mut Vec<u8>, frame: Frame, y: usize, x: usize, w: usize) {
         let row = &frame.words[y * frame.words_per_line..];
         for p in x..x + w {
-            let colour = (row[p / 8] >> (p % 8 * 4)) as usize & 0o17;
-            let at = colour * self.n;
-            out.extend_from_slice(&self.colours[at..at + self.n]);
+            let color = (row[p / 8] >> (p % 8 * 4)) as usize & 0o17;
+            let at = color * self.n;
+            out.extend_from_slice(&self.colors[at..at + self.n]);
         }
     }
 }
@@ -527,16 +526,16 @@ impl Viewer {
                     }
                     self.format = f;
                     self.pixels = Pixels::new(f);
-                    if !f.true_colour {
-                        // What the indices in the pixels mean: the colour
-                        // screen's sixteen colours, or the
+                    if !f.true_color {
+                        // What the indices in the pixels mean: the color
+                        // screen's sixteen colors, or the
                         // black-and-white screen's two.
-                        self.outbox.extend(match frame.colours {
+                        self.outbox.extend(match frame.colors {
                             Some(map) => {
-                                self.pixels.colours(map);
-                                rfb::colour_map_of(&map)
+                                self.pixels.colors(map);
+                                rfb::color_map_of(&map)
                             }
-                            None => rfb::colour_map(),
+                            None => rfb::color_map(),
                         });
                     }
                     // The viewer has changed what a pixel means, so what
@@ -550,7 +549,7 @@ impl Viewer {
                     // As asked; clipped to the screen when answered.  One
                     // outstanding request: a viewer that asks again before
                     // being answered gets one answer, and the later ask is
-                    // the one honoured.
+                    // the one honored.
                     let rect = Rect { x: x as usize, y: y as usize, w: w as usize, h: h as usize };
                     self.request = Some(Request { incremental, rect });
                 }
@@ -575,16 +574,16 @@ impl Viewer {
         if self.stage != Stage::Running || !self.outbox.is_empty() {
             return;
         }
-        // The colour map as the viewer's own pixels, remade when the
+        // The color map as the viewer's own pixels, remade when the
         // software writes the map: what the viewer holds then says nothing
         // about the screen, whose words have not changed, and a mapped
         // viewer is told what its indices now mean.
-        if let Some(map) = frame.colours
-            && self.pixels.colours(map)
+        if let Some(map) = frame.colors
+            && self.pixels.colors(map)
         {
             self.seen = false;
-            if !self.format.true_colour {
-                self.outbox.extend(rfb::colour_map_of(&map));
+            if !self.format.true_color {
+                self.outbox.extend(rfb::color_map_of(&map));
             }
         }
         let Some(request) = self.request else { return };
@@ -1019,7 +1018,7 @@ impl Terminal {
             }
         });
         // What the queues had no room for, said as it happens: a run that
-        // has quietly lost a hundred keystrokes is a run whose behaviour
+        // has quietly lost a hundred keystrokes is a run whose behavior
         // is unexplained.
         if self.trace
             && let Some(line) = self.lost_line()

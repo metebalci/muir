@@ -72,7 +72,7 @@ fn the_band_boots_over_the_chaosnet_on_micro() {
     boots_and_reads_a_file(Micro::new(machine_with_pack(&pack)), root, "micro");
 }
 
-/// **And on `rtl`**, which is the engine the behaviour is defined by.
+/// **And on `rtl`**, which is the engine the behavior is defined by.
 /// It is here so that the two are held to the same conversation, rather
 /// than `micro` being held to what someone thought it ought to say.
 #[test]

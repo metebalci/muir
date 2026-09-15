@@ -4,7 +4,7 @@
 # `check` fetches nothing and configures nothing: a fresh clone passes the
 # whole suite on its own, because everything the tests read is committed.
 # The tests that want a release find it absent and skip cleanly, which is
-# the behaviour this job also checks.
+# the behavior this job also checks.
 #
 # `system-100` fetches System 100, the target --- the pack the engines boot
 # and the sources the tests' Chaosnet server serves --- and runs the same suite

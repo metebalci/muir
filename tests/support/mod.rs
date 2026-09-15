@@ -196,7 +196,7 @@ pub fn no_net_has_two_push_pull_drivers(n: &Netlist) {
     assert!(conflicts.is_empty(), "{} nets have two push-pull drivers", conflicts.len());
 }
 
-/// One write of the display board's colour register, `lmtv.order`'s
+/// One write of the display board's color register, `lmtv.order`'s
 /// `173777x4`, watched all the way through: which of `-LOAD COLOR 0`, `1`
 /// and `2` went low during the cycle, and what `COLOR 0..7` and
 /// `COLOR VALUE 0..7` read while one was.
@@ -213,7 +213,7 @@ pub fn no_net_has_two_push_pull_drivers(n: &Netlist) {
 /// is one 16 MHz period wide and is gone by the time the cycle ends: the
 /// bus is watched every 5 ns from the request to the end of the settle, as
 /// `cycle` itself watches for the acknowledgement.
-pub fn colour_write(
+pub fn color_write(
     b: &mut muir::xbus::XbusMaster,
     strap: muir::tv::Strap,
     word: u32,
@@ -221,7 +221,7 @@ pub fn colour_write(
     use muir::xbus::XbusMaster;
 
     let strobes: Vec<u32> = (0..3).map(|k| b.net(&format!("-LOAD COLOR {k}"))).collect();
-    let colour: Vec<u32> = (0..8).map(|k| b.net(&format!("COLOR {k}"))).collect();
+    let color: Vec<u32> = (0..8).map(|k| b.net(&format!("COLOR {k}"))).collect();
     let value: Vec<u32> = (0..8).map(|k| b.net(&format!("COLOR VALUE {k}"))).collect();
 
     let (mut low, mut sampled) = (Vec::new(), None);
@@ -231,7 +231,7 @@ pub fn colour_write(
                 if !low.contains(&k) {
                     low.push(k);
                 }
-                *sampled = Some((b.chip.read(&colour), b.chip.read(&value)));
+                *sampled = Some((b.chip.read(&color), b.chip.read(&value)));
             }
         }
     };
@@ -259,7 +259,7 @@ pub fn colour_write(
 
 /// What `src/part.rs` makes of the kinds a board uses, each kind once and
 /// sorted: the kinds with no pinout, the kinds with a pinout and no
-/// behaviour, and the kinds whose behaviour computes nothing --- no gate
+/// behavior, and the kinds whose behavior computes nothing --- no gate
 /// and no update.
 pub struct Kinds {
     pub unknown: Vec<String>,
@@ -272,7 +272,7 @@ pub fn kinds(n: &Netlist) -> Kinds {
     for p in &n.parts {
         if part::pinout(&p.kind).is_none() {
             unknown.insert(p.kind.clone());
-        } else if let Some(b) = part::behaviour(&p.kind) {
+        } else if let Some(b) = part::behavior(&p.kind) {
             if b.gates.is_empty() && b.update.is_none() {
                 empty.insert(p.kind.clone());
             }
@@ -545,7 +545,7 @@ pub fn wait_for_the_prompt<E: Engine>(e: &mut E) -> u64 {
     ran + 2_000_000
 }
 
-/// A frame of a GIF as the two-colour recordings are read back: the
+/// A frame of a GIF as the two-color recordings are read back: the
 /// rectangle and a byte a pixel.  What the recorder writes is read back
 /// here rather than trusted, by the recorder's own tests and by the CC
 /// diagnostics'.
@@ -556,11 +556,11 @@ pub fn decode_gif(g: &[u8]) -> Vec<Frame> {
 }
 
 /// One frame of a GIF, read back whole: where it lands on the canvas, the
-/// colour table in force for it, whether that table was the frame's own,
+/// color table in force for it, whether that table was the frame's own,
 /// and a byte a pixel.
 pub struct GifFrame {
     pub rect: (usize, usize, usize, usize),
-    /// The frame's local colour table if it carries one, the file's global
+    /// The frame's local color table if it carries one, the file's global
     /// table otherwise --- which is what a viewer resolves its pixels
     /// through either way.
     pub colors: Vec<[u8; 3]>,
@@ -569,16 +569,16 @@ pub struct GifFrame {
     pub pixels: Vec<u8>,
 }
 
-/// A GIF read back with its colour tables: the canvas size, and every
-/// frame with the table a viewer shows it through.  The colour recording
-/// is checked with this --- its map is the file's colours, and a frame
+/// A GIF read back with its color tables: the canvas size, and every
+/// frame with the table a viewer shows it through.  The color recording
+/// is checked with this --- its map is the file's colors, and a frame
 /// taken through a changed map carries a table of its own --- and
-/// [`decode_gif`] is this without the colours.
+/// [`decode_gif`] is this without the colors.
 pub fn decode_gif_fully(g: &[u8]) -> ((usize, usize), Vec<GifFrame>) {
     assert_eq!(&g[..6], b"GIF89a");
     let u = |k: usize| u16::from_le_bytes([g[k], g[k + 1]]) as usize;
     let canvas = (u(6), u(8));
-    // The packed field of a descriptor: bit 7 says a colour table follows
+    // The packed field of a descriptor: bit 7 says a color table follows
     // and bits 2-0 give its size, 2^(n+1) entries of three bytes.
     let table = |at: usize, packed: u8| -> (Vec<[u8; 3]>, usize) {
         if packed & 0x80 == 0 {
@@ -725,7 +725,7 @@ use std::path::Path;
 
 use muir::cable::FarEnd;
 use muir::chip::Chip;
-use muir::clock::Behavioural;
+use muir::clock::Behavioral;
 use muir::disk_unit::{Geometry, Unit};
 use muir::machine::Machine;
 use muir::terminal::keyboard::{Keyboard, keysym};
@@ -763,7 +763,7 @@ pub fn netlists() -> Netlists {
 /// The board as `muir --chip` runs it, `benchmark::chip` over
 /// [`netlists`]: the processor chip, its clock and the far end of its
 /// cables.
-pub fn chip(n: &Netlists) -> (Chip, Behavioural, FarEnd) {
+pub fn chip(n: &Netlists) -> (Chip, Behavioral, FarEnd) {
     muir::benchmark::chip(&n.cpu, &n.busint, &n.cadrm, &n.cadrio, &n.simple_tv)
 }
 

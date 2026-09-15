@@ -17,7 +17,7 @@
 #   disk-sys-100-0.img.gz  the disk pack, decompressed to
 #                          vendor/run/disk-sys-100-0.img
 #
-# with the release's README beside them, which carries its licence, the
+# with the release's README beside them, which carries its license, the
 # GNU Affero General Public License, version 3 or later --- muir's own.
 #
 # The files come from muir's own GitHub release `system-100-0`, a mirror of

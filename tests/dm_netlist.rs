@@ -360,15 +360,15 @@ fn the_drive_ports_are_two_banks_of_four() {
 /// collection beside this project; AMD's own related-products table on the
 /// Am25LS2539 sheet calls it a "1-of-8 Decoder" and no more, and the
 /// pinout is not something to take off the wiring, since the wiring is
-/// checked against the part. The `26S02` has a pinout and no behaviour,
+/// checked against the part. The `26S02` has a pinout and no behavior,
 /// which is the one-shot `src/chip.rs` times.
 ///
 /// Written as an equality rather than an emptiness so that a body arriving
-/// unmodelled is caught, and so that modelling either of these fails here
+/// unmodeled is caught, and so that modeling either of these fails here
 /// and says to update it.
 #[test]
 fn the_bodies_without_a_model_are_the_two_known_ones() {
     let k = support::kinds(&dm());
     assert!(k.unknown.is_empty(), "every body has a pinout: {:?}", k.unknown);
-    assert_eq!(k.silent, ["26S02"], "bodies with a pinout and no behaviour");
+    assert_eq!(k.silent, ["26S02"], "bodies with a pinout and no behavior");
 }

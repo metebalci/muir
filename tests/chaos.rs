@@ -762,7 +762,7 @@ impl Client {
 /// properties line and the truename, the file down the data connection
 /// in the Lisp Machine character set, EOF, CLOSE answered and then the
 /// synchronous mark; DIRECTORY as records; PROBE of a missing file as an
-/// FNF error; a compiled file recognised by its magic and sent binary.
+/// FNF error; a compiled file recognized by its magic and sent binary.
 #[test]
 fn the_file_service_serves_files_and_directories() {
     let root = std::env::temp_dir().join(format!("muir-chaos-file-{}", std::process::id()));
@@ -839,7 +839,7 @@ fn the_file_service_serves_files_and_directories() {
     assert_eq!(r, "T7 I0001 CLOSE");
     c.down.clear();
 
-    // A compiled file, opened with DEFAULT: recognised, and sent binary.
+    // A compiled file, opened with DEFAULT: recognized, and sent binary.
     let r = c.command(&mut h, 80, &format!("T8 I0001 OPEN READ DEFAULT{nl}/tree/sys/x.qfasl{nl}"));
     let props = r.strip_prefix("T8 I0001 OPEN ").unwrap().split(nl).next().unwrap();
     assert!(props.ends_with(" 5 T NIL"), "length in words, QFASL, not characters: {props:?}");
@@ -1067,9 +1067,9 @@ fn the_file_service_manages_a_directory() {
     let r = c.command(
         &mut h,
         71,
-        &format!("TC  CHANGE-PROPERTIES{nl}/tree/sys/only.text{nl}COLOUR BLUE{nl}"),
+        &format!("TC  CHANGE-PROPERTIES{nl}/tree/sys/only.text{nl}COLOR BLUE{nl}"),
     );
-    assert_eq!(r, "TC  ERROR UKP C COLOUR cannot be set here");
+    assert_eq!(r, "TC  ERROR UKP C COLOR cannot be set here");
 
     // EXPUNGE: a number, and here always none.
     assert_eq!(c.command(&mut h, 80, &format!("TD  EXPUNGE{nl}/tree/sys/{nl}")), "TD  EXPUNGE 0");
@@ -1169,7 +1169,7 @@ fn the_file_service_never_writes_outside_its_root() {
         assert!(r.starts_with(&format!("{tid} ")) && r.contains(" ERROR ATD "), "{cmd:?}: {r:?}");
     };
 
-    // The root itself, spelt three ways, and climbing out or staying put.
+    // The root itself, spelled three ways, and climbing out or staying put.
     for name in [
         "",
         "/",
@@ -1973,7 +1973,7 @@ fn the_304_band_reaches_the_server_at_its_own_numbers() {
 /// arrive in, its worked example of writing a file says to send "a SYNC
 /// mark on the DATA connection and a CLOSE on the CONTROL connection (in
 /// either order)". So a client that does everything the protocol asks of
-/// it may still have its CLOSE overtake its mark, the two travelling on
+/// it may still have its CLOSE overtake its mark, the two traveling on
 /// different connections, and the server has to wait rather than take
 /// the CLOSE as the end of the data.
 ///

@@ -3,7 +3,7 @@
 
 //! Checks the clock generator model against the CLOCK1/CLOCK2 wiring.
 
-use muir::clock::{Behavioural, Clock, Inputs, Outputs, Speed};
+use muir::clock::{Behavioral, Clock, Inputs, Outputs, Speed};
 
 /// The eight taps the 74S151 at CLOCK1 1D08 selects between. This is the
 /// solid part of the clock model: it is read directly off the mux wiring.
@@ -33,7 +33,7 @@ fn speed_table_matches_the_mux() {
 }
 
 fn run_cycle(speed: Speed, ilong: bool) -> Vec<(u64, Outputs)> {
-    let mut c = Behavioural::new();
+    let mut c = Behavioral::new();
     let inputs = Inputs { machrun: true, hang: false, ilong, speed, reset: false };
     let mut seen = Vec::new();
     // Two cycles' worth, so the period can be measured: ten transitions a
@@ -114,7 +114,7 @@ fn cycle_period() {
 /// stretches a microcycle without disturbing the phase relationships.
 #[test]
 fn hang_stalls_at_the_start_of_a_cycle() {
-    let mut c = Behavioural::new();
+    let mut c = Behavioral::new();
     let held = Inputs { machrun: true, hang: true, speed: Speed::Normal, ..Inputs::default() };
     for _ in 0..4 {
         let (dt, _) = c.advance(held);

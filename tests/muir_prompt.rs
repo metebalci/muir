@@ -439,7 +439,7 @@ fn pair() -> (Child, Child) {
 /// none `--resume` can take, and a recording over the cable is two clocks,
 /// which is why `--checkpoint` and `--tv-capture` are refused there from
 /// the command line.  Issue 102 met a `--debug-cable-connect` run that
-/// answered nothing at all and could only be signalled.
+/// answered nothing at all and could only be signaled.
 #[test]
 fn both_ends_of_the_cable_over_tcp_have_the_prompt() {
     let dir = scratch("cable-prompt");

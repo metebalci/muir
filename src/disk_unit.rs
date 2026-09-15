@@ -560,7 +560,7 @@ pub mod format {
 /// left out --- one degree short, and mirrored. What
 /// matters is not the name of the polynomial but that this register and
 /// the board's agree bit for bit, and `tests/cadrdc_netlist.rs` reads a
-/// sector serialised by this one through the board's.
+/// sector serialized by this one through the board's.
 ///
 /// The checkword is what the controller writes with `WRITE/ECC,ECC/NO
 /// FEEDBACK`: the register shifted out with nothing coming in, `ECC.OUT`
@@ -992,7 +992,7 @@ fn began_of(k: u64) -> u64 {
 /// index pulse beginning at `phase` modulo a revolution: the region under
 /// the head and how far into it, in nanoseconds. The drive on the cable
 /// turns by this, [`Trident::turn`], and so does the block counter of the
-/// behavioural controller, `disk_controller::Controller`, which has no
+/// behavioral controller, `disk_controller::Controller`, which has no
 /// drive on a cable to count pulses from.
 ///
 /// **A revolution is `sectors` + 1 regions, because it is `sectors` + 1
@@ -1093,7 +1093,7 @@ type SectorKey = (u32, u32, u32);
 
 /// The Trident as its cables see it: a spindle turning from power-on, a
 /// bit clock, the tags and the gates, the status lines, the composite
-/// pulse, and the sector under the head serialised in MIT's format.
+/// pulse, and the sector under the head serialized in MIT's format.
 ///
 /// The one thing here that is not the drive's own is [`Unit`], the pack:
 /// it serves the model controller a block at a time and serves this a
@@ -1139,7 +1139,7 @@ pub struct Trident {
     prev: ControllerLines,
     read_gate: bool,
     write_gate: bool,
-    /// The sector under the head serialised, and which one it is.
+    /// The sector under the head serialized, and which one it is.
     image: Option<(SectorKey, Vec<u8>)>,
     /// Bits the controller has written into the sector under the head,
     /// by bit from the sector's first clock, and which sector.
@@ -1153,7 +1153,7 @@ pub struct Trident {
     /// (sector pulse) happened at a time when it should not have. Either
     /// the disk is incorrectly formatted or it is generating spurious
     /// sector pulses". The board carries the detection, the LS74
-    /// synchroniser at DCHDCM 0D15 into `BAD START BLOCK` at the LS08
+    /// synchronizer at DCHDCM 0D15 into `BAD START BLOCK` at the LS08
     /// 0D16, and before this nothing could give it one to catch: the
     /// spindle's pulses come from [`turn`] on a fixed [`REVOLUTION_NS`]
     /// and are correct by construction. Issue 81.
@@ -1267,7 +1267,7 @@ impl Trident {
         now % BIT_NS < BIT_NS / 2
     }
 
-    /// The sector under the head, serialised.
+    /// The sector under the head, serialized.
     fn image(&mut self, sector: u32) -> &[u8] {
         let key = (self.cylinder, self.head, sector);
         if self.image.as_ref().is_none_or(|(k, _)| *k != key) {
@@ -1987,7 +1987,7 @@ impl Trident {
     ///
     /// Two fields are not here. [`Trident::tags`] is the record of what
     /// the drive saw, kept for a test to read back, and nothing the drive
-    /// does depends on it. The sector under the head, serialised, is a
+    /// does depends on it. The sector under the head, serialized, is a
     /// cache: it is cut from the pack again whenever the arm is not where
     /// it was cut for, and thrown away when a write lands, so a drive read
     /// back rebuilds it from the pack that came with it. Bits the

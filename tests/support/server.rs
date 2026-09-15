@@ -688,7 +688,7 @@ fn fmt_data(op: u8, data: &[u8]) -> String {
 /// time server in it, so `muir` carries none: a run reaches a host on the
 /// network over CHUDP, and `ozd` (`https://github.com/metebalci/ozd`) is
 /// one. `cargo test` cannot want a daemon running beside it, so the tests
-/// put this server on the modelled cable themselves --- a
+/// put this server on the modeled cable themselves --- a
 /// [`muir::chaos::ether::Node`] like any other, taking its turn --- and
 /// the whole boot over the Chaosnet stays in one process.
 ///

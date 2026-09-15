@@ -72,7 +72,7 @@ fn parses_to_the_expected_shape() {
 }
 
 /// Every part on the board is identified, and everything that computes
-/// anything has a behaviour. Two parts have a pinout and no behaviour, and
+/// anything has a behavior. Two parts have a pinout and no behavior, and
 /// both are analog: the RAS/CAS delay line at RAMCAS 0D11 and the 64 MHz
 /// oscillator can at NECCLK 0C08, which `src/chip.rs` runs as it runs the
 /// other boards'.
@@ -80,7 +80,7 @@ fn parses_to_the_expected_shape() {
 fn every_part_is_identified() {
     let k = support::kinds(&simpletv());
     assert!(k.unknown.is_empty(), "no pinout for {:?}", k.unknown);
-    assert_eq!(k.silent, ["TD100", "TTLOSC"], "parts with no behaviour");
+    assert_eq!(k.silent, ["TD100", "TTLOSC"], "parts with no behavior");
 }
 
 /// Two totem-pole outputs on one net is an electrical fault, so a wrongly
@@ -175,7 +175,7 @@ fn the_read_only_mode_bits_come_off_a_buffer() {
 /// **The control registers decode as MIT's own order sheet says.** NXBCTL
 /// 0F13 is a 74S138 on `ADR0..2` and `CTL RQ`, and its first five outputs
 /// are the five writes `cadrtv/lmtv.order` lists at `173777x0` to
-/// `173777x4`: mode, sync program, sync pointer, vertical spacing, colour.
+/// `173777x4`: mode, sync program, sync pointer, vertical spacing, color.
 /// `src/tv.rs` models the first and answers the rest without storing
 /// them.
 #[test]
@@ -458,7 +458,7 @@ fn frame_dots(b: &mut muir::xbus::XbusMaster) -> Vec<u32> {
 /// falls once every 966 lines, 15.456 ms apart, and between two of them the
 /// sync program blanks 54 lines end to end and leaves 912 unblanked for
 /// exactly 768 dots each --- no line part way between, which is what says
-/// the count is the program's and not an artefact of where the measurement
+/// the count is the program's and not an artifact of where the measurement
 /// starts.
 ///
 /// Ignored because it runs two frames of board time --- two, so that a
@@ -901,7 +901,7 @@ fn the_board_answers_its_control_registers() {
 ///   the clock by the cycle's own duration, so a request issued at
 ///   `b.now`, or on a stride shorter than a cycle, always lands at the same
 ///   phase relative to the last one. That reads as a constant and is an
-///   artefact of the stride. **The stride must exceed the longest cycle**,
+///   artifact of the stride. **The stride must exceed the longest cycle**,
 ///   which is why it is 2,100 ns here. What walks the phase is its
 ///   remainder over the slot, 100 ns a step, not the stride itself.
 /// - **A blanked line fetches nothing.** The board runs MIT's sync program
@@ -918,7 +918,7 @@ fn the_board_answers_its_control_registers() {
 /// - **A stride longer than one cycle is not a stride longer than three.**
 ///   Issuing a read, a control access and a write at each step puts the
 ///   second and third back to back behind the first, so only the first is
-///   ever on the grid --- the artefact above, surviving inside the fix for
+///   ever on the grid --- the artifact above, surviving inside the fix for
 ///   it. That is what made the control registers look constant. **One
 ///   access per step**, and one sweep per kind.
 /// - **`XbusMaster::cycle` watches every 5 ns**, so what it returns is the
@@ -1106,7 +1106,7 @@ fn what_the_board_takes_to_answer_in_the_picture() {
 
     // **And now the picture at every phase**, twenty lines of it, stepping
     // by `1 + (now * 53) mod 499` as the blanking test does so that no
-    // phase of the grid is favoured. Two questions: does the grid hold, and
+    // phase of the grid is favored. Two questions: does the grid hold, and
     // does the second-slot rule hold with it.
     let until = b.now + 20 * LINE_NS;
     let (mut served, mut beyond, mut worst) = (0u64, 0u64, 0u64);
@@ -1152,7 +1152,7 @@ fn what_the_board_takes_to_answer_in_the_picture() {
     // **Not flat --- but not the buffer's shape either.** It tracks the
     // phase of the board's own clock over tens of nanoseconds, the way the
     // memory board's 470--500 does, and never by a whole slot. Saying
-    // "flat" here was an artefact of measuring it back to back behind
+    // "flat" here was an artifact of measuring it back to back behind
     // another access.
     let (lo, hi) =
         (*control_ns.iter().min().expect("samples"), *control_ns.iter().max().expect("samples"));
@@ -1320,7 +1320,7 @@ fn the_prom_mode_bit_reads_zero_whatever_the_sync_enable_is() {
     assert_eq!(word & mode::SYNC_PROM_ENABLE, 0, "as it does with the PROM back in");
 }
 
-/// **This board has the colour map's write port too, and it is the same
+/// **This board has the color map's write port too, and it is the same
 /// circuit the LISPM TV's is.**
 ///
 /// `lmtv.stf`, MIT's own page list of 28 May 1979, titles `RAMCOL.DRW`
@@ -1337,11 +1337,11 @@ fn the_prom_mode_bit_reads_zero_whatever_the_sync_enable_is() {
 /// `HI3` there.
 ///
 /// So **register 4 is not what tells the boards apart**: the mode
-/// register's bit 7 is, and `src/tv.rs` writes the colour map on either
+/// register's bit 7 is, and `src/tv.rs` writes the color map on either
 /// board because either board strobes it. `lmtv.order` describes one
 /// programming interface for both, and this is the rest of it.
 #[test]
-fn the_colour_register_strobes_one_map_here_as_well() {
+fn the_color_register_strobes_one_map_here_as_well() {
     use muir::xbus::XbusMaster;
 
     let n = simpletv();
@@ -1353,26 +1353,26 @@ fn the_colour_register_strobes_one_map_here_as_well() {
     }
     assert!(on(&n, dec, 9).starts_with("NC#"), "the fourth channel goes nowhere");
     let buf = at(&n, "NRACOL", "0D13", "74LS244");
-    assert_eq!(on(&n, buf, 1), "-LOAD COLOR", "the colour buffer turns on for the write");
+    assert_eq!(on(&n, buf, 1), "-LOAD COLOR", "the color buffer turns on for the write");
     assert_eq!(on(&n, buf, 2), "XDI0", "and puts the written bits on COLOR");
     assert_eq!(on(&n, buf, 18), "COLOR 0");
 
     let mut b = XbusMaster::new(&n, 0);
-    // (DPB value 1010 (DPB channel 0602 colour)), as `WRITE-COLOR-MAP` writes.
-    for (value, channel, colour) in [(0o252u32, 0u32, 5u32), (0o123, 1, 0o17), (0o077, 2, 0)] {
+    // (DPB value 1010 (DPB channel 0602 color)), as `WRITE-COLOR-MAP` writes.
+    for (value, channel, color) in [(0o252u32, 0u32, 5u32), (0o123, 1, 0o17), (0o077, 2, 0)] {
         let (low, sampled) =
-            support::colour_write(&mut b, muir::tv::NORMAL_TV, value << 8 | channel << 6 | colour);
-        let (on_colour, on_value) = sampled
+            support::color_write(&mut b, muir::tv::NORMAL_TV, value << 8 | channel << 6 | color);
+        let (on_color, on_value) = sampled
             .unwrap_or_else(|| panic!("channel {channel}: no -LOAD COLOR n fell during the cycle"));
         eprintln!(
-            "value {value:o} channel {channel} colour {colour:o}: \
-             -LOAD COLOR {low:?} low, COLOR {on_colour:o}, COLOR VALUE {on_value:o}"
+            "value {value:o} channel {channel} color {color:o}: \
+             -LOAD COLOR {low:?} low, COLOR {on_color:o}, COLOR VALUE {on_value:o}"
         );
         assert_eq!(low, vec![channel as usize], "one map's strobe, and one only");
-        assert_eq!(on_colour & 0o17, colour as u64, "the colour is XDI3..0 on COLOR 3..0");
-        assert_eq!(on_colour >> 6 & 3, channel as u64, "and the channel rides out on COLOR 7..6");
+        assert_eq!(on_color & 0o17, color as u64, "the color is XDI3..0 on COLOR 3..0");
+        assert_eq!(on_color >> 6 & 3, channel as u64, "and the channel rides out on COLOR 7..6");
         assert_eq!(on_value, value as u64, "the value is XDI15..8 on COLOR VALUE 7..0");
     }
-    let (low, _) = support::colour_write(&mut b, muir::tv::NORMAL_TV, 0o377 << 8 | 3 << 6 | 5);
+    let (low, _) = support::color_write(&mut b, muir::tv::NORMAL_TV, 0o377 << 8 | 3 << 6 | 5);
     assert!(low.is_empty(), "channel 3 decodes to the 74S139's unconnected output: {low:?}");
 }

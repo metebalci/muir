@@ -6,7 +6,7 @@
 //! `data/CADRIO.netlist` under a Unibus master, and
 //! `chaos::board::Interface` under the same reads and writes --- and every
 //! CSR read, every word read back and every bit count must agree.  Times
-//! are reported, not held: the behavioural interface takes a frame's bits
+//! are reported, not held: the behavioral interface takes a frame's bits
 //! at the cable's rate and its turn, the board takes what its counters
 //! take.
 
@@ -35,7 +35,7 @@ fn board(n: &Netlist) -> UnibusMaster<'_> {
     b
 }
 
-/// The behavioural interface at the same address, with `ether` on its
+/// The behavioral interface at the same address, with `ether` on its
 /// cable or none, and a clock of its own.
 struct Model {
     io: IoBoard,

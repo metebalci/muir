@@ -11,7 +11,7 @@
 //! board MIT left no wire list of, and then only the pin moves below are
 //! made. Where a wire of the
 //! list falls on more than one net of the netlist --- a wire the drawings
-//! label twice, a name spelt with and without a space, a pin the reader lost
+//! label twice, a name spelled with and without a space, a pin the reader lost
 //! to `@,p0` --- every pin of that wire is put on one net under MIT's name.
 //! A wire the list leaves unnamed is left to the parser's own rule for
 //! them unless the reader broke it, and is then named the netlist's way,

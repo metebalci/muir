@@ -47,7 +47,7 @@ toggles fewer nets and looks *faster*.
 
 Neither program touches the disk, and the rate it prints against the
 machine's own 145 ns microcycle does not account for one. The controller
-behind the bus here is the behavioural model, as it is on `micro` and `rtl`
+behind the bus here is the behavioral model, as it is on `micro` and `rtl`
 and on `muir --chip --disk-controller model`: a seek takes no time where the
 hardware spent milliseconds running the microcode's polling loop, so a
 program that seeks does better against a CADR than this rate implies.

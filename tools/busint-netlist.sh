@@ -50,7 +50,7 @@ generate() {
 
 # MIT's own wire list for the board, cadr1/busint.wlr, settles what
 # soap4 gets wrong: a wire the drawings label twice comes out as two nets,
-# a name spelt with and without a space as two, and six pins are lost to
+# a name spelled with and without a space as two, and six pins are lost to
 # `@,p0`. examples/reconcile.rs puts each such wire on one net under MIT's
 # name, and tests/busint_netlist.rs checks the result against the list.
 #
