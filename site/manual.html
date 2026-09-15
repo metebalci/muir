@@ -47,6 +47,7 @@ pack: vendor/run/disk-sys-100-0.img in unit 0
 chaosnet: 3050
 chaosnet over udp: 127.0.0.1:42042, 3060 at 127.0.0.1:42043
 terminal: vnc://127.0.0.1:5900 --- RFB, no password
+debug cable: DBGIN listening at 127.0.0.1:7661
 stop: after 2000000 microcycles
 ^C holds the machine at the prompt; help lists muir&rsquo;s commands</pre>
       <p>Paths under the directory muir was run from are written relative to it, so the block stays readable wherever the tree lives.</p>
@@ -126,6 +127,23 @@ stop: after 2000000 microcycles
         </dd>
       </div>
       <div>
+        <dt>--color-terminal [&lt;endpoint&gt;]</dt>
+        <dd>
+        <p>Where the color TV&rsquo;s screen is served, as <code>--terminal</code> is the main screen&rsquo;s: a port, an address or address:port.</p>
+        <p><b>Pixels only.</b> The machine has one keyboard and one mouse, both on the I/O board, and they stay with the terminal that serves the main screen, so what a viewer types or points at this one is dropped. <code>--tv-capture</code> records the main screen alone.</p>
+        <p>It needs <code>--color-tv</code>. Default: the display above the last one bound, which in a run with one machine is the main screen&rsquo;s.</p>
+        </dd>
+      </div>
+      <div>
+        <dt>--color-tv</dt>
+        <dd>
+        <p>Fit <b>the color TV</b>, the second display board: a LISPM TV strapped to the other addresses MIT&rsquo;s own <code>cadrtv/lmtv.order</code> gives &mdash; the frame buffer at <code>17200000</code> and the registers at <code>17377750</code>, &ldquo;for the color TV, x is 5&rdquo;. The main screen stays at <code>17000000</code> whichever board <code>--tv-board</code> named, System 100 hardwiring <code>MAIN-SCREEN</code> to one bit a pixel there.</p>
+        <p><b>Off by default, and that is how the software finds out.</b> A machine without the board answers those addresses with an NXM, which is what <code>COLOR-EXISTS-P</code> reads when it writes into the colour buffer with the error stop off. With the board there the cold boot sets it up: <code>COLOR:SETUP</code> loads the NTSC sync program, starts it in clock mode 3 with vertical spacing 36, and writes the sixteen colours of the map.</p>
+        <p>The picture is 576 by 454 at four bits a pixel through that map, served on <code>--color-terminal</code>. The model on every engine, <code>chip</code> included: there is no netlist of a board strapped colour.</p>
+        <p>Default: off, and the machine has one screen.</p>
+        </dd>
+      </div>
+      <div>
         <dt>-c, --config &lt;file&gt;</dt>
         <dd>
         <p>The file of flags to read before the command line, which must be there. Without it muir reads <code>.muirrc</code> in the directory it was run from, or failing that <code>.muirrc</code> in the home directory. <a href="#rc">Flags in a file</a> has the rest.</p>
@@ -142,8 +160,9 @@ stop: after 2000000 microcycles
       <div>
         <dt>--debug-cable-listen [&lt;endpoint&gt;]</dt>
         <dd>
-        <p><b>rtl, chip:</b> this machine is the debuggee at the end of a debug cable over TCP: its DBGIN waits at the endpoint for the debugger to connect, and then the two run in step. On <code>rtl</code> this machine has <a href="#prompt">the prompt</a>, as one alone has, less <code>checkpoint</code> and the capture commands. On <code>chip</code> it is the board&rsquo;s own connector, run an event at a time, and there is no prompt.</p>
-        <p>Default: <code>127.0.0.1:7661</code>.</p>
+        <p><b>rtl, chip:</b> where this machine&rsquo;s DBGIN listens for a debugger&rsquo;s cable over TCP: a port, an address or address:port. <b>Every <code>rtl</code> and <code>chip</code> run listens</b>, asked for or not, since the bus interface&rsquo;s DBGIN is on every machine; this moves the connector, or puts it back after <code>--no-debug-cable-listen</code>, and a port named here is bound as it stands.</p>
+        <p>The machine runs on its own until a debugger connects, in step with it while one is on the cable, and on its own again when the debugger is done or goes away, listening again. It has <a href="#prompt">the prompt</a> throughout, less <code>checkpoint</code> and the capture commands while a debugger is on. On <code>chip</code> the cable meets the board&rsquo;s own connector, run an event at a time.</p>
+        <p>A debugger reads and writes the whole Unibus and stops the clock, so the connector stays on the loopback unless an address is named. Default: <code>127.0.0.1:7661</code>, or the port above it when that one is taken by another muir.</p>
         </dd>
       </div>
       <div>
@@ -272,6 +291,14 @@ muir --keyboard-mapping my.keys</pre>
         </dd>
       </div>
       <div>
+        <dt>--no-debug-cable-listen</dt>
+        <dd>
+        <p><b>rtl, chip:</b> no connector for a debugger&rsquo;s cable, so that this machine cannot be debugged from another. Of this and <code>--debug-cable-listen</code> the last given wins.</p>
+        <p><code>--checkpoint</code>, <code>--tv-capture</code> and <code>chip</code>&rsquo;s <code>--watch</code> leave the connector empty by themselves, wanting a machine on its own, and the start says so.</p>
+        <p>Default: the connector is there, at <code>127.0.0.1:7661</code>.</p>
+        </dd>
+      </div>
+      <div>
         <dt>--prom &lt;file&gt;</dt>
         <dd>
         <p>The boot PROM to run, an MCR microcode file as MIT&rsquo;s own <code>sys/ubin/promh.mcr</code> is: the 512 words the machine fetches before it turns the PROM off. A program longer than that, or assembled somewhere other than address 0, or setting the statistics bit <code>IR&lt;46&gt;</code>, which a burned word has nowhere to hold, is refused rather than run.</p>
@@ -332,7 +359,8 @@ muir --keyboard-mapping my.keys</pre>
       <div>
         <dt>--tv-board simple-tv|lispm-tv</dt>
         <dd>
-        <p><b>chip:</b> which display board.</p>
+        <p>Which display board, <b>on every engine</b>: the SIMPLE TV that System 100 drives, or the LISPM TV that replaced it in December 1980. One model serves either &mdash; MIT&rsquo;s own <code>cadrtv/lmtv.order</code> is the LISPM TV&rsquo;s programming specification and both boards answer it &mdash; so this chooses the netlist <code>chip</code> builds the backplane with and the board the model answers as on <code>micro</code>, on <code>rtl</code> and under <code>--tv model</code>. The start says which the run has, and a checkpoint carries it.</p>
+        <p>The two program alike but for mode bit 7, which reads the sync enable back on the LISPM TV and zero on the SIMPLE TV, where an ECO grounds it.</p>
         <p>Default: <code>simple-tv</code>.</p>
         </dd>
       </div>
@@ -402,7 +430,7 @@ engine: rtl</pre>
   <div class="band">
     <h2>The prompt</h2>
     <div class="prose">
-      <p>While a machine runs, on any of the three engines, a line on stdin is a command to <em>muir</em> rather than to the machine &mdash; the machine&rsquo;s own keyboard is <a href="#terminal">the terminal&rsquo;s</a>. It is read from a pipe, or from a terminal muir is in the foreground of, and acted on between two microcycles. The <code>rtl</code> machine at either end of the debug cable over TCP has it too, and so does the debugger of a CADR in fabric, less <code>checkpoint</code> and the capture commands, which say why they are refused there; the lashup in one process and the netlist debuggee have none, and the start says so.</p>
+      <p>While a machine runs, on any of the three engines, a line on stdin is a command to <em>muir</em> rather than to the machine &mdash; the machine&rsquo;s own keyboard is <a href="#terminal">the terminal&rsquo;s</a>. It is read from a pipe, or from a terminal muir is in the foreground of, and acted on between two microcycles. Every machine muir holds alone has it, <code>chip</code> included, with or without a debugger on its connector, and so do both ends of the debug cable over TCP and the debugger of a CADR in fabric &mdash; less <code>checkpoint</code> and the capture commands, which say why they are refused there. The lashup in one process has none, and the start says so.</p>
       <p><code>muir: </code> is written while the machine is held, which is when muir is waiting to be told what to do next; it is not written down a pipe, where the answers alone are wanted. A line typed while the machine is running is acted on all the same &mdash; there is just no prompt in front of it, because muir is not waiting.</p>
       <p>^C holds the machine at the prompt, and says where it stopped. A second ^C while held, or a ^C with no prompt to go on from, ends the run as <code>quit</code> does, with the recording and the checkpoint written. A hold nothing can run on &mdash; stdin has ended, so no <code>continue</code> will ever come &mdash; ends the run the same way rather than standing there.</p>
       <p>A machine that stops <em>itself</em> is held here too, and says why. <code>(si:%halt)</code> in the band runs <code>HALT-CONS</code>, which under <code>ERRSTOP</code> drops <code>MACHRUN</code> with <code>RUN</code> still set; the statistics counter under <code>STATHENB</code> does the same. From there no microcycle runs, and nothing about stepping says so &mdash; the screen simply stops &mdash; so muir reads it off <code>FLAG-1</code>, where a console reads it, and holds rather than spinning. <code>continue</code> and <code>step</code> say so as well; <code>boot</code> presses the button that starts it again. <code>chip</code> holds the same way, off the nets those registers are buffered from, it being a netlist and not an engine with registers to read.</p>
@@ -524,6 +552,7 @@ PC 0 in the PROM; 0 microcycles, 0 ns; 0 this run</pre>
 muir --terminal 5901       <b># or wherever you say</b></pre>
       <p>The display is VNC&rsquo;s :0 unless <code>--terminal</code> says another, and the start says where it is. A display already taken &mdash; a second muir on the host, which is what the lashup over TCP is &mdash; moves it up to the first free one; a port you named yourself is bound as it stands, and the run stops rather than putting a viewer somewhere it was not told to look.</p>
       <p>What it shows is the frame buffer, which is the screen on every engine. The keyboard is the CADR&rsquo;s own, with its key positions taken from MIT&rsquo;s tables, and the mouse is the machine&rsquo;s quadrature mouse; Home writes a checkpoint as the run goes. Once the run has stopped, muir keeps serving the last screen for as long as a viewer is looking at it, or until ^C.</p>
+      <p>With <code>--color-tv</code> the colour screen is served as well, at the display above the last one bound or wherever <code>--color-terminal</code> says. <b>Pixels only:</b> the machine has one keyboard and one mouse, both on the I/O board, and they stay with the terminal that serves the main screen, so what a viewer types or points at the colour one is dropped.</p>
       <p>On an engine with no <a href="#chaosnet">Chaosnet</a> the boot stops in the debugger at the initialization that wants a host. <kbd>Super-B</kbd> there, then the date and time it asks for and <kbd>y</kbd>, finish it.</p>
       <p>Separately, and on every engine: the band&rsquo;s cold boot leaves the display&rsquo;s vertical interrupt off, so <b>the mouse is not tracked until <code>(si:setup-cpt)</code> is typed at the listener</b>. That one is the band&rsquo;s own, not a Chaosnet matter &mdash; <code>LISP-REINITIALIZE</code> in this release guards its <code>SETUP-CPT</code> block with <code>(UNLESS (NOT CALLED-BY-USER) ...)</code>, which the cold boot&rsquo;s <code>(LISP-REINITIALIZE NIL)</code> does not satisfy, where the trunk source has <code>(UNLESS CALLED-BY-USER ...)</code> &mdash; so it is wanted just as much on a boot that reached the listener with no trouble at all.</p>
     </div>
@@ -576,7 +605,8 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
     <div class="prose">
       <p>MIT debugged a CADR from another CADR, over a <b>debug cable</b>: 21 wires from one machine&rsquo;s DBGOUT connector to the other&rsquo;s DBGIN, through which the console program <b>CC</b> halts the other machine, reads its registers and drives its bus. muir runs that lashup, and it is the project&rsquo;s acceptance test.</p>
       <p>Each machine has a Chaosnet of its own: muir&rsquo;s cable carries one machine, so the other gets a cable of its own. The two cannot hear each other over it &mdash; the only wire between them is the debug cable &mdash; and the other machine has no CHUDP link either, one socket belonging to one cable, so it reaches no file or time host and its own boot stops in the cold-load debugger. That is where CC finds it, and it is what the acceptance test wants.</p>
-      <p><code>--debug-in-process</code> puts both machines in one process with both cables between them. <code>--debug-cable-listen</code> and <code>--debug-cable-connect</code> put the same cable over TCP with one machine in each process, the listener being the debuggee; both take an endpoint the same way and meet at <code>127.0.0.1:7661</code> without one. The listener may be a <code>--chip</code> machine, and then the netlist board&rsquo;s own DBGIN answers the debugger, an event at a time, at the netlist&rsquo;s pace.</p>
+      <p><code>--debug-in-process</code> puts both machines in one process with both cables between them. Over TCP the two machines are in two processes, and there <b>the debuggee needs no flag at all: every <code>rtl</code> and <code>chip</code> run listens for a debugger</b>, since the bus interface&rsquo;s DBGIN is on every machine &mdash; it takes the Unibus as master when a debugger drives its cable, and nothing in the machine enables it. The connector is at <code>127.0.0.1:7661</code>, or the port above it when another muir has that one, and the start says where. The machine runs on its own until a debugger connects, in step with it while one is on the cable, and on its own again when the debugger is done or goes away, listening again; a second debugger while one is on is refused. <code>--debug-cable-connect</code> in another muir is the debugger, meeting it at <code>127.0.0.1:7661</code> unless told otherwise. The listener may be a <code>--chip</code> machine, and then the netlist board&rsquo;s own DBGIN answers the debugger, an event at a time, at the netlist&rsquo;s pace.</p>
+      <p><code>--debug-cable-listen</code> moves the connector, and <code>--no-debug-cable-listen</code> leaves it empty, which a machine that must not be reachable from outside wants &mdash; a debugger reads and writes the whole Unibus and stops the clock, which is why the connector stays on the loopback unless an address is named. <code>--checkpoint</code>, <code>--tv-capture</code> and <code>--watch</code> want a machine on its own and leave it empty too, saying so. <b>The cable&rsquo;s clock starts at the connection</b>, in one process and over TCP alike, each end translating instants by its own origin, so a debugger that arrives late is not a machine that has been waiting for it.</p>
       <p>Over TCP each machine has <a href="#prompt">the prompt</a>, and a hold at one end is felt at the other: each end steps only as far as the other has promised and waits otherwise, so a held debugger holds the debuggee once it has run to the debugger&rsquo;s last promise, and a held debuggee holds the debugger at its next request &mdash; the other process sits in its wait, terminal and prompt unattended, until <code>continue</code>. A debuggee that stops itself is not held for it, since a halted debuggee is what CC reads through the cable.</p>
       <p>There is a third transport, where the debuggee is not a program at all: <code>--debug-cable-connect 0x&lt;address&gt;</code> is the CADR of the <a href="https://github.com/metebalci/muir-fpga">muir-fpga</a> project, in the programmable logic of a Zynq board with Linux on the Arm cores beside it, which is where muir runs to be its debugger. The cable&rsquo;s 21 wires are a window of memory-mapped registers muir reaches with ordinary loads and stores, and it is that project&rsquo;s window and no other: muir refuses one that does not identify itself rather than store into it. The first two transports keep the two machines&rsquo; simulated clocks in step by exchanging promises; fabric runs on its own crystal in real time, so nothing is promised, only the debugger is stepped, and the debugger&rsquo;s own 11.05&nbsp;&micro;s timeout is what ends a cycle nothing answers. The window&rsquo;s layout is proposed and nothing has been built to it yet. The debugger has <a href="#prompt">the prompt</a>; a hold leaves the window as it stands, so a request standing at it when the hold comes on holds the debuggee&rsquo;s Unibus until the adapter&rsquo;s watchdog lifts it, and the debugger costs that cycle when it runs on.</p>
     </div>
@@ -593,7 +623,8 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
     <h3>What each engine models</h3>
     <div class="prose">
       <p>The engine chooses how the processor is computed; it also chooses what stands in for every other board on the backplane. A netlist board is MIT&rsquo;s own wire list run package by package. A model is a behavioural one written from the drawings &mdash; on <code>rtl</code> those are timed to the nanosecond and held against the netlist board, and on <code>micro</code> they run without the clock.</p>
-      <p><b>The choice between the two exists only on <code>chip</code>.</b> <code>--main-memory</code>, <code>--io-board</code>, <code>--tv</code>, <code>--tv-board</code> and <code>--disk-controller</code> are refused to the other engines with a warning rather than obeyed quietly, so <code>micro</code> and <code>rtl</code> have one answer a row and <code>chip</code> has two. <b>A bare <code>chip</code> run is an all-netlist machine</b>: main memory, the I/O board, the display and the disk controller all come up as MIT&rsquo;s boards. Each row below marks which side it starts on.</p>
+      <p><b>The choice between the two exists only on <code>chip</code>.</b> <code>--main-memory</code>, <code>--io-board</code>, <code>--tv</code> and <code>--disk-controller</code> are refused to the other engines with a warning rather than obeyed quietly, so <code>micro</code> and <code>rtl</code> have one answer a row and <code>chip</code> has two. <b>A bare <code>chip</code> run is an all-netlist machine</b>: main memory, the I/O board, the display and the disk controller all come up as MIT&rsquo;s boards. Each row below marks which side it starts on.</p>
+      <p><b><code>--tv-board</code> is not one of those:</b> it says which display board the machine has, and it is every engine&rsquo;s. One model serves either board, so the flag chooses the netlist <code>chip</code> builds the backplane with and the board the model answers as everywhere else. <code>--color-tv</code> is every engine&rsquo;s too, and is the model on all three.</p>
       <p><b>The mixed machines are instruments, not configurations.</b> A run meant to work the machine wants <code>rtl</code>, which runs the models throughout at about twice the hardware and is the engine for ordinary use; whoever asks for <code>chip</code> is asking for the gates, and asking for one board as its model is how that board is taken out of the picture while something else is under investigation &mdash; the two engines are held to each other at every microcycle, so where a board and its model part one of them is wrong, and running the model in its place is how you find out which. The other use is time: <code>--disk-controller model</code> gives a <code>chip</code> run the model&rsquo;s instant transfers in place of the drive&rsquo;s real milliseconds, which is nearly five times fewer microcycles through the boot PROM alone, measured above.</p>
     </div>
 
@@ -642,9 +673,9 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
           </tr>
           <tr>
             <td class="name">Display</td>
-            <td colspan="2">Model of the standard black-and-white board: a frame buffer and a mode register on the Xbus.</td>
-            <td><code>--tv model</code>, for the same model.</td>
-            <td><b>Default.</b> <code>SIMPLETV.netlist</code>, or <code>--tv-board lispm-tv</code> for <code>LISPMTV.netlist</code>, the colour board that replaced it in 1980, which has no model.</td>
+            <td colspan="2">Model: a frame buffer, a mode register and the sync program the board runs, which is where the frame, the vertical flag and the sync bits come from. Either board, as <code>--tv-board</code> says; <code>--color-tv</code> adds a second one, strapped to the colour addresses.</td>
+            <td><code>--tv model</code>, for the same model, on the board <code>--tv-board</code> names.</td>
+            <td><b>Default.</b> <code>SIMPLETV.netlist</code>, or <code>--tv-board lispm-tv</code> for <code>LISPMTV.netlist</code>, the four- and eight-bit board that replaced it in 1980. The color TV is the model here as well: there is no netlist of a board strapped colour.</td>
           </tr>
           <tr>
             <td class="name">Debug cable</td>
