@@ -211,16 +211,16 @@
 //! foreground of, and acted on between two microcycles. An end of the
 //! cable refuses `checkpoint` and the capture commands, saying why, as
 //! the command line refuses `--checkpoint` and `--tv-capture` there; the
-//! lashup in one process and the netlist debuggee have no prompt, and
-//! their start says so. `muir: ` is
-//! written while the machine is held, to a terminal and not to a pipe;
-//! a line typed while it runs is acted on all the same. ^C holds the
-//! machine at the prompt; ^C while held, or with no prompt to go on
-//! from, ends the run as `quit` does. `--no-auto-boot` leaves the boot
-//! button unpressed, as a CADR is when the power comes on, and starts the
-//! run held for the prompt's `boot` to press it --- which starts the
-//! machine, since the button is all that does; a hold nothing can run on
-//! --- stdin having ended --- ends the run rather than standing there.
+//! lashup in one process alone has no prompt, and its start says so.
+//! `muir: ` is written while the machine is held, to a terminal and not
+//! to a pipe; a line typed while it runs is acted on all the same. ^C
+//! holds the machine at the prompt; ^C while held, or with no prompt to
+//! go on from, ends the run as `quit` does. `--no-auto-boot` leaves the
+//! boot button unpressed, as a CADR is when the power comes on, and
+//! starts the run held for the prompt's `boot` to press it --- which
+//! starts the machine, since the button is all that does; a hold
+//! nothing can run on --- stdin having ended --- ends the run rather
+//! than standing there.
 //!
 //! A machine that stops itself is held at the prompt and says so, rather
 //! than being run on through: `HALT-CONS` under `ERRSTOP` --- what System
@@ -2753,9 +2753,9 @@ fn asked_where(seen: &mut u32) -> bool {
 
 /// Whether ^C has been pressed since this was last asked.
 ///
-/// A run that has no prompt to hold the machine from --- the lashup in one
-/// process, and the netlist debuggee --- ends on the first one, so that
-/// what the run was to write is written: the recording, and the checkpoint.
+/// A run that has no prompt to hold the machine from --- the lashup in
+/// one process --- ends on the first one, so that what the run was to
+/// write is written: the recording, and the checkpoint.
 /// A run with the prompt wants more than this, a first ^C holding the
 /// machine and a second quitting, which is [`Hold::interrupts`]; `chip`'s
 /// loop does the same inline.
