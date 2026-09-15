@@ -75,7 +75,7 @@
   </defs>
 </svg>
 
-<p class="desk-note"><b>muir</b> &middot; the front page &middot; <a href="manual.html">the manual</a> &middot; <a href="https://github.com/metebalci/muir">the repository</a></p>
+<p class="desk-note"><b>muir</b> &middot; the front page &middot; <a href="https://github.com/metebalci/muir/blob/main/docs/manual.md">the manual</a> &middot; <a href="https://github.com/metebalci/muir">the repository</a></p>
 
 <div class="page">
 
@@ -87,7 +87,7 @@
         <p class="lede">A simulator of the MIT CADR Lisp Machine that goes all the way down to its chips.</p>
         <div class="actions">
           <a class="key" href="#install">Install</a>
-          <a class="key lm" href="manual.html">Manual</a>
+          <a class="key lm" href="https://github.com/metebalci/muir/blob/main/docs/manual.md">Manual</a>
           <a class="key lm" href="https://github.com/metebalci/muir">GitHub</a>
         </div>
       </div>
@@ -112,7 +112,7 @@
           <li><a href="#install"><span class="tag">DO IT</span><span class="nm">Build and boot</span><span class="no">06</span></a></li>
           <li><a href="#colophon"><span class="tag">END</span><span class="nm">Colophon</span><span class="no">07</span></a></li>
         </ol>
-        <p class="small" style="margin-top:auto;">Every flag, every table and the long form of everything here is in <a href="manual.html">the manual</a>.</p>
+        <p class="small" style="margin-top:auto;">Every flag, every table and the long form of everything here is in <a href="https://github.com/metebalci/muir/blob/main/docs/manual.md">the manual</a>.</p>
       </nav>
     </div>
 
@@ -211,7 +211,7 @@ BUILT      about 30</pre>
       </div>
     </div>
 
-    <p class="small">Rates from <code>cargo run --release --example benchmark</code> on one core of an Apple M4, rounded. The machine's own microcycle is 145&nbsp;ns, so the hardware runs 6.9 M of them a second. What each engine computes on the way to the next one is <a href="manual.html#internals">in the manual</a>.</p>
+    <p class="small">Rates from <code>cargo run --release --example benchmark</code> on one core of an Apple M4, rounded. The machine's own microcycle is 145&nbsp;ns, so the hardware runs 6.9 M of them a second. What each engine computes on the way to the next one is <a href="https://github.com/metebalci/muir/blob/main/docs/engines.md">in the manual</a>.</p>
 
     <footer class="wholine">
       <div class="label">muir &middot; Three engines</div>
@@ -340,7 +340,7 @@ BUILT      about 30</pre>
           <text class="d-n" x="1200" y="451" text-anchor="middle">--serial</text>
         </svg>
       </div>
-      <figcaption class="cap">The processor is not one board and the bus interface is not part of it: they live in different backplanes and talk over five 40-wire flat cables carrying two buses and the master clock. Everything else in the machine hangs off one of those two buses. What each box is, which flag fits it, and what it reaches outside muir, is <a href="manual.html#machine">in the manual</a>.</figcaption>
+      <figcaption class="cap">The processor is not one board and the bus interface is not part of it: they live in different backplanes and talk over five 40-wire flat cables carrying two buses and the master clock. Everything else in the machine hangs off one of those two buses. What each box is, which flag fits it, and what it reaches outside muir, is <a href="https://github.com/metebalci/muir/blob/main/docs/machine.md">in the manual</a>.</figcaption>
     </figure>
 
     <footer class="wholine">
@@ -381,7 +381,7 @@ BUILT      about 30</pre>
           <p class="big-number" id="whole-machine">2,016</p>
           <p class="small"><b>parts in a whole machine</b> &mdash; one memory board on the Xbus and both display boards, the SIMPLE TV and the color TV, and 7,224 with all thirty-two memory boards.</p>
           <p class="say quiet">Not drawn by hand. Pulled out of MIT's own CAD files, then held pin for pin to MIT's wire list for the same board.</p>
-          <p class="small" style="margin-top:auto;"><a href="manual.html#netlists">Where the netlists come from</a> &mdash; and the eighth, the disk multiplexor's, which is fitted only when a run asks for it.</p>
+          <p class="small" style="margin-top:auto;"><a href="https://github.com/metebalci/muir/blob/main/docs/netlists.md">Where the netlists come from</a> &mdash; and the eighth, the disk multiplexor's, which is fitted only when a run asks for it.</p>
         </div>
       </div>
     </div>
@@ -431,14 +431,14 @@ cargo build --release</pre>
         <p class="say quiet" style="margin-top:0.35rem;">The file and time host at 3060 is not me. A CADR had no such server in it, so it is a program of its own on the network &mdash; <a href="https://github.com/metebalci/ozd">ozd</a>.</p>
         <p class="small">A band that reaches no host boots all the same, but stops to ask for the date: <b>Super-B</b> at the debugger, then the date and time it asks for and <b>y</b>, finish it.</p>
         <div class="actions" style="margin-top:auto;">
-          <a class="key" href="manual.html#running">What a run says</a>
-          <a class="key lm" href="manual.html#flags">Every flag</a>
+          <a class="key" href="https://github.com/metebalci/muir/blob/main/docs/manual.md#running-it">What a run says</a>
+          <a class="key lm" href="https://github.com/metebalci/muir/blob/main/docs/manual.md#the-command-line">Every flag</a>
         </div>
       </div>
 
       <figure class="panel">
         <img class="shot" src="system-100.png" width="768" height="963" loading="lazy" style="width:min(100%, 17rem); margin-inline:auto;" alt="The CADR screen: MIT System, band 2 of MIT-LISPM-1; Experimental System 100.0; Microcode 323; MIT Lisp Machine One, with associated machine OZ; and a Lisp Listener reading at top level.">
-        <figcaption class="cap">The boot when it has finished: System&nbsp;100.0 on microcode 323, reading at Lisp Listener 1. The screen, keyboard and mouse go out over RFB, so any VNC viewer is <a href="manual.html#terminal">the machine's terminal</a>.</figcaption>
+        <figcaption class="cap">The boot when it has finished: System&nbsp;100.0 on microcode 323, reading at Lisp Listener 1. The screen, keyboard and mouse go out over RFB, so any VNC viewer is <a href="https://github.com/metebalci/muir/blob/main/docs/manual.md#the-terminal">the machine's terminal</a>.</figcaption>
       </figure>
     </div>
 
@@ -457,14 +457,14 @@ cargo build --release</pre>
 
     <div class="panels two end-split">
     <div class="colophon">
-      <p>Almost nothing here is a first-hand invention. The CADR, the drawings, the wire lists, the microcode and the diagnostics are MIT&rsquo;s, recovered by other people&rsquo;s work over decades; <a href="manual.html#credits">the manual lists every source</a> and what each contributed.</p>
+      <p>Almost nothing here is a first-hand invention. The CADR, the drawings, the wire lists, the microcode and the diagnostics are MIT&rsquo;s, recovered by other people&rsquo;s work over decades; <a href="https://github.com/metebalci/muir/blob/main/docs/sources.md">the manual lists every source</a> and what each contributed.</p>
       <p>muir is implemented entirely by <a href="https://claude.com/claude-code">Claude Code</a>, on Anthropic&rsquo;s Opus 5 and Fable 5.1 models. It is written in Rust and has no crate dependencies.</p>
       <p>muir is named for Nathan Muir, the character Robert Redford plays in <em>Spy Game</em> (2001). In memory of Robert Redford.</p>
       <p><b>&copy; 2026 Mete Balci.</b> muir is <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0-or-later</a>. MIT&rsquo;s own drawings and wire lists are committed unmodified in <code>mit/</code>.</p>
       <p>The drawing style, the palette and the panels are <a href="https://github.com/metebalci/coldboot">Cold Boot</a>&rsquo;s, a manga-style zine about the same machine by the same author, under CC BY-SA 4.0. That one is the story; this one is the machine.</p>
       <div class="actions" style="margin-top:0.6rem;">
-        <a class="key" href="manual.html">Read the manual</a>
-        <a class="key lm" href="manual.html#credits">The sources</a>
+        <a class="key" href="https://github.com/metebalci/muir/blob/main/docs/manual.md">Read the manual</a>
+        <a class="key lm" href="https://github.com/metebalci/muir/blob/main/docs/sources.md">The sources</a>
         <a class="key lm" href="https://github.com/metebalci/muir">Repository</a>
       </div>
     </div>

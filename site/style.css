@@ -10,8 +10,9 @@
    display face with a pink drop shadow --- a second drum printed a little out
    of register --- and the machine's own who-line ruled off at the foot.
 
-   Three pages share this file: `index.html`, the front page; `manual.html`,
-   the manual; and `lashup.html`, the acceptance test at its own size.
+   Two pages share this file: `index.html`, the front page, and
+   `lashup.html`, the acceptance test at its own size. The manual is
+   Markdown in `docs/`.
 
    No dark mode. Paper and ink is what this is, as the zine is, so the
    stylesheet names one set of colors and the page keeps them in either
@@ -141,8 +142,7 @@ em { font-style: italic; }
 /* Inline code is one size wherever it sits, not a fraction of its context:
    a relative size compounds against every panel and produces sizes nobody
    chose. */
-code, kbd { font-family: var(--mono); font-size: var(--fs-mono); font-weight: 400; }
-kbd { border: 2px solid var(--ink); border-radius: 3px; padding: 0 0.25rem; }
+code { font-family: var(--mono); font-size: var(--fs-mono); font-weight: 400; }
 
 /* ---------------------------------------------------------------- shell */
 
@@ -445,7 +445,7 @@ figure { margin: 0; display: grid; gap: 0.5rem; }
   overflow-wrap: anywhere;
 }
 .term b { color: var(--spot); font-weight: 400; }
-.term code, .term kbd { font-size: inherit; border: 0; padding: 0; }
+.term code { font-size: inherit; border: 0; padding: 0; }
 /* A command keeps the line breaks it was typed with, and where a line is
    longer than its panel it folds at a space and never inside a flag, a path
    or a URL --- a break mid-token reads as a typo. */
@@ -492,9 +492,7 @@ thead th {
 tbody td { border-bottom: 2px dotted var(--ink); }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: var(--spot-tint); }
-td.file, td.name, th.name { font-family: var(--mono); font-weight: 500; }
-td.file { white-space: nowrap; }
-td.num, th.num { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+td.file { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
 /* A parts count is a figure printed as one: the display face, ranged right,
    as the big numerals elsewhere are. */
 .spec .n, .spec th.n {
@@ -517,24 +515,20 @@ td.num, th.num { font-family: var(--mono); font-weight: 500; white-space: nowrap
 
 .d-box  { fill: none; stroke: currentColor; stroke-width: 1.5; }
 .d-fill { fill: var(--paper); stroke: currentColor; stroke-width: 1.5; }
-.d-tex  { stroke: currentColor; stroke-width: 1.5; }
 .d-dash { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 6 5; }
 .d-line { fill: none; stroke: currentColor; stroke-width: 1.5; }
 .d-bus  { fill: none; stroke: currentColor; stroke-width: 4; }
 /* A ring round part of the picture, saying that what is inside it is there
    only under a condition the label gives. */
 .d-ring { fill: none; stroke: currentColor; stroke-width: 1; opacity: .4; stroke-dasharray: 2 4; }
-.d-plate { fill: var(--paper); }
 .d-t { font: 500 13px var(--sans); fill: currentColor; }
 .d-s { font: 500 11px var(--sans); fill: currentColor; }
-.d-m { font: 500 13px var(--mono); fill: currentColor; }
 .d-n { font: 400 11px var(--mono); fill: currentColor; }
 
-/* ------------------------------------------------- the manual's long prose */
+/* ----------------------------------------------------------- long prose */
 
-/* The manual is the same sections with more words in them: running text
-   stops at the measure, a heading is the display face a size down, and a
-   flag list is the name over what it does rather than beside it.
+/* Running text stops at the measure and a heading is the display face a
+   size down.
 
    The measure is on the paragraph rather than on the block that holds it, so
    that a terminal block or a table in the same flow takes the whole width:
@@ -554,54 +548,9 @@ h3 {
   text-shadow: 0.05em 0.04em 0 var(--spot);
 }
 
-/* An aside: what the section just said, held to one side of the ink rule. */
-.note {
-  border-left: var(--line) solid var(--spot);
-  background: var(--paper);
-  padding: 0.15rem 0 0.15rem 0.8rem;
-  font-size: var(--fs-small);
-  max-width: var(--measure);
-}
-
 figcaption { font-size: var(--fs-small); max-width: var(--measure); }
 figcaption p { margin: 0 0 0.5rem; }
 figcaption p:last-child { margin-bottom: 0; }
-/* A caption long enough to fill a panel is set in two columns, as a caption
-   under a full-width plate is in print, rather than as one column with the
-   panel empty beside it. */
-.cols { max-width: none; columns: 2; column-gap: 2.5rem; }
-@media screen and (max-width: 58rem) { .cols { columns: 1; max-width: var(--measure); } }
-
-/* The manual's flags and prompt commands. The name goes on its own line
-   above what it does rather than in a column beside it: the longest of them
-   is wider than a column that would leave the description room to read. */
-dl.flags { margin: 0; }
-dl.flags > div { padding: 0.65rem 0; border-top: 2px dotted var(--ink); }
-dl.flags > div:first-child { border-top: 0; }
-dl.flags dt {
-  font-family: var(--mono);
-  font-size: var(--fs-mono);
-  font-weight: 600;
-  margin-bottom: 0.3rem;
-  background: var(--spot-tint);
-  display: inline-block;
-  padding: 0.05rem 0.35rem;
-}
-dl.flags dd { margin: 0; font-size: var(--fs-small); display: grid; gap: 0.4rem; }
-dl.flags dd > p, dl.flags dd > ul { max-width: var(--measure); }
-
-/* Who did what: a name against what it contributed. */
-dl.credits { margin: 0; max-width: var(--measure); }
-dl.credits > div {
-  display: grid;
-  grid-template-columns: 11rem minmax(0, 1fr);
-  gap: 0 1.2rem;
-  padding: 0.5rem 0;
-  border-top: 2px dotted var(--ink);
-}
-dl.credits > div:first-child { border-top: 0; }
-dl.credits dt { font-family: var(--mono); font-size: var(--fs-mono); font-weight: 500; }
-dl.credits dd { margin: 0; font-size: var(--fs-small); }
 
 /* ---------------------------------------------- colophon and the who-line */
 
@@ -639,7 +588,6 @@ dl.credits dd { margin: 0; font-size: var(--fs-small); }
   .term.cmd { white-space: pre; }
   .big-number { font-size: var(--fs-t-l); }
   .toc a { grid-template-columns: 4rem minmax(0, 1fr) auto; }
-  dl.credits > div { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
