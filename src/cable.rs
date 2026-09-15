@@ -399,15 +399,23 @@ pub struct FarEnd {
 }
 
 /// The boards behind the bus interface, as netlists or not: how many
-/// memory boards are on the backplane, and whether the I/O board, the
-/// display and the disk controller are netlists on their buses. `None` for
-/// a board is [`Buses`] answering it from the machine's model.
+/// memory boards are on the backplane, and whether the I/O board, the two
+/// displays and the disk controller are netlists on their buses. `None`
+/// for a board is [`Buses`] answering it from the machine's model.
 #[derive(Clone, Copy, Default)]
 pub struct Boards<'a> {
     /// Memory boards on the backplane, each 64K words; 0 is the twins.
     pub memory: usize,
     pub io: Option<&'a Netlist>,
     pub tv: Option<&'a Netlist>,
+    /// The color TV, the second display board: a display netlist wrapped
+    /// to [`crate::tv::COLOR_TV`] rather than to the main screen's
+    /// addresses, which is [`crate::netlist::parse_color_tv`]'s netlist
+    /// and no other. `None` with the board fitted is the model answering
+    /// `17200000` and `17377750` from the machine, as `--tv model` is for
+    /// the main screen; `None` with no board fitted at all is a machine
+    /// with one screen, and then nothing answers there.
+    pub color_tv: Option<&'a Netlist>,
     pub disk: Option<&'a Netlist>,
     /// The DISK MULTIPLEXOR on the disk controller's cable, which is not
     /// on a bus at all: it hangs off the controller's edge connector, and
@@ -467,9 +475,29 @@ impl FarEnd {
         buses.memory_twins = boards.memory == 0;
         buses.io_board = boards.io.is_some();
         buses.tv_board = boards.tv.is_some();
+        buses.color_tv_board = boards.color_tv.is_some();
+        // The netlist colour board wants the model fitted beside it, as
+        // the main screen's netlist board has `machine.tv` beside it: the
+        // picture is read off the model, and it is the model's presence
+        // that makes `busint::decode_with` answer `Device` at `17200000`
+        // and `17377750` at all --- without it nothing would answer the
+        // board's own addresses and every cycle to them would time out.
+        assert!(
+            boards.color_tv.is_none() || buses.machine.color_tv.is_some(),
+            "a color TV netlist on the backplane wants Machine::fit_color_tv beside it"
+        );
         buses.disk_board = boards.disk.is_some();
-        // The device boards on the backplane, the display first.
-        let devices: Vec<&Netlist> = boards.tv.into_iter().chain(boards.disk).collect();
+        // The device boards on the backplane, the displays first and the
+        // main screen's before the colour one's. Each is a netlist and the
+        // strap it was wrapped with, the two displays being one board at
+        // two addresses: [`crate::xbus::straps`].
+        let devices: Vec<crate::xbus::Device> = boards
+            .tv
+            .map(crate::xbus::Device::new)
+            .into_iter()
+            .chain(boards.color_tv.map(|n| crate::xbus::Device::strapped(n, crate::tv::COLOR_TV)))
+            .chain(boards.disk.map(crate::xbus::Device::new))
+            .collect();
         let mut xbus = Xbus::new(busint, memory, boards.memory, &devices, powered_at);
         if let Some(dm) = boards.multiplexor {
             xbus.plug_multiplexor(dm, powered_at);
@@ -923,10 +951,19 @@ impl FarEnd {
 /// rather than as the flag it is. How many memory boards, and whether
 /// each of main memory, the I/O board, the display and the disk
 /// controller is a netlist, is [`Buses`]'s own and is refused there.
+///
+/// **The color TV goes in by name for a second reason**: it changes how
+/// much of the file there is. A second display board is one more device
+/// board, and [`crate::xbus::Xbus::save_devices`] writes the device boards
+/// one after another with no count, so a file written with one cannot be
+/// read by a machine built without it at all. So `color_tv` --- `none`,
+/// `model` or `netlist` --- is here at the front, where a reader settles
+/// it before a board is asked to load anything.
 pub fn write_checkpoint(
     path: &std::path::Path,
     ran: u64,
     tv_board: &str,
+    color_tv: &str,
     cpu: &Chip,
     clk: &Behavioural,
     far: &FarEnd,
@@ -934,6 +971,7 @@ pub fn write_checkpoint(
     let mut w = crate::checkpoint::Writer::new();
     w.u64(ran);
     w.bytes(tv_board.as_bytes());
+    w.bytes(color_tv.as_bytes());
     cpu.save(&mut w)?;
     clk.save(&mut w)?;
     far.checkpoint(&mut w)?;
@@ -953,6 +991,9 @@ pub struct Resuming<'a> {
     pub ran: u64,
     /// The display board the backplane carried, `simple-tv` or `lispm-tv`.
     pub tv_board: String,
+    /// What the machine had for a second display board: `none`, `model`
+    /// or `netlist`.
+    pub color_tv: String,
     /// How many 64K-word memory boards the machine had, off the header.
     pub memory_boards: usize,
     body: crate::checkpoint::Reader<'a>,
@@ -993,7 +1034,9 @@ pub fn read_checkpoint(c: &crate::checkpoint::Checkpoint) -> std::io::Result<Res
     let ran = body.u64()?;
     let tv_board = String::from_utf8(body.bytes()?)
         .map_err(|_| crate::checkpoint::bad("the display board's name"))?;
-    Ok(Resuming { ran, tv_board, memory_boards: c.memory_boards, body })
+    let color_tv = String::from_utf8(body.bytes()?)
+        .map_err(|_| crate::checkpoint::bad("the color TV's kind"))?;
+    Ok(Resuming { ran, tv_board, color_tv, memory_boards: c.memory_boards, body })
 }
 
 // --- The debuggee's DBGIN with the debugger elsewhere ------------------------

@@ -250,3 +250,61 @@ fn a_resume_has_the_checkpoint_s_color_tv() {
     assert!(t.contains("--color-tv"), "the refusal names the flag:\n{t}");
     assert!(t.contains("with the color tv"), "and says what the checkpoint has:\n{t}");
 }
+
+/// **A `chip` checkpoint carries the second display board**, and a resume
+/// onto a machine whose `--color-tv` is not the checkpoint's is refused by
+/// the flag's name --- none against one, and the netlist board against the
+/// model.
+///
+/// It is refused before anything is read, as `--tv-board` is: the colour
+/// board is one more device board in the file, and the device boards go in
+/// one after another with no count, so a checkpoint with one cannot be
+/// read at all by a machine built without it. Hence the word at the front
+/// of the file, which [`muir::cable::write_checkpoint`] writes and
+/// `read_checkpoint` gives back.
+///
+/// The boards apart from the two displays are models, and four memory
+/// boards rather than thirty-two, so that three runs of this are quick.
+#[test]
+fn a_chip_resume_has_the_checkpoint_s_color_tv() {
+    let dir = scratch("checkpoint-chip-color-tv");
+    let chk = dir.join("colour.chk");
+    let chip = [
+        "--chip",
+        "--main-memory-boards",
+        "4",
+        "--main-memory",
+        "model",
+        "--io-board",
+        "model",
+        "--disk-controller",
+        "model",
+    ];
+    let out = muir()
+        .args(chip)
+        .args(["--color-tv", "--stop-after", "300", "--checkpoint"])
+        .arg(&chk)
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "the first run failed:\n{t}");
+    assert!(t.contains("color TV netlist"), "the board was on the backplane:\n{t}");
+    assert!(chk.exists(), "the checkpoint was written:\n{t}");
+
+    // The same machine resumes, and goes on from where it was.
+    let out =
+        muir().args(chip).args(["--color-tv", "--stop-after", "50", "--resume"]).arg(&chk).run();
+    let t = text(&out);
+    assert!(out.status.success(), "the resumed run failed:\n{t}");
+    assert!(t.contains("at 300 microcycles"), "the resume reported:\n{t}");
+    assert!(t.contains("color TV netlist"), "with the board it was taken with:\n{t}");
+
+    // Without the flag there is one screen, and with `model` the second
+    // board is another board: both refused by the flag's name.
+    for args in [&["--stop-after", "50"][..], &["--color-tv", "model", "--stop-after", "50"][..]] {
+        let out = muir().args(chip).args(args).args(["--resume"]).arg(&chk).run();
+        let t = text(&out);
+        assert!(!out.status.success(), "{args:?}: a board apart resumed anyway:\n{t}");
+        assert!(t.contains("--color-tv"), "{args:?}: the refusal names the flag:\n{t}");
+        assert!(t.contains("netlist"), "{args:?}: and says what the checkpoint has:\n{t}");
+    }
+}

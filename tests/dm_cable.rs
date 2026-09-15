@@ -358,7 +358,7 @@ fn backplane(multiplexor: bool, units: &[u8]) -> (Netlist, Xbus) {
     } else {
         netlist::parse(CADRDC).unwrap()
     };
-    let mut xbus = Xbus::new(&busint, &memory, 0, &[&dc], 0);
+    let mut xbus = Xbus::new(&busint, &memory, 0, &[muir::xbus::Device::new(&dc)], 0);
     if multiplexor {
         xbus.plug_multiplexor(&netlist::parse(DM).unwrap(), 0);
     }

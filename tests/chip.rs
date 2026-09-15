@@ -868,7 +868,10 @@ fn checkpoint(
     clk: &muir::clock::Behavioural,
     far: &FarEnd,
 ) {
-    match muir::cable::write_checkpoint(p, cycle as u64, chosen().tv_board, c, clk, far) {
+    // This harness has no second display board: `none` is what the
+    // checkpoint's colour word says, and a resume onto a machine with one
+    // is refused by it.
+    match muir::cable::write_checkpoint(p, cycle as u64, chosen().tv_board, "none", c, clk, far) {
         Ok(_) => {}
         Err(e) => panic!("{}: {e}", p.display()),
     }
@@ -5239,4 +5242,132 @@ fn the_mask_proms_hold_mits_own_table() {
         checked += 1;
     }
     assert_eq!(checked, 9, "eight mask PROMs and the dispatch one");
+}
+
+/// **Two display boards on one backplane, each answering at its own
+/// strap.** The main screen's board at `17000000` and `17377760`, and a
+/// second LISPM TV wrapped to the color TV's `17200000` and `17377750` ---
+/// `cadrtv/lmtv.order`'s x of 6 and of 5 --- with the processor writing
+/// and reading both through the bus interface's own Xbus cycles.
+///
+/// What is held here is that two boards is not one board twice: each
+/// answers its own two blocks and neither answers the other's, no cycle is
+/// left for the timeout to give up on, and the models behind the buses
+/// hold both pictures --- `machine.tv` the main screen's word,
+/// `machine.color_tv` the colour one's and the colour map register 4
+/// wrote. `Buses` mirrors a write to either board into the model that
+/// answers for it, so the screen is read off the same place whether the
+/// board is a netlist or not.
+///
+/// The last cycle is `COLOR-EXISTS-P`'s own probe: System 100 writes a
+/// word at the colour buffer's first location and reads it back, and a
+/// machine with no second board gets an NXM there. It gets its word back
+/// here.
+#[test]
+fn two_display_boards_answer_at_their_own_straps() {
+    use microcode::*;
+    use muir::isa::Insn;
+    use muir::tv::{BUFFER, COLOR_TV};
+
+    let n = netlist::parse(NETLIST).unwrap();
+    let mut m = muir::machine::Machine::new();
+    // The model of the second board, which is fitted beside the netlist
+    // one exactly as `muir --chip --color-tv netlist` fits it: the picture
+    // is read off the model whichever board drew it.
+    m.fit_color_tv();
+    m.amem[3] = 0o123456;
+    // Three pages through one level-1 block: the colour buffer, the main
+    // screen's buffer, and the colour board's control block.
+    m.l1_map[0] = 0;
+    let mapped = |phys: u32| (1 << 23) | (1 << 22) | (phys >> 8);
+    m.l2_map[0] = mapped(COLOR_TV.buffer);
+    m.l2_map[1] = mapped(BUFFER);
+    m.l2_map[2] = mapped(COLOR_TV.control);
+
+    // The words, and the virtual address of each place they go. Register 4
+    // is the colour map's write port: `(DPB value 1010 (DPB channel 0602
+    // colour))`, as `WRITE-COLOR-MAP` writes it.
+    const COLOUR_WORD: u32 = 0x1234_5678;
+    const MAIN_WORD: u32 = 0x0fed_cba9;
+    const MAP_VALUE: u32 = 0o252;
+    const MAP_COLOUR: u32 = 5;
+    m.mmem[1] = COLOUR_WORD;
+    m.mmem[2] = 5; // page 0, word 5: 17200005
+    m.mmem[3] = MAIN_WORD;
+    m.mmem[4] = (1 << 8) | 5; // page 1, word 5: 17000005
+    m.mmem[5] = MAP_VALUE << 8 | MAP_COLOUR;
+    m.mmem[6] = (2 << 8) | ((COLOR_TV.control + 4) & 0o377); // 17377754
+    m.mmem[7] = 1; // COLOR-EXISTS-P's probe
+    m.mmem[8] = 0; // page 0, word 0: 17200000
+
+    // Each cycle is given forty microcycles to finish in, as the
+    // diagnostic block's reads are: a frame-buffer cycle on either board
+    // is answered in well under a microsecond, and forty microcycles is
+    // seven of them.
+    let mut prom = vec![filler(); 512];
+    let mut at = 20;
+    let write = |prom: &mut Vec<Insn>, at: &mut usize, data: u64, addr: u64| {
+        prom[*at] = Insn::new(ALU | SETM | m_src(data) | a_src(3) | MD);
+        prom[*at + 1] = Insn::new(ALU | SETM | m_src(addr) | a_src(3) | START_WRITE);
+        *at += 42;
+    };
+    write(&mut prom, &mut at, 1, 2); // 17200005 <- COLOUR_WORD
+    write(&mut prom, &mut at, 3, 4); // 17000005 <- MAIN_WORD
+    write(&mut prom, &mut at, 5, 6); // 17377754 <- the colour map
+    write(&mut prom, &mut at, 7, 8); // 17200000 <- 1, the probe
+    // The words are parked from `A` 101 up: 100 is the filler's own
+    // destination, `A[100] <- A[3]`, and a word parked there is written
+    // over by the next filler.
+    for (addr, park) in [(2u64, 0o101u64), (4, 0o102), (8, 0o103)] {
+        prom[at] = Insn::new(ALU | SETM | m_src(addr) | a_src(3) | START_READ);
+        prom[at + 41] = Insn::new(ALU | SETM | SRC_MD | a_src(3) | a_dest(park));
+        at += 42;
+    }
+    m.load_prom(&prom);
+
+    // The backplane: both display boards as netlists, the memory as the
+    // twins and the I/O board and the disk controller as models, so that
+    // what this test builds is the two displays and the least else.
+    let bus_n = netlist::parse(BUSINT).unwrap();
+    let mem_n = netlist::parse(CADRM).unwrap();
+    let tv_n = netlist::parse(SIMPLETV).unwrap();
+    let colour_n = netlist::parse_color_tv(LISPMTV).unwrap();
+    let boards =
+        Boards { memory: 0, tv: Some(&tv_n), color_tv: Some(&colour_n), ..Default::default() };
+    let far = FarEnd::new(&n, &bus_n, &mem_n, boards, 0, m.clone());
+    let (mut c, mut clk, mut far, _r) = same_program_on(&n, &m, far);
+    let clk0 = cpu_clock(&n);
+    let a = Ram::new(&c, &n, &MEMS[0]);
+    for _ in 0..(at + 60) {
+        generator_cycle(&mut c, &mut far, &mut clk, clk0);
+    }
+
+    // What the boards gave back. A cycle nothing answered would have been
+    // given up on after `busint::TIMEOUT_NS` with the NXM flagged, and the
+    // word in `MD` would be whatever was on the bus.
+    assert_eq!(a.word(&c, 0o101), COLOUR_WORD, "17200005 read back off the color TV");
+    assert_eq!(a.word(&c, 0o102), MAIN_WORD, "17000005 read back off the main screen's board");
+    assert_eq!(a.word(&c, 0o103), 1, "COLOR-EXISTS-P's probe at 17200000");
+    assert_eq!(far.buses.machine.bus_error, 0, "no cycle was given up on");
+
+    // And what the models hold: the picture whichever board drew it.
+    let machine = &far.buses.machine;
+    let colour = machine.color_tv.as_ref().expect("the color TV is fitted beside its board");
+    assert_eq!(colour.buffer()[5], COLOUR_WORD, "the colour word is mirrored into its model");
+    assert_eq!(colour.buffer()[0], 1, "and so is the probe");
+    assert_eq!(machine.tv.buffer()[5], MAIN_WORD, "the main screen's into its own");
+    assert_eq!(machine.tv.buffer()[0], 0, "which the colour writes did not reach");
+    // `WRITE-COLOR-MAP` writes the map inverted, which `Tv::rgb` undoes;
+    // the byte register 4 stored is what `color_map` holds.
+    assert_eq!(
+        colour.color_map()[MAP_COLOUR as usize][0],
+        MAP_VALUE as u8,
+        "register 4 of the colour board wrote channel 0 of colour {MAP_COLOUR}"
+    );
+    eprintln!(
+        "two display boards: 17200005 {:#x}, 17000005 {:#x}, colour {MAP_COLOUR} channel 0 {:o}",
+        colour.buffer()[5],
+        machine.tv.buffer()[5],
+        colour.color_map()[MAP_COLOUR as usize][0]
+    );
 }

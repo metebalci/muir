@@ -108,7 +108,7 @@ and `--disk-controller model` is how a `chip` run that does not care about
 the disk is made quick.
 
 `rtl` is the engine for ordinary use, and `chip` means the gate-level
-machine throughout: `--main-memory`, `--io-board`, `--tv` and
+machine throughout: `--main-memory`, `--io-board`, `--tv`, `--color-tv` and
 `--disk-controller` all start there as netlists, and each takes `model` for
 `rtl`'s behavioural one instead, one board at a time. Those mixes are
 instruments rather than machines --- the two engines are held to each other
@@ -139,9 +139,14 @@ which is how the release's `COLOR-EXISTS-P` finds out there is no colour
 screen. With it fitted the cold boot sets the board up: `COLOR:SETUP` loads
 the NTSC sync program, starts it in clock mode 3 with vertical spacing 36,
 and writes the sixteen colours of the map. The picture is 576 by 454 at
-four bits a pixel through that map, served on `--color-terminal`. It is the
-model on every engine, `chip` included: there is no netlist of a LISPM TV
-strapped colour on the backplane.
+four bits a pixel through that map, served on `--color-terminal`. The flag
+takes a word of its own, `--color-tv [netlist|model]`, as `--tv` does:
+`netlist` puts a second LISPM TV on `chip`'s backplane, wrapped to the
+colour addresses, and is `chip`'s alone; `model` is the behavioural board
+and every engine takes it. The bare flag is the netlist on `chip` and the
+model elsewhere. Either way the model is fitted behind the buses and every
+write to the board is mirrored into it, so the colour picture is read off
+the same place whichever board drew it.
 
 ## The netlists
 
@@ -234,7 +239,7 @@ work.
          [--disk-pack <image>[,<unit>][,ro]]
          [--main-memory netlist|model] [--io-board netlist|model]
          [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
-         [--color-tv [--color-terminal [<endpoint>]]]
+         [--color-tv [netlist|model] [--color-terminal [<endpoint>]]]
          [--terminal [<endpoint>]]
          [--debug-in-process [--debuggee-disk-pack <image>[,<unit>][,ro]]
                              [--debuggee-terminal [<endpoint>]]]
