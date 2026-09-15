@@ -155,7 +155,7 @@ glossing.
 | CADRM.netlist | `cadrm/` | `mem.wlr`, with ECO 2 applied to the list, the drawings being after it | --- |
 | CADRIO.netlist | `cadrio/`, `chaos/lispm/` | `iob.wlr` --- one list for both halves, the Chaosnet sharing the board | `iob.stf` for the page list |
 | CADRDC.netlist | `cadrdc/` | `dc.wlr` | `dc.wls`, the census |
-| LISPMTV.netlist | `cadrtv/lispm-tv/` | `lmtv4b.wlr` | `lmtv4b.wls`, the census |
+| LISPMTV.netlist | `cadrtv/lispm-tv/`, the four-bit build's pages, `lmtv4b.fil`; the eight-bit build is not built | `lmtv4b.wlr` | `lmtv4b.wls`, the census |
 | SIMPLETV.netlist | `cadrtv/simple-tv/` | **none on the tapes** | `lmtv.stf`, MIT's page list, and `lmtv.order`, MIT's register map, which the drawings have to decode the way it says |
 | DM.netlist | `cadrdc/` | **none on the tapes** | `dm.stf`, the stuffing list |
 
