@@ -171,8 +171,9 @@ level order.
 A part is one device at one board location --- the chips, the oscillators,
 the delay lines, the switches, the LED digits --- and not the bypass
 capacitors, resistor packs and busbars beside them, which nothing here
-simulates. The whole machine with one memory board is 1,844 of them, and
-7,052 with all thirty-two. The files list gates rather than devices, so they
+simulates. The whole machine with one memory board and both display boards,
+the SIMPLE TV and the color TV, is 2,016 of them, and 7,224 with all
+thirty-two memory boards. The files list gates rather than devices, so they
 run longer than that: the processor's 985 parts arrive as 1,243 `part`
 records, a quad NAND being drawn four times under the one designator. Every
 board but the SIMPLE TV has a count of MIT's own to answer to --- the parts

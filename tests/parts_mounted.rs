@@ -89,11 +89,19 @@ fn every_board_has_the_parts_the_docs_claim() {
     }
 
     // The machine the site draws: the processor pair, the bus interface,
-    // the memory, the I/O board, the disk controller and the SIMPLE TV.
+    // the memory, the I/O board, the disk controller and both display
+    // boards --- a SIMPLE TV as the main display and a LISPM TV beside it
+    // as the color TV. The disk multiplexor is not in it, being fitted
+    // only when a run asks for it.
     let machine = processor + control_store + n["BUSINT"] + n["CADRM"] + n["CADRIO"] + n["CADRDC"];
-    assert_eq!(machine + n["SIMPLETV"], 1844, "one memory board");
-    assert_eq!(machine + n["LISPMTV"], 1845, "with the colour TV instead");
-    assert_eq!(machine + n["SIMPLETV"] + 31 * n["CADRM"], 7052, "all 32 memory boards");
+    let displays = n["SIMPLETV"] + n["LISPMTV"];
+    assert_eq!(machine + displays, 2016, "one memory board");
+    assert_eq!(machine + displays + 31 * n["CADRM"], 7224, "all 32 memory boards");
+    // With the LISPM TV as the main display instead --- `--tv-board lispm`
+    // --- the machine is one part larger, and the color TV is a second one
+    // of the same board.
+    assert_eq!(machine + n["LISPMTV"], 1845, "a LISPM TV as the main display, no color TV");
+    assert_eq!(machine + 2 * n["LISPMTV"], 2017, "and the color TV beside it");
 }
 
 /// **The I/O board is two machines' worth of function on one board**, and

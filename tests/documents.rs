@@ -186,6 +186,10 @@ fn the_data_inventory_counts_every_netlist_correctly() {
 /// so what is checked is every row that is there and not that every netlist
 /// is a row --- `data/README.md` is the inventory and is held to that
 /// above.
+///
+/// The whole machine's total is quoted in prose rather than in a table, so
+/// it is read out of the sentence that makes the claim and summed here from
+/// the same netlists.
 #[test]
 fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
     const README: &str = include_str!("../README.md");
@@ -204,6 +208,60 @@ fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
         }
         assert!(seen >= 7, "{what}: {seen} netlists in the table");
     }
+
+    // A whole machine: the processor pair, the bus interface, one memory
+    // board, the I/O board, the disk controller and both display boards ---
+    // a SIMPLE TV as the main display and a LISPM TV beside it as the color
+    // TV. The disk multiplexor is not in it, being fitted only when a run
+    // asks for it.
+    let board = |file: &str| parts(files.get(file).unwrap_or_else(|| panic!("no data/{file}")));
+    let memory = board("CADRM.netlist");
+    let processor = board("CADR.netlist");
+    let machine = processor
+        + board("BUSINT.netlist")
+        + memory
+        + board("CADRIO.netlist")
+        + board("CADRDC.netlist")
+        + board("SIMPLETV.netlist")
+        + board("LISPMTV.netlist");
+    let full = machine + 31 * memory;
+    for (what, text, before, after, want) in [
+        ("README.md", README, "the SIMPLE TV and the color TV, is ", " of them", machine),
+        ("README.md", README, "of them, and ", " with all thirty-two", full),
+        ("site/index.html", SITE, "own drawings: ", " on the processor", processor),
+        ("site/index.html", SITE, "on the processor, ", " in the machine", machine),
+        ("site/index.html", SITE, "the full netlist &mdash; the ", " parts of MIT", machine),
+        ("site/index.html", SITE, "A whole machine is ", " parts with one memory board", machine),
+        ("site/index.html", SITE, "the color TV, and ", " with all thirty-two", full),
+    ] {
+        assert_eq!(quoted(what, text, before, after), want, "{what}: {before:?}");
+    }
+}
+
+/// A document's prose as one flow. The column a Markdown paragraph wraps at
+/// and the indentation an HTML file carries are typography and not claims,
+/// so they are collapsed before a sentence is looked for.
+fn flowed(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The number a document writes between `before` and `after`, with the
+/// thousands separator prose uses and a table does not.
+///
+/// **The words around the figure are as much of the claim as the figure
+/// is**: what a number counts is the sentence it sits in, so a document
+/// that has stopped saying this has stopped quoting the count, and that
+/// fails here exactly as a wrong figure does.
+fn quoted(what: &str, text: &str, before: &str, after: &str) -> usize {
+    let flow = flowed(text);
+    let at = flow.find(before);
+    let at = at.unwrap_or_else(|| panic!("{what} does not say {before:?}"));
+    assert_eq!(flow.matches(before).count(), 1, "{what} says {before:?} more than once");
+    let rest = &flow[at + before.len()..];
+    let end = rest.find(after);
+    let end = end.unwrap_or_else(|| panic!("{what}: {before:?} is not followed by {after:?}"));
+    let cell = rest[..end].replace(',', "");
+    cell.parse().unwrap_or_else(|_| panic!("{what}: {cell:?} is not a number"))
 }
 
 /// **A count written out in words goes stale in silence**, and this one
