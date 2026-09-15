@@ -317,8 +317,16 @@ kbd { border: 2px solid var(--ink); border-radius: 3px; padding: 0 0.25rem; }
   transform: rotate(-9deg);
   white-space: nowrap;
 }
+/* The romanization, under the sound effect and ranged right, as the zine
+   sets DON under ドン. Two offsets keep it clear of what it is printed over:
+   the katakana are set solid and a small tsu hangs below the line they sit
+   on, so the letters are dropped below that tail; and the effect itself is
+   drawn across the picture, as a sound effect is, so the letters are held
+   in from its right to land on paper rather than on the ink. */
 .sfx small {
   display: block;
+  margin-top: 0.5rem;
+  margin-right: 2rem;
   font-family: var(--mono);
   font-size: var(--fs-mono);
   color: var(--ink);
