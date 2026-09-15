@@ -7,9 +7,14 @@ Pages, which also answers at
 
 Hand-written files, no build step and no generator:
 
-    index.html    the front page
-    manual.html   the manual: running muir, every flag, the prompt, and
-                  how the engines work
+    index.html    the front page, drawn in the hand of Cold Boot --- the
+                  manga-style zine about the same machine by the same
+                  author. The zine is the story; this is the machine
+    manual.html   the manual: running muir, the machine it models, every
+                  flag, the prompt, the terminal, the Chaosnet, the
+                  two-machine lashup, how the engines work, where the
+                  netlists come from, and the sources every part of it
+                  came from
     lashup.html   that recording at its own size, which a browser showing
                   the file itself would shrink to the window
     lashup.gif    the acceptance test recorded as it ran: 1538 x 985, the
@@ -29,8 +34,24 @@ Hand-written files, no build step and no generator:
                   and typing `ss` at the prompt; then recompressed, since
                   `Tv::png` writes stored deflate blocks and zlib -9
                   puts the same pixels in 2.4K rather than 93K.
-    style.css     the stylesheet the three pages share
+    style.css     the stylesheet the three pages share: ink and paper with
+                  one spot color, the size tokens every `font-size` comes
+                  from, and no dark mode --- a spot color printed on black
+                  is a different object
+    fonts/        Dela Gothic One for the display, Zen Maru Gothic for the
+                  voice and IBM Plex Mono for the machine's own, served from
+                  here rather than from Google so that a visitor need ask
+                  nobody else for a page to be readable. `fonts/README.md`
+                  says where each came from, which code points the two
+                  Japanese families were cut down to, and under what license
     .nojekyll     keeps GitHub Pages from running Jekyll over it
+
+The drawings of CADR are inline SVG in `index.html`, defined once at the top
+of the file and placed with `<use>`: the body, the faces and the waving arm
+are Cold Boot's own parts, and the magnifier arm and the tired face are drawn
+for this page in the same hand. The two diagrams --- the machine, and one
+microinstruction through three engines --- are inline SVG too, drawn in their
+own viewBox units so that they scale with the box they sit in.
 
 `.github/workflows/pages.yml` uploads this directory on every push to `main`
 that touches it. The one-time setup is in the repository settings: Pages ->

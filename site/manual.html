@@ -9,37 +9,61 @@
 </head>
 <body>
 
-<header class="topbar">
-  <div class="band">
-    <a class="home" href="index.html"><b>muir</b></a>
-    <nav>
-      <a href="index.html#what">What it is</a>
-      <a href="index.html#engines">Engines</a>
-      <a href="index.html#machine">The machine</a>
-      <a href="index.html#install">Install</a>
-      <a href="manual.html">Manual</a>
-      <a href="https://github.com/metebalci/muir">GitHub</a>
+<p class="desk-note"><b>muir</b> &middot; the manual &middot; <a href="index.html">the front page</a> &middot; <a href="https://github.com/metebalci/muir">the repository</a></p>
+
+<div class="page">
+
+  <section aria-label="muir manual">
+    <div class="masthead">
+      <div class="masthead-text">
+        <span class="eyebrow">Running the CADR simulator</span>
+        <h1 class="title t-xl">Manual</h1>
+        <p class="lede">What muir does when you run it, every flag it takes, and what it is doing underneath.</p>
+        <div class="actions">
+          <a class="key" href="#flags">Every flag</a>
+          <a class="key lm" href="#internals">The engines</a>
+          <a class="key lm" href="index.html">The front page</a>
+          <a class="key lm" href="https://github.com/metebalci/muir">GitHub</a>
+        </div>
+      </div>
+      <span class="vertical" lang="ja" aria-hidden="true">ミュア</span>
+    </div>
+
+    <nav class="panel contents" aria-label="Contents">
+      <span class="eyebrow">Contents</span>
+      <ol class="toc split">
+        <li><a href="#running"><span class="tag">RUN</span><span class="nm">Running it</span><span class="no">02</span></a></li>
+        <li><a href="#machine"><span class="tag">PLAN</span><span class="nm">The machine it models</span><span class="no">03</span></a></li>
+        <li><a href="#flags"><span class="tag">FLAGS</span><span class="nm">The command line</span><span class="no">04</span></a></li>
+        <li><a href="#rc"><span class="tag">FILE</span><span class="nm">Flags in a file</span><span class="no">05</span></a></li>
+        <li><a href="#prompt"><span class="tag">TYPE</span><span class="nm">The prompt</span><span class="no">06</span></a></li>
+        <li><a href="#terminal"><span class="tag">SCREEN</span><span class="nm">The terminal</span><span class="no">07</span></a></li>
+        <li><a href="#files"><span class="tag">WRITE</span><span class="nm">What a run can write</span><span class="no">08</span></a></li>
+        <li><a href="#chaosnet"><span class="tag">NET</span><span class="nm">The Chaosnet</span><span class="no">09</span></a></li>
+        <li><a href="#lashup"><span class="tag">TWO</span><span class="nm">Two machines</span><span class="no">10</span></a></li>
+        <li><a href="#internals"><span class="tag">INSIDE</span><span class="nm">How the engines work</span><span class="no">11</span></a></li>
+        <li><a href="#netlists"><span class="tag">SPEC</span><span class="nm">Where the netlists come from</span><span class="no">12</span></a></li>
+        <li><a href="#credits"><span class="tag">THANKS</span><span class="nm">Sources and attribution</span><span class="no">13</span></a></li>
+      </ol>
+      <p class="small">This is the whole of the program. <a href="index.html#install">Installing</a> is on the front page, and so is the short way in.</p>
     </nav>
-  </div>
-</header>
 
-<section class="hero">
-  <div class="band">
-    <h1>Manual</h1>
-    <p class="lede">What muir does when you run it, every flag it takes, and what it is doing underneath.</p>
-    <p class="sub">This is the whole of the program: <a href="#running">running it</a>, <a href="#flags">the command line</a>, <a href="#rc">flags in a file</a>, <a href="#prompt">the prompt</a>, <a href="#terminal">the terminal</a>, <a href="#files">what a run can write</a>, <a href="#chaosnet">the Chaosnet</a>, <a href="#lashup">the two-machine lashup</a>, <a href="#internals">how the engines work</a>, and <a href="#netlists">where the netlists come from</a>. <a href="index.html#install">Installing</a> is on the front page.</p>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>01</span></div>
+    </footer>
+  </section>
 
-<section id="running">
-  <div class="band">
-    <h2>Running it</h2>
+  <!-- ---------------------------------------------------- running it -->
+  <section id="running" aria-label="Running it">
+    <span class="eyebrow">Run</span>
+    <h2 class="title t-l">Running it</h2>
     <div class="prose">
       <p>muir builds to one binary. Run it with no flags and it starts an <code>rtl</code> machine, presses the boot button, and runs the boot PROM with no pack in the drive, which the boot waits on for ever. A pack is named: <code>--disk-pack vendor/run/disk-sys-100-0.img</code>, where <code>tools/fetch-system-100.sh</code> puts the System 100 pack, and with it <code>--chaos-address 3050</code>, which is that band&rsquo;s own address, and <code>--chaos-udp-peer 3060@&lt;where ozd is&gt;</code>, which is where that band looks for its files and the date. System 304&rsquo;s pack boots too and wants <code>--chaos-address 4401</code> with <code>--chaos-udp-peer 4403@&hellip;</code>.</p>
-<pre class="cmd">target/release/muir</pre>
+<pre class="term cmd">target/release/muir</pre>
       <p>One engine at a time: <code>--micro</code>, <code>--rtl</code> or <code>--chip</code>, and <code>--rtl</code> is what you get without one. A run goes on until a stop, a halt or ^C.</p>
       <p>Every run says what it is before it starts a microcycle, one line a thing, on stderr. Nothing here is hidden state: if a run behaves oddly, the reason is usually in this block.</p>
-<pre class="cmd">$ muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050 \
+<pre class="term cmd">$ muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050 \
        --chaos-udp-peer 3060@127.0.0.1:42043 --stop-after 2000000
 engine: rtl
 memory: 32 boards, 2 MW
@@ -55,16 +79,151 @@ stop: after 2000000 microcycles
       <p><strong>That ratio is microcycles against microcycles, and the disk is outside it.</strong> With the disk controller as a behavioral model &mdash; what <code>micro</code> and <code>rtl</code> always have, and what <code>chip</code> runs on <code>--disk-controller model</code> &mdash; its transfers complete inside the store to <code>START</code> and its seeks take no time. The machine it stands for spent milliseconds on a seek and spent them running the microcode&rsquo;s polling loop, so a 55&nbsp;ms seek on real hardware is about 380,000 microcycles that muir never executes. A program that seeks therefore finishes further ahead of the hardware than the ratio says, by an amount that depends on the program and is not quantified here.</p>
       <p><strong>On <code>chip</code>, where the controller is MIT&rsquo;s board by default, it inverts:</strong> the drive takes its own time, the polling loop is executed through every gate on the board, and a program that waits on the disk is slower than the ratio rather than faster. <strong>Measured, on the System 100 pack: about 4.9 times slower.</strong> The boot PROM alone reaches <code>PROM-DISABLE</code> in 1.40&ndash;1.425 million microcycles with the behavioral controller and in 6.90&ndash;6.925 million with the netlist one &mdash; the same work, and nearly five times the microcycles, because the extra ones are the PROM sitting in <code>DISK-WAIT</code> while the drive turns. In wall clock that was about fifteen minutes against 108.</p>
       <p><strong>A run that touches no pack pays almost nothing for the netlist controller, and a run that boots one pays days.</strong> Measured over 2,000 microcycles that touch no pack, 0.97&nbsp;s against 0.94&nbsp;s, about 3%: the board is on the backplane, and nothing asks it to move a head. Booting is the other end of it &mdash; System 100 came up through this controller on 12 September 2026 in 2 days 14 hours and 301 million microcycles, held between about 1,200 and 2,000 microcycles a second throughout, of which 51 hours was the cold boot&rsquo;s copy of all 21,342 pages of the band at about 330 pages an hour. That is not the engine being slow at gates; it is the controller&rsquo;s sequencer waiting on the drive&rsquo;s clocks and on its own delay lines, which is what the board does and cannot be untimed the way the model can. <code>--disk-controller model</code> is how a <code>chip</code> run that does not care about the disk is made quick.</p>
-<pre class="cmd">rtl      2000000 microcycles    0.194 s     10328518 microcycles/s    1.50x hardware
+<pre class="term cmd">rtl      2000000 microcycles    0.194 s     10328518 microcycles/s    1.50x hardware
        ran out at 2000000; PC 27501</pre>
       <p>Addresses in the flags and in what muir prints are octal, as MIT writes them.</p>
     </div>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; Running it</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>02</span></div>
+    </footer>
+  </section>
 
-<section id="flags">
-  <div class="band">
-    <h2>The command line</h2>
+  <!-- ----------------------------------------- the machine it models -->
+  <section id="machine" aria-label="The machine it models">
+    <span class="eyebrow">Plan</span>
+    <h2 class="title t-l">The machine it models</h2>
+    <div class="prose">
+      <p>The processor is not one board and the bus interface is not part of it. They live in different backplanes and talk over five 40-wire flat cables that carry two independent buses and the master clock, which the processor supplies. Everything else in the machine hangs off one of those two buses.</p>
+    </div>
+
+    <figure class="panel fig">
+      <div class="scroll">
+        <svg viewBox="16 18 1277 444" role="img" aria-label="The processor board connects over five flat cables carrying two buses to the bus interface, which fans out to the Xbus carrying main memory, the disk controller and the TV, and to the Unibus carrying the I/O board, which also has the serial port and the Chaosnet. The disk controller's cable goes down to a Trident drive, and a second path from it goes right to the disk multiplexor and down to another drive; a box drawn round those two says that path belongs to the netlist controller alone. The color TV is a second display board on the Xbus with a terminal of its own below it, and a box drawn round the two says they are fitted only when asked for; that terminal carries pixels and nothing else. The serial port's far end and the Chaosnet's route off the machine are drawn as dashed boxes below the I/O board. A debug cable of 21 wires leaves the bus interface for a second machine's, the two-machine lashup. The TV is either display board, the SIMPLE TV or the LISPM TV; its video and the I/O board's keyboard, mouse and beep meet the terminal, which serves them over RFB to any VNC client. Each of the models reaches something outside: the drive a disk image file, the terminal a VNC client, the Chaosnet hosts anywhere over UDP.">
+          <rect class="d-box" x="24" y="26" width="250" height="76"/>
+          <text class="d-t" x="149" y="53" text-anchor="middle">processor and control store</text>
+          <text class="d-n" x="149" y="71" text-anchor="middle">CADR.netlist</text>
+          <text class="d-n" x="149" y="87" text-anchor="middle">985 parts</text>
+          <line class="d-line" x1="278" y1="64" x2="372" y2="64"/>
+          <text class="d-s" x="325" y="46" text-anchor="middle">5 flat cables</text>
+          <text class="d-s" x="325" y="84" text-anchor="middle">two buses</text>
+          <text class="d-s" x="325" y="98" text-anchor="middle">92 wires</text>
+          <rect class="d-box" x="376" y="26" width="228" height="76"/>
+          <text class="d-t" x="490" y="53" text-anchor="middle">bus interface</text>
+          <text class="d-n" x="490" y="71" text-anchor="middle">BUSINT.netlist</text>
+          <text class="d-n" x="490" y="87" text-anchor="middle">176 parts</text>
+          <line class="d-line" x1="608" y1="64" x2="1121" y2="64"/>
+          <text class="d-s" x="865" y="46" text-anchor="middle">debug cable</text>
+          <text class="d-s" x="865" y="84" text-anchor="middle">DBGOUT to DBGIN</text>
+          <text class="d-s" x="865" y="98" text-anchor="middle">21 wires</text>
+          <rect class="d-dash" x="1125" y="26" width="150" height="76"/>
+          <text class="d-t" x="1200" y="53" text-anchor="middle">another muir</text>
+          <text class="d-s" x="1200" y="71" text-anchor="middle">the two-machine lashup</text>
+          <path class="d-line" d="M490,102 L490,130 M250,130 L1030,130 M250,130 L250,164 M1030,130 L1030,164"/>
+          <line class="d-bus" x1="40" y1="164" x2="880" y2="164"/>
+          <text class="d-s" x="40" y="152">Xbus, 32 bits, synchronous</text>
+          <line class="d-bus" x1="940" y1="164" x2="1290" y2="164"/>
+          <text class="d-s" x="1290" y="152" text-anchor="end">Unibus, 16 bits, open collector</text>
+          <path class="d-line" d="M110,164 L110,200 M250,164 L250,200 M622,164 L622,200 M810,164 L810,200 M1030,164 L1030,200"/>
+          <rect class="d-box" x="45" y="200" width="130" height="100"/>
+          <text class="d-t" x="110" y="223" text-anchor="middle">main memory</text>
+          <text class="d-s" x="110" y="240" text-anchor="middle">32 boards,</text>
+          <text class="d-s" x="110" y="254" text-anchor="middle">64K words each</text>
+          <text class="d-n" x="110" y="274" text-anchor="middle">CADRM.netlist</text>
+          <text class="d-n" x="110" y="289" text-anchor="middle">168 parts</text>
+          <rect class="d-box" x="185" y="200" width="130" height="100"/>
+          <text class="d-t" x="250" y="223" text-anchor="middle">disk controller</text>
+          <text class="d-s" x="250" y="240" text-anchor="middle">runs its own</text>
+          <text class="d-s" x="250" y="254" text-anchor="middle">microcode</text>
+          <text class="d-n" x="250" y="274" text-anchor="middle">CADRDC.netlist</text>
+          <text class="d-n" x="250" y="289" text-anchor="middle">171 parts</text>
+          <rect class="d-box" x="542" y="200" width="160" height="100"/>
+          <text class="d-t" x="622" y="223" text-anchor="middle">color TV</text>
+          <text class="d-s" x="622" y="240" text-anchor="middle">a LISPM TV strapped</text>
+          <text class="d-s" x="622" y="254" text-anchor="middle">to the color address</text>
+          <text class="d-n" x="622" y="274" text-anchor="middle">LISPMTV.netlist</text>
+          <text class="d-n" x="622" y="289" text-anchor="middle">172 parts</text>
+          <rect class="d-box" x="745" y="200" width="130" height="100"/>
+          <text class="d-t" x="810" y="223" text-anchor="middle">TV</text>
+          <text class="d-s" x="810" y="240" text-anchor="middle">SIMPLE TV, or the</text>
+          <text class="d-s" x="810" y="254" text-anchor="middle">LISPM TV</text>
+          <text class="d-n" x="810" y="274" text-anchor="middle">SIMPLETV.netlist</text>
+          <text class="d-n" x="810" y="289" text-anchor="middle">or LISPMTV.netlist</text>
+          <rect class="d-box" x="955" y="200" width="150" height="100"/>
+          <text class="d-t" x="1030" y="223" text-anchor="middle">I/O board</text>
+          <text class="d-s" x="1030" y="240" text-anchor="middle">keyboard, mouse, clocks,</text>
+          <text class="d-s" x="1030" y="254" text-anchor="middle">serial, and Chaosnet</text>
+          <text class="d-n" x="1030" y="274" text-anchor="middle">CADRIO.netlist</text>
+          <text class="d-n" x="1030" y="289" text-anchor="middle">173 parts</text>
+          <path class="d-line" d="M250,300 L250,330 M622,300 L622,330 M810,300 L810,330 M1030,300 L1030,330"/>
+          <text class="d-s" x="258" y="319">cable</text>
+          <text class="d-s" x="630" y="319">video</text>
+          <text class="d-s" x="818" y="319">video</text>
+          <text class="d-s" x="1038" y="319">Chaosnet</text>
+          <path class="d-line" d="M955,266 L901,266 L901,365 L875,365"/>
+          <text class="d-s" x="907" y="304">keys</text>
+          <text class="d-s" x="907" y="317">mouse</text>
+          <text class="d-s" x="907" y="330">beep</text>
+          <rect class="d-dash" x="185" y="330" width="130" height="70"/>
+          <text class="d-t" x="250" y="351" text-anchor="middle">Trident T-300</text>
+          <text class="d-s" x="250" y="367" text-anchor="middle">a drive and its pack</text>
+          <text class="d-n" x="250" y="387" text-anchor="middle">behavioral model</text>
+          <rect class="d-ring" x="338" y="186" width="164" height="128"/>
+          <text class="d-s" x="440" y="333" text-anchor="middle">the netlist controller only</text>
+          <text class="d-n" x="440" y="349" text-anchor="middle">--disk-multiplexor</text>
+          <line class="d-line" x1="315" y1="250" x2="355" y2="250"/>
+          <text class="d-s" x="335" y="243" text-anchor="middle">cable</text>
+          <rect class="d-box" x="355" y="200" width="130" height="100"/>
+          <text class="d-t" x="420" y="235" text-anchor="middle">disk multiplexor</text>
+          <text class="d-s" x="420" y="252" text-anchor="middle">eight drive ports</text>
+          <text class="d-n" x="420" y="274" text-anchor="middle">DM.netlist</text>
+          <text class="d-n" x="420" y="289" text-anchor="middle">62 parts</text>
+          <path class="d-line" d="M360,300 L360,365 L315,365"/>
+          <text class="d-s" x="337" y="358" text-anchor="middle">0 to 7</text>
+          <rect class="d-ring" x="525" y="186" width="194" height="228"/>
+          <text class="d-s" x="622" y="433" text-anchor="middle">fitted only when asked for</text>
+          <text class="d-n" x="622" y="449" text-anchor="middle">--color-tv</text>
+          <rect class="d-dash" x="542" y="330" width="160" height="70"/>
+          <text class="d-t" x="622" y="351" text-anchor="middle">color terminal</text>
+          <text class="d-s" x="622" y="367" text-anchor="middle">an RFB server, pixels only</text>
+          <text class="d-n" x="622" y="387" text-anchor="middle">behavioral model</text>
+          <rect class="d-dash" x="745" y="330" width="130" height="70"/>
+          <text class="d-t" x="810" y="351" text-anchor="middle">terminal</text>
+          <text class="d-s" x="810" y="367" text-anchor="middle">an RFB server</text>
+          <text class="d-n" x="810" y="387" text-anchor="middle">behavioral model</text>
+          <rect class="d-dash" x="955" y="330" width="150" height="70"/>
+          <text class="d-t" x="1030" y="351" text-anchor="middle">Chaosnet</text>
+          <text class="d-s" x="1030" y="367" text-anchor="middle">the cable, bridged to UDP</text>
+          <text class="d-n" x="1030" y="387" text-anchor="middle">behavioral model</text>
+          <rect class="d-dash" x="1125" y="330" width="150" height="70"/>
+          <text class="d-t" x="1200" y="351" text-anchor="middle">serial far end</text>
+          <text class="d-s" x="1200" y="367" text-anchor="middle">DSR, DCD and CTS asserted</text>
+          <text class="d-n" x="1200" y="387" text-anchor="middle">a null-modem plug</text>
+          <path class="d-line" d="M1105,266 L1200,266 L1200,330"/>
+          <path class="d-line" d="M250,400 L250,420 M810,400 L810,420 M1030,400 L1030,420 M1200,400 L1200,420"/>
+          <text class="d-s" x="250" y="435" text-anchor="middle">a disk image file</text>
+          <text class="d-n" x="250" y="451" text-anchor="middle">--disk-pack</text>
+          <text class="d-s" x="810" y="435" text-anchor="middle">a VNC client, anywhere</text>
+          <text class="d-n" x="810" y="451" text-anchor="middle">--terminal</text>
+          <text class="d-s" x="1030" y="435" text-anchor="middle">hosts anywhere, over UDP</text>
+          <text class="d-n" x="1030" y="451" text-anchor="middle">--chaos-udp, --chaos-udp-peer</text>
+          <text class="d-s" x="1200" y="435" text-anchor="middle">a TCP client, anywhere</text>
+          <text class="d-n" x="1200" y="451" text-anchor="middle">--serial</text>
+        </svg>
+      </div>
+      <figcaption class="cols"><p>The <code>chip</code> engine runs every board as the netlist of MIT&rsquo;s own drawings for it, held pin for pin to MIT&rsquo;s wire list for the same board &mdash; every board but the disk multiplexor, which has no wire list on the tapes and is held to MIT&rsquo;s stuffing list instead, the list of which bodies are placed. Three kinds of thing on the diagram are not boards: the Trident disk unit, a drive cabinet on the end of the controller&rsquo;s cable, a behavioral model; the Chaosnet cable itself, modeled as a medium rather than drawn as gates; and the terminals, one to a screen. Each is pointed at something outside muir &mdash; the drive at a disk image file, the terminal at a VNC client, the cable at whatever hosts its CHUDP node carries. <b>The file and time host a band calls is not among them.</b> A CADR had no file or time server in it, so muir has none either, and the host is a program of its own on the network, <a href="https://github.com/metebalci/ozd">ozd</a>. <code>--chaos-address</code> gives this machine its address and puts the CHUDP node on the modeled ether with it; <code>--chaos-udp-peer</code> says where each host lives. muir is a leaf there and not a router &mdash; a frame goes out only when this machine put it on the cable, so one host&rsquo;s is never carried on to another.</p><p>The disk multiplexor is a board, 62 parts, and the ring round it says it is fitted only when asked for. It is what gives the <em>netlist</em> disk controller a drive past unit 0: the three unit lines reach one of that board&rsquo;s receivers and nothing on it drives them, so on a single-drive machine MIT&rsquo;s own jumpers ground them and unit 0 is the consequence rather than a setting &mdash; and the multiplexor is where the unit number comes from, latched off the bus and driven back. The behavioral controller wants none of it, having addressed eight drives all along, which is why the plain cable is drawn straight to a drive and the multiplexor stands in a ring of its own. Any board can be run as its model instead, one at a time. The <code>rtl</code> engine runs the models throughout, and the two engines are held to each other at every microcycle, so where a board and its model part, one of them is wrong.</p><p>The terminal is where the machine meets a person: the picture goes out of it, keyboard and mouse events come back in to the I/O board, and the beep goes the other way &mdash; the beeper is in the keyboard, not the TV. All of it over RFB, so the screen and the keys are a VNC client &mdash; on this machine or anywhere else. The color screen has a terminal of its own beside that one, <code>--color-terminal</code>, and it carries pixels and nothing else: the machine has one keyboard and one mouse, both on the I/O board, and they stay with the terminal that serves the main screen. Where the picture comes from depends on the engine. <code>micro</code> and <code>rtl</code> have no video timing at all, so the terminal reads their frame buffer; <code>chip</code> with the TV as a netlist really scans out, and the terminal takes what a monitor takes, the differential video pair and the two syncs. That pair is the one signal the board deliberately leaves unterminated, because the pull-down belongs at the far end of the cable &mdash; so the terminal supplies it, as the far end already holds the Chaosnet&rsquo;s receive pair and the keyboard&rsquo;s.</p><p>Two of the boxes are one board standing for a choice. The TV is either display board, which is why the box names both: the SIMPLE TV, which is what muir runs by default, or the LISPM TV that replaced it in December 1980, 172 parts against 171, near enough the same board, and <code>--tv-board</code> says which on every engine. Whichever it is, the main screen is monochrome &mdash; System 100 drives whatever is at <code>17000000</code> at one bit a pixel, 768 by 963. The color picture is the second board&rsquo;s: <code>--color-tv</code> fits <b>the color TV</b>, the same LISPM TV wrapped to the color address, and its 576 by 454 at four bits a pixel through a sixteen-entry color map is what the second terminal serves. On <code>chip</code> it is a second netlist on the backplane, that same <code>LISPMTV.netlist</code> wrapped to the color addresses instead of the main screen&rsquo;s; on <code>micro</code> and <code>rtl</code> it is the model, as the rest of the machine is. And the I/O board is two machines&rsquo; worth of function on one board: 94 parts on the keyboard, mouse, clock and serial pages against 84 on the Chaosnet&rsquo;s, near enough half each. They are not two boards in disguise, though, which is why the diagram does not draw them apart. Forty-seven signals cross between the halves &mdash; the buffered Unibus data and address lines, the reset, the address decode that makes the Chaosnet&rsquo;s own select, and its bus reply and interrupt going back out through the I/O half &mdash; and the clock the I/O half counts microseconds on is the Chaosnet half&rsquo;s own 32 MHz crystal. The serial port is on that half too &mdash; the Signetics 2651 at IOBSER 0A12, its 5.0688 MHz baud-rate can beside it, and the MC1488 and MC1489 out to the RS-232 connector at J9 &mdash; and until recently it was the one thing on the board with no far end outside muir. <code>--serial</code> gives it one: a TCP endpoint, off unless asked for, which plugs the cable when something connects &mdash; DSR, DCD and CTS asserted as a device on a null-modem does with its DTR and RTS, because the 2651 is conditioned to transmit on <code>-CTS</code> low and receive on <code>-DCD</code> low, so carrying bytes is not enough. The far end takes its rate and framing from the port, whatever the machine programmed into it: a far end that picks its own produces garbage rather than an error.</p><p>The five cables carry two buses. One is the memory bus. The other is the diagnostic bus, SPY: sixteen registers on the processor&rsquo;s two boards, read and written by whoever masters the bus interface&rsquo;s Unibus, which is how the console program CC halts, steps and inspects a machine. They are not a board and are not drawn as one. Every engine has them, and the netlist is held to <code>rtl</code> on them through the microcode&rsquo;s own reads and writes of its own registers. The dashed box at the top right is not a model but a second machine: the debug cable, 21 wires from the DBGOUT connector of one bus interface to the DBGIN connector of another, over which one machine&rsquo;s Unibus cycles run on the other&rsquo;s bus. Both connectors&rsquo; pages are in the netlist; the cable and the machine at its far end are the two-machine lashup, the acceptance test. It runs on <code>rtl</code> and <code>chip</code> only: the cable is the bus interface&rsquo;s timing and nothing else &mdash; the arbitration for the debuggee&rsquo;s bus, the acknowledgement at its instant, the timeout &mdash; and <code>micro</code>, having no timing model, has no end of it and cannot be debugged over it. And the disk controller is a netlist like the rest of them, which costs a run that reads a pack the drive&rsquo;s real milliseconds: <code>--disk-controller model</code> puts the instant transfers back for a run that does not care about the disk.</p></figcaption>
+    </figure>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; The machine it models</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>03</span></div>
+    </footer>
+  </section>
+
+
+  <!-- ---------------------------------------------- the command line -->
+  <section id="flags" aria-label="The command line">
+    <span class="eyebrow">Flags</span>
+    <h2 class="title t-l">The command line</h2>
     <div class="prose">
       <p>Every flag muir takes, in the order <code>muir --help</code> lists them: the engine first, then the rest by name. A flag that only means something on some engines says which.</p>
     </div>
@@ -257,7 +416,7 @@ stop: after 2000000 microcycles
         <dt>--keyboard-mapping-dump</dt>
         <dd>
         <p>Write the mapping this run would use to stdout, in the format <code>--keyboard-mapping</code> reads, and stop &mdash; before a terminal is bound or a machine is built, so stdout carries the mapping and nothing else. Fed back in unedited it changes nothing, so it is a copy to edit rather than a report.</p>
-<pre class="cmd">muir --keyboard-mapping-dump &gt; my.keys
+<pre class="term cmd">muir --keyboard-mapping-dump &gt; my.keys
 <b># edit my.keys</b>
 muir --keyboard-mapping my.keys</pre>
         </dd>
@@ -268,7 +427,7 @@ muir --keyboard-mapping my.keys</pre>
         <p>Every keysym a viewer sends and what it became, on stderr, alongside the run. The other half of the same job: the dump says what a keysym means here, this says which keysym arrived, and a key that will not type needs both. A viewer chooses which X11 keysym to send for a physical key, so muir is the only authority on what it received &mdash; <code>xev</code> reports what the host&rsquo;s X server thinks, which is not the same thing and differs most on the modifiers.</p>
         <p>Each line names the keysym by name and number, whether it went down or up, and the key it became &mdash; spelled as <code>--keyboard-mapping-dump</code> spells it, so the line can be pasted into a mapping file &mdash; or <code>no binding</code> where the mapping has nothing for it. A keysym held as a prefix says so rather than printing nothing, a prefix&rsquo;s press producing no key by design.</p>
         <p><b>And what the terminal lost.</b> What a viewer types waits for the machine&rsquo;s next look, 256 events of it, and beyond that the oldest keystroke goes whole rather than the queue growing for the length of the run. A keystroke that goes there never becomes a keysym line at all, so a character that failed to type looks exactly like a key with no binding &mdash; which is why the count is said here as well:</p>
-<pre class="cmd">terminal: the input queue was full: 20 key events lost, 37 in this run</pre>
+<pre class="term cmd">terminal: the input queue was full: 20 key events lost, 37 in this run</pre>
         <p>The count and not one line an event, a queue that fills under load losing hundreds of them. <b>A run says the first loss with or without this flag</b>, one line, naming the flag for the rest; under the flag it says each time the count changes.</p>
         <p><b>And what the keyboard refused.</b> Below the terminal the keyboard holds a queue of its own, 256 words the machine takes one at a time, and a keystroke it has no room for is refused whole, leaving nothing down. A shifted character is the most exposed, a tap needing three words where a letter needs one, which is how <code>(</code> and <code>)</code> go missing on a machine slow to read its keyboard. The key&rsquo;s own line says so &mdash; <code>( refused: the queue is full, 256 words the machine has not read</code> &mdash; where it used to say the key had gone; and a run says the first refusal without the flag.</p>
         <p>The pointer&rsquo;s queue loses its oldest the same way and nothing is printed for it. A viewer sends where the pointer is rather than how far it moved and the mouse hands the machine the difference from the position it last saw, so the newest event is the one that matters and that one is always kept.</p>
@@ -392,7 +551,7 @@ muir --keyboard-mapping my.keys</pre>
         <p><b>chip:</b> record the named nets over microcycles <code>from</code> to <code>to</code>, or from <code>from</code> to the end of the run when there is no <code>to</code>, counted as <code>--stop-after</code> counts them &mdash; from the start of this run, so a resumed checkpoint counts from the checkpoint. Each net is named as the prompt&rsquo;s <a href="#prompt"><code>net</code></a> names one, <code>disk:NEW CCW</code> or <code>PC/14</code> for a bus, and the nets are comma separated. A name that does not resolve stops the run before it starts, with the boards it was looked for on.</p>
         <p><b>The boards are sampled at every instant they move, not once a microcycle.</b> A step of the netlist machine is to the next event on any board &mdash; the processor clock&rsquo;s next transition, or a delay-line tap, an oscillator edge or a one-shot on some board, whichever comes first &mdash; and the gates have no delay, so nothing moves between two of them. Sampled after each, the record has every level a net settled at, however brief: <code>CCW CLK</code> on the disk controller is two taps of a delay line 50 ns apart, and a sample once a microcycle, 145 to 220 ns, would step over it.</p>
         <p>One line on stderr, prefixed <code>watch:</code> so that it can be grepped out from under the run, with the time in nanoseconds, the microcycle and every watched value &mdash; a net as <code>net</code> prints it, a bus in octal, or <code>Z</code> while any bit of it is undriven &mdash; once as the range begins and then at every change, and nothing while nothing changes. Outside the range the run pays nothing.</p>
-<pre class="cmd">$ muir --chip --disk-controller netlist --disk-pack vendor/run/disk-sys-100-0.img,ro \
+<pre class="term cmd">$ muir --chip --disk-controller netlist --disk-pack vendor/run/disk-sys-100-0.img,ro \
     --watch '530000-:disk:NEW CCW,disk:CCW CLK,disk:-CHAN.MASTER,disk:-LAST CCW,disk:XBAO/22' \
     --stop-after 700000 2>&amp;1 | grep '^watch:'
 watch: 116600440 ns, microcycle 530000: disk:NEW CCW=High disk:CCW CLK=Low disk:-CHAN.MASTER=High disk:-LAST CCW=Low disk:XBAO/22=0
@@ -414,30 +573,40 @@ watch: 118613110 ns, microcycle 539144: disk:NEW CCW=High disk:CCW CLK=Low disk:
         </dd>
       </div>
     </dl>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; The command line</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>04</span></div>
+    </footer>
+  </section>
 
-<section id="rc">
-  <div class="band">
-    <h2>Flags in a file</h2>
+
+  <!-- ----------------------------------------------- flags in a file -->
+  <section id="rc" aria-label="Flags in a file">
+    <span class="eyebrow">File</span>
+    <h2 class="title t-l">Flags in a file</h2>
     <div class="prose">
       <p>Flags that every run should have go in a file, one to a line: the flag, then after a space whatever it takes, which is the rest of the line &mdash; so a path with a space in it needs no quotes. A line that is blank or begins with <code>#</code> is a comment.</p>
-<pre class="cmd"># what every run of mine wants
+<pre class="term cmd"># what every run of mine wants
 --rtl
 --terminal
 --disk-pack /Users/me/lispm packs/system-100.img</pre>
       <p>The file is the one <code>--config</code> names, or <code>.muirrc</code> in the directory muir was run from, or <code>.muirrc</code> in the home directory: <b>the first of the three there, not all of them</b>, so a file beside the work is the whole of a run&rsquo;s flags rather than an addition to the home one. A file named with <code>--config</code> must be there; the two that are looked for need not be, and most runs have neither. <code>MUIR_RC</code> in the environment names a file in place of the two.</p>
       <p>It is read before the command line, so <b>the command line wins</b>: a flag given there replaces the one in the file, and an engine named there replaces the file&rsquo;s &mdash; <code>--micro</code>, <code>--rtl</code> and <code>--chip</code> are exclusive of one another rather than last-wins, so the file&rsquo;s is dropped rather than refused. A file cannot name another with <code>--config</code>; which file to read is the command line&rsquo;s to say.</p>
       <p>What came from the file is the first thing a run says, so that the lines under it are never a mystery.</p>
-<pre class="cmd">flags: --rtl --terminal, from /Users/me/.muirrc
+<pre class="term cmd">flags: --rtl --terminal, from /Users/me/.muirrc
 engine: rtl</pre>
     </div>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; Flags in a file</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>05</span></div>
+    </footer>
+  </section>
 
-<section id="prompt">
-  <div class="band">
-    <h2>The prompt</h2>
+
+  <!-- ---------------------------------------------------- the prompt -->
+  <section id="prompt" aria-label="The prompt">
+    <span class="eyebrow">Type</span>
+    <h2 class="title t-l">The prompt</h2>
     <div class="prose">
       <p>While a machine runs, on any of the three engines, a line on stdin is a command to <em>muir</em> rather than to the machine &mdash; the machine&rsquo;s own keyboard is <a href="#terminal">the terminal&rsquo;s</a>. It is read from a pipe, or from a terminal muir is in the foreground of, and acted on between two microcycles. Every machine muir holds alone has it, <code>chip</code> included, with or without a debugger on its connector, and so do both ends of the debug cable over TCP and the debugger of a CADR in fabric &mdash; less <code>checkpoint</code> and the capture commands, which say why they are refused there. The lashup in one process has none, and the start says so.</p>
       <p><code>muir: </code> is written while the machine is held, which is when muir is waiting to be told what to do next; it is not written down a pipe, where the answers alone are wanted. A line typed while the machine is running is acted on all the same &mdash; there is just no prompt in front of it, because muir is not waiting.</p>
@@ -531,7 +700,7 @@ engine: rtl</pre>
 
     <div class="prose">
       <p>So a machine can be looked at before it has done anything, and started by hand:</p>
-<pre class="cmd">$ muir --micro --no-auto-boot
+<pre class="term cmd">$ muir --micro --no-auto-boot
 engine: micro
 memory: 32 boards, 2 MW
 pack: vendor/run/disk-sys-100-0.img in unit 0
@@ -549,15 +718,20 @@ the machine is halted, its RUN clear: boot presses the button that starts it
 muir: boot
 PC 0 in the PROM; 0 microcycles, 0 ns; 0 this run</pre>
     </div>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; The prompt</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>06</span></div>
+    </footer>
+  </section>
 
-<section id="terminal">
-  <div class="band">
-    <h2>The terminal</h2>
+
+  <!-- -------------------------------------------------- the terminal -->
+  <section id="terminal" aria-label="The terminal">
+    <span class="eyebrow">Screen</span>
+    <h2 class="title t-l">The terminal</h2>
     <div class="prose">
       <p>The <b>terminal</b> is the far end of the machine: pixels out, keys and the mouse in. Every run serves one over RFB &mdash; the VNC protocol, RFC 6143 &mdash; so any VNC viewer is a CADR terminal, and the machine has no other way to be worked; <code>--serial</code> opens the serial port at J9, and nothing on that port works the machine. Only None security is offered, so a viewer needs no password; keep it on the loopback unless you mean to let another machine in.</p>
-<pre class="cmd">muir                       <b># then point a viewer at 127.0.0.1:5900</b>
+<pre class="term cmd">muir                       <b># then point a viewer at 127.0.0.1:5900</b>
 muir --terminal 5901       <b># or wherever you say</b></pre>
       <p>The display is VNC&rsquo;s :0 unless <code>--terminal</code> says another, and the start says where it is. A display already taken &mdash; a second muir on the host, which is what the lashup over TCP is &mdash; moves it up to the first free one; a port you named yourself is bound as it stands, and the run stops rather than putting a viewer somewhere it was not told to look.</p>
       <p>What it shows is the frame buffer, which is the screen on every engine. The keyboard is the CADR&rsquo;s own, with its key positions taken from MIT&rsquo;s tables, and the mouse is the machine&rsquo;s quadrature mouse; Home writes a checkpoint as the run goes. Once the run has stopped, muir keeps serving the last screen for as long as a viewer is looking at it, or until ^C.</p>
@@ -565,24 +739,34 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
       <p>On an engine with no <a href="#chaosnet">Chaosnet</a> the boot stops in the debugger at the initialization that wants a host. <kbd>Super-B</kbd> there, then the date and time it asks for and <kbd>y</kbd>, finish it.</p>
       <p>Separately, and on every engine: the band&rsquo;s cold boot leaves the display&rsquo;s vertical interrupt off, so <b>the mouse is not tracked until <code>(si:setup-cpt)</code> is typed at the listener</b>. That one is the band&rsquo;s own, not a Chaosnet matter &mdash; <code>LISP-REINITIALIZE</code> in this release guards its <code>SETUP-CPT</code> block with <code>(UNLESS (NOT CALLED-BY-USER) ...)</code>, which the cold boot&rsquo;s <code>(LISP-REINITIALIZE NIL)</code> does not satisfy, where the trunk source has <code>(UNLESS CALLED-BY-USER ...)</code> &mdash; so it is wanted just as much on a boot that reached the listener with no trouble at all.</p>
     </div>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; The terminal</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>07</span></div>
+    </footer>
+  </section>
 
-<section id="files">
-  <div class="band">
-    <h2>What a run can write</h2>
+
+  <!-- ------------------------------------------ what a run can write -->
+  <section id="files" aria-label="What a run can write">
+    <span class="eyebrow">Write</span>
+    <h2 class="title t-l">What a run can write</h2>
     <div class="prose">
       <p><b>Checkpoints.</b> <code>--checkpoint &lt;file&gt;</code> writes the machine&rsquo;s whole state when the run stops and <code>--resume &lt;file&gt;</code> starts from it instead of booting: the engine that wrote it, with the same pack under it. The prompt&rsquo;s <code>checkpoint</code> and Home in the terminal write one as the run goes. It works on all three engines; on <code>chip</code> what goes in the file is the boards themselves, net by net and cell by cell. A pack given <code>ro</code> is only ever read, a block the machine writes being kept in memory and going into the checkpoint instead, so that image stays as fetched and a checkpoint over it can be resumed from any number of times.</p>
       <p><b>Screenshots.</b> The prompt&rsquo;s <code>screenshot</code> writes the screen as a PNG: 768 by 963, one bit a pixel, encoded by muir itself rather than by a library.</p>
       <p><b>Recordings.</b> <code>--tv-capture &lt;gif&gt;</code> records the display for the whole run, and the prompt&rsquo;s <code>startcapture</code> and <code>endcapture</code> begin and end one as it goes. Each frame is the rectangle that changed since the last, over the one before it, two colors and LZW, timed by the machine&rsquo;s own clock so it plays at the machine&rsquo;s speed &mdash; and it stays small while the screen stays still. A line below the screen carries the machine&rsquo;s time and the wall clock unless <code>--tv-capture-no-time</code> drops it. <code>--color-tv-capture</code> records the color screen the same way, to a file of its own, the picture being 576 by 454 through the sixteen colors of the map.</p>
       <p>Without a file, all three write <code>muir-yyyymmdd-hhmmss</code> with the right extension in the current directory.</p>
     </div>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; What a run can write</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>08</span></div>
+    </footer>
+  </section>
 
-<section id="chaosnet">
-  <div class="band">
-    <h2>The Chaosnet</h2>
+
+  <!-- -------------------------------------------------- the chaosnet -->
+  <section id="chaosnet" aria-label="The Chaosnet">
+    <span class="eyebrow">Net</span>
+    <h2 class="title t-l">The Chaosnet</h2>
     <div class="prose">
       <p>The machine&rsquo;s Chaosnet interface is real &mdash; it is half the I/O board, and on <code>chip</code> it is that board&rsquo;s netlist. What is on the other end of the cable is <b>not in muir</b>. A CADR had no file or time server inside it: it called its <b>associated machine</b>, the host the boot banner names &mdash; &ldquo;with associated machine OZ&rdquo; &mdash; for its files and for the date. So muir carries a machine and nothing else, and a band that wants a host wants one on the network.</p>
       <p><b><a href="https://github.com/metebalci/ozd">ozd</a> is that host.</b> It is the OZ daemon: one server for however many Lisp machines are on the cable, which is the commoner case than one, and it answers the four contact names a band asks for.</p>
@@ -605,12 +789,17 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
       <p><b>How a run reaches it.</b> <code>--chaos-address</code> sets the sixteen address switches on the I/O board and nothing else; <code>--chaos-udp</code> is the cable, which puts those switches on a network as <b>Chaosnet over UDP</b>, at the protocol&rsquo;s own port unless it says where. Without the cable muir sends nothing, as a machine with none talks to nobody. Every host <code>--chaos-udp-peer</code> names is then a station on the same modeled cable, taking its turn on it like any other, and a packet from one goes on with that host&rsquo;s own address in the hardware source. The numbers are the band&rsquo;s own: System 100&rsquo;s <code>sys/site/hosts.text</code> puts <code>MIT-LISPM-1</code> at <code>3050</code> and <code>MIT-OZ</code> at <code>3060</code>, so that band is run with <code>--chaos-address 3050 --chaos-udp --chaos-udp-peer 3060@&lt;where ozd is&gt;</code>. muir stays a leaf: a frame goes out only when this machine put it on the cable, so one host&rsquo;s is never carried on to another, and a <code>cbridge</code> beside it is what routes. <code>--chaos-udp-default-peer</code> is where that bridge is: a frame whose destination no <code>--chaos-udp-peer</code> named goes there rather than nowhere, which is how a run reaches the wider Chaosnet. A broadcast is not handed to it, the named peers being stations on this machine&rsquo;s own cable.</p>
       <p>muir&rsquo;s own tests do not want a daemon running beside them, so they put a Chaosnet server of their own on the modeled cable, in process. It lives in <code>tests/support/</code> and is no part of the simulator.</p>
     </div>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; The Chaosnet</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>09</span></div>
+    </footer>
+  </section>
 
-<section id="lashup">
-  <div class="band">
-    <h2>Two machines</h2>
+
+  <!-- -------------------------------------------------- two machines -->
+  <section id="lashup" aria-label="Two machines">
+    <span class="eyebrow">Two</span>
+    <h2 class="title t-l">Two machines</h2>
     <div class="prose">
       <p>MIT debugged a CADR from another CADR, over a <b>debug cable</b>: 21 wires from one machine&rsquo;s DBGOUT connector to the other&rsquo;s DBGIN, through which the console program <b>CC</b> halts the other machine, reads its registers and drives its bus. muir runs that lashup, and it is the project&rsquo;s acceptance test.</p>
       <p>Each machine has a Chaosnet of its own: muir&rsquo;s cable carries one machine, so the other gets a cable of its own. The two cannot hear each other over it &mdash; the only wire between them is the debug cable &mdash; and the other machine has no CHUDP link either, one socket belonging to one cable, so it reaches no file or time host and its own boot stops in the cold-load debugger. That is where CC finds it, and it is what the acceptance test wants.</p>
@@ -619,17 +808,104 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
       <p>Over TCP each machine has <a href="#prompt">the prompt</a>, and a hold at one end is felt at the other: each end steps only as far as the other has promised and waits otherwise, so a held debugger holds the debuggee once it has run to the debugger&rsquo;s last promise, and a held debuggee holds the debugger at its next request &mdash; the other process sits in its wait, terminal and prompt unattended, until <code>continue</code>. A debuggee that stops itself is not held for it, since a halted debuggee is what CC reads through the cable.</p>
       <p>There is a third transport, where the debuggee is not a program at all: <code>--debug-cable-connect 0x&lt;address&gt;</code> is the CADR of the <a href="https://github.com/metebalci/muir-fpga">muir-fpga</a> project, in the programmable logic of a Zynq board with Linux on the Arm cores beside it, which is where muir runs to be its debugger. The cable&rsquo;s 21 wires are a window of memory-mapped registers muir reaches with ordinary loads and stores, and it is that project&rsquo;s window and no other: muir refuses one that does not identify itself rather than store into it. The first two transports keep the two machines&rsquo; simulated clocks in step by exchanging promises; fabric runs on its own crystal in real time, so nothing is promised, only the debugger is stepped, and the debugger&rsquo;s own 11.05&nbsp;&micro;s timeout is what ends a cycle nothing answers. The window&rsquo;s layout is proposed and nothing has been built to it yet. The debugger has <a href="#prompt">the prompt</a>; a hold leaves the window as it stands, so a request standing at it when the hold comes on holds the debuggee&rsquo;s Unibus until the adapter&rsquo;s watchdog lifts it, and the debugger costs that cycle when it runs on.</p>
     </div>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; Two machines</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>10</span></div>
+    </footer>
+  </section>
 
-<section id="internals">
-  <div class="band">
-    <h2>How the engines work</h2>
+
+  <!-- ------------------------------------------ how the engines work -->
+  <section id="internals" aria-label="How the engines work">
+    <span class="eyebrow">Inside</span>
+    <h2 class="title t-l">How the engines work</h2>
     <div class="prose">
       <p>The three engines differ in what they actually compute on the way to the next microcycle &mdash; no timing model, the timing model, the full netlist. This is what that means in each case, and it is the part of the project most easily mistaken for something it is not. Last is the wire protocol that runs two of them against each other over a network, which is a scheduling problem before it is a networking one.</p>
     </div>
 
-    <h3>What each engine models</h3>
+    <h3>The three engines</h3>
+    <div class="prose">
+      <p>An <strong>engine</strong> is an implementation of the machine at one fidelity level. All three sit behind one interface and reach the same architectural state at every microcycle boundary, so you can run the fast one and check it against the slow one. They differ in how much of the hardware they compute on the way, and in where that state sits: <code>micro</code> and <code>rtl</code> hold the scratchpads and the control store as arrays, <code>chip</code> holds them in the RAM chips&rsquo; own cells, and the cosimulation compares the two word for word.</p>
+      <p>The shortest way to tell them apart is by time.</p>
+      <p><strong><code>micro</code> has no timing model.</strong> It has a clock &mdash; it adds up the microcycle periods, so that the devices that read time see it pass &mdash; but nothing in it happens at an instant or waits for one. A bus cycle completes at once; the word is in <code>MD</code> two instructions later whatever the memory is doing. It is the engine for what needs no timing: unless a program reaches the hardware directly, or the debugger and the diagnostic bus are in play, <code>micro</code> is enough. It is also much the fastest.</p>
+      <p><strong><code>rtl</code> is the timing model.</strong> Every datapath signal on the machine&rsquo;s own two-phase clock, and everything that is a matter of <em>when</em>: the bus&rsquo;s waits and hangs, the interface&rsquo;s arbitration and timeouts, a device answering late, the debug cable to a second machine. The boards behind the cables are behavioral models, timed to the nanosecond against the netlist boards. Anything <code>micro</code> cannot do, <code>rtl</code> can; it is slower than <code>micro</code> and still faster than the machine itself.</p>
+      <p><strong><code>chip</code> is the full netlist.</strong> The parts themselves, resolved net by net from what is actually driving each, and every board on both buses a netlist too. It is the reference: where it and <code>rtl</code> disagree, the drawings decide which is wrong, and it is usually <code>rtl</code>. It is also much the slowest &mdash; approximately 4,000 times slower than the hardware.</p>
+      <p><strong>Those figures count microcycles, and the disk is not in them.</strong> With the disk controller as a behavioral model &mdash; which is what <code>micro</code> and <code>rtl</code> always use, and what <code>chip</code> uses when told <code>--disk-controller model</code> &mdash; a transfer completes inside the instruction that starts it and a seek takes no time at all. A real CADR spent milliseconds on a seek, and spent them executing the microcode&rsquo;s polling loop: a 55&nbsp;ms seek is some 380,000 microcycles that produce nothing. muir does not execute them. So on anything that touches the disk muir gains twice over the hardware, once per microcycle and once by having far fewer of them, and by how much depends entirely on how much the program seeks. It is not in the numbers above and it is not worth guessing at.</p>
+      <p><code>chip</code> runs the netlist controller, and it goes the other way. There the drive takes its own time over every block, so those 380,000 polling microcycles are executed for real, through every gate on the board, and a program that waits on the disk is slower than the 4,000 figure rather than faster. <strong>A run that touches no pack pays about 3% for that; a boot pays days.</strong> System 100 came up this way on 12 September 2026, after 2 days 14 hours. <code>--disk-controller model</code> is how a <code>chip</code> run that does not care about the disk is made quick &mdash; and <code>rtl</code>, which runs the models throughout at about twice the hardware, is the engine for ordinary use.</p>
+    </div>
+
+    <figure class="panel fig">
+      <div class="scroll">
+        <svg viewBox="0 0 900 326" role="img" aria-label="One microinstruction through three engines: micro computes one evaluation, rtl the read and write phases of every datapath signal, chip the 985 parts in level order.">
+          <defs>
+            <marker id="arw1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="strokeWidth">
+              <path d="M0,1 L9,5 L0,9 z" fill="currentColor"/>
+            </marker>
+            <pattern id="dots1" width="5" height="5" patternUnits="userSpaceOnUse">
+              <circle cx="1.2" cy="1.2" r="1" fill="currentColor"/>
+            </pattern>
+          </defs>
+
+          <text class="d-m" x="8" y="68">micro</text>
+          <rect class="d-box" x="104" y="44" width="560" height="48"/>
+          <text class="d-t" x="384" y="73" text-anchor="middle">one evaluation: decode, execute, write back</text>
+          <text class="d-m" x="892" y="62" text-anchor="end">107 M/s</text>
+          <text class="d-s" x="892" y="80" text-anchor="end">about 15x the machine</text>
+
+          <text class="d-m" x="8" y="176">rtl</text>
+          <rect class="d-box" x="104" y="152" width="262" height="48"/>
+          <text class="d-t" x="235" y="171" text-anchor="middle">read phase</text>
+          <text class="d-s" x="235" y="187" text-anchor="middle">sources drive, the ALU settles</text>
+          <line class="d-line" x1="368" y1="176" x2="392" y2="176" marker-end="url(#arw1)"/>
+          <rect class="d-box" x="396" y="152" width="268" height="48"/>
+          <text class="d-t" x="530" y="171" text-anchor="middle">write phase</text>
+          <text class="d-s" x="530" y="187" text-anchor="middle">destinations take what they caught</text>
+          <text class="d-m" x="892" y="170" text-anchor="end">16 M/s</text>
+          <text class="d-s" x="892" y="188" text-anchor="end">about 2x the machine</text>
+
+          <text class="d-m" x="8" y="284">chip</text>
+          <rect class="d-box" x="104" y="260" width="118" height="48"/>
+          <text class="d-t" x="163" y="279" text-anchor="middle">clock</text>
+          <text class="d-t" x="163" y="295" text-anchor="middle">generator</text>
+          <line class="d-line" x1="224" y1="284" x2="248" y2="284" marker-end="url(#arw1)"/>
+          <rect class="d-tex" x="252" y="260" width="412" height="48" fill="url(#dots1)"/>
+          <rect class="d-plate" x="286" y="272" width="344" height="24"/>
+          <text class="d-t" x="458" y="289" text-anchor="middle">985 parts, settled in level order</text>
+          <text class="d-m" x="892" y="278" text-anchor="end">1,900/s</text>
+          <text class="d-s" x="892" y="296" text-anchor="end">about 1/4,000 of the machine</text>
+        </svg>
+      </div>
+      <figcaption>The same microinstruction, through each engine. Rates from <code>cargo run --release --example benchmark</code> on one core of an Apple M4, rounded: run it yourself and you should see about these. The machine&rsquo;s own microcycle is 145 ns at normal speed, read off the delay-line taps, so the hardware runs 6.9 M of them a second.</figcaption>
+    </figure>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Engine</th><th>What it computes</th><th class="num">Rate</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">micro</td>
+            <td>No timing model. One step per microinstruction, on the machine&rsquo;s own periods but without its bus waits. Fast enough to get somewhere and see what happens.</td>
+            <td class="num">107 M/s</td>
+          </tr>
+          <tr>
+            <td class="name">rtl</td>
+            <td>The timing model. Every datapath signal, on the machine&rsquo;s own two-phase clock, with the real memory cycle in nanoseconds: <code>MEMSTART</code>, <code>MEMRQ</code>, <code>MBUSY</code>, the acknowledgement back, and the clock held off by <code>WAIT</code> and <code>HANG</code> meanwhile.</td>
+            <td class="num">16 M/s</td>
+          </tr>
+          <tr>
+            <td class="name">chip</td>
+            <td>The full netlist. The parts themselves: 985 of them on the processor and control-store boards, sorted into levels, on four-valued nets, with the bus interface, main memory, the I/O board and the TV as netlists behind the cables. This is the reference the other two are checked against.</td>
+            <td class="num">1,900/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">The 1,900/s above is the <code>chip</code> engine with the processor, the interface, main memory, the I/O board and the display all netlists, on two programs that touch no disk &mdash; so the disk controller in that machine is the behavioral model. A run as <code>chip</code> comes up has MIT&rsquo;s controller there as well, which costs about 3% while nothing reads a pack and days once something does. Any board can be run instead as the behavioral model the <code>rtl</code> engine uses, one at a time, which is faster. Which model each engine uses for each part of the machine, and which flag changes it, is <a href="#models">the table below</a>.</div>
+
+    <h3 id="models">What each engine models</h3>
     <div class="prose">
       <p>The engine chooses how the processor is computed; it also chooses what stands in for every other board on the backplane. A netlist board is MIT&rsquo;s own wire list run package by package. A model is a behavioral one written from the drawings &mdash; on <code>rtl</code> those are timed to the nanosecond and held against the netlist board, and on <code>micro</code> they run without the clock.</p>
       <p><b>The choice between the two exists only on <code>chip</code>.</b> <code>--main-memory</code>, <code>--io-board</code>, <code>--tv</code> and <code>--disk-controller</code> are refused to the other engines with a warning rather than obeyed quietly, so <code>micro</code> and <code>rtl</code> have one answer a row and <code>chip</code> has two. <b>A bare <code>chip</code> run is an all-netlist machine</b>: main memory, the I/O board, the display and the disk controller all come up as MIT&rsquo;s boards. Each row below marks which side it starts on.</p>
@@ -714,6 +990,75 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
 
     <div class="note">Parity is left out of the two models deliberately. A parity bit detects a chip having failed, and the words these engines hold are values that cannot fail; a check written over them could not fire, and MIT&rsquo;s own writers &mdash; <code>CC-WRITE-D-MEM</code>, PRAID&rsquo;s <code>P-D-MEM-D</code> &mdash; always compute the bit correctly. What CC would do with a flag, it can still do on <code>chip</code>.</div>
 
+    <h3>Why the level matters</h3>
+    <div class="prose">
+      <p>A model that steps once per microinstruction is self-consistent, agrees with itself, and boots Lisp. It is still not the machine, and one instruction shows the gap.</p>
+    </div>
+
+    <figure class="panel fig">
+      <div class="scroll">
+        <svg viewBox="0 0 900 206" role="img" aria-label="A control-store write costs one microcycle in a model that special-cases it, and three on the board: the instruction plus two dead cycles.">
+          <defs>
+            <marker id="arw2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="strokeWidth">
+              <path d="M0,1 L9,5 L0,9 z" fill="currentColor"/>
+            </marker>
+            <pattern id="dots2" width="4" height="4" patternUnits="userSpaceOnUse">
+              <circle cx="1" cy="1" r="0.85" fill="currentColor"/>
+            </pattern>
+          </defs>
+
+          <text class="d-n" x="250" y="24" text-anchor="middle">microcycle 1</text>
+          <text class="d-n" x="426" y="24" text-anchor="middle">2</text>
+          <text class="d-n" x="602" y="24" text-anchor="middle">3</text>
+          <text class="d-n" x="778" y="24" text-anchor="middle">4</text>
+
+          <text class="d-m" x="8" y="54">micro</text>
+          <text class="d-s" x="8" y="71">one step per</text>
+          <text class="d-s" x="8" y="85">microinstruction</text>
+          <rect class="d-box" x="170" y="40" width="160" height="48"/>
+          <text class="d-m" x="250" y="69" text-anchor="middle">WRITE-I-MEM</text>
+          <rect class="d-dash" x="346" y="40" width="160" height="48"/>
+          <text class="d-s" x="426" y="69" text-anchor="middle">next instruction</text>
+
+          <text class="d-m" x="8" y="158">rtl, chip</text>
+          <text class="d-s" x="8" y="175">what the board</text>
+          <text class="d-s" x="8" y="189">actually spends</text>
+          <rect class="d-box" x="170" y="144" width="160" height="48"/>
+          <text class="d-m" x="250" y="173" text-anchor="middle">WRITE-I-MEM</text>
+          <rect class="d-tex" x="346" y="144" width="160" height="48" fill="url(#dots2)"/>
+          <rect class="d-plate" x="368" y="154" width="116" height="30"/>
+          <text class="d-m" x="426" y="168" text-anchor="middle">nop</text>
+          <text class="d-s" x="426" y="183" text-anchor="middle">the instruction&rsquo;s N</text>
+          <rect class="d-tex" x="522" y="144" width="160" height="48" fill="url(#dots2)"/>
+          <rect class="d-plate" x="544" y="154" width="116" height="30"/>
+          <text class="d-m" x="602" y="168" text-anchor="middle">nop</text>
+          <text class="d-s" x="602" y="183" text-anchor="middle">IWRITED&rsquo;s N, POPJ</text>
+          <rect class="d-dash" x="698" y="144" width="160" height="48"/>
+          <text class="d-s" x="778" y="173" text-anchor="middle">next instruction</text>
+
+        </svg>
+      </div>
+      <figcaption><code>WRITE-I-MEM</code> — a JUMP with both <code>IR&lt;8&gt;</code> and <code>IR&lt;9&gt;</code> set — writes the control store. On the board it costs two microcycles beyond itself: <code>IWRITED</code> is the registered <code>IWRITE</code>, and in the following microcycle it drives both <code>N</code> and <code>POPJ</code>, so one cycle dies for the instruction&rsquo;s own <code>N</code> and another for <code>IWRITED</code>&rsquo;s, with the <code>POPJ</code> bringing the PC back.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <p>The boot PROM notices. <code>CLEAR-I-MEMORY</code> writes all 16,384 words of the control store, so the shortcut is taken 16,384 times, and two microcycles apiece is 32,768 of them — six per cent of the boot, out of one instruction.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>To the first disk read</th><th class="num">Executed instructions</th><th class="num">Microcycles</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>micro</code>, one step per microinstruction</td><td class="num">416,736</td><td class="num">505,079</td></tr>
+          <tr><td><code>rtl</code>, following the drawings</td><td class="num">416,736</td><td class="num">537,848</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">The same instructions either way, so nothing an instruction trace can ever see. A cycle count built on the first number is simply wrong, and an instruction trace cannot reveal it, because the cycles that were inhibited leave no instruction behind.</div>
+
     <h3>What register-transfer level means here</h3>
     <div class="prose">
       <p>RTL is register-transfer level: the machine described as registers and the logic that moves data between them, clocked. The <code>rtl</code> engine is that written out directly — what drives each bus, what the ALU computes, which register takes what. It has no notion of a package, a pin or a net.</p>
@@ -767,12 +1112,27 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
     </div>
 
     <div class="note">There is no authentication and no encryption on this connection, and a peer that speaks it can halt the machine at the other end, read its memory and reset it &mdash; that is what a debug cable is for. Hence the loopback default; an address other than the loopback is worth meaning. The protocol is held to the in-process cable rather than to itself: the same two machines are run both ways, and the debuggee has to halt at the same PC and the debugger read back the same words.</div>
-  </div>
-</section>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; How the engines work</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>11</span></div>
+    </footer>
+  </section>
 
-<section id="netlists">
-  <div class="band">
-    <h2>Where the netlists come from</h2>
+
+  <!-- ---------------------------------- where the netlists come from -->
+  <section id="netlists" aria-label="Where the netlists come from">
+    <span class="eyebrow">Spec</span>
+    <h2 class="title t-l">Where the netlists come from</h2>
+
+    <h3>What a netlist means here</h3>
+    <div class="prose">
+      <p>A netlist is the board itself: every part, every pin, every wire between them. These are not drawn by hand and not transcribed from scans. They are extracted from MIT&rsquo;s own SUDS drawings — the CAD files the machine was designed in — and then held, pin by pin, to MIT&rsquo;s own wire list for the same board. Where the two disagree, a test fails. Six of the eight boards are checked that way; two have no wire list on the tapes and are held to MIT&rsquo;s specification instead, which is a weaker thing. <a href="#checked">What each board is checked against</a> below says which board is checked which way, and the sections before it set out the whole chain, file by file.</p>
+      <p>Underneath, a part is a behavior checked against its datasheet, nets resolve four-valued so that an open-collector bus works the way it does on the board, and the parts are evaluated in level order, with only the ones something moved under recomputed.</p>
+      <p>A part is one device at one board location &mdash; the chips, the oscillators, the delay lines, the switches, the LED digits &mdash; and not the bypass capacitors, resistor packs and busbars beside them, which nothing here computes. The files list gates rather than devices and run longer than the boards do: the processor&rsquo;s 985 parts arrive as 1,243 <code>part</code> records, a quad NAND being drawn four times under the one designator. A whole machine is 2,016 parts with one memory board on the Xbus and both display boards, the SIMPLE TV and the color TV, and 7,224 with all thirty-two memory boards.</p>
+      <p>Six of the seven files are one card each &mdash; the same card, six rows of thirty positions, with 176 to 180 of them filled, which is why those boards land within a few parts of each other &mdash; and the processor and the control store are the two large boards, their designators running in four sections and in two. MIT counted these boards twice itself, by the locations it stuffed and by the packages each part type takes, and every board but the SIMPLE TV has one of those counts or both to answer to.</p>
+    </div>
+
+    <div class="note">The Chaosnet interface shares the I/O board rather than having one of its own, and MIT drew the two separately: fourteen pages for the board proper and thirteen for Chaosnet. All twenty-seven are in the netlist, 94 parts against 84, five chips having gates on both sides. The interface runs: it knows its own address off the switches, a packet written into its transmitter comes back out of its receiver with the check word right, and it trades packets with the other stations on its cable, taking broadcasts and passing over other hosts&rsquo;. Those stations are off the host: <code>--chaos-udp</code> is the cable, putting the board on a network as Chaosnet over UDP while <code>--chaos-address</code> sets its switches, and a band&rsquo;s file and time host — what MIT&rsquo;s associated machine, OZ, ran — is a program of its own there, <a href="https://github.com/metebalci/ozd">ozd</a>. A CADR had no such server inside it, and neither has muir.</div>
     <div class="prose">
       <p>The boards this program runs are not written here. They are MIT&rsquo;s own engineering files, recovered from the ITS backup tapes, extracted by a script and then held to a second file MIT made of the same board. That chain is the whole reason a netlist here can be called checkable rather than plausible, and it is worth setting out, because the interesting part is not the extraction &mdash; it is what the extraction is answerable to.</p>
       <p>The files are in <code>mit/</code> in the repository, committed unmodified and byte for byte as they arrived: 682 of them, 20&nbsp;MB, under the ten directory names they were dumped from, which are MIT&rsquo;s own. About 380 are read by nothing here &mdash; two thirds of the bytes &mdash; and are carried because they are the machine&rsquo;s own record.</p>
@@ -812,7 +1172,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
       <p><b>Then the result is held to the wire list, pin for pin.</b> That is <code>tests/*_netlist.rs</code>, and it runs on every <code>cargo test</code>: each signal in MIT&rsquo;s list has to reach exactly the pins the netlist gives it and no others. Where a board has a census, the part types are counted against that too.</p>
     </div>
 
-<pre class="cmd">the pages dc.book names  --soap4-->  parts and nets a page
+<pre class="term cmd">the pages dc.book names  --soap4-->  parts and nets a page
                                             |
                                           joined
                                             |
@@ -825,7 +1185,7 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
       <p><b>What this catches, and what it does not.</b> It catches a drawing misread, and it catches the drawing and the wire list disagreeing &mdash; different files, made by different people at MIT, for different jobs. It does not witness the recovery of the tape: a drawing and the wire list it is checked against reached this project together, through the same tree, so the check is of the two against each other and not of either against the machine that is gone.</p>
     </div>
 
-    <h3>What each board is checked against</h3>
+    <h3 id="checked">What each board is checked against</h3>
     <div class="prose">
       <p><b>Not every board has the full set, and that is the honest half.</b> Six of the eight are held to MIT&rsquo;s own wiring. Two are not, because no wire list for them is on the tapes &mdash; for those, MIT&rsquo;s <em>specification</em> stands in for MIT&rsquo;s <em>wiring</em>, which is a weaker thing and is worth saying rather than glossing.</p>
     </div>
@@ -849,14 +1209,105 @@ muir --terminal 5901       <b># or wherever you say</b></pre>
     </div>
 
     <div class="note">The multiplexor&rsquo;s missing wire list is an absence that was looked for rather than assumed: <code>cadrdc/</code> holds <code>dc.wlr</code> and <code>mk.wlr</code> for the two boards drawn beside it and no <code>dm.wlr</code>, and the tapes were searched for one. Its <code>dm.wls</code> stops before the census, so the check that would have counted its parts is not available either, and its netlist rests on <code>dm.stf</code> and the drawings. The SIMPLE TV is the same shape for a different reason: <code>cadrtv/</code> holds two displays under six shared page names, and only the later one&rsquo;s wire list survived.</div>
-  </div>
-</section>
+    <h3>Every board a netlist, at once</h3>
+    <div class="prose">
+      <p><strong>Every one of those boards ran a cold boot of System 100, all of them netlists at once.</strong> On 12 September 2026 a <code>chip</code> run with the processor, the interface, main memory, the I/O board, the display and MIT&rsquo;s disk controller all as netlists took the release from the pack and brought the system up: the boot PROM read microcode 323 off the drive, the cold boot copied all 21,342 pages of the band into the paging partition, and the system swapped itself in and painted its who-line &mdash; <code>Lisp Listener 1</code>, and <code>Cold-booted</code> beside it, which is the running system&rsquo;s own report of where it came from. It took 2 days 14 hours and 301 million microcycles, 51 of those hours the copy, because the netlist disk controller spends the drive&rsquo;s real milliseconds on every block where its behavioral model spends none.</p>
+      <p>That is what the netlists are for. A board held pin for pin to MIT&rsquo;s wire list is a claim about the wiring; a board that carries the machine&rsquo;s own software, through its own microcode, at gate level, for two and a half days without a wrong answer, is that claim tested. The one board not in the run is the DISK MULTIPLEXOR, which is the one board with no wire list on the tapes to hold it to.</p>
+    </div>
 
-<footer>
-  <div class="band">
-    <p>&copy; 2026 Mete Balci</p>
-  </div>
-</footer>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; Where the netlists come from</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>12</span></div>
+    </footer>
+  </section>
+
+
+  <!-- --------------------------------------- sources and attribution -->
+  <section id="credits" aria-label="Sources and attribution">
+    <span class="eyebrow">Thanks</span>
+    <h2 class="title t-l">Sources and attribution</h2>
+    <div class="prose">
+      <p>Almost nothing here is a first-hand invention. The machine, the drawings, the wire lists, the microcode and the diagnostics are MIT&rsquo;s, recovered by other people&rsquo;s work over decades. The recovered material is also not uniformly trustworthy — it mixes primary MIT files with hand conversions and reconstructions from scans — so nothing load-bearing is taken from a single file: anything that matters is cross-checked against a second copy that reached us by a different route, and a test enforces the agreement. Every netlist in the repository is held pin for pin to MIT&rsquo;s own wire list for the same board, and where a fact is believed but unchecked the code that depends on it says so.</p>
+    </div>
+
+    <dl class="credits">
+      <div>
+        <dt>The CADR</dt>
+        <dd>MIT AI Laboratory, around 1978. Tom Knight, David Moon, Jack Holloway and Guy Steele.</dd>
+      </div>
+      <div>
+        <dt>Tapes of Tech Square</dt>
+        <dd>The MIT project that read the AI Lab and LCS backup tapes, and the collection at MIT Libraries&rsquo; Department of Distinctive Collections that holds them. System 100 was pulled from TID/671 among these. Recovered material is published as <a href="https://github.com/MITDDC">MITDDC</a>.</dd>
+      </div>
+      <div>
+        <dt>System 100</dt>
+        <dd>The restored last MIT release, from the <a href="https://tumbleweed.nu/system-100-0-release/">System 100 release</a>.</dd>
+      </div>
+      <div>
+        <dt>usim</dt>
+        <dd><a href="https://tumbleweed.nu/r/usim/">A CADR emulator in C</a>, by Brad Parker and now maintained by Alfred M. Szmidt.</dd>
+      </div>
+      <div>
+        <dt>ams/cadr4</dt>
+        <dd><a href="https://github.com/ams/cadr4">A faithful VHDL CADR</a> with a TTL part library, MIT&rsquo;s drawings and wire lists, and the SUDS readers. <code>soap4.c</code> from it is what reads the drawings into netlists here.</dd>
+      </div>
+      <div>
+        <dt>uhdl</dt>
+        <dd><a href="https://tumbleweed.nu/r/uhdl/">CADR in Verilog for FPGA</a>. It carries the 2004 <code>CADR4.netlist</code>, an earlier extraction from the same MIT drawings.</dd>
+      </div>
+      <div>
+        <dt>cpus-caddr</dt>
+        <dd><a href="https://github.com/lisper/cpus-caddr">Brad Parker&rsquo;s Verilog CADR</a>.</dd>
+      </div>
+      <div>
+        <dt>LM-3</dt>
+        <dd><a href="https://tumbleweed.nu/lm-3/">The Lisp Machine system software releases</a>.</dd>
+      </div>
+      <div>
+        <dt>ozd</dt>
+        <dd><a href="https://github.com/metebalci/ozd">The OZ daemon</a>: the file and time host a band calls, which muir is not &mdash; a CADR had no such server in it. One host serves however many machines are on the cable.</dd>
+      </div>
+      <div>
+        <dt>muir-fpga</dt>
+        <dd><a href="https://github.com/metebalci/muir-fpga">The CADR in programmable logic</a>, on a Zynq board with Linux on the Arm cores beside it. <code>--debug-cable-connect 0x&lt;address&gt;</code> is muir debugging that machine over the CADR debug cable, the cable&rsquo;s wires being a window of registers there.</dd>
+      </div>
+      <div>
+        <dt>cbridge</dt>
+        <dd><a href="https://github.com/bictorv/chaosnet-bridge">A Chaosnet bridge</a>, for when networking matters here.</dd>
+      </div>
+          <div>
+        <dt>An overview of the machine</dt>
+        <dd><a href="https://metebalci.com/blog/cadr-lisp-machine-and-cadr-processor/">CADR LISP Machine and CADR Processor</a>, written before this project: the processor, its pipeline and clock, virtual memory, the microinstruction and macroinstruction formats, and a bibliography of the MIT memos behind them. The shortest way in, if you are starting cold.</dd>
+      </div>
+</dl>
+
+    <h3>How it was written</h3>
+    <div class="prose">
+      <p>muir is implemented entirely by <a href="https://claude.com/claude-code">Claude Code</a>, on Anthropic&rsquo;s Opus 5 and Fable 5.1 models.</p>
+    </div>
+
+    <h3>License</h3>
+    <div class="prose">
+      <p>muir is <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0-or-later</a>.</p>
+    </div>
+
+    <div class="note">&ldquo;The GNU Affero General Public License is a free, copyleft license for software and other kinds of works, specifically designed to ensure cooperation with the community in the case of network server software.&rdquo; From the license&rsquo;s own preamble, in <code>LICENSE</code>.</div>
+
+    <div class="prose">
+      <p>MIT&rsquo;s own drawings and wire lists are committed in <code>mit/</code>, unmodified; <code>mit/README.md</code> is the inventory and says what is MIT&rsquo;s work rather than this project&rsquo;s.</p>
+    </div>
+
+    <h3>The name</h3>
+    <div class="prose">
+      <p>muir is named for Nathan Muir, the character <a href="https://en.wikipedia.org/wiki/Robert_Redford">Robert Redford</a> plays in <a href="https://en.wikipedia.org/wiki/Spy_Game"><em>Spy Game</em></a> (2001). In memory of Robert Redford.</p>
+    </div>
+    <footer class="wholine">
+      <div class="label">muir &middot; Manual &middot; Sources and attribution</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>13</span></div>
+    </footer>
+  </section>
+
+</div>
 
 </body>
 </html>
