@@ -89,6 +89,26 @@ pub const ABORT_HOLD_NS: u64 = 1_000;
 /// netlist board for four addresses against a host at 3060: `16`, `64`,
 /// `127`, `255` loaded and 17, 65, 128, 256 counts waited
 /// against the netlist board.
+///
+/// **A station's own packet loads zero, so its own turn is the first
+/// count of the round and not the last.**  AIM-628 §2.6, memo page 7, has
+/// it the other way: "When an interface transmits, the token stops moving
+/// and remains at that interface until the end of the packet, whereupon
+/// it continues down the cable, passing every other interface, giving
+/// them each a chance to transmit before letting the first interface
+/// transmit a second packet."  The board as wired hears its own
+/// transmission as it hears any frame --- it must, for its transceiver to
+/// find a collision --- and loads the difference between that source word
+/// and its own address, which is zero, so `MY.TURN^` rises on the first
+/// count after the cable goes idle: measured at four addresses by
+/// `the_turn_timer_loads_the_address_difference_bit_reversed` in
+/// `tests/chaos_rtl.rs`.  The board is followed.  What keeps the memo's
+/// picture on a real machine is that the software cannot reload the
+/// transmitter within one slot, which
+/// `two_packets_back_to_back_wait_a_whole_round` in
+/// `tests/chaos_netlist.rs` measures at 257 slots; a node on this ether
+/// has no such delay, and takes the cable back one slot after it let it
+/// go.
 pub fn turn_byte(source: u16, me: u16) -> u8 {
     let d = source.wrapping_sub(me);
     (0..8).map(|m| (((d >> (14 - m)) & 1) as u8) << m).sum()
