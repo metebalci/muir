@@ -411,10 +411,13 @@ pub struct Tv {
     pub sync: SyncRam,
     /// The color map as written, `[color][channel]`: [`Tv::color_map`].
     color_map: [[u8; CHANNELS]; COLORS],
-    /// The bit the last mode write clocked into the vertical flag's flop.
+    /// The vertical flag's flop as something other than the running
+    /// program last set it: the bit a mode write clocked in, the zero
+    /// `-XBUS INIT` cleared it to ([`Tv::xbus_init`]), or the value it
+    /// carried over the program being run afresh ([`Tv::restart`]).
     flag_written: bool,
-    /// When that write was, in the machine's nanoseconds: the flag is
-    /// that bit, or the `TVMA CLR` that has come since.
+    /// When that was, in the machine's nanoseconds: the flag is that bit,
+    /// or the `TVMA CLR` that has come since.
     written_at: u64,
     /// The program running, laid out in time; `None` while the RAM is
     /// selected and holds no program that makes a frame, as it does before
@@ -424,6 +427,13 @@ pub struct Tv {
     /// machine's nanoseconds: power-on, or the last change of program or
     /// clock mode ([`Tv::restart`]).
     origin: u64,
+    /// The sync bits `(hsync, vsync)` the mode register was holding when
+    /// the program running started, which is what it goes on reading
+    /// until that program's first instruction lands: the 74LS175 that
+    /// latches them, NSYREG 0D02, has its clear on a pull-up and the
+    /// program's start reaches neither it nor its clock
+    /// ([`sync::Timeline::sync_at_since_start`]).
+    sync_held: (bool, bool),
 }
 
 impl Default for Tv {
@@ -441,6 +451,13 @@ impl Default for Tv {
             written_at: 0,
             timeline,
             origin: 0,
+            // Power-on is the program started from a register holding
+            // nothing: the 74LS175 at NSYREG 0D02 has no clear at all ---
+            // pin 1 is the pull-up `HI` at XBADR 0F10 on the SIMPLE TV
+            // and `HI5` at XBADR 0D04 on the LISPM TV --- so what it
+            // holds there is whatever its flops came up in, and zero is
+            // what the model starts them at.
+            sync_held: (false, false),
         }
     }
 }
@@ -513,7 +530,20 @@ impl Tv {
     /// counter stood: the 74LS569s at NSYADR are cleared only by `-SYNC ADR
     /// CLR`, and what settles it is the phase of `-TVMA CLR` on the netlist
     /// across a `SETUP-CPT`. Nothing in the software depends on the phase.
+    ///
+    /// **The vertical flag and the mode register's sync bits are carried
+    /// over**, the start of the program reaching neither part: the flag is
+    /// the 74LS74 at NXBCTL 0E14, whose preset is `-TVMA CLR`, clock
+    /// `-LOAD MODE` with `XDI4` as data and clear `-RESET`; the sync bits
+    /// are the 74LS175 at NSYREG 0D02, whose clear, pin 1, is a pull-up
+    /// (`HI` at XBADR 0F10 on the SIMPLE TV, `HI5` at XBADR 0D04 on the
+    /// LISPM TV) and whose clock is `-CLK`. So the flag keeps its value,
+    /// and the register keeps its bits until the new program's first
+    /// instruction lands.
     fn restart(&mut self, ns: u64) {
+        self.flag_written = self.vert_flag(ns);
+        self.written_at = ns;
+        self.sync_held = self.sync_at(ns);
         self.timeline = Timeline::of(self.sync.program(), self.mode & mode::CLOCK);
         self.origin = ns;
     }
@@ -527,10 +557,12 @@ impl Tv {
     }
 
     /// The sync bits the program has in the register at `ns`: `(hsync,
-    /// vsync)`.
+    /// vsync)`. Before the running program's first instruction has landed
+    /// they are still the ones the program before it left in the register,
+    /// which the model holds from the restart.
     pub fn sync_at(&self, ns: u64) -> (bool, bool) {
         match &self.timeline {
-            Some(t) if ns >= self.origin => t.sync_at(ns - self.origin),
+            Some(t) if ns >= self.origin => t.sync_at_since_start(ns - self.origin, self.sync_held),
             _ => (false, false),
         }
     }
@@ -882,6 +914,7 @@ impl Tv {
             written_at,
             timeline: _,
             origin,
+            sync_held,
         } = self;
         w.u8(match board {
             Board::SimpleTv => 0,
@@ -898,6 +931,8 @@ impl Tv {
         w.bool(*flag_written);
         w.u64(*written_at);
         w.u64(*origin);
+        w.bool(sync_held.0);
+        w.bool(sync_held.1);
     }
 
     /// The timeline is not in the checkpoint: it is the program and the
@@ -921,6 +956,7 @@ impl Tv {
         self.flag_written = r.bool()?;
         self.written_at = r.u64()?;
         self.origin = r.u64()?;
+        self.sync_held = (r.bool()?, r.bool()?);
         self.timeline = Timeline::of(self.sync.program(), self.mode & mode::CLOCK);
         Ok(())
     }

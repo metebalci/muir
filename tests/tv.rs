@@ -167,6 +167,131 @@ fn the_vertical_flag_sets_each_frame_and_a_mode_write_clears_it() {
     assert!(tv.interrupt(CLR + FRAME_NS + 3), "a write of bit 4 set it");
 }
 
+/// The smallest program the rules of `lmtv.order` make a frame of: a loop
+/// of one iteration whose instruction carries End of Program, and the one
+/// more instruction (JUMP-XCT-NEXT) executed after it. `first` and
+/// `second` are the two instructions' sync bits, `lmtv.order`'s bit 1
+/// Vertical Sync and bit 0 Horizontal Sync; there is no `TVMA CLR` in it.
+fn two_instruction_program(first: u8, second: u8) -> [u8; 3] {
+    // The loop's repeat count, which is never executed, and then the two
+    // instructions; `11` in bits 7-6 is End of Program.
+    [1, 0b1100_0000 | first, second]
+}
+
+/// A program into the sync RAM through registers 2 and 1, with the enable
+/// clear so that MIT's PROM goes on running until register 3 selects it.
+fn load_sync_program(tv: &mut Tv, program: &[u8], ns: u64) {
+    assert!(!tv.sync.enabled(), "loaded with the PROM still running");
+    for (k, &word) in program.iter().enumerate() {
+        tv.write_control(2, k as u32, ns);
+        tv.write_control(1, word as u32, ns);
+    }
+}
+
+/// **Running the sync program afresh leaves the vertical flag where it
+/// stood.** The flag is the 74LS74 at NXBCTL 0E14, and its three inputs
+/// are `-TVMA CLR` on the preset, pin 10; `-LOAD MODE` on the clock, pin
+/// 11, with `XDI4` as its data on pin 12; and `-RESET` on the clear, pin
+/// 13 --- `data/SIMPLETV.netlist` and `data/LISPMTV.netlist` alike, with
+/// `VERT FLAG` on pin 9. The program's start reaches none of the three,
+/// so a write that runs it afresh here --- the RAM selected or written
+/// while it is selected, or the clock mode changed --- leaves the flop
+/// holding what it held.
+#[test]
+fn a_sync_program_run_afresh_leaves_the_vertical_flag_alone() {
+    const CLR: u64 = 16_000;
+    let mut tv = Tv::default();
+    // A program with no `TVMA CLR` in it, so that nothing it does can
+    // preset the flag: what the flag reads after the restart is what the
+    // flop carried over and nothing else.
+    load_sync_program(&mut tv, &two_instruction_program(0, 0), 10);
+    // The interrupt enable up and the flag down --- a mode write clocks
+    // its own bit 4 in --- and then the PROM program's `TVMA CLR`.
+    tv.write_control(0, mode::INTERRUPT_ENABLE, 20);
+    assert!(!tv.vert_flag(CLR - 1), "not yet set before the first line ends");
+    assert!(tv.vert_flag(CLR), "preset by the PROM program's TVMA CLR");
+    assert!(tv.interrupt(CLR), "which with the enable is the 60-cycle interrupt");
+
+    // Register 3 selects the RAM, and the program runs afresh.
+    tv.write_control(3, 0o200, CLR + 1);
+    assert_eq!(tv.origin(), CLR + 1, "the new program from its location 0");
+    assert!(tv.vert_flag(CLR + 1), "and the flop keeps what TVMA CLR put in it");
+    assert!(tv.interrupt(CLR + 1), "so the interrupt stays up");
+    assert_eq!(tv.read_control(0, CLR + 1) & mode::VERT, mode::VERT, "and reads back in bit 4");
+    assert!(tv.vert_flag(CLR + 1 + FRAME_NS), "the new program has nothing that clears it");
+
+    // `INTRX0`'s read-modify-write is what clears it, as before.
+    tv.write_control(0, mode::INTERRUPT_ENABLE, CLR + 2);
+    assert!(!tv.vert_flag(CLR + 2), "bit 4 written zero");
+    // And a restart with the flag down leaves it down: MIT's PROM back in,
+    // clear until its own first `TVMA CLR`.
+    tv.write_control(3, 0, CLR + 3);
+    assert_eq!(tv.origin(), CLR + 3);
+    assert!(!tv.vert_flag(CLR + 3), "the flop carried a zero over");
+    assert!(!tv.vert_flag(CLR + 3 + 15_999));
+    assert!(tv.vert_flag(CLR + 3 + 16_000), "until the PROM program's first line ends");
+}
+
+/// **The mode register's sync bits during a program's first run are what
+/// the program before it left in the register.** They are the 74LS175 at
+/// NSYREG 0D02 --- SYNREG 0D02 on the LISPM TV --- whose clear, pin 1, is
+/// the pull-up net `HI` in `data/SIMPLETV.netlist` (the PULLUP at XBADR
+/// 0F10) and `HI5` in `data/LISPMTV.netlist` (the PULLUP at XBADR 0D04):
+/// the register has no clear at all, and the program's start reaches
+/// neither it nor its clock, pin 9. So it holds the bits it was last
+/// clocked with until the new program's first instruction lands, an
+/// instruction after that instruction is fetched. From the second run on
+/// the program is periodic and the run's own last bits are what it holds
+/// there. At power-on the model starts the held bits zero.
+#[test]
+fn the_sync_bits_hold_across_a_restart_until_the_first_instruction_lands() {
+    use muir::checkpoint::{Reader, Writer};
+    let sync = mode::HSYNC | mode::VSYNC;
+    let mut tv = Tv::default();
+    // Power-on: nothing has been clocked into the register, so it reads
+    // zero until `cpt.prom`'s first instruction lands 500 ns in --- not
+    // the bits that program's run ends with, which are both.
+    assert_eq!(tv.read_control(0, 0) & sync, 0, "no instruction has landed yet");
+    assert_eq!(tv.read_control(0, 499) & sync, 0);
+    assert_eq!(tv.read_control(0, 500) & sync, sync, "the first instruction's, one late");
+
+    // Two instructions, the first with neither sync bit and the second
+    // with both, loaded with the enable clear so that selecting it is the
+    // one restart.
+    load_sync_program(&mut tv, &two_instruction_program(0, 0b11), 10);
+    // A hundred lines into `cpt.prom` and a microsecond into the line:
+    // horizontal sync up, vertical over after the 54th line.
+    const AT: u64 = 100 * 16_000 + 1_000;
+    assert_eq!(tv.read_control(0, AT) & sync, mode::HSYNC, "where the PROM program has it");
+    tv.write_control(3, 0o200, AT);
+    assert_eq!(tv.read_control(0, AT) & sync, mode::HSYNC, "the 175 holds it over the restart");
+    assert_eq!(tv.read_control(0, AT + 499) & sync, mode::HSYNC, "until the first lands");
+    assert_eq!(tv.read_control(0, AT + 500) & sync, 0, "which carries neither bit");
+    assert_eq!(tv.read_control(0, AT + 1_000) & sync, sync, "and the second carries both");
+    // The run over, the program repeats and the timeline answers: an
+    // offset before the first change is the last change's bits, the
+    // program having been round once.
+    assert_eq!(tv.read_control(0, AT + 1_100) & sync, sync, "the second run, before its first");
+    assert_eq!(tv.read_control(0, AT + 1_500) & sync, 0, "and its first instruction again");
+
+    // The held bits are the register's state, so a checkpoint taken
+    // inside a first run carries them: MIT's PROM back in where this
+    // program holds neither bit, and its first instruction carries both.
+    let back_in = AT + 1_600;
+    assert_eq!(tv.read_control(0, back_in) & sync, 0);
+    tv.write_control(3, 0, back_in);
+    assert_eq!(tv.read_control(0, back_in + 499) & sync, 0, "held, the PROM's first not landed");
+    let mut w = Writer::new();
+    tv.save(&mut w);
+    let body = w.finish();
+    let mut back = Tv::default();
+    let mut r = Reader::new(&body);
+    back.load(&mut r).unwrap();
+    r.done().unwrap();
+    assert_eq!(back.read_control(0, back_in + 499) & sync, 0, "the held bits came back");
+    assert_eq!(back.read_control(0, back_in + 500) & sync, sync, "and the PROM's first lands");
+}
+
 #[test]
 fn the_display_answers_where_nothing_did_before() {
     let d = |p| busint::decode(p, MAIN_WORDS);

@@ -139,7 +139,20 @@ fn mits_prom_program_makes_the_frame_the_board_makes() {
     assert_eq!(
         t.sync_at(0),
         (true, true),
-        "before the first instruction lands: the last's, the program being periodic"
+        "an offset before the first change: the run's last, the program being periodic"
+    );
+    // That is the steady state, from the second run on. The first run
+    // after the program is started is the one run where no instruction of
+    // it has landed yet, and there the register still holds what the
+    // program before it left: `sync_at_since_start` is handed those bits.
+    let held = (false, true);
+    assert_eq!(t.sync_at_since_start(0, held), held, "held at the start");
+    assert_eq!(t.sync_at_since_start(499, held), held, "and until the first instruction lands");
+    assert_eq!(t.sync_at_since_start(500, held), (true, true), "which is this program's own");
+    assert_eq!(
+        t.sync_at_since_start(FRAME_NS, held),
+        (true, true),
+        "a run later, the last's again"
     );
     assert_eq!(t.tvma_clrs_by(15_999), 0);
     assert_eq!(t.tvma_clrs_by(16_000), 1);
