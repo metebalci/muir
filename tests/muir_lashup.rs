@@ -12,6 +12,7 @@ mod support;
 
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -270,6 +271,36 @@ fn the_lashup_records_both_displays_on_one_canvas() {
     assert!(
         t.contains(&format!("frames of the display at {}", gif.display())),
         "the recording reported:\n{t}"
+    );
+}
+
+/// **`--color-tv-capture` in the lashup is this machine's colour screen
+/// alone.** `--color-tv` fits the board on the machine this process runs
+/// as its own, the debuggee having none, so the recording is one screen
+/// 576 wide and not the pair's canvas --- which the main screen's
+/// recording, taken beside it in the same run, is.
+#[test]
+fn the_lashups_colour_recording_is_the_debuggers_screen() {
+    let dir = scratch("lashup-color-capture");
+    let (gif, colour) = (dir.join("lashup.gif"), dir.join("colour.gif"));
+    let out = muir()
+        .args(["--rtl", "--debug-in-process", "--color-tv", "--stop-after", "5000"])
+        .args(["--tv-capture", gif.to_str().unwrap()])
+        .args(["--color-tv-capture", colour.to_str().unwrap()])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "muir failed:\n{t}");
+    let width = |p: &Path| {
+        let b =
+            std::fs::read(p).unwrap_or_else(|e| panic!("the recording {}: {e}\n{t}", p.display()));
+        assert!(b.starts_with(b"GIF89a"), "{} is a GIF", p.display());
+        u16::from_le_bytes([b[6], b[7]]) as usize
+    };
+    assert_eq!(width(&gif), 2 * WIDTH + PAIR_RULE, "both main screens on one canvas");
+    assert_eq!(width(&colour), muir::tv::COLOR_WIDTH, "the debugger's colour screen alone");
+    assert!(
+        t.contains(&format!("frames of the colour screen at {}", colour.display())),
+        "the colour recording reported:\n{t}"
     );
 }
 

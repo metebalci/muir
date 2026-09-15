@@ -26,8 +26,18 @@
 //! power-on, and at the right the wall clock, the local time of day where
 //! the run was made.  Each changes once its second ticks, a small frame of
 //! its own.
+//!
+//! The color TV's screen is recorded by a [`ColorRecorder`] beside it,
+//! 576 by 454, and the picture is the four-bit buffer through the map:
+//! a frame's pixels are [`Tv::pixel4`]'s indices and the GIF's colour
+//! table for that frame is the sixteen colours as [`Tv::rgb`] shows them.
+//! The map is the machine's to rewrite as it runs, so **a frame whose map
+//! differs from the file's global table carries a local table of its own
+//! and is the whole canvas**: a GIF resolves each frame's pixels to
+//! colours as it lays them down, so a changed map recolours everything
+//! already on the canvas and a rectangle would recolour only itself.
 
-use crate::tv::{HEIGHT, Tv, WIDTH};
+use crate::tv::{CHANNELS, COLOR_HEIGHT, COLOR_WIDTH, COLORS, HEIGHT, Tv, WIDTH};
 
 /// The height of the clock line below the screen, when it is shown: two
 /// rows of margin above and below a `GLYPH_H`-tall digit doubled.
@@ -72,6 +82,12 @@ struct Frame {
     height: u16,
     /// LZW-coded pixels of the rectangle, row by row.
     data: Vec<u8>,
+}
+
+impl Frame {
+    fn rect(&self) -> (u16, u16, u16, u16) {
+        (self.left, self.top, self.width, self.height)
+    }
 }
 
 impl Recorder {
@@ -171,29 +187,13 @@ impl Recorder {
         if self.show_time {
             self.shown_second = Some(ns / 1_000_000_000);
             self.shown_wall_second = Some(wall_ns / 1_000_000_000);
-            draw_time(&mut cur, self.width, ns, TIME_MARGIN);
-            draw_time(&mut cur, self.width, wall_ns, self.width - TIME_MARGIN - TIME_W);
+            draw_time(&mut cur, self.width, HEIGHT, ns, TIME_MARGIN, 1);
+            draw_time(&mut cur, self.width, HEIGHT, wall_ns, self.width - TIME_MARGIN - TIME_W, 1);
         }
         let width = self.width;
         let rect = match &self.prev {
             None => Some((0, 0, width, self.height)),
-            Some(prev) => {
-                let (mut x0, mut y0, mut x1, mut y1) = (width, self.height, 0, 0);
-                for y in 0..self.height {
-                    let (a, b) =
-                        (&prev[y * width..(y + 1) * width], &cur[y * width..(y + 1) * width]);
-                    if a == b {
-                        continue;
-                    }
-                    let first = (0..width).find(|&x| a[x] != b[x]).unwrap();
-                    let last = (0..width).rev().find(|&x| a[x] != b[x]).unwrap();
-                    x0 = x0.min(first);
-                    x1 = x1.max(last + 1);
-                    y0 = y0.min(y);
-                    y1 = y1.max(y + 1);
-                }
-                (x0 < x1).then(|| (x0, y0, x1 - x0, y1 - y0))
-            }
+            Some(prev) => changed_rect(prev, &cur, width, self.height),
         };
         if let Some((x, y, w, h)) = rect {
             if let Some(last) = self.frames.last_mut() {
@@ -209,7 +209,7 @@ impl Recorder {
                 top: y as u16,
                 width: w as u16,
                 height: h as u16,
-                data: lzw(&pixels),
+                data: lzw::<2>(&pixels, 2),
             });
             self.last_at = ns;
             self.prev = Some(cur);
@@ -219,41 +219,283 @@ impl Recorder {
 
     /// The recording as a GIF.
     pub fn gif(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(b"GIF89a");
-        out.extend_from_slice(&(self.width as u16).to_le_bytes());
-        out.extend_from_slice(&(self.height as u16).to_le_bytes());
-        // A global table of two colours, one bit of colour resolution.
-        out.extend_from_slice(&[0x80, 0, 0]);
-        out.extend_from_slice(&[0, 0, 0, 255, 255, 255]);
-        // Loop for ever.
-        out.extend_from_slice(b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00");
+        let mut out = head(self.width, self.height, &[[0, 0, 0], [255, 255, 255]]);
         for (k, f) in self.frames.iter().enumerate() {
-            let delay_ns = if k + 1 == self.frames.len() {
-                self.sampled_at - self.last_at + 1_000_000_000
-            } else {
-                f.delay_ns
-            };
-            let cs = (delay_ns / 10_000_000).clamp(2, u16::MAX as u64) as u16;
-            // Graphic control: leave the frame in place, no transparency.
-            out.extend_from_slice(&[0x21, 0xf9, 4, 0x04]);
-            out.extend_from_slice(&cs.to_le_bytes());
-            out.extend_from_slice(&[0, 0]);
-            out.push(0x2c);
-            for v in [f.left, f.top, f.width, f.height] {
-                out.extend_from_slice(&v.to_le_bytes());
-            }
-            out.push(0);
-            out.push(2);
-            for block in f.data.chunks(255) {
-                out.push(block.len() as u8);
-                out.extend_from_slice(block);
-            }
-            out.push(0);
+            frame_bytes(&mut out, self.delay_of(k, f.delay_ns), f.rect(), &[], 2, &f.data);
         }
         out.push(0x3b);
         out
     }
+
+    /// How long frame `k` stays up: what it was measured at, and for the
+    /// last frame the time since it was taken and a second more, nothing
+    /// having come after it to time it.
+    fn delay_of(&self, k: usize, delay_ns: u64) -> u64 {
+        if k + 1 == self.frames.len() {
+            self.sampled_at - self.last_at + 1_000_000_000
+        } else {
+            delay_ns
+        }
+    }
+}
+
+// --- The colour screen ------------------------------------------------------
+
+/// The sixteen colours of the colour map as the monitor shows them,
+/// [`Tv::rgb`] of each: what a frame of a colour recording is resolved
+/// through.
+type Palette = [[u8; CHANNELS]; COLORS];
+
+/// The clock line's ground and ink, as indices into a colour frame's
+/// table: past the map's sixteen, so the line reads the same whatever the
+/// machine wrote into the map --- the line belongs to the recording, as
+/// the rule between the lashup's two screens does, and not to the
+/// machine.  A GIF's table is a power of two long, so the two of them
+/// take it from sixteen entries to thirty-two.
+const CLOCK_GROUND: u8 = COLORS as u8;
+const CLOCK_INK: u8 = COLORS as u8 + 1;
+
+/// A recorder for the color TV's screen, growing a GIF frame by frame as
+/// [`Recorder`] does for the main screen: 576 by 454, a four-bit pixel an
+/// index into the map, and the map itself the frame's colour table.
+pub struct ColorRecorder {
+    /// Whether the machine's clock and the wall clock are drawn on a line
+    /// below the picture.
+    show_time: bool,
+    /// The canvas height: the picture, and the clock line if shown.
+    height: usize,
+    /// The last canvas sampled, a byte a pixel: a colour, or the clock
+    /// line's two.
+    prev: Option<Vec<u8>>,
+    /// The map the last frame was taken through.
+    prev_map: Option<Palette>,
+    last_at: u64,
+    sampled_at: u64,
+    shown_second: Option<u64>,
+    shown_wall_second: Option<u64>,
+    frames: Vec<ColorFrame>,
+}
+
+struct ColorFrame {
+    delay_ns: u64,
+    left: u16,
+    top: u16,
+    width: u16,
+    height: u16,
+    /// The map this frame's pixels are to be shown through.
+    map: Palette,
+    /// LZW-coded pixels of the rectangle, row by row.
+    data: Vec<u8>,
+}
+
+impl ColorFrame {
+    fn rect(&self) -> (u16, u16, u16, u16) {
+        (self.left, self.top, self.width, self.height)
+    }
+}
+
+impl ColorRecorder {
+    /// A recorder for the colour screen, with the machine's clock and the
+    /// wall clock on a line below it if `show_time`.
+    pub fn new(show_time: bool) -> ColorRecorder {
+        ColorRecorder {
+            show_time,
+            height: COLOR_HEIGHT + if show_time { TIME_H } else { 0 },
+            prev: None,
+            prev_map: None,
+            last_at: 0,
+            sampled_at: 0,
+            shown_second: None,
+            shown_wall_second: None,
+            frames: Vec::new(),
+        }
+    }
+
+    pub fn frames(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// The colour screen at `ns` of the machine's time, the wall clock
+    /// reading `wall_ns` since midnight: a frame if the canvas or the map
+    /// differs from the last.
+    pub fn sample(&mut self, tv: &Tv, ns: u64, wall_ns: u64) {
+        let mut map: Palette = [[0; CHANNELS]; COLORS];
+        for (colour, out) in map.iter_mut().enumerate() {
+            *out = tv.rgb(colour);
+        }
+        let mut cur = vec![0u8; COLOR_WIDTH * self.height];
+        for y in 0..COLOR_HEIGHT {
+            for x in 0..COLOR_WIDTH {
+                cur[y * COLOR_WIDTH + x] = tv.pixel4(x, y);
+            }
+        }
+        if self.show_time {
+            self.shown_second = Some(ns / 1_000_000_000);
+            self.shown_wall_second = Some(wall_ns / 1_000_000_000);
+            cur[COLOR_WIDTH * COLOR_HEIGHT..].fill(CLOCK_GROUND);
+            draw_time(&mut cur, COLOR_WIDTH, COLOR_HEIGHT, ns, TIME_MARGIN, CLOCK_INK);
+            let right = COLOR_WIDTH - TIME_MARGIN - TIME_W;
+            draw_time(&mut cur, COLOR_WIDTH, COLOR_HEIGHT, wall_ns, right, CLOCK_INK);
+        }
+        // A map that has changed recolours every pixel on the canvas, not
+        // only the ones this frame lays down, so the frame is the whole
+        // of it.
+        let whole = (0, 0, COLOR_WIDTH, self.height);
+        let rect = match &self.prev {
+            None => Some(whole),
+            Some(_) if self.prev_map != Some(map) => Some(whole),
+            Some(prev) => changed_rect(prev, &cur, COLOR_WIDTH, self.height),
+        };
+        if let Some((x, y, w, h)) = rect {
+            if let Some(last) = self.frames.last_mut() {
+                last.delay_ns = ns - self.last_at;
+            }
+            let mut pixels = Vec::with_capacity(w * h);
+            for row in y..y + h {
+                pixels.extend_from_slice(&cur[row * COLOR_WIDTH + x..row * COLOR_WIDTH + x + w]);
+            }
+            self.frames.push(ColorFrame {
+                delay_ns: 0,
+                left: x as u16,
+                top: y as u16,
+                width: w as u16,
+                height: h as u16,
+                map,
+                // The clock line's two colours take the table from
+                // sixteen entries to thirty-two, and a code from four
+                // bits to five.
+                data: if self.show_time {
+                    lzw::<{ 2 * COLORS }>(&pixels, 5)
+                } else {
+                    lzw::<COLORS>(&pixels, 4)
+                },
+            });
+            self.last_at = ns;
+            self.prev = Some(cur);
+            self.prev_map = Some(map);
+        }
+        self.sampled_at = ns;
+    }
+
+    /// The recording as a GIF: the first frame's map is the global colour
+    /// table, and a later frame taken through another map carries its own.
+    pub fn gif(&self) -> Vec<u8> {
+        let global = self.frames.first().map_or([[0; CHANNELS]; COLORS], |f| f.map);
+        let table = self.table(&global);
+        let mut out = head(COLOR_WIDTH, self.height, &table);
+        // The bits a code takes: the table's length, sixteen or, with the
+        // clock line's two colours, thirty-two.
+        let min = if self.show_time { 5 } else { 4 };
+        for (k, f) in self.frames.iter().enumerate() {
+            let local = if f.map == global { Vec::new() } else { self.table(&f.map) };
+            let flat: Vec<u8> = local.concat();
+            frame_bytes(&mut out, self.delay_of(k, f.delay_ns), f.rect(), &flat, min, &f.data);
+        }
+        out.push(0x3b);
+        out
+    }
+
+    /// A frame's colour table: the map's sixteen, and, when the clocks are
+    /// shown, the line's two and the fourteen a power-of-two table is
+    /// padded out with.
+    fn table(&self, map: &Palette) -> Vec<[u8; CHANNELS]> {
+        let mut table = map.to_vec();
+        if self.show_time {
+            table.resize(2 * COLORS, [0, 0, 0]);
+            table[CLOCK_GROUND as usize] = [0, 0, 0];
+            table[CLOCK_INK as usize] = [255, 255, 255];
+        }
+        table
+    }
+
+    /// How long frame `k` stays up: [`Recorder::delay_of`]'s rule.
+    fn delay_of(&self, k: usize, delay_ns: u64) -> u64 {
+        if k + 1 == self.frames.len() {
+            self.sampled_at - self.last_at + 1_000_000_000
+        } else {
+            delay_ns
+        }
+    }
+}
+
+// --- The GIF around the frames ----------------------------------------------
+
+/// The rectangle `cur` differs from `prev` in, both canvases `width` by
+/// `height`, or `None` when they are the same picture: what a frame is.
+fn changed_rect(
+    prev: &[u8],
+    cur: &[u8],
+    width: usize,
+    height: usize,
+) -> Option<(usize, usize, usize, usize)> {
+    let (mut x0, mut y0, mut x1, mut y1) = (width, height, 0, 0);
+    for y in 0..height {
+        let (a, b) = (&prev[y * width..(y + 1) * width], &cur[y * width..(y + 1) * width]);
+        if a == b {
+            continue;
+        }
+        let first = (0..width).find(|&x| a[x] != b[x]).unwrap();
+        let last = (0..width).rev().find(|&x| a[x] != b[x]).unwrap();
+        x0 = x0.min(first);
+        x1 = x1.max(last + 1);
+        y0 = y0.min(y);
+        y1 = y1.max(y + 1);
+    }
+    (x0 < x1).then(|| (x0, y0, x1 - x0, y1 - y0))
+}
+
+/// A GIF's header, the canvas, the global colour table and the block that
+/// makes it loop for ever.  The table is a power of two long and its size
+/// is written as the exponent less one.
+fn head(width: usize, height: usize, table: &[[u8; CHANNELS]]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"GIF89a");
+    out.extend_from_slice(&(width as u16).to_le_bytes());
+    out.extend_from_slice(&(height as u16).to_le_bytes());
+    out.extend_from_slice(&[0x80 | size_bits(table.len()), 0, 0]);
+    for colour in table {
+        out.extend_from_slice(colour);
+    }
+    out.extend_from_slice(b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00");
+    out
+}
+
+/// One frame: the graphic control block with how long it stays up, the
+/// image descriptor and its local colour table if it carries one ---
+/// `table` empty is a frame shown through the global one --- then the LZW
+/// data in sub-blocks.  `delay_ns` is written in centiseconds, the
+/// smallest unit a GIF has.
+fn frame_bytes(
+    out: &mut Vec<u8>,
+    delay_ns: u64,
+    (left, top, width, height): (u16, u16, u16, u16),
+    table: &[u8],
+    min: u8,
+    data: &[u8],
+) {
+    let cs = (delay_ns / 10_000_000).clamp(2, u16::MAX as u64) as u16;
+    // Graphic control: leave the frame in place, no transparency.
+    out.extend_from_slice(&[0x21, 0xf9, 4, 0x04]);
+    out.extend_from_slice(&cs.to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out.push(0x2c);
+    for v in [left, top, width, height] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.push(if table.is_empty() { 0 } else { 0x80 | size_bits(table.len() / CHANNELS) });
+    out.extend_from_slice(table);
+    out.push(min);
+    for block in data.chunks(255) {
+        out.push(block.len() as u8);
+        out.extend_from_slice(block);
+    }
+    out.push(0);
+}
+
+/// How a colour table's length is written in a descriptor's packed field:
+/// the table holds `2^(n+1)` entries and `n` is the three bits.
+fn size_bits(entries: usize) -> u8 {
+    entries.trailing_zeros() as u8 - 1
 }
 
 // --- The wall clock ---------------------------------------------------------
@@ -377,11 +619,12 @@ const TIME_W: usize = 8 * (GLYPH_W + 1) * SCALE - SCALE;
 /// the left, the wall clock from the right.
 const TIME_MARGIN: usize = 6;
 
-/// Draws `hh:mm:ss` of `ns` into the clock line at the bottom of `cur`,
-/// a canvas `width` wide, from column `x`, white on the black line.  Two
-/// digits of hours: the machine's past ninety-nine wrap rather than
-/// stopping the recording; the wall clock's never get there.
-fn draw_time(cur: &mut [u8], width: usize, ns: u64, mut x: usize) {
+/// Draws `hh:mm:ss` of `ns` into the clock line below the `screen_h` rows
+/// of screen at the top of `cur`, a canvas `width` wide, from column `x`,
+/// in `ink` on the line's ground.  Two digits of hours: the machine's past
+/// ninety-nine wrap rather than stopping the recording; the wall clock's
+/// never get there.
+fn draw_time(cur: &mut [u8], width: usize, screen_h: usize, ns: u64, mut x: usize, ink: u8) {
     let s = ns / 1_000_000_000;
     let (hh, mm, ss) = (s / 3600, s / 60 % 60, s % 60);
     let text = [
@@ -394,7 +637,7 @@ fn draw_time(cur: &mut [u8], width: usize, ns: u64, mut x: usize) {
         (ss / 10) as u8,
         (ss % 10) as u8,
     ];
-    let top = HEIGHT + 4;
+    let top = screen_h + 4;
     for &glyph in &text {
         let bits = GLYPHS[glyph as usize];
         for (row, &pattern) in bits.iter().enumerate() {
@@ -406,7 +649,7 @@ fn draw_time(cur: &mut [u8], width: usize, ns: u64, mut x: usize) {
                     for dx in 0..SCALE {
                         let px = x + col * SCALE + dx;
                         let py = top + row * SCALE + dy;
-                        cur[py * width + px] = 1;
+                        cur[py * width + px] = ink;
                     }
                 }
             }
@@ -435,20 +678,29 @@ const GLYPHS: [[u8; GLYPH_H]; 11] = [
 
 // --- GIF's LZW --------------------------------------------------------------
 
-/// GIF's LZW over two-valued pixels: a minimum code size of 2, so the
-/// clear code is 4 and the end code 5, codes from 6, the code width from
-/// 3 bits to 12, and a clear when the table is full.
-fn lzw(pixels: &[u8]) -> Vec<u8> {
-    const CLEAR: u16 = 4;
-    const END: u16 = 5;
+/// GIF's LZW over pixels of `N` values with a minimum code size of `min`,
+/// which is the bits an index into the frame's colour table takes: the
+/// clear code is `1 << min` and the end code the one above it, codes from
+/// the one above that, the code width from `min + 1` bits to 12, and a
+/// clear when the table is full.  The main screen's two colours are
+/// `lzw::<2>(_, 2)`, GIF's smallest code size; the colour screen's are
+/// sixteen or, with the clock line's two, thirty-two.
+fn lzw<const N: usize>(pixels: &[u8], min: u32) -> Vec<u8> {
     const NONE: u16 = u16::MAX;
+    let clear: u16 = 1 << min;
+    let end: u16 = clear + 1;
+    let first_code: u16 = end + 1;
     let mut bits = BitWriter::default();
-    let mut table = vec![[NONE; 2]; 4096];
-    let mut next = 6u16;
-    let mut width = 3;
-    bits.put(CLEAR, width);
+    // On the heap: 4096 rows of `N`, which for the colour screen's
+    // thirty-two values is a quarter of a megabyte.  Clippy cannot size a
+    // const-generic row and offers the stack for it.
+    #[allow(clippy::useless_vec)]
+    let mut table = vec![[NONE; N]; 4096];
+    let mut next = first_code;
+    let mut width = min + 1;
+    bits.put(clear, width);
     let Some((&first, rest)) = pixels.split_first() else {
-        bits.put(END, width);
+        bits.put(end, width);
         return bits.finish();
     };
     let mut cur = first as u16;
@@ -466,15 +718,15 @@ fn lzw(pixels: &[u8]) -> Vec<u8> {
                 width += 1;
             }
         } else {
-            bits.put(CLEAR, width);
-            table.iter_mut().for_each(|t| *t = [NONE; 2]);
-            next = 6;
-            width = 3;
+            bits.put(clear, width);
+            table.iter_mut().for_each(|t| *t = [NONE; N]);
+            next = first_code;
+            width = min + 1;
         }
         cur = p as u16;
     }
     bits.put(cur, width);
-    bits.put(END, width);
+    bits.put(end, width);
     bits.finish()
 }
 

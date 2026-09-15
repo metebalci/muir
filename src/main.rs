@@ -13,6 +13,7 @@
 //!          [--chaos-udp-default-peer <host>[:<port>]]
 //!          [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
 //!          [--color-terminal [<endpoint>]] [--color-tv]
+//!          [--color-tv-capture <gif>]
 //!          [--debug-cable-connect [<endpoint>|0x<address>]]
 //!          [--debug-cable-listen [<endpoint>]] [--debug-in-process]
 //!          [--debuggee-disk-pack <image>[,<unit>][,ro]]
@@ -113,7 +114,8 @@
 //! and it is **pixels only**: the machine has one keyboard and one mouse,
 //! both on the I/O board, and they stay with the terminal that serves the
 //! main screen, so what a viewer types or points at the colour screen is
-//! dropped. `--tv-capture` records the main screen alone.
+//! dropped. `--tv-capture` records the main screen and
+//! `--color-tv-capture` the colour one, each to a file of its own.
 //!
 //! **Every `rtl` and `chip` run listens for a debugger too**, since the
 //! bus interface's DBGIN is on every machine: it takes the Unibus as
@@ -128,9 +130,10 @@
 //! reads and writes the whole Unibus and stops the clock, so the connector
 //! stays on the loopback unless `--debug-cable-listen` names an address.
 //! `--no-debug-cable-listen` leaves it empty, as do the flags that want a
-//! machine on its own --- `--checkpoint`, `--tv-capture`, and `--watch` on
-//! `chip` --- which the start says. `micro` has no timing model and no end
-//! of the cable, and says so. The debugger's own end, `--debug-cable-connect`,
+//! machine on its own --- `--checkpoint`, `--tv-capture`,
+//! `--color-tv-capture`, and `--watch` on `chip` --- which the start says.
+//! `micro` has no timing model and no end of the cable, and says so. The
+//! debugger's own end, `--debug-cable-connect`,
 //! runs the machine inside the cable it plugged into a debuggee, and its
 //! DBGIN is not listened at.
 //!
@@ -269,7 +272,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use muir::cable::{Boards, DebugIn, FarEnd};
-use muir::capture::{Recorder, local_time, wall_clock};
+use muir::capture::{ColorRecorder, Recorder, local_time, wall_clock};
 use muir::checkpoint::Checkpoint;
 use muir::chip::Chip;
 use muir::clock::{Behavioural, Clock};
@@ -798,7 +801,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--chaos-udp-default-peer <host>[:<port>]]
             [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
             [--color-terminal [<endpoint>]] [--color-tv]
-            [-c|--config <file>]
+            [--color-tv-capture <gif>] [-c|--config <file>]
             [--debug-cable-connect [<endpoint>|0x<address>]]
             [--debug-cable-listen [<endpoint>]] [--debug-in-process]
             [--debuggee-chaos-address <address>]
@@ -911,6 +914,15 @@ A simulator of the MIT CADR Lisp Machine.
                                --color-terminal. The model on every engine,
                                chip included: there is no netlist of this
                                board.
+  --color-tv-capture <gif>     record the color TV's screen to <gif> as the
+                               run goes, as --tv-capture records the main
+                               screen: a file of its own, 576 x 454, four
+                               bits a pixel through the colour map, which
+                               is the GIF's own colours and is written
+                               again whenever the machine changes it. There
+                               is no default path; one must be given. It
+                               needs --color-tv. Not over the debug cable,
+                               where the two machines are two clocks.
   -c, --config <file>          the file of flags to read before the command
                                line, which must be there. Without it muir
                                reads .muirrc in the directory it was run
@@ -1153,9 +1165,10 @@ A simulator of the MIT CADR Lisp Machine.
                                one canvas, the debugger at the left and the
                                debuggee at the right; not over the debug
                                cable, where they are two clocks. The main
-                               screen only: the color TV's is served and
-                               not recorded.
-  --tv-capture-no-time         leave the clocks off the recording. By
+                               screen: the color TV's is --color-tv-capture's.
+  --tv-capture-no-time         leave the clocks off the recordings, the
+                               colour screen's as much as the main
+                               screen's: there is one flag for the two. By
                                default a line below the screen, hiding none
                                of it, shows the machine's simulated time at
                                the left and the local time of day at the
@@ -1856,6 +1869,7 @@ fn time_lashup(
     debuggee_terminal: Option<&mut Terminal>,
     color: Option<&mut Terminal>,
     capture: Option<(PathBuf, bool)>,
+    color_capture: Option<(PathBuf, bool)>,
 ) {
     let t = Instant::now();
     let mut halt = None;
@@ -1867,6 +1881,10 @@ fn time_lashup(
     // debuggee's at the right, timed by the debugger's clock, which the
     // lashup holds the debuggee's to within a generator cycle.
     let mut capture = capture.map(|(path, time)| (path, Recorder::pair(time)));
+    // The colour screen is this machine's alone: the debuggee has no
+    // second display board, `--color-tv` fitting the machine this process
+    // runs as its own.
+    let mut color_capture = color_capture.map(|(path, time)| (path, ColorRecorder::new(time)));
     let (mut keyboard, mut mouse) = (a_keyboard(), Mouse::new());
     let (mut b_keyboard, mut b_mouse) = (a_keyboard(), Mouse::new());
     let mut last_poll = Instant::now();
@@ -1901,6 +1919,11 @@ fn time_lashup(
                     lashup.debugger.ns(),
                     wall_clock(),
                 );
+            }
+            if let Some((_, rec)) = color_capture.as_mut()
+                && let Some(tv) = lashup.debugger.machine().color_tv.as_ref()
+            {
+                rec.sample(tv, lashup.debugger.ns(), wall_clock());
             }
             let poll = last_poll.elapsed() >= TERMINAL_INTERVAL;
             let e = &mut lashup.debugger;
@@ -1939,6 +1962,12 @@ fn time_lashup(
             wall_clock(),
         );
         write_capture(path, rec);
+    }
+    if let Some((path, rec)) = color_capture.as_mut() {
+        if let Some(tv) = lashup.debugger.machine().color_tv.as_ref() {
+            rec.sample(tv, lashup.debugger.ns(), wall_clock());
+        }
+        write_color_capture(path, rec);
     }
     let mut screens = Vec::new();
     if let Some(term) = terminal {
@@ -2229,6 +2258,12 @@ fn time_fabric(
 struct Run<'a> {
     stop: Stop,
     capture: Option<(PathBuf, bool)>,
+    /// The colour screen's own recording, when `--color-tv-capture` asked
+    /// for one: its file, and whether the clocks go below it, which is
+    /// the main screen's recording's flag too.  A second recorder beside
+    /// the main screen's rather than a second canvas, the two screens
+    /// being two pictures of different shapes.
+    color_capture: Option<(PathBuf, bool)>,
     checkpoint: Option<PathBuf>,
     setup: &'a str,
     /// The color TV's screen, when `--color-tv` fitted the board: a second
@@ -2528,7 +2563,7 @@ fn time_engine<S: Stepper>(
     serial: Option<&mut Endpoint>,
     run: Run,
 ) {
-    let Run { stop, capture, checkpoint, setup, hold: held, clocks, color } = run;
+    let Run { stop, capture, color_capture, checkpoint, setup, hold: held, clocks, color } = run;
     let t = Instant::now();
     let mut ran = 0;
     let mut halt = None;
@@ -2540,6 +2575,7 @@ fn time_engine<S: Stepper>(
     let mut last_poll = Instant::now();
     let mut last_serial = Instant::now();
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
+    let mut color_capture = color_capture.map(|(path, time)| (path, ColorRecorder::new(time)));
     let mut hold = Hold::open(held);
     catch_interrupts();
     while !hold.quit
@@ -2573,11 +2609,21 @@ fn time_engine<S: Stepper>(
         // The connector's listener, held or not: a debugger may come to a
         // machine standing at the prompt.
         s.attend();
-        if !hold.on
-            && let Some((_, rec)) = capture.as_mut()
-        {
+        if !hold.on && (capture.is_some() || color_capture.is_some()) {
+            // One reading of the wall clock for the two recordings: they
+            // are two files of one run, and a frame of each is one
+            // instant.
+            let now = wall_clock();
             let m = s.engine().machine();
-            rec.sample(&m.tv, m.ns, wall_clock());
+            if let Some((_, rec)) = capture.as_mut() {
+                rec.sample(&m.tv, m.ns, now);
+            }
+            // The colour screen, when the board is fitted.
+            if let Some((_, rec)) = color_capture.as_mut()
+                && let Some(tv) = m.color_tv.as_ref()
+            {
+                rec.sample(tv, m.ns, now);
+            }
         }
         if last_poll.elapsed() >= TERMINAL_INTERVAL {
             if let Some(term) = terminal.as_deref_mut() {
@@ -2661,6 +2707,13 @@ fn time_engine<S: Stepper>(
         let m = s.engine().machine();
         rec.sample(&m.tv, m.ns, wall_clock());
         write_capture(path, rec);
+    }
+    if let Some((path, rec)) = color_capture.as_mut() {
+        let m = s.engine().machine();
+        if let Some(tv) = m.color_tv.as_ref() {
+            rec.sample(tv, m.ns, wall_clock());
+        }
+        write_color_capture(path, rec);
     }
     if let Some(path) = &checkpoint {
         write_checkpoint(name, s.engine(), path);
@@ -3272,16 +3325,26 @@ fn resume_engine<E: Engine>(
     );
 }
 
-/// Writes a recording to `path` and says how big it came.
+/// Writes a recording of the main screen to `path` and says how big it
+/// came.
 fn write_capture(path: &Path, rec: &Recorder) {
-    match std::fs::write(path, rec.gif()) {
+    wrote_capture("capture", "the display", path, rec.frames(), rec.gif());
+}
+
+/// The same for a recording of the colour screen, which is a file of its
+/// own and says which screen it is.
+fn write_color_capture(path: &Path, rec: &ColorRecorder) {
+    wrote_capture("color capture", "the colour screen", path, rec.frames(), rec.gif());
+}
+
+fn wrote_capture(what: &str, screen: &str, path: &Path, frames: usize, gif: Vec<u8>) {
+    match std::fs::write(path, gif) {
         Ok(()) => eprintln!(
-            "capture: {} frames of the display at {}, {} bytes",
-            rec.frames(),
+            "{what}: {frames} frames of {screen} at {}, {} bytes",
             path.display(),
             std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
         ),
-        Err(e) => eprintln!("capture: could not write {}: {e}", path.display()),
+        Err(e) => eprintln!("{what}: could not write {}: {e}", path.display()),
     }
 }
 
@@ -3546,7 +3609,7 @@ fn time_chip(
     color_tv: bool,
     watch: Option<WatchSpec>,
 ) {
-    let Run { stop, capture, checkpoint, setup, hold, clocks, mut color } = run;
+    let Run { stop, capture, color_capture, checkpoint, setup, hold, clocks, mut color } = run;
     let ChipMachine {
         mut cpu,
         mut clk,
@@ -3623,6 +3686,7 @@ fn time_chip(
     let (mut keyboard, mut mouse) = (a_keyboard(), Mouse::new());
     let mut last_poll = Instant::now();
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
+    let mut color_capture = color_capture.map(|(path, time)| (path, ColorRecorder::new(time)));
     let mut last_check = Instant::now();
     let prompt = Prompt::open();
     // The same hold the other two engines have: nothing is ticked while it
@@ -3708,12 +3772,16 @@ fn time_chip(
             }
         }
         // The capture keeps its own cadence, in microcycles.
-        if wrapped
-            && ran % TERMINAL_CHECK == 0
-            && let Some((_, rec)) = capture.as_mut()
-        {
+        if wrapped && ran % TERMINAL_CHECK == 0 {
             let m = end.machine();
-            rec.sample(&m.far.buses.machine.tv, m.clk.time_ns(), wall_clock());
+            if let Some((_, rec)) = capture.as_mut() {
+                rec.sample(&m.far.buses.machine.tv, m.clk.time_ns(), wall_clock());
+            }
+            if let Some((_, rec)) = color_capture.as_mut()
+                && let Some(tv) = m.far.buses.machine.color_tv.as_ref()
+            {
+                rec.sample(tv, m.clk.time_ns(), wall_clock());
+            }
         }
         // Everything else goes by the wall clock, not by a microcycle
         // count. `chip` runs about 1,800 microcycles a second, so
@@ -3991,6 +4059,12 @@ fn time_chip(
         rec.sample(&m.far.buses.machine.tv, m.clk.time_ns(), wall_clock());
         write_capture(path, rec);
     }
+    if let Some((path, rec)) = color_capture.as_mut() {
+        if let Some(tv) = m.far.buses.machine.color_tv.as_ref() {
+            rec.sample(tv, m.clk.time_ns(), wall_clock());
+        }
+        write_color_capture(path, rec);
+    }
     // The checkpoint last, and at the first quiet microcycle from here:
     // the stop falls where it falls, and a machine part way through a bus
     // cycle is not a machine a checkpoint describes.  Those microcycles
@@ -4097,6 +4171,9 @@ fn main() {
     // The serial port's endpoint: nothing unless `--serial` names one.
     let mut serial_at: Option<SocketAddr> = None;
     let mut capture_tv: Option<PathBuf> = None;
+    // The colour screen's own recording, which takes the board and shares
+    // the one clocks flag with the main screen's.
+    let mut capture_color_tv: Option<PathBuf> = None;
     let mut capture_tv_time = true;
     // `--watch`: the range and the nets, resolved against the boards once
     // the machine is built.
@@ -4253,6 +4330,10 @@ fn main() {
                 _ => usage("--tv-board wants simple-tv or lispm-tv"),
             },
             (None, "--color-tv") => color_tv = true,
+            (None, "--color-tv-capture") => match args.next() {
+                Some(path) => capture_color_tv = Some(PathBuf::from(path)),
+                None => usage("--color-tv-capture wants a file for the GIF"),
+            },
             (None, "--color-terminal") => {
                 // The endpoint is optional: the next word is it unless it is a flag.
                 color_terminal = Some(args.next_if(|v| !v.starts_with('-')));
@@ -4533,17 +4614,30 @@ fn main() {
             }
         }
     }
-    if capture_tv.is_some() && (cable_listen.asked || cable_connect.is_some()) {
-        usage(
-            "--tv-capture records a machine on its own or the lashup in one process, not an end of the debug cable to another program or to the fabric",
-        );
+    // The colour screen's recording takes the board, as its terminal does.
+    if capture_color_tv.is_some() && !color_tv {
+        usage("--color-tv-capture records the color TV's screen: it needs --color-tv");
+    }
+    for (flag, given) in
+        [("--tv-capture", capture_tv.is_some()), ("--color-tv-capture", capture_color_tv.is_some())]
+    {
+        if given && (cable_listen.asked || cable_connect.is_some()) {
+            usage(&format!(
+                "{flag} records a machine on its own or the lashup in one process, not an end of the debug cable to another program or to the fabric",
+            ));
+        }
     }
     // The prompt's `startcapture` makes a recorder too, so the flag means
     // something on the engines that have one even with no --tv-capture.
-    if capture_tv.is_none() && !capture_tv_time && (which == Which::Chip || cabled == 1) {
+    if capture_tv.is_none()
+        && capture_color_tv.is_none()
+        && !capture_tv_time
+        && (which == Which::Chip || cabled == 1)
+    {
         usage("--tv-capture-no-time only means anything with --tv-capture");
     }
     let capture = capture_tv.map(|path| (path, capture_tv_time));
+    let color_capture = capture_color_tv.map(|path| (path, capture_tv_time));
     if !auto_boot {
         // A machine held with its connector listening is one machine on
         // its own, and a debugger may come to it standing: the two
@@ -4694,6 +4788,8 @@ fn main() {
         Some("--checkpoint writes a machine on its own".to_string())
     } else if capture.is_some() {
         Some("--tv-capture records a machine on its own".to_string())
+    } else if color_capture.is_some() {
+        Some("--color-tv-capture records a machine on its own".to_string())
     } else if which == Which::Chip && watch.is_some() {
         Some("--watch is the run's own loop".to_string())
     } else {
@@ -4967,6 +5063,9 @@ fn main() {
         if let Some((p, _)) = &capture {
             writeln!(s, "capture: {}{clocks}", p.display()).unwrap();
         }
+        if let Some((p, _)) = &color_capture {
+            writeln!(s, "color capture: {}{clocks}", p.display()).unwrap();
+        }
         if let Some(p) = &checkpoint {
             writeln!(s, "checkpoint: {} at the stop", p.display()).unwrap();
         }
@@ -5052,6 +5151,7 @@ fn main() {
             let run = Run {
                 stop,
                 capture,
+                color_capture,
                 checkpoint,
                 setup: &setup,
                 hold: !auto_boot,
@@ -5093,6 +5193,7 @@ fn main() {
                     debuggee_terminal.as_mut(),
                     color_screen.as_mut(),
                     capture,
+                    color_capture,
                 );
             } else if let Some(Connect::Endpoint(addr)) = cable_connect {
                 // The debuggee may still be starting: try for five seconds.
@@ -5118,6 +5219,7 @@ fn main() {
                 let run = Run {
                     stop,
                     capture: None,
+                    color_capture: None,
                     checkpoint: None,
                     setup: &setup,
                     hold: !auto_boot,
@@ -5154,6 +5256,7 @@ fn main() {
                 let run = Run {
                     stop,
                     capture,
+                    color_capture,
                     checkpoint,
                     setup: &setup,
                     hold: !auto_boot,
@@ -5199,6 +5302,7 @@ fn main() {
             let run = Run {
                 stop,
                 capture,
+                color_capture,
                 checkpoint,
                 setup: &setup,
                 hold: !auto_boot,

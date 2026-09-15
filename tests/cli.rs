@@ -1205,3 +1205,87 @@ fn the_color_terminal_serves_the_colour_screen() {
         "COLOR:MAKE-SCREEN's 576 by 454"
     );
 }
+
+/// **`--color-tv-capture` records the colour screen, and it needs the
+/// board.** Its own GIF, 576 by 454 with the clocks below it;
+/// `--tv-capture-no-time` is both recordings' and leaves this one 454
+/// high; and an end of the debug cable is refused it as it is refused
+/// `--tv-capture`, the two machines being two clocks.
+#[test]
+fn the_color_tv_capture_records_the_colour_screen() {
+    let dir = scratch("color-capture");
+    let gif = dir.join("colour.gif");
+    let path = gif.to_str().unwrap();
+    // The board is what there is to record: the refusal names both flags.
+    refused(&["--rtl", "--color-tv-capture", path, "--stop-after", "1"], "--color-tv-capture");
+    refused_saying(
+        &["--rtl", "--color-tv-capture", path, "--stop-after", "1"],
+        "it needs --color-tv",
+    );
+
+    let size = |out: &std::process::Output, gif: &Path| {
+        let t = text(out);
+        assert!(out.status.success(), "muir failed:\n{t}");
+        let bytes = std::fs::read(gif)
+            .unwrap_or_else(|e| panic!("the recording {}: {e}\n{t}", gif.display()));
+        assert!(bytes.starts_with(b"GIF89a"), "the recording is a GIF:\n{t}");
+        assert!(
+            t.contains(&format!("color capture: {}", gif.display())),
+            "the start says where it goes:\n{t}"
+        );
+        assert!(
+            t.contains(&format!("frames of the colour screen at {}", gif.display())),
+            "and the stop says what it wrote:\n{t}"
+        );
+        (
+            u16::from_le_bytes([bytes[6], bytes[7]]) as usize,
+            u16::from_le_bytes([bytes[8], bytes[9]]) as usize,
+        )
+    };
+
+    let out = muir()
+        .args(["--micro", "--color-tv", "--color-tv-capture", path])
+        .args(["--stop-after", "200"])
+        .run();
+    assert_eq!(
+        size(&out, &gif),
+        (muir::tv::COLOR_WIDTH, muir::tv::COLOR_HEIGHT + muir::capture::TIME_H),
+        "576 by 454 and the clock line below it"
+    );
+
+    // The one flag turns the clocks off, on this recording as on the main
+    // screen's: there is no second one for it.
+    let bare = dir.join("no-clocks.gif");
+    let out = muir()
+        .args(["--micro", "--color-tv", "--color-tv-capture", bare.to_str().unwrap()])
+        .args(["--tv-capture-no-time", "--stop-after", "200"])
+        .run();
+    assert_eq!(
+        size(&out, &bare),
+        (muir::tv::COLOR_WIDTH, muir::tv::COLOR_HEIGHT),
+        "the picture alone"
+    );
+
+    // A machine on its own, as `--tv-capture` is: over the cable the two
+    // machines are two clocks.
+    let t = text(
+        &muir_default()
+            .args(["--rtl", "--color-tv", "--color-tv-capture", path])
+            .args(["--stop-after", "1"])
+            .run(),
+    );
+    assert!(t.contains("debug cable: none --- --color-tv-capture"), "said:\n{t}");
+    refused(
+        &[
+            "--rtl",
+            "--color-tv",
+            "--color-tv-capture",
+            path,
+            "--debug-cable-listen",
+            "127.0.0.1:0",
+            "--stop-after",
+            "1",
+        ],
+        "--color-tv-capture",
+    );
+}
