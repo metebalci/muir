@@ -108,9 +108,9 @@ fn the_committed_source_defines_every_label() {
 ///
 /// A fast variant of this source exists --- the same file with its first jump
 /// changed to enter at `FUDGE-INITIAL-DISK-PARAMETERS` rather than `GO`, so
-/// that memory initialisation is skipped and a boot is quicker. That is a
+/// that memory initialization is skipped and a boot is quicker. That is a
 /// reasonable thing for an emulator to offer and the wrong thing to be
-/// running here, because the memory initialisation *is* the part being
+/// running here, because the memory initialization *is* the part being
 /// checked: it is where `chip` and `rtl` have been compared for half a
 /// million microcycles.
 ///
@@ -125,7 +125,7 @@ fn the_prom_source_is_the_original_not_the_fast_variant() {
     assert!(original.contains("(IF PROM (JUMP GO))"), "the original enters at GO");
     assert!(
         !original.contains("(IF PROM (JUMP FUDGE-INITIAL-DISK-PARAMETERS))"),
-        "mit/sys/ucadr/promh.text is the fast variant, which skips memory initialisation"
+        "mit/sys/ucadr/promh.text is the fast variant, which skips memory initialization"
     );
 }
 

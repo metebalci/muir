@@ -8,14 +8,14 @@
 //! - **Consistency.** The gates and the pinout in `src/part.rs` must agree,
 //!   and between them they must account for every pin the netlist connects.
 //!   That is what catches a mux whose select was left out of its `ins`.
-//! - **Behaviour.** The 74S181 array is checked against [`muir::ttl::alu`],
+//! - **Behavior.** The 74S181 array is checked against [`muir::ttl::alu`],
 //!   which is written from the datasheet function table rather than from the
 //!   gate model, so the two are genuinely independent.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use muir::netlist::{self, Netlist};
-use muir::part::{self, Behaviour, Level, Pins, State};
+use muir::part::{self, Behavior, Level, Pins, State};
 use muir::ttl;
 
 const NETLIST: &str = include_str!("../data/CADR.netlist");
@@ -45,13 +45,13 @@ fn drive(vals: &[(u8, bool)]) -> Pins {
     p
 }
 
-fn out(b: &Behaviour, pin: u8, p: &Pins, s: &State) -> Level {
+fn out(b: &Behavior, pin: u8, p: &Pins, s: &State) -> Level {
     let gate = b.gates.iter().find(|g| g.out == pin).expect("no such output pin");
     gate.eval(p, s)
 }
 
-fn behaviour(kind: &str) -> Behaviour {
-    part::behaviour(kind).unwrap_or_else(|| panic!("{kind} has no behaviour"))
+fn behavior(kind: &str) -> Behavior {
+    part::behavior(kind).unwrap_or_else(|| panic!("{kind} has no behavior"))
 }
 
 // ---------------------------------------------------------------------------
@@ -61,14 +61,14 @@ fn behaviour(kind: &str) -> Behaviour {
 /// Every type the netlist uses must compute something --- except the delay
 /// lines, which are analog and belong to `src/clock.rs`.
 #[test]
-fn every_part_type_has_a_behaviour() {
+fn every_part_type_has_a_behavior() {
     let n = load();
     const DELAY: &[&str] = &["TD25", "TD50", "TD100", "TD250"];
     let missing: Vec<String> = kinds(&n)
         .into_iter()
-        .filter(|k| part::behaviour(k).is_none() && !DELAY.contains(&part::strip(k).0))
+        .filter(|k| part::behavior(k).is_none() && !DELAY.contains(&part::strip(k).0))
         .collect();
-    assert!(missing.is_empty(), "no behaviour for {missing:?}");
+    assert!(missing.is_empty(), "no behavior for {missing:?}");
 }
 
 /// The gates and the pinout are two statements about the same thing.
@@ -76,8 +76,8 @@ fn every_part_type_has_a_behaviour() {
 fn gates_drive_exactly_the_pinout_outputs() {
     let n = load();
     for kind in kinds(&n) {
-        let Some(b) = part::behaviour(&kind) else { continue };
-        let Some(po) = part::pinout(&kind) else { panic!("{kind} has a behaviour but no pinout") };
+        let Some(b) = part::behavior(&kind) else { continue };
+        let Some(po) = part::pinout(&kind) else { panic!("{kind} has a behavior but no pinout") };
         let gated: BTreeSet<u8> = b.gates.iter().map(|g| g.out).collect();
         let claimed: BTreeSet<u8> = po.outputs.iter().copied().collect();
         assert_eq!(gated, claimed, "{kind}: gates drive {gated:?}, pinout says {claimed:?}");
@@ -91,7 +91,7 @@ fn gates_drive_exactly_the_pinout_outputs() {
 fn no_gate_reads_its_own_packages_output() {
     let n = load();
     for kind in kinds(&n) {
-        let Some(b) = part::behaviour(&kind) else { continue };
+        let Some(b) = part::behavior(&kind) else { continue };
         let driven: BTreeSet<u8> = b.gates.iter().map(|g| g.out).collect();
         for gate in b.gates {
             for pin in gate.ins {
@@ -121,7 +121,7 @@ fn every_connected_pin_has_a_role() {
         if NO_LOGIC.contains(&part::strip(&pkg.kind).0) {
             continue;
         }
-        let Some(b) = part::behaviour(&pkg.kind) else { continue };
+        let Some(b) = part::behavior(&pkg.kind) else { continue };
         let po = part::pinout(&pkg.kind).unwrap();
         let mut known: BTreeSet<u8> = b.gates.iter().map(|g| g.out).collect();
         known.extend(b.gates.iter().flat_map(|g| g.ins.iter().copied()));
@@ -148,7 +148,7 @@ fn every_connected_pin_has_a_role() {
 /// depends on it, and nothing else does.
 #[test]
 fn unknown_propagates_only_through_what_is_read() {
-    let b = behaviour("74S00");
+    let b = behavior("74S00");
     let mut p = drive(&[(1, true), (2, true), (4, true), (5, true)]);
     assert_eq!(out(&b, 3, &p, &State::default()), Level::Low);
     p[1] = Level::X;
@@ -169,7 +169,7 @@ fn unknown_propagates_only_through_what_is_read() {
 /// took any unknown input as absorbing, the sequencer never clocked.
 #[test]
 fn an_unknown_on_a_gated_off_leg_is_not_an_unknown_output() {
-    let b = behaviour("74S51");
+    let b = behavior("74S51");
     // 2 = enable, 3 = -2USEC.CLK^, 4 = -BIT.CLK^, 5 = the bit clock's enable.
     let mut p = drive(&[(2, true), (3, false), (4, true), (5, false)]);
     assert_eq!(out(&b, 6, &p, &State::default()), Level::High);
@@ -183,7 +183,7 @@ fn an_unknown_on_a_gated_off_leg_is_not_an_unknown_output() {
     assert_eq!(out(&b, 6, &p, &State::default()), Level::X, "now it depends on the unknown");
     // Past the limit, a gate does not try: seventeen unknowns on a
     // 74S181 F output is a bus nothing has settled.
-    let alu = behaviour("74S181");
+    let alu = behavior("74S181");
     let all = [Level::X; muir::part::MAX_PINS];
     assert_eq!(out(&alu, 9, &all, &State::default()), Level::X);
 }
@@ -191,7 +191,7 @@ fn an_unknown_on_a_gated_off_leg_is_not_an_unknown_output() {
 /// An undriven TTL input floats high.
 #[test]
 fn undriven_inputs_read_high() {
-    let b = behaviour("74S00");
+    let b = behavior("74S00");
     assert_eq!(out(&b, 3, &pins(), &State::default()), Level::Low);
 }
 
@@ -233,7 +233,7 @@ fn gate_truth_tables() {
         }),
     ];
     for &(kind, pin, ins, want) in cases {
-        let b = behaviour(kind);
+        let b = behavior(kind);
         for n in 0..1u32 << ins.len() {
             let vals: Vec<bool> = (0..ins.len()).map(|k| n >> k & 1 != 0).collect();
             let p = drive(&ins.iter().copied().zip(vals.iter().copied()).collect::<Vec<_>>());
@@ -249,7 +249,7 @@ fn gate_truth_tables() {
 /// Six-bit identity comparator, enabled by pin 7.
 #[test]
 fn comparator_93s46() {
-    let b = behaviour("93S46");
+    let b = behavior("93S46");
     let s = State::default();
     let a = [1u8, 3, 5, 10, 12, 14];
     let bp = [2u8, 4, 6, 11, 13, 15];
@@ -273,7 +273,7 @@ fn comparator_93s46() {
 #[test]
 fn decoders_select_one_line() {
     let s = State::default();
-    let b = behaviour("74S138");
+    let b = behavior("74S138");
     let outs = [15u8, 14, 13, 12, 11, 10, 9, 7];
     for sel in 0..8u8 {
         for g1 in [false, true] {
@@ -294,7 +294,7 @@ fn decoders_select_one_line() {
             }
         }
     }
-    let b = behaviour("74S139");
+    let b = behavior("74S139");
     for sel in 0..4u8 {
         for enabled in [false, true] {
             let p = drive(&[(1, !enabled), (2, sel & 1 != 0), (3, sel & 2 != 0)]);
@@ -310,7 +310,7 @@ fn decoders_select_one_line() {
 #[test]
 fn multiplexers_pick_the_right_input() {
     let s = State::default();
-    let b = behaviour("74S151");
+    let b = behavior("74S151");
     let data = [4u8, 3, 2, 1, 15, 14, 13, 12];
     for sel in 0..8u8 {
         for word in 0..256u32 {
@@ -332,8 +332,8 @@ fn multiplexers_pick_the_right_input() {
 
     // The '157 is totem pole and forces low; the '258 inverts and goes high
     // impedance.
-    let b157 = behaviour("74S157");
-    let b258 = behaviour("74S258");
+    let b157 = behavior("74S157");
+    let b258 = behavior("74S258");
     for sel in [false, true] {
         for a in [false, true] {
             for bb in [false, true] {
@@ -352,7 +352,7 @@ fn multiplexers_pick_the_right_input() {
 /// The four-bit adder, exhaustively.
 #[test]
 fn adder_74s283() {
-    let b = behaviour("74S283");
+    let b = behavior("74S283");
     let s = State::default();
     let ap = [5u8, 3, 14, 12];
     let bp = [6u8, 2, 15, 11];
@@ -379,7 +379,7 @@ fn adder_74s283() {
 /// The four-bit shifter, exhaustively over its ten inputs and both enables.
 #[test]
 fn shifter_25s10() {
-    let b = behaviour("25S10");
+    let b = behavior("25S10");
     let s = State::default();
     // Pins 1 to 7 carry i-3 through i3.
     for word in 0..128u32 {
@@ -408,7 +408,7 @@ fn buffers_enable_the_right_half() {
     for (kind, invert, b_active_high) in
         [("74S240", true, false), ("74S241", false, true), ("74LS244", false, false)]
     {
-        let b = behaviour(kind);
+        let b = behavior(kind);
         for data in [false, true] {
             // A half: input 2, output 18, enable 1 active low.
             let p = drive(&[(1, false), (19, !b_active_high), (2, data), (17, data)]);
@@ -428,7 +428,7 @@ fn buffers_enable_the_right_half() {
 
 /// One 74S181 slice, wired the way the board does.
 fn slice(a: u8, b: u8, sel: u8, logic: bool, cnb: bool) -> (u8, bool, bool, bool, bool) {
-    let bh = behaviour("74S181");
+    let bh = behavior("74S181");
     let s = State::default();
     let mut vals = Vec::new();
     for (k, &pin) in [2u8, 23, 21, 19].iter().enumerate() {
@@ -529,7 +529,7 @@ fn alu_array_agrees_with_the_function_table() {
 /// combination of the P and G a group of four slices can present.
 #[test]
 fn lookahead_agrees_with_ripple() {
-    let bh = behaviour("74S182");
+    let bh = behavior("74S182");
     let s = State::default();
     for a in 0..16u32 {
         for b in 0..16u32 {
@@ -577,13 +577,13 @@ fn lookahead_agrees_with_ripple() {
 // ---------------------------------------------------------------------------
 
 /// Runs an update: `now` becomes the pins, `prev` what they were.
-fn step(b: &Behaviour, st: &mut State, prev: &Pins, now: &Pins) {
+fn step(b: &Behavior, st: &mut State, prev: &Pins, now: &Pins) {
     (b.update.unwrap())(now, prev, st);
 }
 
 #[test]
 fn register_74s374_latches_on_the_rising_edge() {
-    let b = behaviour("74S374");
+    let b = behavior("74S374");
     let mut st = State::default();
     let d = [3u8, 4, 7, 8, 13, 14, 17, 18];
     let q = [2u8, 5, 6, 9, 12, 15, 16, 19];
@@ -612,7 +612,7 @@ fn register_74s374_latches_on_the_rising_edge() {
 
 #[test]
 fn latch_74s373_is_transparent_while_pin_11_is_high() {
-    let b = behaviour("74S373");
+    let b = behavior("74S373");
     let mut st = State::default();
     let open = drive(&[(1, false), (11, true), (3, true), (4, true)]);
     step(&b, &mut st, &open, &open);
@@ -624,7 +624,7 @@ fn latch_74s373_is_transparent_while_pin_11_is_high() {
 
 #[test]
 fn flip_flop_74s74_clears_and_presets() {
-    let b = behaviour("74S74");
+    let b = behavior("74S74");
     let mut st = State::default();
     let idle = drive(&[(1, true), (4, true), (3, false), (2, true)]);
     let clk = drive(&[(1, true), (4, true), (3, true), (2, true)]);
@@ -663,7 +663,7 @@ fn flip_flop_74s74_clears_and_presets() {
 /// next request.
 #[test]
 fn flip_flop_74ls112_has_a_true_k_and_holds_with_both_low() {
-    let b = behaviour("74LS112-1");
+    let b = behavior("74LS112-1");
     let mut st = State::default();
     // Flop 2: CLK 13, K 12, J 11, -PRE 10, Q 9, -Q 7, -CLR 14.
     let at =
@@ -695,7 +695,7 @@ fn flip_flop_74ls112_has_a_true_k_and_holds_with_both_low() {
 
 #[test]
 fn counter_74s169_counts_both_ways_and_carries() {
-    let b = behaviour("74S169");
+    let b = behavior("74S169");
     let mut st = State::default();
     // Load 14, then count up: 15 raises the carry, then it wraps to 0.
     let load = |clk: bool| {
@@ -728,7 +728,7 @@ fn counter_74s169_counts_both_ways_and_carries() {
 
 #[test]
 fn shift_register_74s194_shifts_the_datasheet_way() {
-    let b = behaviour("74S194");
+    let b = behavior("74S194");
     let mut st = State::default();
     // Load 0b0001 --- QA set, QB to QD clear.
     let load = |clk: bool| {
@@ -792,7 +792,7 @@ fn the_194_serial_input_comes_from_the_slice_below() {
 /// clock as an inhibit and the common one on pin 9 as the clock.
 #[test]
 fn shift_register_9328_uses_the_common_clock() {
-    let b = behaviour("9328");
+    let b = behavior("9328");
     let mut st = State::default();
     // Inhibit low, common clock rising: the A register shifts a one in.
     let a = |common: bool| drive(&[(1, true), (7, false), (9, common), (4, false), (6, true)]);
@@ -839,7 +839,7 @@ fn every_9328_has_a_signal_on_its_common_clock() {
 
 #[test]
 fn ram_2147_reads_back_what_was_written() {
-    let b = behaviour("2147");
+    let b = behavior("2147");
     let mut st = State { bits: 0, cells: vec![0; 4096] };
     let addr = [1u8, 2, 3, 4, 5, 6, 17, 16, 15, 14, 13, 12];
     let at = |a: u32, ce: bool, we: bool, di: bool| {
@@ -863,7 +863,7 @@ fn ram_2147_reads_back_what_was_written() {
 
 #[test]
 fn ram_82s21_is_two_bits_wide_and_open_collector() {
-    let b = behaviour("82S21");
+    let b = behavior("82S21");
     let mut st = State { bits: 0, cells: vec![0; 32] };
     let addr = [13u8, 12, 11, 10, 4];
     let at = |a: u32, write: bool, d0: bool, d1: bool| {
@@ -889,7 +889,7 @@ fn ram_82s21_is_two_bits_wide_and_open_collector() {
 
 #[test]
 fn prom_74s472_reads_its_contents() {
-    let b = behaviour("74S472");
+    let b = behavior("74S472");
     let mut cells = vec![0u8; 512];
     cells[0x1ff] = 0x81;
     let st = State { bits: 0, cells };
@@ -912,15 +912,15 @@ fn prom_74s472_reads_its_contents() {
 
 /// A count, so the README can quote one that is checked.
 #[test]
-fn how_much_is_modelled() {
+fn how_much_is_modeled() {
     let n = load();
     let all = kinds(&n);
-    let with = all.iter().filter(|k| part::behaviour(k).is_some()).count();
+    let with = all.iter().filter(|k| part::behavior(k).is_some()).count();
     let logic =
-        all.iter().filter(|k| part::behaviour(k).is_some_and(|b| !b.gates.is_empty())).count();
-    let gates: usize = all.iter().filter_map(|k| part::behaviour(k)).map(|b| b.gates.len()).sum();
+        all.iter().filter(|k| part::behavior(k).is_some_and(|b| !b.gates.is_empty())).count();
+    let gates: usize = all.iter().filter_map(|k| part::behavior(k)).map(|b| b.gates.len()).sum();
     eprintln!(
-        "{} part types, {with} with a behaviour, {logic} of them logic, {gates} gates",
+        "{} part types, {with} with a behavior, {logic} of them logic, {gates} gates",
         all.len()
     );
     assert_eq!(all.len(), 71);
@@ -1068,7 +1068,7 @@ fn open_collector_nets_have_pull_ups_or_a_single_driver() {
 /// 2B 11, 2A 12.
 #[test]
 fn line_receiver_75107() {
-    let b = behaviour("75107");
+    let b = behavior("75107");
     let s = State::default();
     let y = |a: bool, bb: bool, g: bool, st: bool| {
         out(&b, 4, &drive(&[(1, a), (2, bb), (5, g), (6, st)]), &s)
@@ -1081,7 +1081,7 @@ fn line_receiver_75107() {
     assert_eq!(y(false, true, true, true), Level::Low, "A<B, strobed");
     assert_eq!(y(false, true, false, true), Level::High, "A<B, G down");
     assert_eq!(y(false, true, true, false), Level::High, "A<B, S down");
-    // The sheet's indeterminate row, and its two strobed-off neighbours.
+    // The sheet's indeterminate row, and its two strobed-off neighbors.
     assert_eq!(y(true, true, true, true), Level::X, "no difference to read");
     assert_eq!(y(false, false, true, true), Level::X, "no difference to read");
     assert_eq!(y(true, true, false, true), Level::High, "G down");
@@ -1106,7 +1106,7 @@ fn line_receiver_75107() {
 /// 2Z 9, D 10, 1Z 12, 1Y 13.
 #[test]
 fn line_driver_75110() {
-    let b = behaviour("75110");
+    let b = behavior("75110");
     let s = State::default();
     // Channel 2, the one the disk controller uses: A 5, B 6, C 4, D 10.
     let yz = |a: bool, bb: bool, c: bool, d: bool| {
@@ -1145,7 +1145,7 @@ fn line_driver_75110() {
 /// driver's logic level either way.
 #[test]
 fn the_trident_data_pair_is_a_loop() {
-    let (drv, rcv) = (behaviour("75110"), behaviour("75107"));
+    let (drv, rcv) = (behavior("75110"), behavior("75107"));
     let s = State::default();
     for bit in [false, true] {
         // WRITE DATA B on 2B, the other logic input strapped high, write
@@ -1168,7 +1168,7 @@ fn the_trident_data_pair_is_a_loop() {
 /// Without this the four bus-cable status lines reach no receiver at all.
 #[test]
 fn trident_terminator_passes_across_the_package() {
-    let b = behaviour("TRITERM");
+    let b = behavior("TRITERM");
     let s = State::default();
     for (signal, receiver) in [(1u8, 16u8), (3, 14), (5, 12), (7, 10)] {
         for level in [false, true] {
@@ -1205,7 +1205,7 @@ fn trident_terminator_passes_across_the_package() {
 /// by different routes and agree pin for pin.
 #[test]
 fn line_receiver_26ls33() {
-    let b = behaviour("26LS33");
+    let b = behavior("26LS33");
     let s = State::default();
     // Both enables on, as LMLNDR A01 ties them: `G` 4 high, `-G` 12 low.
     let y = |o: u8, a: u8, bb: u8, above: bool| {
@@ -1251,7 +1251,7 @@ fn line_receiver_26ls33() {
 /// strobe grounded. `TTL.D.IN` is the line level, active high.
 #[test]
 fn the_chaosnet_data_pair_is_a_loop() {
-    let (drv, rcv, sel) = (behaviour("26LS31"), behaviour("26LS33"), behaviour("74S158"));
+    let (drv, rcv, sel) = (behavior("26LS31"), behavior("26LS33"), behavior("74S158"));
     let s = State::default();
     for bit in [false, true] {
         // `-TTL.D.OUT` on `1A` 1; `G` 4 is grounded and `-G` 12 is
@@ -1286,7 +1286,7 @@ fn the_chaosnet_data_pair_is_a_loop() {
 /// checked here.
 #[test]
 fn an_idle_chaosnet_reads_as_quiet() {
-    let b = behaviour("26LS33");
+    let b = behavior("26LS33");
     let s = State::default();
     let held = |name: &str| {
         muir::unibus::IDLE_CHAOSNET
@@ -1325,7 +1325,7 @@ fn an_idle_chaosnet_reads_as_quiet() {
 /// transfer crosses one.
 #[test]
 fn fifo_67401_is_first_in_first_out() {
-    let b = behaviour("67401");
+    let b = behavior("67401");
     let mut st = State { cells: vec![0; 64], ..State::default() };
     let (si, so, mr) = (3u8, 15u8, 9u8);
     let d = [4u8, 5, 6, 7];
@@ -1406,7 +1406,7 @@ fn fifo_67401_is_first_in_first_out() {
 /// `FUNC/INCREMENT ADDRESS`.
 #[test]
 fn the_2536_is_its_function_table() {
-    let b = behaviour("25LS2536");
+    let b = behavior("25LS2536");
     let outs = [9u8, 11, 12, 13, 14, 15, 16, 17];
     let ys =
         |p: &Pins, s: &State| -> Vec<Level> { outs.iter().map(|&y| out(&b, y, p, s)).collect() };
@@ -1500,7 +1500,7 @@ fn the_2536_is_its_function_table() {
 /// bits on the wire a bit at a time.
 #[test]
 fn the_74165_is_its_datasheet() {
-    let b = behaviour("74165");
+    let b = behavior("74165");
     let mut st = State::default();
     // Pins: 1 SH/-LD, 2 CLK, 3..6 E..H, 10 SER, 11..14 A..D, 15 CLK INH.
     let at = |load: bool, clk: bool, ser: bool, inh: bool, data: u8| -> Pins {
@@ -1563,7 +1563,7 @@ fn the_74165_is_its_datasheet() {
 /// `ER` low. A single flipped bit must not.
 #[test]
 fn the_9401_check_word_divides_out() {
-    let b = behaviour("9401");
+    let b = behavior("9401");
     // Pins: 1 CP, 2 -P, 3 S0, 4 MR, 5 S1, 8 S2, 10 CWE, 11 D.
     let at = |clk: bool, d: bool, cwe: bool, mr: bool| {
         drive(&[
@@ -1652,7 +1652,7 @@ fn the_9401_check_word_divides_out() {
 }
 
 /// The remainder CRC-16 leaves on a message, for the comparison above.
-fn enc_remainder(b: &Behaviour, message: &[bool]) -> u16 {
+fn enc_remainder(b: &Behavior, message: &[bool]) -> u16 {
     let at = |clk: bool, d: bool| {
         drive(&[
             (1, clk),
@@ -1683,7 +1683,7 @@ fn enc_remainder(b: &Behaviour, message: &[bool]) -> u16 {
 /// its two independent ports has it, and the count stays.
 #[test]
 fn fifo_67401_takes_a_word_in_and_out_in_one_step() {
-    let b = behaviour("67401");
+    let b = behavior("67401");
     let mut st = State { cells: vec![0; 64], ..State::default() };
     let (si, so, mr) = (3u8, 15u8, 9u8);
     let d = [4u8, 5, 6, 7];
@@ -1743,7 +1743,7 @@ fn fifo_67401_takes_a_word_in_and_out_in_one_step() {
 /// and `RxD` in a break.
 #[test]
 fn receiver_mc1489_reads_an_open_input_as_low() {
-    let b = behaviour("MC1489");
+    let b = behavior("MC1489");
     assert_eq!(out(&b, 3, &pins(), &State::default()), Level::High);
     assert_eq!(out(&b, 3, &drive(&[(1, true)]), &State::default()), Level::Low);
     assert_eq!(out(&b, 3, &drive(&[(1, false)]), &State::default()), Level::High);
@@ -1773,7 +1773,7 @@ fn pci_pins(ce: bool, write: bool, a: u8, d: u8, brclk: bool) -> Pins {
 
 /// One bus access to register `a`: `-CE` down with the data, and up
 /// again, which is where the chip takes it.
-fn pci_access(b: &Behaviour, st: &mut State, write: bool, a: u8, d: u8) {
+fn pci_access(b: &Behavior, st: &mut State, write: bool, a: u8, d: u8) {
     let idle = pci_pins(true, write, a, d, false);
     let active = pci_pins(false, write, a, d, false);
     step(b, st, &idle, &active);
@@ -1787,7 +1787,7 @@ fn pci_access(b: &Behaviour, st: &mut State, write: bool, a: u8, d: u8) {
 /// ready.
 #[test]
 fn pci_2651_registers_by_the_sheets_table_4() {
-    let b = behaviour("2651");
+    let b = behavior("2651");
     let mut st = State::default();
     // Reset, as a level.
     let mut reset = pci_pins(true, false, 0, 0, false);

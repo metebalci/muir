@@ -6,7 +6,7 @@
 //! `src/rtl.rs` runs on the machine's own clock: one edge per microcycle,
 //! and a level either side of it. That is a claim about the board, so it is
 //! made here twice over --- read off `data/CADR.netlist` through
-//! `muir::part::behaviour`, whose `update_ins` names the pins a stateful part
+//! `muir::part::behavior`, whose `update_ins` names the pins a stateful part
 //! latches on, and then measured on `chip` while it runs.
 //!
 //! The board has two phases and one register clock edge a microcycle, and a
@@ -14,7 +14,7 @@
 //! the tests that say what the board does.
 
 use muir::chip::Chip;
-use muir::clock::{Behavioural, Clock};
+use muir::clock::{Behavioral, Clock};
 use muir::netlist::{self, NetId, Netlist};
 use muir::part::{self, Level};
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,7 +57,7 @@ fn stateful(n: &Netlist) -> Vec<Clocked> {
     let clocks = clock_nets(n);
     let mut out = Vec::new();
     for pkg in n.packages() {
-        let Some(b) = part::behaviour(&pkg.kind) else { continue };
+        let Some(b) = part::behavior(&pkg.kind) else { continue };
         if b.update.is_none() {
             continue;
         }
@@ -142,7 +142,7 @@ fn the_datapath_has_one_clock_edge_per_microcycle() {
     c.power_on();
     c.load_prom(&n, &image);
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let boot = n.by_name_id("-BOOT1").unwrap();
     c.set_net(boot, Level::Low);
     c.settle();
@@ -225,7 +225,7 @@ fn how_far_behind_the_pc_opc_runs() {
     c.power_on();
     c.load_prom(&n, &image);
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let boot = n.by_name_id("-BOOT1").unwrap();
     c.set_net(boot, Level::Low);
     c.settle();

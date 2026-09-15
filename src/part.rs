@@ -125,7 +125,7 @@ pub fn strip(kind: &str) -> (&str, bool) {
 /// a 74LS00, `OLS14L` for a 74LS14, `37L` for a 74S37, `279A` for a
 /// 74279, `DM8136` for the 8136. The logic families differ only in
 /// speed, which the model has none of, so each is the part the table
-/// already has, spelt as the table has it, before [`strip`] reads the
+/// already has, spelled as the table has it, before [`strip`] reads the
 /// open-collector `O` off the end.
 fn canonical(kind: &str) -> &str {
     match kind {
@@ -193,7 +193,7 @@ fn canonical(kind: &str) -> &str {
         // The display board draws one 74LS244 as two bodies on two pages,
         // `-A` and `-B`, one buffer each: NXBCTL 0F11 has the mode
         // register's read buffer on pins 1-2/4/6/8 and 12/14/16/18, NRACOL
-        // 0F11 the colour buffer on 11/13/15/17/19 and 3/5/7/9. The pins
+        // 0F11 the color buffer on 11/13/15/17/19 and 3/5/7/9. The pins
         // are the package's, so both are the whole part.
         "74LS244-A" | "74LS244-B" => "74LS244",
         // The display board's MECL bodies carry `I` and `AI` suffixes ---
@@ -290,14 +290,14 @@ fn table(base: &str) -> Option<Pinout> {
         // on 9 is `BOARD SELECT`, pulled up on RES20.
         "8136" => p(16, &[9], OpenCollector, Family),
         // Am25LS2539 (`am25ls2539.pdf`), dual one-of-four decoder with
-        // three-state outputs; the pins and the function are in `behaviour`
+        // three-state outputs; the pins and the function are in `behavior`
         // below. `memras` 0F13 uses decoder 2 to steer `RAS` to a bank: the
         // bank number `XBAI14`, `XBAI15` on `A` 17 and `B` 18, `REFRESH
         // CYC` on `POL` 4 and `E` 16, `-OE` 5 grounded, and the four bank
         // enables out on 3, 2, 1 and 19 into the 74S37 drivers.
         "25LS2539" => p(20, &[1, 2, 3, 19, 8, 9, 11, 12], TriState, Family),
         // Am25LS2538, one-of-eight decoder with three-state outputs and
-        // polarity control; the pins and the function are in `behaviour`
+        // polarity control; the pins and the function are in `behavior`
         // below. **The outputs are not contiguous**: `Y0` to `Y7` are on
         // 3, 2, 1, 19, 18, 8, 9 and 11, which is the thing about this part
         // nobody would guess.
@@ -342,7 +342,7 @@ fn table(base: &str) -> Option<Pinout> {
         // says so of each, and note 7 of the electrical characteristics
         // again --- which is what lets ECO 10 of `cadrio/iob.eco` put
         // -TxRDY on -RxRDY's net, the pull-up at CLK60H 0C20 holding it
-        // up; see `behaviour`.
+        // up; see `behavior`.
         "2651" => p_oc(
             28,
             &[27, 28, 1, 2, 5, 6, 7, 8, 19, 15, 14, 18, 24, 23],
@@ -948,7 +948,7 @@ impl Level {
     /// What a TTL input makes of this level; `None` is unknown.
     ///
     /// An undriven input floats high. That is the TTL input's own
-    /// behaviour --- an open input draws no emitter current, and the gate
+    /// behavior --- an open input draws no emitter current, and the gate
     /// sees a one --- and it is what TI's *TTL Data Book* says of unused
     /// inputs when it has them tied high rather than left to float.
     pub const fn read(self) -> Option<bool> {
@@ -1023,7 +1023,7 @@ pub type Pins = [Level; MAX_PINS];
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct State {
     /// What a flip-flop, register, latch or counter holds.  Each type's
-    /// entry in [`behaviour`] says which bit is which; bit 0 is its first
+    /// entry in [`behavior`] says which bit is which; bit 0 is its first
     /// output.
     pub bits: u16,
     /// A memory array, one entry per address: RAM contents, or PROM contents
@@ -1230,7 +1230,7 @@ pub fn resolve(drivers: &[Driver]) -> Level {
 
 /// What a part type computes and how it remembers.
 #[derive(Clone, Copy)]
-pub struct Behaviour {
+pub struct Behavior {
     /// One entry per output pin.
     pub gates: &'static [Gate],
     /// `None` for a part that holds nothing.
@@ -1245,13 +1245,13 @@ pub struct Behaviour {
 /// A part with no state.  The gate lists at the call sites are inline
 /// `const` blocks, which is what gives them a `'static` lifetime; written as
 /// plain array literals they would be temporaries.
-const fn comb(gates: &'static [Gate]) -> Behaviour {
-    Behaviour { gates, update: None, update_ins: &[] }
+const fn comb(gates: &'static [Gate]) -> Behavior {
+    Behavior { gates, update: None, update_ins: &[] }
 }
 
 /// A part that remembers something.
-const fn seq(gates: &'static [Gate], update_ins: &'static [u8], update: Update) -> Behaviour {
-    Behaviour { gates, update: Some(update), update_ins }
+const fn seq(gates: &'static [Gate], update_ins: &'static [u8], update: Update) -> Behavior {
+    Behavior { gates, update: Some(update), update_ins }
 }
 
 const fn g(out: u8, ins: &'static [u8], f: GateFn) -> Gate {
@@ -1732,7 +1732,7 @@ fn pci_update(now: &Pins, prev: &Pins, st: &mut State) {
     let rx_on = pci_rx_on(st);
     if !(tx_on || rx_on || bit(st.bits, PCI_TX_ACTIVE)) {
         // The generator held, at zero: it counts from the write that
-        // turns either half on, as the behavioural port counts from it.
+        // turns either half on, as the behavioral port counts from it.
         // A character the disable found in the shift register keeps it
         // counting until the character is out.
         pci_put_u16(st, PCI_DIV, 0);
@@ -2284,7 +2284,7 @@ const RAM16X4_IN: &[u8] = &[2, 3, 13, 14, 15, 1];
 /// boards clears them, so a model has to choose: the engine zeroes them,
 /// and `src/chip.rs` says what a zero means in each array.
 ///
-/// Looked up as [`pinout`] and [`behaviour`] look a kind up, alias first:
+/// Looked up as [`pinout`] and [`behavior`] look a kind up, alias first:
 /// a 2118 is a 4116 and has its cells. Going by [`strip`] alone resolves the
 /// suffix but not the alias, which gives the LISPM TV's frame buffer 64 DRAMs
 /// with the 4116's pins and cycle and no cells --- every write dropped, every
@@ -2326,7 +2326,7 @@ pub fn memory_words(kind: &str) -> Option<usize> {
 /// each is named where it is used. `tests/behaviour.rs` holds the pinout and
 /// the gates to each other: between them they must account for every pin the
 /// netlist connects.
-pub fn behaviour(kind: &str) -> Option<Behaviour> {
+pub fn behavior(kind: &str) -> Option<Behavior> {
     let (base, _) = strip(canonical(kind));
     Some(match base {
         // --- gates ---------------------------------------------------------
@@ -2856,7 +2856,7 @@ pub fn behaviour(kind: &str) -> Option<Behaviour> {
         // holds how many are in it and the nibble the output stage keeps
         // after the last word leaves --- the real part maintains it, and
         // OUTPUT READY low is what says not to read it. The one thing not
-        // modelled is `tPT`, the fall-through time: here a word is at the
+        // modeled is `tPT`, the fall-through time: here a word is at the
         // output as soon as it is shifted in, where the part takes it
         // through 64 stages.
         "67401" => seq(
@@ -3528,7 +3528,7 @@ pub fn behaviour(kind: &str) -> Option<Behaviour> {
         // While pin 11 is high the latch is *transparent*, and a transparent
         // latch is not a latch --- it is a wire. So the data pin is one of
         // the gate's inputs and the stored bit only decides the output once
-        // pin 11 goes low. Modelling the data path through the state instead
+        // pin 11 goes low. Modeling the data path through the state instead
         // makes it a tick late, which on the A and M buses is the difference
         // between the machine working and not.
         "74S373" => seq(
@@ -4344,7 +4344,7 @@ pub fn behaviour(kind: &str) -> Option<Behaviour> {
         // nothing on J9, `EIA DATA IN`, `DSR`, `CTS` and `DCD` all stand at
         // `Z` and all four `TTL ... IN` at `High`.
         // `tests/serial_cable.rs` reads the status register on this board
-        // and on the behavioural port and requires the same word, unplugged
+        // and on the behavioral port and requires the same word, unplugged
         // and plugged, so the two cannot part here; and swapping these four
         // to `g` fails `tests/cadrio_netlist.rs`.
         "MC1489" => comb(
@@ -4362,7 +4362,7 @@ pub fn behaviour(kind: &str) -> Option<Behaviour> {
         // internal baud-rate generator: the registers of Tables 4 to 8,
         // and a transmitter and receiver a bit at a time on the 16X clock
         // the generator divides `BRCLK` down to. The tables and the frame
-        // are `src/serial.rs`'s, shared with the behavioural port. What
+        // are `src/serial.rs`'s, shared with the behavioral port. What
         // is held where is [`PCI_CELLS`]; [`pci_update`] is the chip.
         //
         // The bus side is level and edge as the sheet's READ AND WRITE
@@ -4386,7 +4386,7 @@ pub fn behaviour(kind: &str) -> Option<Behaviour> {
         // nothing off the chip --- `-TxC` and `-RxC` are not connected on
         // this board --- so its phase while idle cannot be seen, and
         // holding it lets a board with an idle port sleep between bus
-        // cycles as it did before the chip was modelled.
+        // cycles as it did before the chip was modeled.
         "2651" => seq(
             const {
                 &[

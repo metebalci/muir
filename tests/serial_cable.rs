@@ -3,7 +3,7 @@
 
 //! The serial port on the netlist I/O board: the 2651 of `src/part.rs`
 //! at IOBSER 0A12, programmed over the Unibus and driven a bit at a time
-//! over the EIA wires by the far end of `src/serial.rs`. The behavioural
+//! over the EIA wires by the far end of `src/serial.rs`. The behavioral
 //! port of `src/ioboard.rs` is run alongside and has to say the same:
 //! every register read is compared, and the frame times are held to a
 //! bit of each other.
@@ -87,7 +87,7 @@ fn set_up(b: &mut UnibusMaster, m: &mut IoBoard) {
 
 /// **The registers read back on the board as on the model**, from reset
 /// and through what `serial.lisp` does to them: the existence check, the
-/// mode pointer, the driver's own initialisation, the status with and
+/// mode pointer, the driver's own initialization, the status with and
 /// without a far end, and the interrupt enable, which is bit 7 of the
 /// status register at `764112` on this board and reads back.
 #[test]

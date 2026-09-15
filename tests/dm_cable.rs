@@ -8,7 +8,7 @@
 //! not reach fails to resolve and the cable refuses to build. It is that
 //! **the fan-out is the multiplexor's own gates**. A model that chose the
 //! unit itself would boot and pass everything and not be MIT's, so the two
-//! signals whose behaviour MIT wrote down are exercised through the cable
+//! signals whose behavior MIT wrote down are exercised through the cable
 //! and asserted against what MIT says they do.
 //!
 //! Quoted rather than cited, this repository not holding `lmdoc/disk.22`:

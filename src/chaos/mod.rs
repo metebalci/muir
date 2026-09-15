@@ -27,7 +27,7 @@
 //! FILE are the far end of the cable, what MIT's associated machine ran,
 //! and a band that wants them wants a host on the network. A run reaches
 //! one over [`udp`]. The tests, which cannot want a daemon running beside
-//! them, put a server of their own on the modelled cable through
+//! them, put a server of their own on the modeled cable through
 //! [`crate::machine::Machine::attach_chaos_node`]; it lives in
 //! `tests/support/` and is still called **the Chaosnet server**.
 //!

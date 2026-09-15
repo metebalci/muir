@@ -3,7 +3,7 @@
 
 //! Skipping work on a quiet port and a quiet cable must change nothing.
 //!
-//! The behavioural engines advance the whole I/O board every microcycle,
+//! The behavioral engines advance the whole I/O board every microcycle,
 //! and on a machine with nothing plugged into the serial port and a quiet
 //! Chaosnet most of that work discovers there is nothing to do. The engine
 //! is allowed to notice and skip it: [`muir::serial::Pci::advance`]

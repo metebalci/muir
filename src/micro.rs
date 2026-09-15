@@ -196,7 +196,7 @@ impl Micro {
     }
 
     /// The master clock edge, as far as this engine has one: the run and
-    /// step synchronisers, and the two pulses a mode-register write can
+    /// step synchronizers, and the two pulses a mode-register write can
     /// make.  See `Rtl::mclk_edge`, which this follows.
     fn mclk_edge(&mut self) {
         // The I/O board's own clock runs on between the processor's
@@ -503,7 +503,7 @@ impl Micro {
     ///
     /// `MEMSTART` swings the map's address multiplexer from `MD` to `VMA`
     /// through the microcycle after a memory operation, which is what MIT's
-    /// warning is about, and it is not modelled here because it has no
+    /// warning is about, and it is not modeled here because it has no
     /// case to decide.  The one memory operation a `MAP(MD)VMA` store's
     /// microcycle can carry is an instruction fetch, and page VCTL1's
     /// `VMAS` multiplexer then loads `VMA` with the fetch address ---
@@ -906,7 +906,7 @@ impl Micro {
         // back**. `DPAR` goes only to the parity checker, the 74S280 at
         // 4F09; `CC-READ-D-MEM` in `cc/lcadrd.lisp` does not read the word
         // at all but reconstructs the seventeen data bits from the machine's
-        // behaviour --- the PC-select bits and the noop and `SPUSHD` flags
+        // behavior --- the PC-select bits and the noop and `SPUSHD` flags
         // out of `SPY-FLAG-2`, and `DPC` from `CC-READ-PC`. The one thing
         // that observes the stored bit is `-DPE`, and that can only differ
         // from correct if a chip has failed.

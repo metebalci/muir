@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Chaosnet over UDP: the frame's bytes, and the node that carries it on
-//! and off the modelled cable.
+//! and off the modeled cable.
 //!
 //! The frame is pinned here as a byte sequence rather than left implicit
 //! in the packing code, because its byte order is **unverified** ---
@@ -635,7 +635,7 @@ fn a_packet_does_not_move_an_endpoint_a_flag_named() {
 /// link and says which machine this is, `--chaos-udp` says where it
 /// listens, `--chaos-udp-peer` says where this test lives, the node goes
 /// on the I/O board's cable, and an RFC that arrives as a datagram is put
-/// on the modelled cable for the interface to hear.
+/// on the modeled cable for the interface to hear.
 ///
 /// **The answer is not muir's to give.** A CADR has no file or time
 /// server in it, so a run carries none: nothing on that cable answers an

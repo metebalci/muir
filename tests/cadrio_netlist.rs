@@ -43,7 +43,7 @@ fn parses_to_the_expected_shape() {
 }
 
 /// Every part on the board is identified, and everything that computes
-/// anything has a behaviour, the oscillators, the one-shots and the delay
+/// anything has a behavior, the oscillators, the one-shots and the delay
 /// lines apart, which `src/chip.rs` runs. The 2651's is the serial port
 /// itself, held to its sheet in `tests/serial_cable.rs`.
 #[test]
@@ -53,7 +53,7 @@ fn every_part_is_identified() {
     assert_eq!(
         k.silent,
         ["26S02", "DIPOSC", "TD100", "TD100NC", "TD250", "TD25NC"],
-        "parts with no behaviour"
+        "parts with no behavior"
     );
 }
 
@@ -168,7 +168,7 @@ fn the_board_settles_with_its_bus_driven() {
 
 /// **The board answers its registers on the Unibus.** Driven by a master on
 /// its own, reset and left a while, it is read at each of the addresses
-/// microcode 323 uses, and what it says is held against the behavioural
+/// microcode 323 uses, and what it says is held against the behavioral
 /// board in `src/ioboard.rs`, which was written from MIT's sources for the
 /// same registers; and the status register takes its four enables back.
 #[test]
@@ -194,7 +194,7 @@ fn the_registers_answer_on_the_unibus() {
         times.push((name, took, word, want));
     }
     for &(name, _, word, want) in &times {
-        assert_eq!(word, want, "{name}: the board against the behavioural model");
+        assert_eq!(word, want, "{name}: the board against the behavioral model");
     }
     // A second read of each, for the timing once the board is warm.
     for (name, uaddr) in
@@ -503,7 +503,7 @@ fn the_far_ends_board_is_reset_at_power_on() {
 /// as `POWER LINE ^`.
 ///
 /// Nothing drove it before [`muir::unibus::MAINS_PERIOD`], so the counter
-/// stood still on the netlist board where the behavioural model\'s counted.
+/// stood still on the netlist board where the behavioral model\'s counted.
 ///
 /// The count is taken twice, a tenth of a second apart, and the difference
 /// asserted rather than either reading: what the counter stands at depends
@@ -764,9 +764,9 @@ const FROM_OUTSIDE: &[&str] = &[
 /// open inputs give `-DSR`, `-DCD` and `-CTS` high, which is the sheet's
 /// `V_OH` row for "Input open" and is what `src/serial.rs` models. `POWER
 /// LINE ^` is the mains at the board's edge pin `FV2`; `src/dm.rs`'s
-/// neighbour `MAINS_PERIOD` says why the driver attaches at the Schmitt
+/// neighbor `MAINS_PERIOD` says why the driver attaches at the Schmitt
 /// trigger's side of C20 instead, the 150 ohm network between them being a
-/// comment on `cadrio/clk60h.drw` rather than a modelled body.
+/// comment on `cadrio/clk60h.drw` rather than a modeled body.
 const UNPLUGGED: &[&str] =
     &["'EIA CTS IN'", "'EIA DATA IN'", "'EIA DCD IN'", "'EIA DSR IN'", "'POWER LINE ^'"];
 
@@ -778,7 +778,7 @@ const RAILS: &[&str] = &["+12V", "-5V"];
 /// two one-shots and the keyboard receiver, and the taps along the
 /// Chaosnet detector's delay-line chain, which `src/chaos/wire.rs` reckons
 /// as instants rather than levels.
-const ANALOGUE: &[&str] =
+const ANALOG: &[&str] =
     &["'KBDIN RC'", "'LOCKOUT END'", "R.C", "R.RC", "SAMPLE", "SDLYD", "SDLYD2", "T.C", "T.RC"];
 
 /// Every net on the board with no pin driving it, the supplies aside.
@@ -806,7 +806,7 @@ fn undriven(n: &Netlist) -> BTreeSet<String> {
 /// checked; what that cannot check is whether muir supplies what the board
 /// expects to arrive from outside it. Issue #41 was that gap: the mains
 /// input was never driven, so the counter behind the `CLOCK` register stood
-/// still on the netlist board where the behavioural model's counted, and
+/// still on the netlist board where the behavioral model's counted, and
 /// nothing said so.
 ///
 /// So every undriven net is sorted into one of five kinds and the residue
@@ -819,7 +819,7 @@ fn every_undriven_net_is_accounted_for() {
     let mut left = undriven(&n);
     // From another board: the Unibus, which the bus interface drives.
     let mut named: BTreeSet<String> = muir::unibus::wire_names().into_iter().collect();
-    for group in [FROM_OUTSIDE, UNPLUGGED, RAILS, ANALOGUE] {
+    for group in [FROM_OUTSIDE, UNPLUGGED, RAILS, ANALOG] {
         named.extend(group.iter().map(|s| s.to_string()));
     }
     // The general-purpose input port: MIT wired nothing to it.

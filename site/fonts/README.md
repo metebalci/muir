@@ -11,14 +11,14 @@ subset only --- every character these pages use is in it.
 | `ibm-plex-mono-500.woff2` | IBM Plex Mono | medium |
 | `ibm-plex-mono-600.woff2` | IBM Plex Mono | semibold |
 
-## Licence
+## License
 
-Neither is this project's work and neither is under its licence.
+Neither is this project's work and neither is under its license.
 
 **Archivo**, by Omnibus-Type, and **IBM Plex Mono**, by IBM, are both under
 the **SIL Open Font License, Version 1.1**, which permits redistribution
 with or without modification. The files here are unmodified subsets as
-Google Fonts serves them. The licence text travels with each project:
+Google Fonts serves them. The license text travels with each project:
 
 - Archivo --- <https://github.com/Omnibus-Type/Archivo>
 - IBM Plex --- <https://github.com/IBM/plex>

@@ -71,7 +71,7 @@ pub fn bus(n: &Netlist) -> String {
     // exactly one gate is that gate's data.
     let mut gates: Vec<(&str, Vec<&str>, Vec<&str>)> = Vec::new();
     for p in n.parts.iter().filter(|p| p.page == "DCDBUS") {
-        let Some(b) = crate::part::behaviour(&p.kind) else { continue };
+        let Some(b) = crate::part::behavior(&p.kind) else { continue };
         let at: BTreeMap<u8, u32> = p.pins.iter().copied().collect();
         let live: Vec<_> = b.gates.iter().filter(|g| at.contains_key(&g.out)).collect();
         let mut seen: BTreeMap<u8, usize> = BTreeMap::new();

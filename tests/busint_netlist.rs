@@ -112,7 +112,7 @@ fn the_census_matches_mits_own() {
 // --- the same structural checks tests/part.rs makes of the processor ------
 
 /// Every part on the board is identified, and everything that computes
-/// anything has a behaviour.
+/// anything has a behavior.
 ///
 /// The exceptions are the analog parts, which is the same exception the
 /// processor board has: twelve delay lines and the `74LS124`
@@ -126,7 +126,7 @@ fn every_part_is_identified() {
     assert_eq!(
         k.silent,
         ["74LS124", "MTD100", "TD100", "TD250"],
-        "only the delay lines and the oscillator may lack a behaviour"
+        "only the delay lines and the oscillator may lack a behavior"
     );
 }
 
@@ -304,7 +304,7 @@ fn the_drawings_are_the_later_revision() {
 /// `cadr1/busint.wlr` is what MIT's tooling made of the same drawings, the
 /// list the board was wrapped from, and it is the second route that says
 /// which pins share a wire. `soap4` gave two names to a wire the drawings
-/// label twice, `LMRD` and `-LMWR`, and to one spelt with and without a
+/// label twice, `LMRD` and `-LMWR`, and to one spelled with and without a
 /// space, `-DBUB GRANTED` and `-DB UB GRANTED`, and lost six pins to `@,p0`;
 /// `tools/busint-netlist.sh` reconciles the file with the list, and this
 /// says the result is the list.
@@ -789,7 +789,7 @@ fn the_proms_are_mits_listings() {
 /// `-MEMRQ`. A Unibus cycle is not: the board is the Unibus arbiter in local
 /// mode, and its own request goes through the arbitration --- `NPR` to the
 /// UPRIOR PROM, `NPG` out on the grant chain and back, `SACK` --- before the
-/// request synchroniser on RQSYNC lets it have the bus, and then the
+/// request synchronizer on RQSYNC lets it have the bus, and then the
 /// address is deskewed, `-UB MSYN` goes out, the slave answers `-UB SSYN`,
 /// and `-LMACK` follows through the TD250 at REQU 0B09. This runs three
 /// such cycles against the far end in `src/buses.rs` and prints each one
@@ -805,7 +805,7 @@ fn a_unibus_cycle_is_arbitrated_before_it_is_run() {
 }
 
 /// The same three cycles with the master clock at the 220 ns the machine
-/// boots in, extra slow.  The synchronisers on UBMAST and RQSYNC count
+/// boots in, extra slow.  The synchronizers on UBMAST and RQSYNC count
 /// edges and the delay lines count nanoseconds, so what a cycle costs
 /// depends on the period; `rtl` and the board were found a microcycle
 /// apart on a halt written from the console at this speed, in
@@ -860,14 +860,14 @@ fn unibus_cycles_at(half_ns: u64) {
     let ubd: Vec<muir::netlist::NetId> = (0..16).map(|k| b.id(&format!("-UBD{k}"))).collect();
     let (memrq, wrcyc, lmack, loadmd) =
         (b.id("-MEMRQ"), b.id("WRCYC"), b.id("-LMACK"), b.id("-LOADMD"));
-    // The behavioural interface, run alongside every cycle on the same
+    // The behavioral interface, run alongside every cycle on the same
     // master clock and kept across them, as it keeps the Unibus.
     let mut model = Busint::default();
 
     // One cycle: the address and direction on the cables, `-MEMRQ` down
     // until `-LMACK`, and the wires watched every ten nanoseconds. Returns
     // when `-LMACK` came, the word `MEM` carried when `-LOADMD` rose, when
-    // the behavioural interface acknowledged the same cycle, and --- for a
+    // the behavioral interface acknowledged the same cycle, and --- for a
     // write of one of the board's own diagnostic registers --- when the
     // strobe's trailing edge clocked it on the board and when the model
     // says the register took the word.
@@ -1003,7 +1003,7 @@ fn unibus_cycles_at(half_ns: u64) {
     assert_eq!(model, nxm_ack, "the model's timeout of a Unibus cycle nothing answers");
 }
 
-/// **The behavioural I/O board interrupts through the interface.** Under
+/// **The behavioral I/O board interrupts through the interface.** Under
 /// `chip --io-board model` the keyboard's word goes into the model board,
 /// and its interrupt has to reach the microcode by the same road the
 /// netlist board's does: `src/buses.rs` runs the device's side of the
@@ -1014,7 +1014,7 @@ fn unibus_cycles_at(half_ns: u64) {
 /// shows. Reading the keyboard's two registers through the interface
 /// clears the request, and a write of zero to `766042` clears `UB INT`.
 #[test]
-fn the_behavioural_io_board_interrupts_through_the_interface() {
+fn the_behavioral_io_board_interrupts_through_the_interface() {
     use muir::buses::Buses;
     use muir::busint::interrupt_status::{ENABLE_UB_INTS, UB_INT};
     use muir::ioboard::{self, csr};
@@ -1120,7 +1120,7 @@ fn the_behavioural_io_board_interrupts_through_the_interface() {
     assert_ne!(status & ENABLE_UB_INTS, 0, "ENABLE UB INTS took: {status:o}");
     assert_eq!(status & UB_INT, 0, "nothing taken yet: {status:o}");
 
-    // A key into the behavioural board, with its interrupt enabled.
+    // A key into the behavioral board, with its interrupt enabled.
     buses.machine.ioboard.write(ioboard::CSR, csr::KBD_INT_ENABLE, 0);
     let word = keyboard::up_down(0o123, false);
     buses.machine.ioboard.press(word);

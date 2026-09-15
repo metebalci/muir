@@ -9,11 +9,11 @@
 //! are both here. So the clock gets its own model behind a trait, and the rest
 //! of the machine never has to know about nanoseconds.
 //!
-//! [`Behavioural`] is the fast one, driven by the tap table below. A
+//! [`Behavioral`] is the fast one, driven by the tap table below. A
 //! structural model built from the delay lines and SR latches can be added
 //! later behind the same trait, to check this one rather than replace it.
 //!
-//! Everything here is read off the netlist. `CLOCKD` is *not* modelled: it is
+//! Everything here is read off the netlist. `CLOCKD` is *not* modeled: it is
 //! pure distribution, 74S37 buffers and 74S04A inverters fanning `CLK1..CLK5`
 //! out to `CLK1A`, `CLK2A..C`, `CLK3A..G` and `CLK4A..F`, and it stays
 //! structural. So do the 7428 buffers on CLOCK2.
@@ -204,7 +204,7 @@ pub const TPR_PULSE_NS: u32 = 40;
 
 /// `-TPR60` is the one read tap something outside the generator uses:
 /// `SPEEDCLK` is it inverted, off the 7428 at CLOCK2 1C01, and it clocks the
-/// speed synchroniser at OLORD1 1A01 sixty nanoseconds into every generator
+/// speed synchronizer at OLORD1 1A01 sixty nanoseconds into every generator
 /// cycle, waits included. It is an event of its own so that it happens at
 /// every speed: derived from whichever event fell inside its window, it
 /// happened at normal speed and never at extra slow, and the machine could
@@ -212,7 +212,7 @@ pub const TPR_PULSE_NS: u32 = 40;
 const TPR60_NS: u32 = 60;
 
 /// When the tap that ends the read phase is chosen: after `SPEEDCLK` at 60
-/// has clocked the synchroniser and the board has settled, before the
+/// has clocked the synchronizer and the board has settled, before the
 /// earliest tap at 75. The 74S151 at CLOCK1 1D08 is a multiplexer, so what
 /// counts is what `SSPEED1, SSPEED0` and `-ILONG` stand at when the pulse
 /// reaches it, and by 65 that is settled.
@@ -252,7 +252,7 @@ impl Ev {
 
 /// A small event scheduler --- the clock is the one place that needs one.
 /// Everything else in the `chip` engine is levelized.
-pub struct Behavioural {
+pub struct Behavioral {
     time: u64,
     cycle_start: u64,
     read_ns: u32,
@@ -260,9 +260,9 @@ pub struct Behavioural {
     pending: Vec<(u64, Ev)>,
 }
 
-impl Behavioural {
+impl Behavioral {
     pub fn new() -> Self {
-        Behavioural {
+        Behavioral {
             time: 0,
             cycle_start: 0,
             read_ns: 0,
@@ -313,7 +313,7 @@ impl Behavioural {
     }
 }
 
-impl Behavioural {
+impl Behavioral {
     /// Writes the generator's state, so a run can be picked up again
     /// mid-cycle. See [`crate::chip::Chip::save`].
     ///
@@ -335,8 +335,8 @@ impl Behavioural {
         Ok(())
     }
 
-    /// Reads back what [`Behavioural::save`] wrote.
-    pub fn load(r: &mut impl std::io::Read) -> std::io::Result<Behavioural> {
+    /// Reads back what [`Behavioral::save`] wrote.
+    pub fn load(r: &mut impl std::io::Read) -> std::io::Result<Behavioral> {
         let bad = |what: &str| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("checkpoint: {what}"))
         };
@@ -375,17 +375,17 @@ impl Behavioural {
             let ev = Ev::from_byte(ev[0]).ok_or_else(|| bad("unknown clock event"))?;
             pending.push((u64::from_le_bytes(word), ev));
         }
-        Ok(Behavioural { time, cycle_start, read_ns, out, pending })
+        Ok(Behavioral { time, cycle_start, read_ns, out, pending })
     }
 }
 
-impl Default for Behavioural {
+impl Default for Behavioral {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Clock for Behavioural {
+impl Clock for Behavioral {
     fn advance(&mut self, inputs: Inputs) -> (u32, Outputs) {
         if inputs.reset {
             self.out = Outputs::default();
@@ -432,7 +432,7 @@ impl Clock for Behavioural {
 
     fn next_at(&self, inputs: Inputs) -> Option<u64> {
         // `RESET` holds the ring cleared: no transition until it lifts, and
-        // then a cycle starts from `-TPR0` --- [`Behavioural::advance`]
+        // then a cycle starts from `-TPR0` --- [`Behavioral::advance`]
         // under reset leaves exactly that pending.  The debug cable's reset
         // bit holds it for as long as the debugger likes.
         if inputs.reset {

@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use muir::checkpoint::{self, Reader, Writer};
-use muir::clock::Behavioural;
+use muir::clock::Behavioral;
 use muir::disk_unit::{Geometry, Unit};
 use muir::engine::Engine;
 use muir::machine::Machine;
@@ -125,10 +125,10 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// saved with to be saved while it is busy, version 22 when the
 /// display's sync program last started, its timing being that program
 /// run rather than a fixed frame, version 23 which display board the
-/// machine has and the colour map the LISPM TV's register 4 writes, and
+/// machine has and the color map the LISPM TV's register 4 writes, and
 /// version 24 the color TV, the second display board, with whether the
 /// machine had one at all, and version 25 that board as a netlist on
-/// `chip`'s backplane: which kind of colour board a `chip` checkpoint was
+/// `chip`'s backplane: which kind of color board a `chip` checkpoint was
 /// taken with is a word at the front of it, and a netlist one is a second
 /// device board in the file after it.
 #[test]
@@ -231,12 +231,12 @@ fn a_clock_with_more_events_than_the_file_holds_is_refused() {
     // The time, the cycle's start, the read phase and the four outputs.
     file.extend([0u8; 8 + 8 + 4 + 4]);
     file.extend(u32::MAX.to_le_bytes());
-    assert!(Behavioural::load(&mut file.as_slice()).is_err());
+    assert!(Behavioral::load(&mut file.as_slice()).is_err());
     // And a clock as saved loads as itself.
-    let clock = Behavioural::default();
+    let clock = Behavioral::default();
     let mut saved = Vec::new();
     clock.save(&mut saved).unwrap();
-    let back = Behavioural::load(&mut saved.as_slice()).unwrap();
+    let back = Behavioral::load(&mut saved.as_slice()).unwrap();
     let mut again = Vec::new();
     back.save(&mut again).unwrap();
     assert_eq!(again, saved);
@@ -350,7 +350,7 @@ const BOARDS: usize = 4;
 /// controller as the machine's model. `press` is the boot button: a run
 /// from power-on presses it, and a resume does not, because a checkpoint
 /// replaces everything the button and the power-on set.
-fn chip_machine(press: bool) -> (muir::chip::Chip, Behavioural, muir::cable::FarEnd) {
+fn chip_machine(press: bool) -> (muir::chip::Chip, Behavioral, muir::cable::FarEnd) {
     use muir::netlist;
     use muir::part::Level;
     let n = netlist::parse(CPU).unwrap();
@@ -362,7 +362,7 @@ fn chip_machine(press: bool) -> (muir::chip::Chip, Behavioural, muir::cable::Far
     c.power_on();
     c.load_prom(&n, &muir::prom::boot_prom_image());
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let boards = muir::cable::Boards {
         memory: BOARDS,
         io: Some(&io_n),
@@ -398,7 +398,7 @@ fn chip_machine(press: bool) -> (muir::chip::Chip, Behavioural, muir::cable::Far
 /// about --- it is saved; see [`chip_checkpoints_a_busy_machine`].
 fn run_to_quiet(
     c: &mut muir::chip::Chip,
-    clk: &mut Behavioural,
+    clk: &mut Behavioral,
     far: &mut muir::cable::FarEnd,
     at_least: u64,
 ) -> u64 {
@@ -429,7 +429,7 @@ fn run_to_quiet(
 /// nets and cells.
 fn chip_pieces(
     c: &muir::chip::Chip,
-    clk: &Behavioural,
+    clk: &Behavioral,
     far: &muir::cable::FarEnd,
 ) -> Vec<(&'static str, Vec<u8>)> {
     let piece = |f: &dyn Fn(&mut Writer)| {
@@ -446,7 +446,7 @@ fn chip_pieces(
 }
 
 /// The pieces run together, which is what a checkpoint's body is.
-fn chip_body(c: &muir::chip::Chip, clk: &Behavioural, far: &muir::cable::FarEnd) -> Vec<u8> {
+fn chip_body(c: &muir::chip::Chip, clk: &Behavioral, far: &muir::cable::FarEnd) -> Vec<u8> {
     let mut w = Writer::new();
     c.save(&mut w).unwrap();
     clk.save(&mut w).unwrap();
@@ -458,8 +458,8 @@ fn chip_body(c: &muir::chip::Chip, clk: &Behavioural, far: &muir::cable::FarEnd)
 /// where rather than printing megabytes of them.
 fn same_state(
     what: &str,
-    a: (&muir::chip::Chip, &Behavioural, &muir::cable::FarEnd),
-    b: (&muir::chip::Chip, &Behavioural, &muir::cable::FarEnd),
+    a: (&muir::chip::Chip, &Behavioral, &muir::cable::FarEnd),
+    b: (&muir::chip::Chip, &Behavioral, &muir::cable::FarEnd),
 ) {
     for ((name, x), (_, y)) in chip_pieces(a.0, a.1, a.2).iter().zip(chip_pieces(b.0, b.1, b.2)) {
         assert_eq!(x.len(), y.len(), "{what}: {name} is a different length");
@@ -496,7 +496,7 @@ fn chip_picks_up_where_the_checkpoint_left_off() {
     let (mut c2, _, mut far2) = chip_machine(false);
     let mut r = Reader::new(&body);
     c2.load(&mut r).unwrap();
-    let mut clk2 = Behavioural::load(&mut r).unwrap();
+    let mut clk2 = Behavioral::load(&mut r).unwrap();
     far2.resume(&mut r).unwrap();
     r.done().unwrap();
     same_state("the checkpoint loads and saves as itself", (&c, &clk, &far), (&c2, &clk2, &far2));
@@ -532,7 +532,7 @@ fn chip_picks_up_where_the_checkpoint_left_off() {
 
 /// One microcycle of a netlist machine: transitions until the clock's
 /// phase wraps, which is what a microcycle is here.
-fn one_microcycle(c: &mut muir::chip::Chip, clk: &mut Behavioural, far: &mut muir::cable::FarEnd) {
+fn one_microcycle(c: &mut muir::chip::Chip, clk: &mut Behavioral, far: &mut muir::cable::FarEnd) {
     use muir::clock::Clock;
     let mut last = clk.phase_ns();
     loop {
@@ -605,7 +605,7 @@ fn chip_checkpoints_a_busy_machine() {
         let body = chip_body(&c, &clk, &far);
         let mut r = Reader::new(&body);
         c2.load(&mut r).unwrap();
-        let mut clk2 = Behavioural::load(&mut r).unwrap();
+        let mut clk2 = Behavioral::load(&mut r).unwrap();
         far2.resume(&mut r).unwrap();
         r.done().unwrap();
         same_state(

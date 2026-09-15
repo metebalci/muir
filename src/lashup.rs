@@ -4,7 +4,7 @@
 //! Two machines on a debug cable, in one process: the reference transport,
 //! where the drawings are verified.
 //!
-//! The debugger's DBGOUT and the debuggee's DBGIN are both behavioural
+//! The debugger's DBGOUT and the debuggee's DBGIN are both behavioral
 //! here, in `src/busint.rs`; this carries the cable between them and keeps
 //! the two machines' clocks honest with each other.  The cable is 21 wires
 //! as timestamped levels ([`CableEvent`]), and **each machine runs only as

@@ -56,12 +56,12 @@
 //! board `--tv-board` named, the release hardwiring `MAIN-SCREEN` to one
 //! bit a pixel there. It is off by default, and a machine without it
 //! answers those addresses with an NXM, which is how `COLOR-EXISTS-P`
-//! finds out there is no colour screen; with it, the cold boot's
+//! finds out there is no color screen; with it, the cold boot's
 //! `COLOR:SETUP` loads the NTSC sync program, starts it in clock mode 3
-//! with vertical spacing 36, and writes the colour map. The picture is 576
+//! with vertical spacing 36, and writes the color map. The picture is 576
 //! by 454 at four bits a pixel through that map. The flag takes a word of
 //! its own, `--color-tv [netlist|model]`, as `--tv` does: the netlist is
-//! `chip`'s, a second LISPM TV on the backplane wrapped to the colour
+//! `chip`'s, a second LISPM TV on the backplane wrapped to the color
 //! addresses, and the model is every engine's. The bare flag is the
 //! netlist on `chip` and the model elsewhere, and `--color-tv netlist` off
 //! `chip` is refused by the engine's name. `--disk-controller`
@@ -112,13 +112,13 @@
 //! screen for as long as a viewer is looking at it once the run has
 //! stopped. In the lashup the other machine is served a terminal too, the
 //! display above this machine's, and `--debuggee-terminal` puts that
-//! elsewhere. With `--color-tv` the colour screen is served as well, at
+//! elsewhere. With `--color-tv` the color screen is served as well, at
 //! the display above the last one bound or where `--color-terminal` says,
 //! and it is **pixels only**: the machine has one keyboard and one mouse,
 //! both on the I/O board, and they stay with the terminal that serves the
-//! main screen, so what a viewer types or points at the colour screen is
+//! main screen, so what a viewer types or points at the color screen is
 //! dropped. `--tv-capture` records the main screen and
-//! `--color-tv-capture` the colour one, each to a file of its own.
+//! `--color-tv-capture` the color one, each to a file of its own.
 //!
 //! **Every `rtl` and `chip` run listens for a debugger too**, since the
 //! bus interface's DBGIN is on every machine: it takes the Unibus as
@@ -278,7 +278,7 @@ use muir::cable::{Boards, DebugIn, FarEnd};
 use muir::capture::{ColorRecorder, Recorder, local_time, wall_clock};
 use muir::checkpoint::Checkpoint;
 use muir::chip::Chip;
-use muir::clock::{Behavioural, Clock};
+use muir::clock::{Behavioral, Clock};
 use muir::disk_unit::{Geometry, Unit};
 use muir::engine::Engine;
 use muir::isa::Insn;
@@ -323,7 +323,7 @@ const HARDWARE_CYCLES_PER_S: f64 = 1e9 / 145.0;
 /// **1.2% does not buy a lock.** The frame buffer is written by the
 /// processor, by the disk controller's DMA and by the netlist display's
 /// mirror, and none of them has to know a viewer exists; a second thread
-/// reading the screen would put a synchronisation point into a part of the
+/// reading the screen would put a synchronization point into a part of the
 /// machine that has none.
 ///
 /// What would change the answer: a screen that really does repaint whole
@@ -724,7 +724,7 @@ fn attend<E: Engine>(
     mouse: &mut Mouse,
 ) {
     let m = e.machine_mut();
-    // The colour screen, when the board is fitted: the picture out and
+    // The color screen, when the board is fitted: the picture out and
     // nothing in.
     if poll
         && let Some(term) = color
@@ -773,7 +773,7 @@ enum Which {
 /// What the ratio does **not** include: the disk.
 ///
 /// This is microcycles against microcycles. With the disk controller as a
-/// behavioural model --- always on `micro` and `rtl`, and on `chip` when
+/// behavioral model --- always on `micro` and `rtl`, and on `chip` when
 /// it is given `--disk-controller model` --- a transfer completes inside
 /// the store to `START` and a seek takes no time. The machine spent
 /// milliseconds on a seek and spent them running the microcode's polling
@@ -909,15 +909,15 @@ A simulator of the MIT CADR Lisp Machine.
                                \"for the color TV, x is 5\". Off by default,
                                and a machine without it answers those
                                addresses with an NXM, which is how System
-                               100 finds out it has no colour screen. With
+                               100 finds out it has no color screen. With
                                it the band's cold boot starts the board:
                                the NTSC sync program, clock mode 3, and the
-                               colour map. The picture is 576 x 454 at four
-                               bits a pixel through sixteen colours, on
+                               color map. The picture is 576 x 454 at four
+                               bits a pixel through sixteen colors, on
                                --color-terminal. netlist puts the board
                                itself on chip's backplane, a second LISPM
-                               TV wrapped to the colour addresses, and is
-                               chip's alone; model is the behavioural
+                               TV wrapped to the color addresses, and is
+                               chip's alone; model is the behavioral
                                board and is taken on every engine. Without
                                a word it is the netlist on chip and the
                                model elsewhere.
@@ -926,8 +926,8 @@ A simulator of the MIT CADR Lisp Machine.
   --color-tv-capture <gif>     record the color TV's screen to <gif> as the
                                run goes, as --tv-capture records the main
                                screen: a file of its own, 576 x 454, four
-                               bits a pixel through the colour map, which
-                               is the GIF's own colours and is written
+                               bits a pixel through the color map, which
+                               is the GIF's own colors and is written
                                again whenever the machine changes it. There
                                is no default path; one must be given. It
                                needs --color-tv. Not over the debug cable,
@@ -1176,7 +1176,7 @@ A simulator of the MIT CADR Lisp Machine.
                                cable, where they are two clocks. The main
                                screen: the color TV's is --color-tv-capture's.
   --tv-capture-no-time         leave the clocks off the recordings, the
-                               colour screen's as much as the main
+                               color screen's as much as the main
                                screen's: there is one flag for the two. By
                                default a line below the screen, hiding none
                                of it, shows the machine's simulated time at
@@ -1202,12 +1202,12 @@ A simulator of the MIT CADR Lisp Machine.
   -V, --version                what this build calls itself: the version,
                                the commit it was built from --- with -dirty
                                after it if the tree had uncommitted work ---
-                               and whether it was built with optimisations
+                               and whether it was built with optimizations
                                off. Every run says it in its first line too.
 ";
 
 /// What this build calls itself: the crate's version, the commit it was
-/// built from, and whether it was built with optimisations off ---
+/// built from, and whether it was built with optimizations off ---
 /// `muir 0.1.0-e4d8aeb-release`. `--version` prints it, and every run says
 /// it in its first line, so a report of a run says which muir made it.
 ///
@@ -1783,14 +1783,14 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
 }
 
 /// **What `--color-tv` asked for**: no second display board, the
-/// behavioural one, or the LISPM TV netlist wrapped to the colour
+/// behavioral one, or the LISPM TV netlist wrapped to the color
 /// addresses on `chip`'s backplane.
 ///
 /// The bare flag is the netlist on `chip` and the model on the other two
 /// engines, as every board on `chip` is a netlist unless a flag says
 /// otherwise; `--color-tv netlist` is `chip`'s alone and is refused by the
 /// engine's name elsewhere, there being no backplane to put a board on.
-/// The model is fitted behind the buses whichever it is, so the colour
+/// The model is fitted behind the buses whichever it is, so the color
 /// picture is read off `machine.color_tv` either way, exactly as the main
 /// screen's is off `machine.tv` beside its netlist board.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1929,7 +1929,7 @@ fn time_lashup(
     // debuggee's at the right, timed by the debugger's clock, which the
     // lashup holds the debuggee's to within a generator cycle.
     let mut capture = capture.map(|(path, time)| (path, Recorder::pair(time)));
-    // The colour screen is this machine's alone: the debuggee has no
+    // The color screen is this machine's alone: the debuggee has no
     // second display board, `--color-tv` fitting the machine this process
     // runs as its own.
     let mut color_capture = color_capture.map(|(path, time)| (path, ColorRecorder::new(time)));
@@ -2306,7 +2306,7 @@ fn time_fabric(
 struct Run<'a> {
     stop: Stop,
     capture: Option<(PathBuf, bool)>,
-    /// The colour screen's own recording, when `--color-tv-capture` asked
+    /// The color screen's own recording, when `--color-tv-capture` asked
     /// for one: its file, and whether the clocks go below it, which is
     /// the main screen's recording's flag too.  A second recorder beside
     /// the main screen's rather than a second canvas, the two screens
@@ -2666,7 +2666,7 @@ fn time_engine<S: Stepper>(
             if let Some((_, rec)) = capture.as_mut() {
                 rec.sample(&m.tv, m.ns, now);
             }
-            // The colour screen, when the board is fitted.
+            // The color screen, when the board is fitted.
             if let Some((_, rec)) = color_capture.as_mut()
                 && let Some(tv) = m.color_tv.as_ref()
             {
@@ -2687,7 +2687,7 @@ fn time_engine<S: Stepper>(
                     term.ring();
                 }
             }
-            // The colour screen, when the board is fitted: the picture
+            // The color screen, when the board is fitted: the picture
             // out and nothing in.
             if let Some(term) = color.as_deref_mut()
                 && let Some(tv) = s.engine().machine().color_tv.as_ref()
@@ -3197,7 +3197,7 @@ fn write_screenshot(path: &Path, tv: &muir::tv::Tv) {
 fn write_chip_checkpoint(
     path: &Path,
     cpu: &Chip,
-    clk: &Behavioural,
+    clk: &Behavioral,
     far: &FarEnd,
     tv_board: TvBoard,
     color_tv: ColorTv,
@@ -3216,7 +3216,7 @@ fn write_chip_checkpoint(
 /// holds what the others drive onto it.
 fn resume_chip(
     cpu: &mut Chip,
-    clk: &mut Behavioural,
+    clk: &mut Behavioral,
     far: &mut FarEnd,
     tv_board: TvBoard,
     color_tv: ColorTv,
@@ -3234,7 +3234,7 @@ fn resume_chip(
     }
     // **The color TV before anything is read.** A second display board is
     // one more board in the file --- the device boards go in one after
-    // another and nothing counts them --- so a checkpoint whose colour
+    // another and nothing counts them --- so a checkpoint whose color
     // board is not this run's cannot be read at all, and is refused here
     // by the flag's name rather than a hundred kilobytes later as a board
     // that does not fit.
@@ -3270,7 +3270,7 @@ fn resume_chip(
 ///
 /// This is `micro`'s and `rtl`'s, where the board is the model or nothing
 /// and the fact is in the machine the body carries. A `chip` checkpoint
-/// carries which kind of colour board it was taken with in its header,
+/// carries which kind of color board it was taken with in its header,
 /// where [`resume_chip`] settles it before anything is read, because a
 /// netlist board is one more board in the file.
 fn refuse_color_tv(path: &Path, had: bool, asked: bool) {
@@ -3397,10 +3397,10 @@ fn write_capture(path: &Path, rec: &Recorder) {
     wrote_capture("capture", "the display", path, rec.frames(), rec.gif());
 }
 
-/// The same for a recording of the colour screen, which is a file of its
+/// The same for a recording of the color screen, which is a file of its
 /// own and says which screen it is.
 fn write_color_capture(path: &Path, rec: &ColorRecorder) {
-    wrote_capture("color capture", "the colour screen", path, rec.frames(), rec.gif());
+    wrote_capture("color capture", "the color screen", path, rec.frames(), rec.gif());
 }
 
 fn wrote_capture(what: &str, screen: &str, path: &Path, frames: usize, gif: Vec<u8>) {
@@ -3420,7 +3420,7 @@ fn wrote_capture(what: &str, screen: &str, path: &Path, frames: usize, gif: Vec<
 /// run to the first microcycle whose PC is not zero.
 struct ChipMachine {
     cpu: Chip,
-    clk: Behavioural,
+    clk: Behavioral,
     far: FarEnd,
     bus: netlist::Netlist,
     pc_nets: Vec<netlist::NetId>,
@@ -3474,7 +3474,7 @@ fn chip_machine(
     c.power_on();
     c.load_prom(&n, image);
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let mut machine = Machine::with_memory_boards(memory_boards);
     attach(&mut machine, packs);
     // The board `--tv model` answers as: the far end's machine is the
@@ -3485,7 +3485,7 @@ fn chip_machine(
     // backplane: with `--color-tv model` it answers `17200000` and
     // `17377750` as `--tv model` answers the main screen's addresses, and
     // with `--color-tv netlist` the netlist board answers them and every
-    // write is mirrored in here, so that the colour picture is read off
+    // write is mirrored in here, so that the color picture is read off
     // the same place either way.
     if color_tv.fitted() {
         machine.fit_color_tv();
@@ -3552,7 +3552,7 @@ fn chip_machine(
 /// boot sequence presses `-BOOT1` through this same hold, there being no
 /// netlist board to pulse it; with the netlist board the far end carries
 /// its `-BOOT*` to `-BOOT1` itself.
-fn press_boot(c: &mut Chip, clk: &mut Behavioural, boot: netlist::NetId) {
+fn press_boot(c: &mut Chip, clk: &mut Behavioral, boot: netlist::NetId) {
     c.set_net(boot, Level::Low);
     c.settle();
     for _ in 0..20 {
@@ -3575,7 +3575,7 @@ fn attend_chip(
     keyboard: &mut Keyboard,
     mouse: &mut Mouse,
 ) -> bool {
-    // The colour screen, when the board is fitted: the picture out and
+    // The color screen, when the board is fitted: the picture out and
     // nothing in.
     if poll
         && let Some(term) = color
@@ -3591,7 +3591,7 @@ fn attend_chip(
         for (buttons, x, y) in term.take_pointers() {
             mouse.pointer(buttons, x, y);
         }
-        // The behavioural board under `--io-board model`. The netlist
+        // The behavioral board under `--io-board model`. The netlist
         // board's speaker is `AUDIO+`/`AUDIO-` out of the 75118 at IOBXCV
         // 0F30 and nothing is plugged into that pair, so a beep on it is
         // heard by nobody.
@@ -3626,7 +3626,7 @@ fn attend_chip(
                     keyboard.take();
                 }
             }
-            // The behavioural board under `--io-board model` takes the
+            // The behavioral board under `--io-board model` takes the
             // word, and `Buses` runs its interrupt cycle against the
             // netlist bus interface --- request, grant, `SACK`, `INTR`
             // with vector 260 --- as the netlist board would run its own.
@@ -3641,7 +3641,7 @@ fn attend_chip(
 /// One turn of the serial endpoint for a netlist machine.
 ///
 /// Two far ends, and which one is on J9 is `--io-board`'s: the netlist
-/// board's, a bit at a time on the EIA wires, or the behavioural port's
+/// board's, a bit at a time on the EIA wires, or the behavioral port's
 /// cable under `--io-board model`. The model board is advanced by its own
 /// register accesses here and by nothing else, so its time is the
 /// machine's last access rather than the clock's; MIT's driver polls the
@@ -4246,7 +4246,7 @@ fn main() {
     // The serial port's endpoint: nothing unless `--serial` names one.
     let mut serial_at: Option<SocketAddr> = None;
     let mut capture_tv: Option<PathBuf> = None;
-    // The colour screen's own recording, which takes the board and shares
+    // The color screen's own recording, which takes the board and shares
     // the one clocks flag with the main screen's.
     let mut capture_color_tv: Option<PathBuf> = None;
     let mut capture_tv_time = true;
@@ -4703,7 +4703,7 @@ fn main() {
             usage("--debuggee-terminal: the same endpoint as --terminal");
         }
     }
-    // The colour screen's display: it takes the board, and it is not
+    // The color screen's display: it takes the board, and it is not
     // another screen's endpoint.  Settled here, before anything is bound.
     if let Some(spec) = color_terminal.as_ref() {
         if !color_tv.fitted() {
@@ -4723,7 +4723,7 @@ fn main() {
             }
         }
     }
-    // The colour screen's recording takes the board, as its terminal does.
+    // The color screen's recording takes the board, as its terminal does.
     if capture_color_tv.is_some() && !color_tv.fitted() {
         usage("--color-tv-capture records the color TV's screen: it needs --color-tv");
     }
@@ -4803,7 +4803,7 @@ fn main() {
         print!("{}", mapping.dump());
         std::process::exit(0);
     }
-    // The behavioural memory answers the interface's cycles and no other
+    // The behavioral memory answers the interface's cycles and no other
     // master's; the netlist controller's DMA needs memory boards.
     // **The model memory takes the disk down with it unless the netlist
     // controller was asked for.**  A run that chose the model memory did
@@ -4822,7 +4822,7 @@ fn main() {
     // The DISK MULTIPLEXOR hangs off the netlist controller's edge
     // connector, so there has to be one for it to hang off: the `chip`
     // engine's, and not its model. The model controller wants no such
-    // board on any engine --- it is behavioural and has had eight units
+    // board on any engine --- it is behavioral and has had eight units
     // all along, `disk_controller::UNITS` --- and `micro` and `rtl` have
     // no netlist board of any kind. The engine is named here rather than
     // left to the controller's default, which is netlist on `chip` and
@@ -4851,7 +4851,7 @@ fn main() {
     // its eight units.
     // The engine is named for the same reason the multiplexor's refusal
     // names it: the controller's default is netlist on `chip` and means
-    // nothing on `micro` and `rtl`, whose behavioural controller has
+    // nothing on `micro` and `rtl`, whose behavioral controller has
     // addressed eight units all along.
     if which == Which::Chip
         && disk_controller
@@ -4936,8 +4936,8 @@ fn main() {
             Err(e) => (None, Some(e)),
         },
     };
-    // The colour screen's display: the one above the last display bound,
-    // so a lashup with a colour board has three and none of them collide,
+    // The color screen's display: the one above the last display bound,
+    // so a lashup with a color board has three and none of them collide,
     // or where the flag says.
     let color_listen = color_tv.fitted().then(|| {
         let bound = |t: &Option<Terminal>| t.as_ref().and_then(|t| t.addr().ok());
@@ -5413,7 +5413,7 @@ fn main() {
             let dm_n = use_multiplexor.then(|| netlist::parse(DM).unwrap());
             // The second display board, when `--color-tv` asked for the
             // netlist: the LISPM TV, which is the board `lmtv.order`
-            // specifies and the only one there is a colour strap for,
+            // specifies and the only one there is a color strap for,
             // whatever `--tv-board` put at the main screen's addresses.
             let color_tv_n =
                 (color_tv == ColorTv::Netlist).then(|| netlist::parse_color_tv(LISPMTV).unwrap());

@@ -80,7 +80,7 @@ fn a_pc_with_no_label_is_named_by_the_one_above() {
     let (name, off) = s.nearest(Space::IMem, 0o27776).unwrap();
     assert_eq!(name, "DISK-COPY-SECTION");
     assert_eq!(off, 1);
-    // ILLOP is at 0o23, the lowest labelled place the microcode halts at.
+    // ILLOP is at 0o23, the lowest labeled place the microcode halts at.
     assert_eq!(s.at(Space::IMem, 0o23), ["ILLOP"]);
 }
 

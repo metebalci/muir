@@ -31,7 +31,7 @@ use muir::micro::Micro;
 use muir::rtl::Rtl;
 
 /// This machine's switches, and the address the frame comes from --- the
-/// band's file and time host, which is off the cable and not modelled
+/// band's file and time host, which is off the cable and not modeled
 /// here: the frame is put on the wire directly.
 const ME: u16 = 0o3050;
 const OTHER: u16 = 0o3060;
@@ -117,7 +117,7 @@ fn a_frame_lands<E: Engine>(mut e: E, name: &str) {
 }
 
 /// **A frame put on the cable lands, on `rtl`.** The engine advances the
-/// whole I/O board every microcycle, so this is the behaviour the other
+/// whole I/O board every microcycle, so this is the behavior the other
 /// engines are held to.
 #[test]
 fn a_frame_lands_on_rtl() {

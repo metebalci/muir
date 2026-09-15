@@ -35,7 +35,7 @@ use crate::machine::Machine;
 use crate::netlist::{NetId, Netlist};
 use crate::part::Level;
 
-/// The device's side of a Unibus interrupt, as the behavioural I/O board
+/// The device's side of a Unibus interrupt, as the behavioral I/O board
 /// runs it against the netlist bus interface --- the netlist I/O board
 /// runs its own. The PDP-11 Unibus handshake, which the CADR's interface
 /// takes as the PDP-11 would: the device asserts its bus request; the
@@ -106,7 +106,7 @@ pub struct Buses {
     /// a netlist on the backplane rather than the model answering
     /// `17200000` and `17377750`. Only ever true where
     /// `machine.color_tv` is fitted, the model beside the board being
-    /// where the colour picture is read off, and a machine with no second
+    /// where the color picture is read off, and a machine with no second
     /// screen at all has neither.
     pub color_tv_board: bool,
     /// Whether the disk controller is a netlist on the backplane. Then its
@@ -130,7 +130,7 @@ pub struct Buses {
     msyn: NetId,
     ssyn: NetId,
     c1: NetId,
-    /// The Unibus interrupt wires, for the behavioural I/O board's
+    /// The Unibus interrupt wires, for the behavioral I/O board's
     /// interrupt cycle: its request, the interface's grant, and the
     /// device's `SACK`, `BBSY` and `INTR`.
     br5: NetId,
@@ -138,7 +138,7 @@ pub struct Buses {
     sack: NetId,
     bbsy: NetId,
     intr: NetId,
-    /// Where the behavioural I/O board's interrupt cycle is.
+    /// Where the behavioral I/O board's interrupt cycle is.
     interrupting: Intr,
     /// `-UB ADR0..17`, bit 0 first.
     ubaddr: Vec<NetId>,
@@ -381,7 +381,7 @@ impl Buses {
                     // A device board on the backplane answers. A write to a
                     // display is mirrored into the model, so that the
                     // screen can be read off it --- the main screen into
-                    // `machine.tv` and the colour one into
+                    // `machine.tv` and the color one into
                     // `machine.color_tv`, which `Machine::bus_write` picks
                     // by the address.
                     if write && self.is_display(phys) {
@@ -473,7 +473,7 @@ impl Buses {
             _ => {}
         }
 
-        // The Unibus, with the behavioural I/O board as an interrupting
+        // The Unibus, with the behavioral I/O board as an interrupting
         // device. Not when the netlist board is on the backplane: that
         // board pulls `-BR*` and puts its vector on the bus itself.
         if !self.io_board {
@@ -481,7 +481,7 @@ impl Buses {
         }
 
         // The Xbus interrupt line: the disk controller's request, and the
-        // behavioural displays' vertical interrupts --- a netlist display
+        // behavioral displays' vertical interrupts --- a netlist display
         // board drives the wire itself, so the model beside it must not,
         // and that goes for the second display board as for the first.
         // The I/O board's is a Unibus one, and goes by the cycle above or
@@ -498,7 +498,7 @@ impl Buses {
         changed
     }
 
-    /// One step of the behavioural I/O board's interrupt cycle
+    /// One step of the behavioral I/O board's interrupt cycle
     /// ([`Intr`]); returns whether a wire moved.
     fn interrupt_cycle(&mut self, c: &mut Chip, now: u64) -> bool {
         let request = self.machine.ioboard.interrupt_request(now);

@@ -107,7 +107,7 @@ pub enum Event {
     Collision(u64),
 }
 
-/// A behavioural interface on the board side of the cable ---
+/// A behavioral interface on the board side of the cable ---
 /// [`crate::chaos::board::Interface`], `rtl`'s I/O board --- which sends
 /// and receives whole frames.  Its turn and its time on the cable are the
 /// ether's, as a node's are; what it hears is kept for it to take.
@@ -228,7 +228,7 @@ impl Ether {
         self.nodes.push(node);
     }
 
-    /// Puts a behavioural interface at `address` on the board side of the
+    /// Puts a behavioral interface at `address` on the board side of the
     /// cable.  One at most; the netlist board drives the cable itself.
     pub fn attach_board(&mut self, address: u16) {
         self.board = Some(Board {
@@ -241,7 +241,7 @@ impl Ether {
         });
     }
 
-    /// The behavioural board's frame to send, cable destination last, and
+    /// The behavioral board's frame to send, cable destination last, and
     /// the instant its turn timer starts it: it goes then, busy cable or
     /// not, and [`Ether::board_sending_until`] says when it ends.
     pub fn board_send(&mut self, buffer: Vec<u16>, start: u64) {
@@ -269,7 +269,7 @@ impl Ether {
     }
 
     /// A transmitter on the cable that aborted, oldest first, for the
-    /// behavioural board: the instant its `ABORT` set, whose frame, and
+    /// behavioral board: the instant its `ABORT` set, whose frame, and
     /// when it lets the cable go, [`ABORT_HOLD_NS`] on --- the frame's
     /// end from then, in place of its nominal one. The board's own frame
     /// among them is its Transmit Abort.
@@ -277,13 +277,13 @@ impl Ether {
         self.board.as_mut().and_then(|b| b.collisions.pop_front())
     }
 
-    /// When the behavioural board's frame on the cable ends, if one has
+    /// When the behavioral board's frame on the cable ends, if one has
     /// started and not ended.
     pub fn board_sending_until(&self) -> Option<u64> {
         self.board.as_ref().and_then(|b| b.sending_until)
     }
 
-    /// A frame the behavioural board heard, oldest first, as a receiver
+    /// A frame the behavioral board heard, oldest first, as a receiver
     /// takes it: everything on the cable but its own, wreckage included,
     /// for the interface to filter as the receiver does.
     pub fn board_heard(&mut self) -> Option<(u64, Received)> {

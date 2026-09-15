@@ -6,7 +6,7 @@
 //! `ttl::alu_control` says what reaches the 74S181 control pins, from the
 //! instruction register onwards. None of that is asserted here --- it is
 //! *evaluated*, by pulling the ten packages that implement it out of
-//! `data/CADR.netlist` and running them through the part behaviour in
+//! `data/CADR.netlist` and running them through the part behavior in
 //! `src/part.rs`. So the check runs from the drawings and the datasheets,
 //! with nothing taken from another emulator on the way.
 
@@ -104,7 +104,7 @@ fn evaluate(n: &Netlist, cluster: &[Package], inputs: &Inputs) -> BTreeMap<Strin
     for _ in 0..cluster.len() + 1 {
         let before = known.len();
         for pkg in cluster {
-            let b = part::behaviour(&pkg.kind).unwrap();
+            let b = part::behavior(&pkg.kind).unwrap();
             let mut pins: Pins = [Level::X; muir::part::MAX_PINS];
             for &(pin, net) in &pkg.pins {
                 if let Some(&v) = known.get(n.net(net)) {
@@ -198,7 +198,7 @@ fn every_control_net_has_one_driver() {
 ///
 /// Nothing here is asserted by hand: `ttl::alu_control` is compared against
 /// ten packages pulled out of `data/CADR.netlist` and evaluated through the
-/// part behaviour in `src/part.rs`, over every input that reaches them.
+/// part behavior in `src/part.rs`, over every input that reaches them.
 #[test]
 fn alu_control_matches_the_hardware() {
     let n = netlist::parse(NETLIST).unwrap();

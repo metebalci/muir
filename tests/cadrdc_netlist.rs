@@ -63,7 +63,7 @@ fn every_page_is_a_disk_control_page() {
 }
 
 /// Every part on the board is identified, and the pinouts are all read off
-/// a datasheet. Four have no behaviour, and should
+/// a datasheet. Four have no behavior, and should
 /// not: `26S02`, `74LS124`, `TD100` and `TD250` are the one-shot, the VCO
 /// and the two delay lines --- analog, as they are on the other boards,
 /// and `src/chip.rs` is where such parts are run.
@@ -71,17 +71,17 @@ fn every_page_is_a_disk_control_page() {
 /// This test names them, so the list is a fact enforced rather than a
 /// silence.
 ///
-/// A part with a behaviour that computes nothing is the same hole wearing a
+/// A part with a behavior that computes nothing is the same hole wearing a
 /// coat, so the second half names those too. What is left there is a dummy
 /// body and a capacitor, which is right. `TRITERM` is the one to watch: it is
-/// the bus cable's terminator, and with no behaviour the four status lines
+/// the bus cable's terminator, and with no behavior the four status lines
 /// reach no receiver at all.
 #[test]
 fn every_part_is_identified() {
     let k = support::kinds(&cadrdc());
     assert!(k.unknown.is_empty(), "no pinout for {:?}", k.unknown);
-    assert_eq!(k.silent, ["26S02", "74LS124", "TD100", "TD250"], "parts with no behaviour");
-    assert_eq!(k.empty, ["16DUMMY", "CAP1"], "parts whose behaviour computes nothing");
+    assert_eq!(k.silent, ["26S02", "74LS124", "TD100", "TD250"], "parts with no behavior");
+    assert_eq!(k.empty, ["16DUMMY", "CAP1"], "parts whose behavior computes nothing");
 }
 
 /// Two totem-pole outputs on one net is an electrical fault, so a wrongly
@@ -1242,7 +1242,7 @@ fn bit_3_is_dead_in_the_seek_and_miscellaneous_sectors() {
 /// Sector 4: `400` puts the cylinder on the bus and loops `ON CYLINDER`,
 /// `401` sends the cylinder tag, `402` holds the bus and stops. The
 /// on-cylinder condition is the drive's `READY/` on J01 pin 42, through
-/// TRITERM and a 74LS14 to `SEL UNIT ON CYL` and a 2 us synchroniser.
+/// TRITERM and a 74LS14 to `SEL UNIT ON CYL` and a 2 us synchronizer.
 /// With the cable empty it is never on cylinder, so the micro-PC stands
 /// at 1 with the first word in the UIR and the cylinder on the bus, and
 /// the status word says not-on-cylinder. When `READY/` is pulled down,
@@ -1386,7 +1386,7 @@ fn a_transfer_with_no_drive_stops_by_error() {
 /// sector 7 walks into unwritten PROM and stays at `31`. A reset between
 /// each --- `16` then `0` into the command register --- puts the word
 /// back to `0o21441`, the empty command register letting the lossage
-/// through again. The behavioural controller is held to the same words in
+/// through again. The behavioral controller is held to the same words in
 /// `tests/disk.rs`.
 ///
 /// The three waits end at the watchdog, 2.56 seconds on --- the hand
@@ -1501,7 +1501,7 @@ fn the_timeout_enable_jumper_starts_the_watchdog_clock() {
 /// which is `STATUS<11>` through the 74LS273 at DCSTS 0C12 and an input of
 /// the 74S260 at 0B13, so it stops the sequencer as the other errors do:
 /// `STATUS<13>`, `STOPPED BY ERROR`, comes up with it and `BUSY` drops.
-/// The behavioural controller reaches the same word from
+/// The behavioral controller reaches the same word from
 /// `disk_controller::TIMEOUT_NS`, in `tests/disk.rs`.
 #[test]
 #[ignore = "2.56 seconds of board, twenty seconds of wall clock; run with --ignored"]
@@ -1551,7 +1551,7 @@ fn quick_drive(now: u64) -> Trident {
 /// the track's leftover, which holds no block. Read during and after every
 /// pulse for a turn and a quarter: while a pulse is on the count is still
 /// the region before it, and the index pulse, the long one, holds that 17
-/// past a sector pulse's width and clears as it ends. The behavioural
+/// past a sector pulse's width and clears as it ends. The behavioral
 /// controller is held to the same readings in `tests/disk.rs`.
 #[test]
 fn the_block_counter_follows_the_drives_sector_pulses() {
@@ -1793,7 +1793,7 @@ fn a_read_with_a_drive_puts_the_block_in_memory() {
 /// missing: `<12>` "indicates that a start-of-block (sector pulse)
 /// happened at a time when it should not have. Either the disk is
 /// incorrectly formatted or it is generating spurious sector pulses." The
-/// board carries the detection --- the LS74 two-stage synchroniser at
+/// board carries the detection --- the LS74 two-stage synchronizer at
 /// DCHDCM 0D15 clocked off the drive's composite pulse, `BAD START BLOCK`
 /// at the LS08 0D16, and `ERR IF START BLOCK` asserted through nearly all
 /// of the read in `cadrdc/newdsk.31` --- and until
@@ -2051,7 +2051,7 @@ fn internal_parity_is_a_comparison_and_not_an_abort_flag() {
 /// Both states of the bit, taken at every step the harness makes inside
 /// the cycle rather than between two of them. Issue 88.
 #[test]
-fn status_8_is_the_on_cylinder_synchroniser() {
+fn status_8_is_the_on_cylinder_synchronizer() {
     const OFF_CYLINDER: u32 = 1 << 8;
     let n = cadrdc();
     let mut b = controller(&n);
@@ -2094,7 +2094,7 @@ fn status_8_is_the_on_cylinder_synchroniser() {
         eprintln!("{what}: status {status:o}, {} samples inside the read", read.len());
     };
 
-    // On cylinder: `READY/` low, the synchroniser holding it, and the bit
+    // On cylinder: `READY/` low, the synchronizer holding it, and the bit
     // down all the way to the backplane.
     let (status, seen) = p.cycle_watching(&mut b, REGS, None, &watch);
     assert!(seen.iter().all(|s| s[sync] == Level::Low), "-ON CYL SYNC while on cylinder");
@@ -3528,7 +3528,7 @@ fn a_multiplexor_leaves_the_one_board_jumpers_off() {
 
 /// **Which bits of the status word the two implementations are held to.**
 ///
-/// The disk controller is modelled twice --- behaviourally in
+/// The disk controller is modeled twice --- behaviorally in
 /// `src/disk_controller.rs` and gate-for-gate in `data/CADRDC.netlist` ---
 /// and until this section nothing put the same commands to both. Four
 /// closed issues were that gap: #8, #34, #36 and #69, each found by a
@@ -3555,7 +3555,7 @@ fn a_multiplexor_leaves_the_one_board_jumpers_off() {
 /// board takes gate delays.
 const PAIRED: u32 = !(0xffu32 << 24) & !(1 << 22);
 
-/// The behavioural controller with the same pack under it as the board's
+/// The behavioral controller with the same pack under it as the board's
 /// drive, charging the drive's own time.
 fn model_with(block: u32, data: &[u32; muir::disk_unit::BLOCK_WORDS]) -> (Controller, Vec<u32>) {
     let mut unit = Unit::blank(Geometry::T300);

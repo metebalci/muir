@@ -30,7 +30,7 @@ fn run(b: &mut UnibusMaster, k: &mut OnCable, until: u64, done: impl Fn(&UnibusM
 /// the three 74LS164s hold the word, `KBD READY` rises, and the two halves
 /// read back as the word sent, the high half's read leaving `KBD READY` and
 /// the low half's taking it --- the 74LS74 at IOBKBD 0B30 clears on
-/// `-READ.KBD.LOW` alone, which is what the behavioural board does in
+/// `-READ.KBD.LOW` alone, which is what the behavioral board does in
 /// `tests/ioboard.rs`. 25 clocks at 8 us is 200 us; the board is given 400.
 #[test]
 fn a_word_down_the_cable_reads_back_from_the_board() {

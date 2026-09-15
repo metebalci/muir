@@ -34,10 +34,10 @@ fn no_pinout_drives_its_own_supply_pin() {
 /// No part has a pin on its own ground or supply, which a wrong pinout or a
 /// wrong package size would give it.
 #[test]
-fn modelled_parts_never_touch_their_own_supply_pins() {
+fn modeled_parts_never_touch_their_own_supply_pins() {
     let checked = support::no_part_touches_its_own_supply_pins(&load());
     eprintln!("supply-pin check covered {checked} parts");
-    assert!(checked > 400, "only {checked} parts modelled");
+    assert!(checked > 400, "only {checked} parts modeled");
 }
 
 /// The strong one: two totem-pole outputs on one net is an electrical fault,
@@ -57,15 +57,15 @@ fn no_net_has_two_push_pull_drivers() {
 fn every_part_has_a_pinout() {
     let n = load();
     let mut missing: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut modelled = 0;
+    let mut modeled = 0;
     for part in &n.parts {
         if part::pinout(&part.kind).is_some() {
-            modelled += 1;
+            modeled += 1;
         } else {
             *missing.entry(part.kind.as_str()).or_default() += 1;
         }
     }
-    eprintln!("{modelled}/{} parts modelled", n.parts.len());
+    eprintln!("{modeled}/{} parts modeled", n.parts.len());
     let mut rest: Vec<_> = missing.into_iter().collect();
     rest.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
     assert!(rest.is_empty(), "parts with no pinout: {rest:?}");
@@ -112,8 +112,8 @@ fn report_split_net_candidates() {
 
 /// The complementary report to the one above. A net with no driver at all is
 /// either something that arrives from off the board, a supply, or a pin
-/// wrongly called an input. Every part being modelled, the list should be
-/// short and recognisable.
+/// wrongly called an input. Every part being modeled, the list should be
+/// short and recognizable.
 #[test]
 #[ignore = "a report, not a check: --ignored --nocapture"]
 fn report_undriven_nets() {
@@ -122,7 +122,7 @@ fn report_undriven_nets() {
 
 /// A part the table knows only by alias --- the LISPM TV's 2118 for the
 /// 4116, its 2141 for the 2147 --- is the whole of its target: the pins,
-/// the behaviour and, for a memory, the cells. `memory_words` once resolved
+/// the behavior and, for a memory, the cells. `memory_words` once resolved
 /// the suffixes but not the alias, and the LISPM TV's frame buffer was 64
 /// DRAMs with no cells: every read `X`.
 #[test]

@@ -227,7 +227,7 @@ fn clock_until_granted(b: &mut Busint, r: Responder, rose_at: u64) -> u64 {
 ///
 /// Read off the netlist bus interface and measured against it in
 /// `tests/busint_netlist.rs`: the request goes through the priority PROM,
-/// the grant chain and `SACK` before the request synchroniser grants it,
+/// the grant chain and `SACK` before the request synchronizer grants it,
 /// six master clocks at 220 ns, and the handshake with the board's own
 /// mode register takes 500 ns more, so the boot PROM's first Unibus write
 /// costs 1.8 microseconds where an Xbus write costs 300. The board is then
@@ -517,7 +517,7 @@ fn the_speed_bits_pick_the_microcycle() {
 // --- the board's own side of it ---
 
 /// The two delay lines on VCTL1 are what ends a memory cycle, and `chip` did
-/// not have them: a delay line computes nothing, so [`muir::part::behaviour`]
+/// not have them: a delay line computes nothing, so [`muir::part::behavior`]
 /// has none for it and the engine skipped the package altogether. `-MEMACK`
 /// then arrived and nothing happened.
 ///
@@ -531,7 +531,7 @@ fn the_speed_bits_pick_the_microcycle() {
 #[test]
 fn the_delay_lines_carry_memack_to_mfinishd_and_rdfinish() {
     use muir::chip::Chip;
-    use muir::clock::{Behavioural, Clock};
+    use muir::clock::{Behavioral, Clock};
     use muir::netlist;
     use muir::part::Level;
 
@@ -539,7 +539,7 @@ fn the_delay_lines_carry_memack_to_mfinishd_and_rdfinish() {
     let mut c = Chip::new(&n);
     c.power_on();
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let net = |name: &str| n.by_name_id(name).unwrap();
     let (memack, mfinishd, rdfinish) = (net("-MEMACK"), net("-MFINISHD"), net("-RDFINISH"));
 
@@ -581,7 +581,7 @@ fn the_delay_lines_carry_memack_to_mfinishd_and_rdfinish() {
 fn a_unibus_cycle_holds_no_memory_board() {
     let mut b = Busint::default();
     // A memory cycle on board 0, released 30 ns after its acknowledgement;
-    // the edge that grants it is the first the board's synchroniser sees
+    // the edge that grants it is the first the board's synchronizer sees
     // of its first refresh, due long before.
     b.request(false);
     b.mclk_edge(100_000, Responder::Memory(0));
@@ -642,7 +642,7 @@ fn the_memory_board_answers_on_its_own_clock_and_refreshes_between() {
     assert_eq!(b, rising_edge(taken + MEMORY_BUSY_STAGES + 1 + MEMORY_CYCLE_STAGES));
 
     // The first refresh is due REFRESH_NS after the one-shot first ran,
-    // an edge into the refresh cycle the board came up with, synchronised
+    // an edge into the refresh cycle the board came up with, synchronized
     // by two clock edges; a request landing after its edge is acknowledged
     // at the edge after its busy, plus a cycle.
     let refresh_time = rising_edge(MEMORY_POWER_ON_EDGE + REFRESH_TRIGGER_STAGES) + REFRESH_NS;
@@ -661,7 +661,7 @@ fn the_memory_board_answers_on_its_own_clock_and_refreshes_between() {
     }
 
     // An Xbus clock edge in the same instant as the one-shot's end is not
-    // seen by the synchroniser, which samples the line as it was: the
+    // seen by the synchronizer, which samples the line as it was: the
     // refresh request then comes one edge later.
     {
         let e = ((refresh_time / 220) + 1) * 220;

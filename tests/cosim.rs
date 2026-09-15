@@ -13,7 +13,7 @@
 //! conditions (`crate::ttl`), so those two agreeing about an ALU result says
 //! less than either agreeing with `chip`, which computes it from the 74S181s
 //! themselves.  `tests/chip.rs` is where that comparison lives; this file is
-//! `micro` against `rtl`, which is what catches a pipeline modelled wrong.
+//! `micro` against `rtl`, which is what catches a pipeline modeled wrong.
 //!
 //! Only executed cycles are compared.  A cycle the pipeline inhibits runs on
 //! the board and retires nothing, so counting it would make the two engines
@@ -75,7 +75,7 @@ fn booted<E>(make: impl Fn(Machine) -> E, boot: impl Fn(&mut E), pack: &Path) ->
 /// to say. `M 0` disagrees at many counts and so do `M 5`, `M 14`, `M 21`
 /// and `M 33` and a word of main memory: one engine has made a store the
 /// other has not, and a stop one instruction later has them agreeing
-/// again. It is the same stop artefact as the dead stack slot below, and
+/// again. It is the same stop artifact as the dead stack slot below, and
 /// `M 0` is only the most conspicuous of them because every discarded
 /// result goes there. Measured, not argued: every one of them is
 /// transient, and `A-DISK-STATUS` is the only word that parts for good.
@@ -179,7 +179,7 @@ fn engines_agree_on_memory() {
 ///
 /// **The band does not fetch a macroinstruction until 1,844,875**, half a
 /// million instructions past `PROM-DISABLE`: the boot PROM never moves the
-/// counter, and microcode 323 spends that long initialising in microcode
+/// counter, and microcode 323 spends that long initializing in microcode
 /// before it runs any macrocode. So `LC` is 0 for all but the last few
 /// hundred instructions of this run, and the assertion is worth making
 /// over all of them because 0 is what it should be.

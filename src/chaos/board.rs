@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! The Chaosnet interface as a behaviour, for the engines whose I/O board
+//! The Chaosnet interface as a behavior, for the engines whose I/O board
 //! is `rtl`'s model: the registers of [`super::interface`] over an
 //! [`Ether`], so that the stations on the cable answer `rtl` as they
 //! answer the netlist board.  The netlist board is the authority:

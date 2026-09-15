@@ -138,9 +138,9 @@ fn chosen() -> Chosen {
 }
 
 /// The far end [`chosen`] asks for. `MUIR_NO_SLEEP=1` turns every
-/// optimisation off, the slow way: every board stepped at every edge of
+/// optimization off, the slow way: every board stepped at every edge of
 /// its own clock instead of sleeping, every wire carried at every exchange
-/// ([`FarEnd::unoptimised`]).
+/// ([`FarEnd::unoptimized`]).
 fn far_end(n: &netlist::Netlist, machine: muir::machine::Machine) -> FarEnd {
     let c = chosen();
     let bus_n = netlist::parse(BUSINT).unwrap();
@@ -157,7 +157,7 @@ fn far_end(n: &netlist::Netlist, machine: muir::machine::Machine) -> FarEnd {
     };
     let mut far = FarEnd::new(n, &bus_n, &mem_n, boards, 0, machine);
     if std::env::var("MUIR_NO_SLEEP").is_ok() {
-        far.unoptimised();
+        far.unoptimized();
     }
     far
 }
@@ -175,7 +175,7 @@ fn far_end(n: &netlist::Netlist, machine: muir::machine::Machine) -> FarEnd {
 /// **Two boards are exceptions, and both for the comparison's sake.** The
 /// display is one; the disk controller is the other, `muir --chip` running
 /// its netlist since a boot through it was run to the end (issue 40) while
-/// this file keeps the behavioural one, because what it compares `chip`
+/// this file keeps the behavioral one, because what it compares `chip`
 /// against is `rtl`, which has no netlist disk to compare with.
 ///
 /// The reason for the display's exception is that the comparison is wrong
@@ -262,7 +262,7 @@ fn muir_builds_this_harnesss_machine_but_for_the_display() {
     // **The disk controller is the second exception, for the same kind of
     // reason as the display.**  `muir --chip` runs the netlist controller
     // since a boot through it was run to the end (issue 40), and this file
-    // compares `chip` against `rtl`, which has the behavioural one ---
+    // compares `chip` against `rtl`, which has the behavioral one ---
     // so a netlist controller here would be comparing two machines rather
     // than two models of one.  `MUIR_DISK_CONTROLLER=netlist` is how the
     // netlist board is asked for, and then nothing is being compared.
@@ -379,7 +379,7 @@ fn settling_is_deterministic() {
 /// After power-on and a settle, no net may be left unknown.
 ///
 /// This is the completeness check for the whole chain: a part whose
-/// behaviour is missing, a gate that reads a pin nothing drives, or a memory
+/// behavior is missing, a gate that reads a pin nothing drives, or a memory
 /// nobody sized would all show up here as an unknown that never resolves.
 /// Undriven nets are *not* unknown --- they come out high impedance, which a
 /// TTL input reads as a one.
@@ -444,7 +444,7 @@ fn the_feedback_loop_converges_in_a_few_sweeps() {
 /// update skip, which the rest of the suite let through as far as the boot.
 #[test]
 fn skipping_work_matches_doing_all_of_it() {
-    use muir::clock::Behavioural;
+    use muir::clock::Behavioral;
     use muir::part::Level;
     let n = netlist::parse(NETLIST).unwrap();
     let image: Vec<u64> = muir::prom::boot_prom_image();
@@ -460,8 +460,8 @@ fn skipping_work_matches_doing_all_of_it() {
     };
     let mut c = start(&n);
     let mut reference = start(&n);
-    let mut a = Behavioural::new();
-    let mut b = Behavioural::new();
+    let mut a = Behavioral::new();
+    let mut b = Behavioral::new();
 
     for tick in 0..400 {
         c.tick(&mut a);
@@ -512,7 +512,7 @@ fn skipping_work_matches_doing_all_of_it() {
 /// every part holds, and then runs *both* on and compares again.
 #[test]
 fn a_checkpoint_restores_the_machine_exactly() {
-    use muir::clock::Behavioural;
+    use muir::clock::Behavioral;
     use muir::part::Level;
     let n = netlist::parse(NETLIST).unwrap();
     let image: Vec<u64> = muir::prom::boot_prom_image();
@@ -520,7 +520,7 @@ fn a_checkpoint_restores_the_machine_exactly() {
     c.power_on();
     c.load_prom(&n, &image);
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     c.settle();
     for _ in 0..20 {
         c.tick(&mut clk);
@@ -538,7 +538,7 @@ fn a_checkpoint_restores_the_machine_exactly() {
     // The net has to be one a gate this chip evaluates reads, and forced to
     // the level it is not at. `-HANG` is the wrong choice that looks like the
     // right one: its only reader is on the clock generator page, which the
-    // behavioural clock stands in for, so forcing it marks nothing --- and
+    // behavioral clock stands in for, so forcing it marks nothing --- and
     // the stale marks a full settle leaves behind hide that, which is what
     // `Chip::mark_every_gate` keeps honest. `-BOOT2`, the light panel's
     // button, is read by the 74LS14 at OLORD2 1A20.
@@ -554,7 +554,7 @@ fn a_checkpoint_restores_the_machine_exactly() {
     let mut back = Chip::new(&n);
     let mut cursor = &saved[..];
     back.load(&mut cursor).unwrap();
-    let mut clk_back = Behavioural::load(&mut cursor).unwrap();
+    let mut clk_back = Behavioral::load(&mut cursor).unwrap();
     assert!(cursor.is_empty(), "{} bytes left over", cursor.len());
 
     let same = |a: &Chip, b: &Chip, when: &str| {
@@ -637,13 +637,13 @@ fn a_checkpoint_from_another_board_is_refused() {
 /// None of that gating is in the clock model. It is in the parts.
 #[test]
 fn the_clock_drives_the_board() {
-    use muir::clock::Behavioural;
+    use muir::clock::Behavioral;
     use muir::part::Level;
     let n = netlist::parse(NETLIST).unwrap();
     let mut c = Chip::new(&n);
     c.power_on();
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
 
     let watch = ["TPCLK", "TPTSE", "MCLK1", "-TSE1", "CLK1", "-WP1", "-WP5"];
     let ids: Vec<u32> = watch.iter().map(|w| n.by_name_id(w).unwrap()).collect();
@@ -730,7 +730,7 @@ fn the_prom_reads_back_onto_the_instruction_bus() {
 /// branch to `ERROR-BAD-BIT` on any failure, and passes it.
 #[test]
 fn chip_boots_the_prom() {
-    use muir::clock::Behavioural;
+    use muir::clock::Behavioral;
     use muir::part::Level;
     let n = netlist::parse(NETLIST).unwrap();
     let image: Vec<u64> = muir::prom::boot_prom_image();
@@ -751,7 +751,7 @@ fn chip_boots_the_prom() {
 
     assert_eq!(c.net(machrun), Level::Low, "should come up halted");
 
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     c.set_net(boot, Level::Low);
     // The preset is asynchronous but shows on the flop's output once the
     // parts have been updated, which a settle alone does not do and a tick
@@ -865,11 +865,11 @@ fn checkpoint(
     p: &std::path::Path,
     cycle: usize,
     c: &Chip,
-    clk: &muir::clock::Behavioural,
+    clk: &muir::clock::Behavioral,
     far: &FarEnd,
 ) {
     // This harness has no second display board: `none` is what the
-    // checkpoint's colour word says, and a resume onto a machine with one
+    // checkpoint's color word says, and a resume onto a machine with one
     // is refused by it.
     match muir::cable::write_checkpoint(p, cycle as u64, chosen().tv_board, "none", c, clk, far) {
         Ok(_) => {}
@@ -912,7 +912,7 @@ const RTL_START_STEPS: usize = 2;
 /// different display board, is refused by name rather than read wrong.
 fn resume_from_checkpoint(
     c: &mut Chip,
-    clk: &mut muir::clock::Behavioural,
+    clk: &mut muir::clock::Behavioral,
     r: &mut muir::rtl::Rtl,
     far: &mut FarEnd,
 ) -> Option<usize> {
@@ -1068,7 +1068,7 @@ fn hang_dump(far: &FarEnd) {
 /// `MUIR_RESUME` and `MUIR_SCREEN` are described where they are read.
 #[test]
 fn chip_agrees_with_rtl() {
-    use muir::clock::{Behavioural, Clock};
+    use muir::clock::{Behavioral, Clock};
     use muir::engine::Engine;
     use muir::part::Level;
     use muir::rtl::Rtl;
@@ -1086,7 +1086,7 @@ fn chip_agrees_with_rtl() {
     c.power_on();
     c.load_prom(&n, &image);
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let boot = n.by_name_id("-BOOT2").unwrap();
     // The far end of the cables, so that `chip` can finish a memory cycle at
     // all: nothing on this board drives `-MEMACK`. It is the bus interface
@@ -1746,7 +1746,7 @@ fn every_group_comes_after_the_ones_feeding_it() {
 /// settled and stable across it.
 #[test]
 fn chip_and_rtl_agree_on_the_spy_flags() {
-    use muir::clock::{Behavioural, Clock};
+    use muir::clock::{Behavioral, Clock};
     use muir::engine::Engine;
     use muir::part::Level;
     use muir::rtl::Rtl;
@@ -1764,7 +1764,7 @@ fn chip_and_rtl_agree_on_the_spy_flags() {
     c.power_on();
     c.load_prom(&n, &image);
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let boot = n.by_name_id("-BOOT2").unwrap();
     c.set_net(boot, Level::Low);
     c.settle();
@@ -1891,7 +1891,7 @@ const WRITE_SETTLED_NS: u32 = 10;
 
 #[test]
 fn chip_and_rtl_hold_the_same_memories() {
-    use muir::clock::{Behavioural, Clock};
+    use muir::clock::{Behavioral, Clock};
     use muir::engine::Engine;
     use muir::part::Level;
     use muir::rtl::Rtl;
@@ -1909,7 +1909,7 @@ fn chip_and_rtl_hold_the_same_memories() {
     c.power_on();
     c.load_prom(&n, &image);
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let boot = n.by_name_id("-BOOT2").unwrap();
     // Only main memory and the devices: the control store is on the board.
     let mut far = far_end(&n, pack);
@@ -2019,7 +2019,7 @@ use muir::isa::asm as microcode;
 fn same_program(
     n: &netlist::Netlist,
     m: &muir::machine::Machine,
-) -> (Chip, muir::clock::Behavioural, FarEnd, muir::rtl::Rtl) {
+) -> (Chip, muir::clock::Behavioral, FarEnd, muir::rtl::Rtl) {
     let far = far_end(n, m.clone());
     same_program_on(n, m, far)
 }
@@ -2030,8 +2030,8 @@ fn same_program_on(
     n: &netlist::Netlist,
     m: &muir::machine::Machine,
     mut far: FarEnd,
-) -> (Chip, muir::clock::Behavioural, FarEnd, muir::rtl::Rtl) {
-    use muir::clock::{Behavioural, Clock};
+) -> (Chip, muir::clock::Behavioral, FarEnd, muir::rtl::Rtl) {
+    use muir::clock::{Behavioral, Clock};
     use muir::engine::Engine;
     use muir::part::Level;
     use muir::rtl::Rtl;
@@ -2067,7 +2067,7 @@ fn same_program_on(
         l2.store(&mut c, k, v & 0o77777777);
     }
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     let boot = n.by_name_id("-BOOT2").unwrap();
     c.set_net(boot, Level::Low);
     c.settle();
@@ -2102,7 +2102,7 @@ fn same_program_on(
 fn generator_cycle(
     c: &mut Chip,
     far: &mut FarEnd,
-    clk: &mut muir::clock::Behavioural,
+    clk: &mut muir::clock::Behavioral,
     clk0: netlist::NetId,
 ) -> bool {
     use muir::clock::Clock;
@@ -2562,7 +2562,7 @@ impl DebuggerOnCable {
         &self,
         c: &mut Chip,
         far: &mut FarEnd,
-        clk: &mut muir::clock::Behavioural,
+        clk: &mut muir::clock::Behavioral,
         strobe: u8,
         write: bool,
         dbd: u16,
@@ -2756,7 +2756,7 @@ fn meet(
     n: &netlist::Netlist,
     c: &mut Chip,
     far: &mut FarEnd,
-    clk: &mut muir::clock::Behavioural,
+    clk: &mut muir::clock::Behavioral,
     r: &mut muir::rtl::Rtl,
     clk0: netlist::NetId,
 ) {
@@ -2813,7 +2813,7 @@ impl<'a> Lockstep<'a> {
         &self,
         c: &mut Chip,
         far: &mut FarEnd,
-        clk: &mut muir::clock::Behavioural,
+        clk: &mut muir::clock::Behavioral,
         r: &mut muir::rtl::Rtl,
     ) {
         use muir::engine::Engine;
@@ -2847,7 +2847,7 @@ impl<'a> Lockstep<'a> {
         &self,
         c: &mut Chip,
         far: &mut FarEnd,
-        clk: &mut muir::clock::Behavioural,
+        clk: &mut muir::clock::Behavioral,
         r: &mut muir::rtl::Rtl,
         strobe: u8,
         write: bool,
@@ -2927,7 +2927,7 @@ impl<'a> Lockstep<'a> {
         &self,
         c: &mut Chip,
         far: &mut FarEnd,
-        clk: &mut muir::clock::Behavioural,
+        clk: &mut muir::clock::Behavioral,
         r: &mut muir::rtl::Rtl,
         uaddr: u32,
     ) -> u16 {
@@ -2942,7 +2942,7 @@ impl<'a> Lockstep<'a> {
         &self,
         c: &mut Chip,
         far: &mut FarEnd,
-        clk: &mut muir::clock::Behavioural,
+        clk: &mut muir::clock::Behavioral,
         r: &mut muir::rtl::Rtl,
         uaddr: u32,
         val: u16,
@@ -2958,7 +2958,7 @@ impl<'a> Lockstep<'a> {
         &self,
         c: &mut Chip,
         far: &mut FarEnd,
-        clk: &mut muir::clock::Behavioural,
+        clk: &mut muir::clock::Behavioral,
         r: &mut muir::rtl::Rtl,
         eadr: u8,
         val: u16,
@@ -3406,7 +3406,7 @@ fn chip_and_rtl_hold_the_same_location_counter() {
 /// **A speed change is taken on the same generator cycle by the board and
 /// by `rtl`.**  The mode register's two speed bits pick which tap of the
 /// delay line ends the read phase, and the 74S174 at OLORD1 1A01 is a
-/// two-stage synchroniser on `SPEEDCLK` between the register and the
+/// two-stage synchronizer on `SPEEDCLK` between the register and the
 /// multiplexer.  Nothing else in this file changes speed --- every board
 /// test runs at the extra slow the machine comes up at --- so the cycle a
 /// change lands on went unchecked until this.
@@ -3414,7 +3414,7 @@ fn chip_and_rtl_hold_the_same_location_counter() {
 /// It was wrong.  `rtl` landed a debug master's write of the mode register
 /// only at the master clock edge, so the `SPEEDCLK` sixty nanoseconds into
 /// the cycle the write arrived in did not see it and the whole
-/// synchroniser ran a cycle behind the board's.  The board's cycle at 5260
+/// synchronizer ran a cycle behind the board's.  The board's cycle at 5260
 /// ns ran the new 145 and `rtl`'s ran the old 220, and the two stood 75 ns
 /// apart --- 220 less 145 --- from there on, never meeting again.
 ///
@@ -3447,7 +3447,7 @@ fn chip_and_rtl_take_a_speed_change_on_the_same_cycle() {
     for (bits, speed) in speeds {
         lock.spy_write(&mut c, &mut far, &mut clk, &mut r, spy::MODE, bits);
         meet(&n, &mut c, &mut far, &mut clk, &mut r, clk0);
-        // Past the two stages of the synchroniser, whichever cycle of the
+        // Past the two stages of the synchronizer, whichever cycle of the
         // write the register happened to load in.
         for _ in 0..3 {
             generator_cycle(&mut c, &mut far, &mut clk, clk0);
@@ -3938,7 +3938,7 @@ impl DebuggerOnCable {
         &self,
         c: &mut Chip,
         far: &mut FarEnd,
-        clk: &mut muir::clock::Behavioural,
+        clk: &mut muir::clock::Behavioral,
         write: bool,
         dbd: u16,
         wait_ns: u64,
@@ -4041,7 +4041,7 @@ fn chip_and_rtl_answer_the_unibus_map_alike() {
     // A cycle the map refuses, on both, lifted after `wait_ns`.
     let refused = |c: &mut Chip,
                    far: &mut FarEnd,
-                   clk: &mut muir::clock::Behavioural,
+                   clk: &mut muir::clock::Behavioral,
                    r: &mut muir::rtl::Rtl,
                    uaddr: u32,
                    write: Option<u16>| {
@@ -4267,7 +4267,7 @@ fn chip_and_rtl_answer_the_processors_own_mapped_cycle_alike() {
 /// single address cannot see.  `40777` is also the word issue 88 wanted:
 /// the 512th CCW of a cold-load command list.
 ///
-/// What the neighbours own rather than this: writing memory through the
+/// What the neighbors own rather than this: writing memory through the
 /// Unibus map from the debug cable and reading it back is
 /// [`chip_and_rtl_answer_the_unibus_map_alike`], and that a word poked
 /// into the cells comes back out of them is `tests/cables.rs`.  This owns
@@ -4375,7 +4375,7 @@ fn chip_and_rtl_read_the_same_main_memory() {
 /// Brings a machine that has no event before `t` to `t`: time passes on its
 /// clock, its boards settle there, and it is joined against its own cables
 /// --- for a wire of the debug cable that the other machine just moved.
-fn bring_to(c: &mut Chip, far: &mut FarEnd, clk: &mut muir::clock::Behavioural, t: u64) {
+fn bring_to(c: &mut Chip, far: &mut FarEnd, clk: &mut muir::clock::Behavioral, t: u64) {
     use muir::clock::Clock;
     if clk.time_ns() < t {
         clk.pass(t, clk.next_at(c.clock_inputs()).is_none());
@@ -4542,7 +4542,7 @@ fn a_chip_debugger_halts_and_reads_a_chip_debuggee() {
 /// runs out over the first thousand microcycles of the boot, on any board.
 #[test]
 fn no_transition_runs_out_of_rounds() {
-    use muir::clock::Behavioural;
+    use muir::clock::Behavioral;
     use muir::part::Level;
     let n = netlist::parse(NETLIST).unwrap();
     let image: Vec<u64> = muir::prom::boot_prom_image();
@@ -4550,7 +4550,7 @@ fn no_transition_runs_out_of_rounds() {
     c.power_on();
     c.load_prom(&n, &image);
     c.settle();
-    let mut clk = Behavioural::new();
+    let mut clk = Behavioral::new();
     // The first thousand microcycles of the boot reach no device, so the
     // far end needs no pack.
     let mut far = far_end(&n, muir::machine::Machine::new());
@@ -4686,7 +4686,7 @@ fn chip_and_rtl_hold_an_unanswered_cycle_under_the_timeout_inhibit_alike() {
         // Through a hang that never ends the generator never comes round, so
         // the board is advanced event by event to an instant.
         let advance =
-            |c: &mut Chip, far: &mut FarEnd, clk: &mut muir::clock::Behavioural, until: u64| {
+            |c: &mut Chip, far: &mut FarEnd, clk: &mut muir::clock::Behavioral, until: u64| {
                 let mut n = 0;
                 while clk.time_ns() < until {
                     far.tick_with(c, clk);
@@ -4697,7 +4697,7 @@ fn chip_and_rtl_hold_an_unanswered_cycle_under_the_timeout_inhibit_alike() {
         const HOLD_NS: u64 = busint::UNIBUS_STROBE_NS;
         let strobe = |c: &mut Chip,
                       far: &mut FarEnd,
-                      clk: &mut muir::clock::Behavioural,
+                      clk: &mut muir::clock::Behavioral,
                       r: &mut muir::rtl::Rtl,
                       dbd: u16|
          -> u64 {
@@ -4817,10 +4817,10 @@ fn two_chip_machines_read_each_others_pc_over_two_cables() {
                     ba: &mut DebugCable,
                     ca: &mut Chip,
                     fa: &mut FarEnd,
-                    clka: &mut muir::clock::Behavioural,
+                    clka: &mut muir::clock::Behavioral,
                     cb: &mut Chip,
                     fb: &mut FarEnd,
-                    clkb: &mut muir::clock::Behavioural,
+                    clkb: &mut muir::clock::Behavioral,
                     t: u64| {
         for _ in 0..12 {
             let moved = ab.exchange(&mut fa.board, &mut fb.board);
@@ -5254,13 +5254,13 @@ fn the_mask_proms_hold_mits_own_table() {
 /// answers its own two blocks and neither answers the other's, no cycle is
 /// left for the timeout to give up on, and the models behind the buses
 /// hold both pictures --- `machine.tv` the main screen's word,
-/// `machine.color_tv` the colour one's and the colour map register 4
+/// `machine.color_tv` the color one's and the color map register 4
 /// wrote. `Buses` mirrors a write to either board into the model that
 /// answers for it, so the screen is read off the same place whether the
 /// board is a netlist or not.
 ///
 /// The last cycle is `COLOR-EXISTS-P`'s own probe: System 100 writes a
-/// word at the colour buffer's first location and reads it back, and a
+/// word at the color buffer's first location and reads it back, and a
 /// machine with no second board gets an NXM there. It gets its word back
 /// here.
 #[test]
@@ -5276,8 +5276,8 @@ fn two_display_boards_answer_at_their_own_straps() {
     // is read off the model whichever board drew it.
     m.fit_color_tv();
     m.amem[3] = 0o123456;
-    // Three pages through one level-1 block: the colour buffer, the main
-    // screen's buffer, and the colour board's control block.
+    // Three pages through one level-1 block: the color buffer, the main
+    // screen's buffer, and the color board's control block.
     m.l1_map[0] = 0;
     let mapped = |phys: u32| (1 << 23) | (1 << 22) | (phys >> 8);
     m.l2_map[0] = mapped(COLOR_TV.buffer);
@@ -5285,17 +5285,17 @@ fn two_display_boards_answer_at_their_own_straps() {
     m.l2_map[2] = mapped(COLOR_TV.control);
 
     // The words, and the virtual address of each place they go. Register 4
-    // is the colour map's write port: `(DPB value 1010 (DPB channel 0602
-    // colour))`, as `WRITE-COLOR-MAP` writes it.
-    const COLOUR_WORD: u32 = 0x1234_5678;
+    // is the color map's write port: `(DPB value 1010 (DPB channel 0602
+    // color))`, as `WRITE-COLOR-MAP` writes it.
+    const COLOR_WORD: u32 = 0x1234_5678;
     const MAIN_WORD: u32 = 0x0fed_cba9;
     const MAP_VALUE: u32 = 0o252;
-    const MAP_COLOUR: u32 = 5;
-    m.mmem[1] = COLOUR_WORD;
+    const MAP_COLOR: u32 = 5;
+    m.mmem[1] = COLOR_WORD;
     m.mmem[2] = 5; // page 0, word 5: 17200005
     m.mmem[3] = MAIN_WORD;
     m.mmem[4] = (1 << 8) | 5; // page 1, word 5: 17000005
-    m.mmem[5] = MAP_VALUE << 8 | MAP_COLOUR;
+    m.mmem[5] = MAP_VALUE << 8 | MAP_COLOR;
     m.mmem[6] = (2 << 8) | ((COLOR_TV.control + 4) & 0o377); // 17377754
     m.mmem[7] = 1; // COLOR-EXISTS-P's probe
     m.mmem[8] = 0; // page 0, word 0: 17200000
@@ -5311,9 +5311,9 @@ fn two_display_boards_answer_at_their_own_straps() {
         prom[*at + 1] = Insn::new(ALU | SETM | m_src(addr) | a_src(3) | START_WRITE);
         *at += 42;
     };
-    write(&mut prom, &mut at, 1, 2); // 17200005 <- COLOUR_WORD
+    write(&mut prom, &mut at, 1, 2); // 17200005 <- COLOR_WORD
     write(&mut prom, &mut at, 3, 4); // 17000005 <- MAIN_WORD
-    write(&mut prom, &mut at, 5, 6); // 17377754 <- the colour map
+    write(&mut prom, &mut at, 5, 6); // 17377754 <- the color map
     write(&mut prom, &mut at, 7, 8); // 17200000 <- 1, the probe
     // The words are parked from `A` 101 up: 100 is the filler's own
     // destination, `A[100] <- A[3]`, and a word parked there is written
@@ -5331,9 +5331,9 @@ fn two_display_boards_answer_at_their_own_straps() {
     let bus_n = netlist::parse(BUSINT).unwrap();
     let mem_n = netlist::parse(CADRM).unwrap();
     let tv_n = netlist::parse(SIMPLETV).unwrap();
-    let colour_n = netlist::parse_color_tv(LISPMTV).unwrap();
+    let color_n = netlist::parse_color_tv(LISPMTV).unwrap();
     let boards =
-        Boards { memory: 0, tv: Some(&tv_n), color_tv: Some(&colour_n), ..Default::default() };
+        Boards { memory: 0, tv: Some(&tv_n), color_tv: Some(&color_n), ..Default::default() };
     let far = FarEnd::new(&n, &bus_n, &mem_n, boards, 0, m.clone());
     let (mut c, mut clk, mut far, _r) = same_program_on(&n, &m, far);
     let clk0 = cpu_clock(&n);
@@ -5345,29 +5345,29 @@ fn two_display_boards_answer_at_their_own_straps() {
     // What the boards gave back. A cycle nothing answered would have been
     // given up on after `busint::TIMEOUT_NS` with the NXM flagged, and the
     // word in `MD` would be whatever was on the bus.
-    assert_eq!(a.word(&c, 0o101), COLOUR_WORD, "17200005 read back off the color TV");
+    assert_eq!(a.word(&c, 0o101), COLOR_WORD, "17200005 read back off the color TV");
     assert_eq!(a.word(&c, 0o102), MAIN_WORD, "17000005 read back off the main screen's board");
     assert_eq!(a.word(&c, 0o103), 1, "COLOR-EXISTS-P's probe at 17200000");
     assert_eq!(far.buses.machine.bus_error, 0, "no cycle was given up on");
 
     // And what the models hold: the picture whichever board drew it.
     let machine = &far.buses.machine;
-    let colour = machine.color_tv.as_ref().expect("the color TV is fitted beside its board");
-    assert_eq!(colour.buffer()[5], COLOUR_WORD, "the colour word is mirrored into its model");
-    assert_eq!(colour.buffer()[0], 1, "and so is the probe");
+    let color = machine.color_tv.as_ref().expect("the color TV is fitted beside its board");
+    assert_eq!(color.buffer()[5], COLOR_WORD, "the color word is mirrored into its model");
+    assert_eq!(color.buffer()[0], 1, "and so is the probe");
     assert_eq!(machine.tv.buffer()[5], MAIN_WORD, "the main screen's into its own");
-    assert_eq!(machine.tv.buffer()[0], 0, "which the colour writes did not reach");
+    assert_eq!(machine.tv.buffer()[0], 0, "which the color writes did not reach");
     // `WRITE-COLOR-MAP` writes the map inverted, which `Tv::rgb` undoes;
     // the byte register 4 stored is what `color_map` holds.
     assert_eq!(
-        colour.color_map()[MAP_COLOUR as usize][0],
+        color.color_map()[MAP_COLOR as usize][0],
         MAP_VALUE as u8,
-        "register 4 of the colour board wrote channel 0 of colour {MAP_COLOUR}"
+        "register 4 of the color board wrote channel 0 of color {MAP_COLOR}"
     );
     eprintln!(
-        "two display boards: 17200005 {:#x}, 17000005 {:#x}, colour {MAP_COLOUR} channel 0 {:o}",
-        colour.buffer()[5],
+        "two display boards: 17200005 {:#x}, 17000005 {:#x}, color {MAP_COLOR} channel 0 {:o}",
+        color.buffer()[5],
         machine.tv.buffer()[5],
-        colour.color_map()[MAP_COLOUR as usize][0]
+        color.color_map()[MAP_COLOR as usize][0]
     );
 }

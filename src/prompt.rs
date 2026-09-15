@@ -254,7 +254,7 @@ pub fn parse(line: &str) -> Result<Option<Command>, String> {
 /// The name is taken whole, spaces and all, because MIT's own net names
 /// have spaces in them --- `SYNC PROM ENB`, `-UNIT 0 ENB` --- and quoting
 /// them at a prompt would be one more thing to get wrong. So the board and
-/// the width are recognised by their punctuation and everything else is
+/// the width are recognized by their punctuation and everything else is
 /// the name.
 pub fn parse_net_name(arg: &str, who: &str) -> Result<NetName, String> {
     let arg = arg.trim();

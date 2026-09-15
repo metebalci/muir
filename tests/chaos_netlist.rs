@@ -721,7 +721,7 @@ fn the_board_asks_the_time_and_is_answered() {
 /// Transmit Done comes: the CSR reads Transmit Done and Transmit Abort.
 /// The model transmitter stops too, [`ABORT_NS`] after the interference,
 /// and nothing whole was on the cable. The board's nets are watched
-/// through it, for the instants the behavioural interface is held to.
+/// through it, for the instants the behavioral interface is held to.
 #[test]
 fn the_board_aborts_its_transmission_on_interference() {
     use muir::chaos::ether::{ABORT_NS, Capture, Ether, Event};
@@ -860,7 +860,7 @@ fn the_board_receives_wreckage_addressed_to_it() {
 /// **CRC Error reads set while a frame is coming in.** AIM-628 says the
 /// bit is "only valid at two times"; between them the board's check
 /// register is mid-packet and the bit reads 1, at every poll of a good
-/// packet for the board until it lands, and 0 then. The behavioural
+/// packet for the board until it lands, and 0 then. The behavioral
 /// interface shows the same, which `tests/chaos_rtl.rs` holds it to.
 #[test]
 fn crc_error_while_a_frame_comes_in() {

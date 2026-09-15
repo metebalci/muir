@@ -86,7 +86,7 @@ microcycle boundary. Run the fast one, check it against the slow one.
 | `chip` | The parts themselves, resolved net by net from whatever drives each, with every board on both buses a netlist too. The reference: where it and `rtl` part, the drawings decide which is wrong. | ~1/4,000 |
 
 Those figures are microcycles against the machine's own 145 ns microcycle,
-and **the disk is outside them**. With the disk controller as a behavioural
+and **the disk is outside them**. With the disk controller as a behavioral
 model --- always on `micro` and `rtl`, and on `chip` when it is given
 `--disk-controller model` --- a transfer completes inside the store to
 `START` and a seek takes no time. The hardware spent milliseconds on a seek
@@ -110,7 +110,7 @@ the disk is made quick.
 `rtl` is the engine for ordinary use, and `chip` means the gate-level
 machine throughout: `--main-memory`, `--io-board`, `--tv`, `--color-tv` and
 `--disk-controller` all start there as netlists, and each takes `model` for
-`rtl`'s behavioural one instead, one board at a time. Those mixes are
+`rtl`'s behavioral one instead, one board at a time. Those mixes are
 instruments rather than machines --- the two engines are held to each other
 at every microcycle, so where a board and its model part one of them is
 wrong, and running a board as its model is how you find out which.
@@ -135,17 +135,17 @@ the other addresses `cadrtv/lmtv.order` gives: the frame buffer at
 main screen stays at `17000000` whichever board `--tv-board` named, because
 System 100 hardwires `MAIN-SCREEN` to one bit a pixel there. It is off by
 default, and a machine without it answers those addresses with an NXM,
-which is how the release's `COLOR-EXISTS-P` finds out there is no colour
+which is how the release's `COLOR-EXISTS-P` finds out there is no color
 screen. With it fitted the cold boot sets the board up: `COLOR:SETUP` loads
 the NTSC sync program, starts it in clock mode 3 with vertical spacing 36,
-and writes the sixteen colours of the map. The picture is 576 by 454 at
+and writes the sixteen colors of the map. The picture is 576 by 454 at
 four bits a pixel through that map, served on `--color-terminal`. The flag
 takes a word of its own, `--color-tv [netlist|model]`, as `--tv` does:
 `netlist` puts a second LISPM TV on `chip`'s backplane, wrapped to the
-colour addresses, and is `chip`'s alone; `model` is the behavioural board
+color addresses, and is `chip`'s alone; `model` is the behavioral board
 and every engine takes it. The bare flag is the netlist on `chip` and the
 model elsewhere. Either way the model is fitted behind the buses and every
-write to the board is mirrored into it, so the colour picture is read off
+write to the board is mirrored into it, so the color picture is read off
 the same place whichever board drew it.
 
 ## The netlists
@@ -154,7 +154,7 @@ A netlist here is the board itself --- every part, every pin, every wire. None
 is drawn by hand or transcribed from a scan: each is extracted from MIT's own
 SUDS drawings and then held, pin by pin, to MIT's own wire list for the same
 board, and where the two disagree a test fails. Underneath, a part is a
-behaviour checked against its datasheet, nets resolve four-valued so an
+behavior checked against its datasheet, nets resolve four-valued so an
 open-collector bus behaves as it does on the board, and parts are evaluated in
 level order.
 
@@ -212,7 +212,7 @@ System 304's sources, which upstream ships no tarball of, built from the
 project's own Fossil repository at the check-in that carries CC's rewritten
 `MAKE-ARRAY` calls --- each script says exactly what it fetched and from
 where. Everything in them is under the
-AGPL, muir's own licence. Without them, everything needing a pack skips and
+AGPL, muir's own license. Without them, everything needing a pack skips and
 says so. Windows is untested; the scripts are POSIX shell, so use WSL.
 
 The two packs are different machines and want different flags. System 100's
@@ -279,7 +279,7 @@ meaning: RFB's `None` security is the only type offered, so a viewer needs
 no password. A port that is named there is bound as it stands, and the run
 stops rather than serving a viewer somewhere it was not told to look.
 
-With `--color-tv` the colour screen is served too, at the display above
+With `--color-tv` the color screen is served too, at the display above
 this one or wherever `--color-terminal` says. **Pixels only**: the machine
 has one keyboard and one mouse, both on the I/O board, and they stay with
 the terminal that serves the main screen, so what a viewer types or points
@@ -374,10 +374,10 @@ the lashup it records both machines on one canvas, the debugger's screen at
 the left and the debuggee's at the right, so that a frame is one instant on
 both: in one process the two are one clock, and a GIF writes each frame's
 length in centiseconds, which two files of the same run could not hold
-together. It is the main screen: `--color-tv-capture <gif>` is the colour
-one, to a file of its own, 576 by 454 with the sixteen colours of the map as
-the GIF's own colours --- and a frame taken after the machine has rewritten
-the map carries a colour table of its own, a GIF resolving each frame's
+together. It is the main screen: `--color-tv-capture <gif>` is the color
+one, to a file of its own, 576 by 454 with the sixteen colors of the map as
+the GIF's own colors --- and a frame taken after the machine has rewritten
+the map carries a color table of its own, a GIF resolving each frame's
 pixels as it lays them down.
 
 `--checkpoint <file>` writes the machine's whole state when the run stops,
@@ -567,7 +567,7 @@ as **Chaosnet over UDP** --- the encapsulation `cbridge`, `usim`, `klh10`,
 unless it says where. **Without the cable muir sends nothing**, as a machine
 with none talks to nobody however its switches read. Every host
 `--chaos-udp-peer 3060@host:port` names is then a station on the same
-modelled cable, taking its turn on it like any other, and that is how a run
+modeled cable, taking its turn on it like any other, and that is how a run
 names its band's file and time host. muir stays a leaf: a frame goes out only when
 this machine put it on the cable, so one host's is never carried on to
 another, and a `cbridge` beside it is what routes. `--chaos-udp-default-peer <host>[:<port>]` is where that bridge is: a
@@ -578,16 +578,16 @@ broadcast is not handed to it, the named peers being stations on this
 machine's own cable.
 
 muir's own tests do not want a daemon running beside them, so they put a
-Chaosnet server of their own on the modelled cable, in process. It lives in
+Chaosnet server of their own on the modeled cable, in process. It lives in
 `tests/support/` and is no part of the simulator.
 
 ## Layout
 
     mit/       MIT's own files, unmodified: the drawings and wire lists of
-               every board modelled here, and a snapshot of System 100's own
+               every board modeled here, and a snapshot of System 100's own
                sys tree, which the boot PROM comes from. mit/README.md
     data/      what is made from mit/ by a script in tools/, each
-               cross-checked or labelled: the eight netlists, the disk
+               cross-checked or labeled: the eight netlists, the disk
                controller's microcode, the cable tables. data/README.md
     src/       the simulator, the muir binary and diskpack
     tests/     the checks
@@ -634,14 +634,14 @@ depending on it says **unverified**, and why.
 muir is implemented entirely by [Claude Code](https://claude.com/claude-code),
 on Anthropic's Opus 5 and Fable 5.1 models.
 
-## Licence
+## License
 
 Copyright (C) 2026 Mete Balci.
 
 Free software under the **GNU Affero General Public License**, version 3 or,
 at your option, any later version. Distributed in the hope that it will be
 useful, but WITHOUT ANY WARRANTY; see `LICENSE` for the full text. AGPL
-matches `ams/cadr4` and the System 100 release. The MIT licence was
+matches `ams/cadr4` and the System 100 release. The MIT license was
 considered and rejected: it would permit a closed-source derivative, and not
 permitting one is the point.
 
@@ -654,7 +654,7 @@ from it. `tools/soap4/` is the reader for MIT's drawings, C that came here
 from `ams/cadr4` under the AGPL: `soap4.c` follows Brad Parker's `soap.c` of
 2004 and `unpack4.c` John Wilson's `unpack.c` of 1993, each keeping its
 original header and naming its original author in its copyright line.
-Neither original carries a licence --- not in the copies here and not in
+Neither original carries a license --- not in the copies here and not in
 Brad Parker's own repository they were published from --- so the AGPL covers
 the work done on them and cannot make a grant for what came before it. That
 is the one open licensing question in this repository, and

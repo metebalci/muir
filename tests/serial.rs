@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! The serial port as the behavioural engines have it, `src/serial.rs`
+//! The serial port as the behavioral engines have it, `src/serial.rs`
 //! behind `src/ioboard.rs`: the 2651's registers against the Signetics
 //! sheet, its addresses against MIT's own list, and its transmitter and
 //! receiver against the frame the sheet's baud-rate table gives them.
@@ -184,7 +184,7 @@ fn the_mode_pointer_alternates_and_a_command_read_resets_it() {
     assert_eq!(read_mode(&mut b, 0), 0, "RESET clears both registers");
 }
 
-/// **The driver's own initialisation lands the registers where it
+/// **The driver's own initialization lands the registers where it
 /// expects.** `(SERIAL-STREAM-MIXIN :INIT)` in `serial.lisp`: reset the
 /// errors, enable both halves, `(SERIAL-WRITE-MODE 60)` for the internal
 /// clocks, then asynchronous, one stop bit, even parity, seven data bits,
@@ -193,7 +193,7 @@ fn the_mode_pointer_alternates_and_a_command_read_resets_it() {
 /// asynchronous" and "internal transmit clock, internal receive clock,
 /// 300 baud", which is what the fields below say.
 #[test]
-fn mits_driver_initialises_the_port_the_way_it_reads_it_back() {
+fn mits_driver_initializes_the_port_the_way_it_reads_it_back() {
     let mut b = plugged();
     let uart_command = (command::TX_ENABLE | command::RX_ENABLE) as u16;
     b.write(COMMAND, command::RESET_ERROR as u16, 0);

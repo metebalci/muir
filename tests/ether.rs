@@ -230,7 +230,7 @@ fn a_frame_put_on_a_busy_cable_collides_and_the_first_is_offered_again() {
 }
 
 /// **The board's frame goes at its turn timer's instant, and the board is
-/// told of the collision.** The behavioural board's turn timer decided at
+/// told of the collision.** The behavioral board's turn timer decided at
 /// its terminal count and its frame starts at the instant given, whether
 /// or not a host has taken the cable since. Both stop; the board is told
 /// when, and that its own frame was one of them, so its busy line and its

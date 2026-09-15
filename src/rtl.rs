@@ -27,7 +27,7 @@
 //!
 //! **The scratchpads are asynchronous and the latches are the state.** They
 //! are 93425As with no clock pin, so what holds a word between phases is the
-//! 74S373 at ALATCH, MLATCH, PLATCH or SPCLCH and not the memory. Modelling
+//! 74S373 at ALATCH, MLATCH, PLATCH or SPCLCH and not the memory. Modeling
 //! the memory as a register loaded early is the 74S373 drawn one state too
 //! soon.
 //!
@@ -68,7 +68,7 @@ use crate::busint::{self, Busint, Responder};
 /// Nothing in the boot turns on which of the two it is.
 const RD_FINISH_NS: u64 = 140;
 
-/// How far into a generator cycle `SPEEDCLK` clocks the speed synchroniser
+/// How far into a generator cycle `SPEEDCLK` clocks the speed synchronizer
 /// at OLORD1 1A01: `src/clock.rs` has the derivation.
 const SPEEDCLK_NS: u64 = 60;
 
@@ -349,7 +349,7 @@ pub struct Rtl {
     /// `SSPEED1, SSPEED0`, which pick the delay-line tap that ends the read
     /// phase. Cleared at reset, so the machine comes up extra slow; the
     /// console writes them, and so does microcode 323, with `46`, as soon as
-    /// it runs. The 74S174 at 1A01 is a two-stage synchroniser on
+    /// it runs. The 74S174 at 1A01 is a two-stage synchronizer on
     /// `SPEEDCLK`, which is `-TPR60` inverted: `SPEED` to `SPEEDA` sixty
     /// nanoseconds into one generator cycle and `SPEEDA` to `SSPEED` into
     /// the next, waits included, and the 74S151 that picks the tap switches
@@ -561,7 +561,7 @@ impl Rtl {
     /// 74S175s at CONTRL 3D26, LCC 3E12, PDLCTL 4C11 and VCTL1 1E20 and
     /// 1C23; the 25LS2519 at FLAG 3E08 and the 74S174 at ACTL 3B26; and
     /// `MBUSY`, through `-MFINISH` at VCTL1 1D28.  Not `RUN`, `SRUN`, the
-    /// speed synchroniser or `PROMDISABLED`, which clear on `-CLOCK RESET
+    /// speed synchronizer or `PROMDISABLED`, which clear on `-CLOCK RESET
     /// A`, the power-on reset.  A bus cycle in flight runs to completion:
     /// the interface has a reset of its own and this is not it.
     pub fn reset(&mut self) {
@@ -607,7 +607,7 @@ impl Rtl {
     }
 
     /// `ERR`, the 74S133 at OLORD2 1A02: any of the ten parity-error flags,
-    /// or `-HALTED`.  None of the parity checks is modelled here --- every
+    /// or `-HALTED`.  None of the parity checks is modeled here --- every
     /// memory this engine holds is a value with no parity to get wrong ---
     /// so `ERR` is `HALTED` alone: misc function 1, `HALT-CONS`, which
     /// microcode 323 writes at `ZERO`, `ILLOP` and `%HALT`.  `-HALT`
@@ -639,7 +639,7 @@ impl Rtl {
     /// `-DPE` would need.  `ucadr/mmtest.lisp`'s own "now turn on parity
     /// checking" is commented out in System 100.
     ///
-    /// Modelling any of it also means every way a word reaches a memory
+    /// Modeling any of it also means every way a word reaches a memory
     /// without the machine writing it --- the boot PROM's programming
     /// image, a band loaded from a pack, a checkpoint resumed --- carrying
     /// parity too: a first attempt that missed the control store halted
@@ -1296,7 +1296,7 @@ impl Rtl {
     /// The word of a write reaches its slave when [`Busint::answered_at`]
     /// says, which for one of the bus interface's own registers is 250 ns
     /// before the acknowledgement. It matters for one register: the mode
-    /// register sets the machine's speed, and the speed synchroniser samples
+    /// register sets the machine's speed, and the speed synchronizer samples
     /// it [`SPEEDCLK_NS`] into every generator cycle, so this is carried to
     /// there before [`Rtl::speedclk`] as well as to the edge.
     ///
@@ -1465,7 +1465,7 @@ impl Rtl {
     /// `-PROG.RESET`, so everything [`Rtl::reset`] clears; `-CLOCK RESET A`
     /// clears what that leaves --- `RUN` at OLORD1 1A14, so the machine
     /// halts; `SRUN`, `SSTEP`, `SSDONE` and `PROMDISABLED` at 1A10; the
-    /// speed synchroniser at 1A01, so it comes up extra slow --- and
+    /// speed synchronizer at 1A01, so it comes up extra slow --- and
     /// presets the 74LS109 at OLORD2 1A18, `BOOT.TRAP` down.
     pub fn clock_reset(&mut self) {
         self.reset();
@@ -1625,8 +1625,8 @@ impl Rtl {
     /// One generator cycle with the cpu clock held off: a `WAIT`, or the
     /// halted machine.  The master clock runs on, so the bus interface goes
     /// on arbitrating and can grant the cycle being waited for, `MBUSY.SYNC`
-    /// goes on following `MEMRQ`, the speed synchroniser takes up a new
-    /// mode register, and the edge shifts the run and step synchronisers on
+    /// goes on following `MEMRQ`, the speed synchronizer takes up a new
+    /// mode register, and the edge shifts the run and step synchronizers on
     /// OLORD1.  The generator cycle is as long as the instruction standing
     /// in `IR` asks: `-ILONG` is `NAND(IR45, -NOPA)`.
     fn master_clock_cycle(&mut self, r: &Read) -> u64 {
@@ -1635,7 +1635,7 @@ impl Rtl {
         // The debug master's write of the mode register is carried to
         // `SPEEDCLK` too, not only to the edge.  The processor's own write
         // is, on the line above, for the reason [`Rtl::land_write`] gives:
-        // the speed synchroniser samples the register sixty nanoseconds
+        // the speed synchronizer samples the register sixty nanoseconds
         // into every generator cycle.  A write over the debug cable lands
         // in [`Rtl::debug_cycle`] instead, and landing it only at the edge
         // made this engine take a speed change **one generator cycle later
@@ -1680,7 +1680,7 @@ impl Rtl {
         let o = self.m.opc_control;
         let ck = o.opcinh || (clk5 && !o.opcclk);
         if ck && !self.opc_ck {
-            // A shift of eight halfwords, spelt out: `rotate_right` on an
+            // A shift of eight halfwords, spelled out: `rotate_right` on an
             // array this small is a call and two `memmove`s, and it was
             // seven per cent of an `rtl` run.
             self.opc.copy_within(0..7, 1);
@@ -1933,7 +1933,7 @@ impl Rtl {
     }
 
     /// `SPEEDCLK`, sixty nanoseconds into a generator cycle: the two-stage
-    /// synchroniser at OLORD1 1A01 shifts, and the tap this cycle ends on is
+    /// synchronizer at OLORD1 1A01 shifts, and the tap this cycle ends on is
     /// chosen from what it then holds. Run at the start of every generator
     /// cycle, waited or not, and before the bus is carried forward, since an
     /// acknowledgement lands no earlier than 80 ns in and a mode register it
@@ -2230,7 +2230,7 @@ impl Rtl {
         // --- measured on the netlist board, `tests/chip.rs`.  The pulse's
         // leading edge inside this cycle cuts the cycle; the machine goes
         // to the load and the next cycle starts there.  The processor's own
-        // write of its mode register with the bit is **not** modelled this
+        // write of its mode register with the bit is **not** modeled this
         // way; nothing does that.
         if let Some(at) = self.busint.debug_answered_at()
             && at > busint::REGISTER_PULSE_NS
@@ -2300,7 +2300,7 @@ impl Rtl {
             // Halted, the generator keeps running but `-CLK0` is held off at
             // CLOCK2 1D10 and the write pulses at `MACHRUNA`, so nothing
             // moves but what `MCLK` clocks --- the bus interface, the
-            // synchronisers on OLORD1, and the OPC clock the console works
+            // synchronizers on OLORD1, and the OPC clock the console works
             // by hand --- which is how the console gets the machine started
             // again.  One master clock cycle a step, and no microcycle.
             if !r.machrun {
@@ -2679,7 +2679,7 @@ impl Engine for Rtl {
     /// result of the instruction it has not yet executed, which is what
     /// CC's `CC-EXECUTE-R` relies on.  `IR48` is the control store's parity
     /// bit, which this engine does not carry, and reads as zero; no parity
-    /// error is ever flagged, since no parity check is modelled.
+    /// error is ever flagged, since no parity check is modeled.
     fn spy_read(&self, eadr: u8) -> u16 {
         let r = self.read_phase();
         let half = |v: u64, k: u8| (v >> (16 * k as u32)) as u16;

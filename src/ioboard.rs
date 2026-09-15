@@ -453,7 +453,7 @@ pub fn register(uaddr: u32) -> Option<u32> {
 /// --- and with the enable clear bit 16 is not looked at.  The boot word
 /// has bit 16 set, source `001`, so it is the keyboard's either way.
 /// [`IoBoard::press`] takes every word as the keyboard's; the mouse's
-/// route under the enable is not modelled here.
+/// route under the enable is not modeled here.
 pub fn boot_word(word: u32) -> bool {
     (word >> 6) & 0o377 == 0o360
 }
@@ -740,7 +740,7 @@ impl IoBoard {
     /// `(%BEEP 0 duration)` is reported as a beep though MIT means it for
     /// silence: with no half-wavelength `XBEEP` clicks as fast as it can,
     /// which on the real speaker is too high to hear.  Telling that from a
-    /// tone would mean modelling what the speaker can reproduce, which is
+    /// tone would mean modeling what the speaker can reproduce, which is
     /// further than this goes.
     pub fn take_beep(&mut self) -> bool {
         std::mem::take(&mut self.beep_started)

@@ -30,7 +30,7 @@ impl Viewer {
     }
 
     /// The same, showing another board: [`Tv::color`] is the color TV,
-    /// whose screen is four bits a pixel through the colour map.
+    /// whose screen is four bits a pixel through the color map.
     fn open_showing(tv: Tv) -> Viewer {
         let terminal = Terminal::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
         let stream = TcpStream::connect(terminal.addr().unwrap()).unwrap();
@@ -112,13 +112,13 @@ impl Viewer {
         out
     }
 
-    /// `SetPixelFormat`, and the colour map that follows a mapped one:
+    /// `SetPixelFormat`, and the color map that follows a mapped one:
     /// two entries for the black-and-white screen and sixteen for the
-    /// colour one, six bytes each.
+    /// color one, six bytes each.
     fn set_format(&mut self, f: rfb::PixelFormat) {
         let mut m = vec![0u8, 0, 0, 0];
         m.extend_from_slice(&f.encode());
-        if f.true_colour {
+        if f.true_color {
             self.exchange(&m, 0);
         } else {
             let entries = if self.tv.strap() == tv::COLOR_TV { tv::COLORS } else { 2 };
@@ -127,7 +127,7 @@ impl Viewer {
             assert_eq!(
                 u16::from_be_bytes([map[4], map[5]]) as usize,
                 entries,
-                "the screen's colours"
+                "the screen's colors"
             );
         }
     }
@@ -155,7 +155,7 @@ fn formats() -> Vec<rfb::PixelFormat> {
             bits_per_pixel: 8,
             depth: 8,
             big_endian,
-            true_colour: false,
+            true_color: false,
             ..rfb::PixelFormat::RGB888
         });
     }
@@ -163,7 +163,7 @@ fn formats() -> Vec<rfb::PixelFormat> {
 }
 
 /// A screen whose bits fall in no pattern, so that a wrong bit anywhere in
-/// a byte or a word shows up rather than cancelling out.
+/// a byte or a word shows up rather than canceling out.
 fn scramble(tv: &mut Tv) {
     for k in 0..(tv::HEIGHT * tv::WORDS_PER_LINE) as u32 {
         tv.write_buffer(k, k.wrapping_mul(0x9e37_79b9) ^ k.rotate_left(13));
@@ -297,11 +297,11 @@ fn an_incremental_update_carries_only_what_changed() {
     assert_eq!((rects[1].1, rects[1].3), (60, 1));
 }
 
-/// **A viewer that wants eight bits a pixel gets them, through a colour
-/// map.** The screen has two colours, so `SetColourMapEntries` sends two
+/// **A viewer that wants eight bits a pixel gets them, through a color
+/// map.** The screen has two colors, so `SetColourMapEntries` sends two
 /// and white is entry 1.
 #[test]
-fn a_viewer_can_ask_for_a_colour_map() {
+fn a_viewer_can_ask_for_a_color_map() {
     let (mut v, _) = Viewer::connect();
     v.tv.write_buffer(0, 0xffff_ffff);
 
@@ -310,14 +310,14 @@ fn a_viewer_can_ask_for_a_colour_map() {
         bits_per_pixel: 8,
         depth: 8,
         big_endian: false,
-        true_colour: false,
+        true_color: false,
         ..rfb::PixelFormat::RGB888
     };
     set.extend_from_slice(&mapped.encode());
     // The map comes unasked, as RFC 6143 section 7.6.2 has it.
     let map = v.exchange(&set, 6 + 12);
     assert_eq!(map[0], 1, "SetColourMapEntries");
-    assert_eq!(u16::from_be_bytes([map[4], map[5]]), 2, "two colours");
+    assert_eq!(u16::from_be_bytes([map[4], map[5]]), 2, "two colors");
     assert_eq!(&map[6..12], &[0, 0, 0, 0, 0, 0], "entry 0 is black");
     assert_eq!(&map[12..18], &[0xff; 6], "entry 1 is white");
 
@@ -339,7 +339,7 @@ fn the_mode_registers_bow_bit_swaps_the_screen() {
     let white = rfb::PixelFormat::RGB888.white().to_le_bytes();
     assert_eq!(&plain[0..4], &white, "the lit bit is white to start with");
     assert_eq!(&swapped[0..4], &[0, 0, 0, 0], "and black once BOW is set");
-    assert_eq!(&plain[4..8], &[0, 0, 0, 0], "its neighbour is black");
+    assert_eq!(&plain[4..8], &[0, 0, 0, 0], "its neighbor is black");
     assert_eq!(&swapped[4..8], &white, "and white once BOW is set");
 }
 
@@ -624,7 +624,7 @@ fn a_taller_frame_is_clipped_to_the_screen_the_viewer_was_told_of() {
             height: words.len() / tv::WORDS_PER_LINE,
             words_per_line: tv::WORDS_PER_LINE,
             black_on_white: false,
-            colours: None,
+            colors: None,
         }
     }
     let (mut v, _) = Viewer::connect();
@@ -807,7 +807,7 @@ fn the_keyboard_trace_says_each_time_the_count_changes() {
 /// **A run says what its terminal lost without being asked for it.**
 /// [`Terminal::trace`] is on for every run muir serves --- it is what
 /// prints a viewer coming and going --- and a run that has quietly lost a
-/// hundred keystrokes is a run whose behaviour is unexplained. So
+/// hundred keystrokes is a run whose behavior is unexplained. So
 /// [`Terminal::poll`] says the line itself, and there is nothing left for
 /// a caller to ask for afterwards.
 #[test]
@@ -1003,11 +1003,11 @@ fn a_rectangle_that_ends_inside_a_byte_is_sent_as_put_would_write_it() {
 }
 
 /// What [`rfb::PixelFormat::put`] would write for the rectangle `(x, y, w,
-/// h)` of the colour screen, one pixel at a time: the colour of the
+/// h)` of the color screen, one pixel at a time: the color of the
 /// pixel's four bits, through the map, in the viewer's format --- or the
 /// four bits themselves where the viewer asked for a mapped format, the
 /// map having gone as `SetColourMapEntries`.
-fn as_colour_put_would(
+fn as_color_put_would(
     tv: &Tv,
     f: rfb::PixelFormat,
     (x, y, w, h): (usize, usize, usize, usize),
@@ -1015,35 +1015,35 @@ fn as_colour_put_would(
     let mut out = Vec::new();
     for row in y..y + h {
         for col in x..x + w {
-            let colour = tv.pixel4(col, row) as usize;
-            let value = if f.true_colour { f.colour(tv.rgb(colour)) } else { colour as u32 };
+            let color = tv.pixel4(col, row) as usize;
+            let value = if f.true_color { f.color(tv.rgb(color)) } else { color as u32 };
             f.put(&mut out, value);
         }
     }
     out
 }
 
-/// **The colour screen is 576 by 454 at four bits a pixel, through the
+/// **The color screen is 576 by 454 at four bits a pixel, through the
 /// map.** `ServerInit` says the size `COLOR:MAKE-SCREEN` gives, and every
-/// pixel of the update is the colour its nibble names, in whatever format
+/// pixel of the update is the color its nibble names, in whatever format
 /// the viewer asked for --- held to [`rfb::PixelFormat::put`] one pixel at
 /// a time, as the black-and-white screen is.
 #[test]
-fn the_colour_screen_is_sent_through_the_map() {
+fn the_color_screen_is_sent_through_the_map() {
     for f in formats() {
         let (mut v, init) = Viewer::connect_showing(Tv::color());
         assert_eq!(
             (u16::from_be_bytes([init[0], init[1]]), u16::from_be_bytes([init[2], init[3]])),
             (tv::COLOR_WIDTH as u16, tv::COLOR_HEIGHT as u16),
-            "the colour screen's size"
+            "the color screen's size"
         );
-        // A map of sixteen different colours, and a picture that uses all
+        // A map of sixteen different colors, and a picture that uses all
         // of them: `WRITE-COLOR-MAP` writes `377 - value` on channel
         // 0, 1 and 2 for red, green and blue.
-        for colour in 0..tv::COLORS as u32 {
+        for color in 0..tv::COLORS as u32 {
             for channel in 0..tv::CHANNELS as u32 {
-                let value = (colour * 0o21 + channel * 0o5) & 0o377;
-                v.tv.write_control(4, (0o377 - value) << 8 | channel << 6 | colour, 0);
+                let value = (color * 0o21 + channel * 0o5) & 0o377;
+                v.tv.write_control(4, (0o377 - value) << 8 | channel << 6 | color, 0);
             }
         }
         for k in 0..(tv::COLOR_HEIGHT * tv::COLOR_WORDS_PER_LINE) as u32 {
@@ -1058,20 +1058,20 @@ fn the_colour_screen_is_sent_through_the_map() {
         assert_eq!((*x, *y, *w, *h), whole);
         assert_eq!(
             pixels,
-            &as_colour_put_would(&v.tv, f, (0, 0, tv::COLOR_WIDTH, tv::COLOR_HEIGHT)),
-            "{f:?}: the colours through the map"
+            &as_color_put_would(&v.tv, f, (0, 0, tv::COLOR_WIDTH, tv::COLOR_HEIGHT)),
+            "{f:?}: the colors through the map"
         );
     }
 }
 
 /// **A map written while a viewer is looking repaints the screen.** The
 /// buffer has not changed, so nothing the viewer holds says the picture
-/// has; the colours it was sent no longer mean what they meant, and a
+/// has; the colors it was sent no longer mean what they meant, and a
 /// mapped viewer is told the new map as well.
 #[test]
 fn a_map_written_under_a_viewer_repaints_it() {
     let (mut v, _) = Viewer::connect_showing(Tv::color());
-    // Every pixel colour 1, and colour 1 black.
+    // Every pixel color 1, and color 1 black.
     for k in 0..(tv::COLOR_HEIGHT * tv::COLOR_WORDS_PER_LINE) as u32 {
         v.tv.write_buffer(k, 0x1111_1111);
     }
@@ -1082,7 +1082,7 @@ fn a_map_written_under_a_viewer_repaints_it() {
     assert_eq!(v.tv.rgb(1), [255, 255, 255], "an unwritten map shows full white");
     assert_eq!(
         rects[0].4,
-        as_colour_put_would(&v.tv, f, (0, 0, tv::COLOR_WIDTH, tv::COLOR_HEIGHT)),
+        as_color_put_would(&v.tv, f, (0, 0, tv::COLOR_WIDTH, tv::COLOR_HEIGHT)),
         "and the viewer has it"
     );
 
@@ -1094,7 +1094,7 @@ fn a_map_written_under_a_viewer_repaints_it() {
     let rects = v.update_rect(true, whole, 4);
     assert_eq!(rects.len(), 1, "the map changed, so the screen did");
     assert_eq!((rects[0].0, rects[0].1, rects[0].2, rects[0].3), whole);
-    assert_eq!(v.tv.rgb(1), [0, 0, 0], "and colour 1 is now black");
+    assert_eq!(v.tv.rgb(1), [0, 0, 0], "and color 1 is now black");
     assert!(rects[0].4.iter().all(|&b| b == 0), "so every pixel of it is");
 
     // Nothing changed since, so an incremental request is left outstanding.
@@ -1112,7 +1112,7 @@ fn a_map_written_under_a_viewer_repaints_it() {
 
 /// **A pixels-only terminal drops what a viewer types and points at.** The
 /// machine has one keyboard and one mouse, both on the I/O board, and they
-/// stay with the terminal that serves the main screen; the colour screen
+/// stay with the terminal that serves the main screen; the color screen
 /// is a second monitor and has neither. The bytes still come off the wire
 /// --- the stream would desync otherwise --- and go nowhere, so the queues
 /// stay empty and nothing is counted as lost.

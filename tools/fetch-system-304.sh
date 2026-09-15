@@ -55,7 +55,7 @@
 #
 # Everything in both files is under the GNU Affero General Public License,
 # version 3 or later, as the sources' own `doc/sys100.msg` says; muir's own
-# licence is the same.
+# license is the same.
 #
 # It also makes the directory the tests' Chaosnet server serves files from,
 # vendor/run/file-root, with `sys` pointing at the release's sources. This
@@ -70,7 +70,7 @@
 # has no file or time server in it --- so a run with this pack wants
 # `--chaos-address 4401` and `--chaos-udp-peer 4403@<where the host is>`,
 # and without them the machine boots but asks for the date and reaches no
-# files. The tests put a server of their own on the modelled cable instead.
+# files. The tests put a server of their own on the modeled cable instead.
 #
 # Re-running this is safe: whatever is already in place is left alone, and
 # nothing else in vendor/ is touched.

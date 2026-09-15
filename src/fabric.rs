@@ -269,7 +269,7 @@ impl<W: Window> Window for &W {
 /// with.
 ///
 /// Nothing here is read-only and no store does anything but land: the
-/// adapter's own behaviour is the caller's to play, which is what makes it
+/// adapter's own behavior is the caller's to play, which is what makes it
 /// useful --- a test can leave a stale acknowledgement standing, or change
 /// the data lines after raising [`ACK`], and see what muir makes of it.
 pub struct Words(Cell<[u32; WORDS]>);

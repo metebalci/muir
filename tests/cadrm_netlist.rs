@@ -38,14 +38,14 @@ fn parses_to_the_expected_shape() {
 }
 
 /// Every part on the board is identified, and everything that computes
-/// anything has a behaviour. The exceptions are the two analog parts, the
+/// anything has a behavior. The exceptions are the two analog parts, the
 /// DIP oscillator and the one-shot, which `src/chip.rs` runs as it runs
 /// the bus interface's oscillator.
 #[test]
 fn every_part_is_identified() {
     let k = support::kinds(&cadrm());
     assert!(k.unknown.is_empty(), "no pinout for {:?}", k.unknown);
-    assert_eq!(k.silent, ["26S02", "DIPOSC"], "parts with no behaviour");
+    assert_eq!(k.silent, ["26S02", "DIPOSC"], "parts with no behavior");
 }
 
 /// Two totem-pole outputs on one net is an electrical fault, so a wrongly
@@ -180,7 +180,7 @@ fn the_board_takes_a_word_and_gives_it_back() {
 
 /// **The numbers `rtl` needs.** A request lands on the board's own 24 MHz
 /// clock, so the acknowledgement depends on where in a period it arrives;
-/// the refresh cycles come on the one-shot's period plus the synchroniser's
+/// the refresh cycles come on the one-shot's period plus the synchronizer's
 /// and hold the board for a cycle; a request that arrives during one waits.
 /// Printed, and pinned where they are stable.
 #[test]
@@ -236,7 +236,7 @@ fn the_cycle_and_the_refresh_are_timed() {
         periods
     );
     // The one-shot's 12,033 ns from the cycle's start, plus the
-    // synchroniser's two Xbus clocks and the edge: 12.3 to 12.6 µs at a
+    // synchronizer's two Xbus clocks and the edge: 12.3 to 12.6 µs at a
     // 220 ns Xbus clock, the pulse being no multiple of it.
     assert!((15..=17).contains(&cycles.len()), "{} refresh cycles in 200 µs", cycles.len());
     // Eleven stages of 125/3 ns, less the 5 ns `T5` runs `-T0`'s fall

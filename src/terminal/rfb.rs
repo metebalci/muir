@@ -27,13 +27,13 @@
 /// The screen is black and white, so of all this only three things
 /// matter --- how many bytes a pixel takes, which way round they go, and
 /// what value means white. [`PixelFormat::white`] and
-/// [`PixelFormat::black`] are the whole of the colour handling.
+/// [`PixelFormat::black`] are the whole of the color handling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PixelFormat {
     pub bits_per_pixel: u8,
     pub depth: u8,
     pub big_endian: bool,
-    pub true_colour: bool,
+    pub true_color: bool,
     pub red_max: u16,
     pub green_max: u16,
     pub blue_max: u16,
@@ -52,7 +52,7 @@ impl PixelFormat {
         bits_per_pixel: 32,
         depth: 24,
         big_endian: false,
-        true_colour: true,
+        true_color: true,
         red_max: 255,
         green_max: 255,
         blue_max: 255,
@@ -67,7 +67,7 @@ impl PixelFormat {
         b[0] = self.bits_per_pixel;
         b[1] = self.depth;
         b[2] = self.big_endian as u8;
-        b[3] = self.true_colour as u8;
+        b[3] = self.true_color as u8;
         b[4..6].copy_from_slice(&self.red_max.to_be_bytes());
         b[6..8].copy_from_slice(&self.green_max.to_be_bytes());
         b[8..10].copy_from_slice(&self.blue_max.to_be_bytes());
@@ -83,7 +83,7 @@ impl PixelFormat {
             bits_per_pixel: b[0],
             depth: b[1],
             big_endian: b[2] != 0,
-            true_colour: b[3] != 0,
+            true_color: b[3] != 0,
             red_max: u16::from_be_bytes([b[4], b[5]]),
             green_max: u16::from_be_bytes([b[6], b[7]]),
             blue_max: u16::from_be_bytes([b[8], b[9]]),
@@ -111,14 +111,14 @@ impl PixelFormat {
         let width = self.bits_per_pixel as u32;
         let shifts = [self.red_shift, self.green_shift, self.blue_shift];
         self.bytes_per_pixel().is_some()
-            && (!self.true_colour || shifts.iter().all(|&s| (s as u32) < width))
+            && (!self.true_color || shifts.iter().all(|&s| (s as u32) < width))
     }
 
-    /// The pixel value for white: every colour at its maximum, or colour
+    /// The pixel value for white: every color at its maximum, or color
     /// map entry 1 where the viewer wants a map.  A shift off the word,
     /// which [`PixelFormat::fits`] refuses on arrival, contributes nothing.
     pub fn white(&self) -> u32 {
-        if !self.true_colour {
+        if !self.true_color {
             return WHITE_INDEX as u32;
         }
         let at = |max: u16, shift: u8| (max as u32).checked_shl(shift as u32).unwrap_or(0);
@@ -127,21 +127,21 @@ impl PixelFormat {
             | at(self.blue_max, self.blue_shift)
     }
 
-    /// The pixel value for black: zero either way, which is colour map
-    /// entry 0 as [`colour_map`] sets it.
+    /// The pixel value for black: zero either way, which is color map
+    /// entry 0 as [`color_map`] sets it.
     pub fn black(&self) -> u32 {
         0
     }
 
-    /// The pixel value for a colour given as eight bits a gun, RFC 6143
+    /// The pixel value for a color given as eight bits a gun, RFC 6143
     /// section 7.4: each gun scaled to the format's own maximum and
     /// shifted where the format wants it.  `[255, 255, 255]` is
     /// [`PixelFormat::white`] and `[0, 0, 0]` is [`PixelFormat::black`].
     ///
-    /// A mapped format has no colour in the pixel --- the pixel is an
-    /// index --- so this is for true-colour formats; the caller sends
-    /// [`colour_map_entries`] instead for the other kind.
-    pub fn colour(&self, rgb: [u8; 3]) -> u32 {
+    /// A mapped format has no color in the pixel --- the pixel is an
+    /// index --- so this is for true-color formats; the caller sends
+    /// [`color_map_entries`] instead for the other kind.
+    pub fn color(&self, rgb: [u8; 3]) -> u32 {
         let at = |max: u16, shift: u8, v: u8| {
             let scaled = v as u32 * max as u32 / 255;
             scaled.checked_shl(shift as u32).unwrap_or(0)
@@ -164,36 +164,36 @@ impl PixelFormat {
     }
 }
 
-/// The colour map entry white takes when a viewer asks for a mapped
-/// format rather than a true-colour one.
+/// The color map entry white takes when a viewer asks for a mapped
+/// format rather than a true-color one.
 pub const WHITE_INDEX: u8 = 1;
 
-/// `SetColourMapEntries`, RFC 6143 section 7.6.2: `colours` from index
+/// `SetColourMapEntries`, RFC 6143 section 7.6.2: `colors` from index
 /// `first`, each entry sixteen bits a gun in red, green, blue order, sent
 /// to a viewer that asked for a mapped format.
-pub fn colour_map_entries(first: u16, colours: &[[u16; 3]]) -> Vec<u8> {
+pub fn color_map_entries(first: u16, colors: &[[u16; 3]]) -> Vec<u8> {
     let mut m = vec![1u8, 0];
     m.extend_from_slice(&first.to_be_bytes());
-    m.extend_from_slice(&(colours.len() as u16).to_be_bytes());
-    for gun in colours.iter().flatten() {
+    m.extend_from_slice(&(colors.len() as u16).to_be_bytes());
+    for gun in colors.iter().flatten() {
         m.extend_from_slice(&gun.to_be_bytes());
     }
     m
 }
 
-/// The two colours the black-and-white screen has, black at 0 and white
+/// The two colors the black-and-white screen has, black at 0 and white
 /// at [`WHITE_INDEX`].
-pub fn colour_map() -> Vec<u8> {
-    colour_map_entries(0, &[[0; 3], [u16::MAX; 3]])
+pub fn color_map() -> Vec<u8> {
+    color_map_entries(0, &[[0; 3], [u16::MAX; 3]])
 }
 
-/// The sixteen colours of the colour screen's map, a byte a gun widened
+/// The sixteen colors of the color screen's map, a byte a gun widened
 /// to RFC 6143's sixteen bits: the whole map, at indices 0 to 15, which is
 /// what a four-bit pixel is.
-pub fn colour_map_of(map: &[[u8; 3]]) -> Vec<u8> {
+pub fn color_map_of(map: &[[u8; 3]]) -> Vec<u8> {
     let widened: Vec<[u16; 3]> =
         map.iter().map(|c| [c[0], c[1], c[2]].map(|v| v as u16 * 0x101)).collect();
-    colour_map_entries(0, &widened)
+    color_map_entries(0, &widened)
 }
 
 /// The version the server offers, RFC 6143 section 7.1.1. A viewer that

@@ -13,7 +13,7 @@
 //! between the interface netlist and every memory board the way
 //! [`crate::cable::Cables`] carries the five cables between two boards:
 //! what any board's own drivers hold, every other board is given, and a
-//! wire nobody holds is pulled up at every end. The behavioural far end,
+//! wire nobody holds is pulled up at every end. The behavioral far end,
 //! [`Buses`], asserts on the same wires for the devices that are not
 //! memory.
 //!
@@ -140,7 +140,7 @@ fn bring_up(memory: &Netlist, strap: crate::tv::Strap, switches: u8, powered_at:
 /// other board takes `NORMAL_TV` and is unmoved by it, having none of
 /// these nets.
 ///
-/// **Unverified**: the colour wrap itself. `lmtv.order` gives the color
+/// **Unverified**: the color wrap itself. `lmtv.order` gives the color
 /// TV's two addresses and nothing in `mit/` gives its wire list: MIT's
 /// own, `cadrtv/lmtv4b.wlr`, is a normal TV, with 0F22-06 and 0F19-13 on
 /// the ground net and 0F19-15 on the pull-up at XBADR 0E14.  So the three
@@ -150,7 +150,7 @@ fn bring_up(memory: &Netlist, strap: crate::tv::Strap, switches: u8, powered_at:
 /// strap moves.
 /// `DEVADR 4` is not even a net on that board ---
 /// [`crate::netlist::parse_color_tv`] is what makes it one --- so a
-/// display board handed the colour strap without having been parsed that
+/// display board handed the color strap without having been parsed that
 /// way is refused here rather than left answering at the normal TV's
 /// address.
 ///
@@ -350,7 +350,7 @@ pub(crate) fn roms(board: &Netlist) -> Vec<(&'static str, &'static str, &'static
 ///
 /// Every board that is not a display takes `NORMAL_TV` and is unmoved by
 /// it, having no address straps at all: [`Device::new`] is that, and
-/// [`Device::strapped`] the colour board.
+/// [`Device::strapped`] the color board.
 #[derive(Clone, Copy)]
 pub struct Device<'a> {
     pub netlist: &'a Netlist,
@@ -592,7 +592,7 @@ pub struct Xbus {
     /// chip that has not moved since is not asked again.
     contrib: Vec<Vec<Option<Level>>>,
     seen: Vec<u64>,
-    /// Which wires the behavioural far end was holding low at the last
+    /// Which wires the behavioral far end was holding low at the last
     /// exchange.
     bus_low: Vec<bool>,
     /// Which wires some end's contribution changed on in the exchange
@@ -604,7 +604,7 @@ pub struct Xbus {
     recombine: bool,
     /// Whether an unchanged chip's answers are reused. Off, every chip is
     /// asked about every wire at every exchange, the slow way:
-    /// [`crate::cable::FarEnd::unoptimised`].
+    /// [`crate::cable::FarEnd::unoptimized`].
     pub skip_unchanged: bool,
     /// The drives on the disk controller's cables, and the multiplexor
     /// between them if one is fitted. `None` until something is plugged
@@ -917,7 +917,7 @@ impl Xbus {
     }
 
     /// Carries every wire across once: the wired-AND of what the interface,
-    /// every board and the behavioural far end hold, given to every end.
+    /// every board and the behavioral far end hold, given to every end.
     /// Returns whether anything changed; `Xbus::changed` says where.
     pub fn exchange(&mut self, interface: &mut Chip, buses: &Buses) -> bool {
         let mut moved = false;

@@ -89,7 +89,7 @@ fn the_release_prom_parses() {
     // memory. So the A memory section is terminal by construction, it must
     // be exactly start 0 and size 0o2000 to fill the 1K buffer, and the
     // PROM never reads a byte past it. Breaking out of the loop at code 4,
-    // which `src/mcr.rs` does, is the PROM's own behaviour.
+    // which `src/mcr.rs` does, is the PROM's own behavior.
     //
     // The zeros are the assembler's too: in `promh.text`'s `(LOCALITY
     // A-MEM)` every cell is declared `(0)` and the PROM builds its

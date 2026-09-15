@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 
 use crate::cable::{Boards, FarEnd};
 use crate::chip::Chip;
-use crate::clock::{Behavioural, Clock};
+use crate::clock::{Behavioral, Clock};
 use crate::engine::Engine;
 use crate::isa::Insn;
 use crate::isa::asm::*;
@@ -415,10 +415,10 @@ pub fn chip(
     memory: &Netlist,
     io: &Netlist,
     tv: &Netlist,
-) -> (Chip, Behavioural, FarEnd) {
+) -> (Chip, Behavioral, FarEnd) {
     let boards = Boards { memory: 32, io: Some(io), tv: Some(tv), ..Default::default() };
     let far = FarEnd::new(cpu, busint, memory, boards, 0, Machine::new());
-    (Chip::new(cpu), Behavioural::new(), far)
+    (Chip::new(cpu), Behavioral::new(), far)
 }
 
 /// The program into the board's PROM, and the board booted as `muir --chip`
@@ -428,7 +428,7 @@ pub fn boot_chip(
     c: &mut Chip,
     n: &Netlist,
     far: &mut FarEnd,
-    clk: &mut Behavioural,
+    clk: &mut Behavioral,
     program: &Program,
 ) {
     let image: Vec<u64> = program.prom.iter().map(|&i| crate::prom::programming(i)).collect();
@@ -454,7 +454,7 @@ pub fn boot_chip(
 /// One microcycle of the board, as `muir --chip` runs it: however many clock
 /// transitions it takes for the phase to wrap, the far end taking its own
 /// turns in between.
-fn chip_step(c: &mut Chip, far: &mut FarEnd, clk: &mut Behavioural) {
+fn chip_step(c: &mut Chip, far: &mut FarEnd, clk: &mut Behavioral) {
     let mut last = clk.phase_ns();
     for _ in 0..(1 << 16) {
         far.tick_with(c, clk);
@@ -473,7 +473,7 @@ pub fn run_chip(
     c: &mut Chip,
     n: &Netlist,
     far: &mut FarEnd,
-    clk: &mut Behavioural,
+    clk: &mut Behavioral,
     p: &Program,
     stop: Stop,
 ) -> Run {
@@ -504,7 +504,7 @@ pub fn run_chip(
 
 /// The count the board has left in `VMA`, read off the register's `-VMA`
 /// outputs after the write has landed.
-pub fn chip_vma(c: &mut Chip, n: &Netlist, far: &mut FarEnd, clk: &mut Behavioural) -> u32 {
+pub fn chip_vma(c: &mut Chip, n: &Netlist, far: &mut FarEnd, clk: &mut Behavioral) -> u32 {
     let vma = c.bus_nets(n, "-VMA", 32);
     for _ in 0..2 {
         chip_step(c, far, clk);

@@ -5,13 +5,13 @@ cold-boots the machine; with Return instead, it warm-boots. muir does the
 same from the terminal's keyboard, on every engine, with the keys the
 sequence needs a setting, `--keyboard-boot`. Every board is complete pin
 for pin; the two things that are not boards, the keyboard's own firmware
-and the wiring between boards, are modelled from the firmware's source and
+and the wiring between boards, are modeled from the firmware's source and
 from the wire lists, and one link of that wiring is not established by any
 file in `mit/`.
 
 Every claim below names the file it was read from. `tests/unibus_backplane_pins.rs`
 holds the wire's pins, `tests/keyboard.rs` holds the boot word's layout and
-the keyboard's part, `tests/ioboard.rs` the behavioural board's decode, and
+the keyboard's part, `tests/ioboard.rs` the behavioral board's decode, and
 `tests/keyboard_boot.rs` the path end to end on each engine.
 
 ## What the hardware does
@@ -181,7 +181,7 @@ OLORD2 page). The processor cannot tell which was pressed. The prompt's
    in the same byte as one of the four --- a Shift, at 24 or 25 beside
    the Controls --- defeats the sequence; muir counts only the keys named.
 
-2. **The behavioural I/O board decodes the word, on `micro` and `rtl`**
+2. **The behavioral I/O board decodes the word, on `micro` and `rtl`**
    (`src/ioboard.rs`: `boot_word` and `IoBoard::take_boot`). The decode
    is read off the netlist, not the prose. On IOBCSR the 25LS2521 at 0A20
    compares `SR7`-`SR10` with ground and `SR11`-`SR14` with the pull-up
@@ -213,7 +213,7 @@ OLORD2 page). The processor cannot tell which was pressed. The prompt's
 
 3. **The engines take the request** (`Engine::keyboard_boot` in
    `src/engine.rs`, called wherever `src/main.rs` delivers keyboard words
-   to the behavioural board, the lashup's two machines included). The
+   to the behavioral board, the lashup's two machines included). The
    request presses the engine's boot as the button does; `boot` touches
    no board on either engine, so the word and `KBD READY` stay.
    `tests/keyboard_boot.rs` runs the PROM on `micro` and on `rtl`,
@@ -234,7 +234,7 @@ OLORD2 page). The processor cannot tell which was pressed. The prompt's
    cable into the netlist board with the whole machine on the far end and
    sees `-BOOT1` and `-BOOT` follow `-BOOT*` low for 4 us, `RUN` preset,
    and the PROM run from 0 again with `KBD READY` up on the board. Under
-   `--io-board model` the behavioural board's request presses `-BOOT1`
+   `--io-board model` the behavioral board's request presses `-BOOT1`
    through the same hold as the button's `-BOOT2`.
 
 5. **The prompt's `boot` is the button still**, `-BOOT2` on `chip`, and

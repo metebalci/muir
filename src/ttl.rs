@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! The 74S181 ALU slice and its carry-lookahead, as behaviour.
+//! The 74S181 ALU slice and its carry-lookahead, as behavior.
 //!
 //! The CADR ALU is nine 74S181s and three 74S182s: eight
 //! slices covering `alu<31:0>`, plus a ninth fed with `m[31]` and `a[31]`
