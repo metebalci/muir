@@ -902,3 +902,55 @@ fn the_color_tv_goes_through_a_machine_checkpoint() {
     had.load(&mut Reader::new(&w.finish())).unwrap();
     assert!(had.color_tv.is_none(), "and none when there was none");
 }
+
+/// **The vertical flag is one comparison a microcycle, and the same flag
+/// as the count.** Every microcycle asks the board for its interrupt, and
+/// `micro` runs a microcycle in about nine nanoseconds, so the flag is
+/// kept as the instant of the next `-TVMA CLR` after the last write and
+/// compared against the clock. This holds that reading to the definition
+/// --- the flop is set if a `-TVMA CLR` fell after the write and no later
+/// than now --- counted off the running program's timeline, through mode
+/// writes, a sync-program restart, an Xbus init and a checkpoint, over a
+/// sweep of instants across three frames.
+#[test]
+fn the_vertical_flag_is_the_count_of_presets_since_the_write() {
+    let mut tv = Tv::default();
+    // What the definition says at `ns`, given the last write.
+    let by_count = |tv: &Tv, written_at: u64, flag_written: bool, ns: u64| {
+        let t = tv.timeline().expect("a program makes a frame");
+        let o = tv.origin();
+        let clrs = |at: u64| if at >= o { t.tvma_clrs_by(at - o) } else { 0 };
+        flag_written || clrs(ns) > clrs(written_at)
+    };
+    let check = |tv: &Tv, written_at: u64, flag_written: bool, what: &str| {
+        let period = tv.timeline().unwrap().period_ns;
+        for k in 0..3 * period / 997 {
+            let ns = written_at + k * 997;
+            assert_eq!(
+                tv.vert_flag(ns),
+                by_count(tv, written_at, flag_written, ns),
+                "{what}: at {ns} ns, written at {written_at}"
+            );
+        }
+    };
+    check(&tv, 0, false, "from power-on");
+    tv.write_control(0, mode::INTERRUPT_ENABLE, 20_000);
+    check(&tv, 20_000, false, "after the microcode's clear");
+    tv.write_control(0, mode::INTERRUPT_ENABLE | mode::VERT, 25_000_000);
+    check(&tv, 25_000_000, true, "written one");
+    // A restart carries the flag as it stood and counts under the new
+    // program from its origin.
+    load_sync_program(&mut tv, &two_instruction_program(0o01, 0o103), 41_000_000);
+    tv.write_control(3, 0o200 | 9, 42_000_000);
+    let flag_at_restart = tv.vert_flag(42_000_000);
+    check(&tv, 42_000_000, flag_at_restart, "restarted into a loaded program");
+    tv.xbus_init(50_000_000);
+    check(&tv, 50_000_000, false, "after an Xbus init");
+    // Through a checkpoint.
+    let mut w = muir::checkpoint::Writer::new();
+    tv.save(&mut w);
+    let bytes = w.finish();
+    let mut back = Tv::default();
+    back.load(&mut muir::checkpoint::Reader::new(&bytes)).unwrap();
+    check(&back, 50_000_000, false, "loaded from a checkpoint");
+}
