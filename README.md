@@ -46,13 +46,13 @@ or out. RFB's `None` security is the only type offered, so no password.
 The boot ends at a Lisp Listener.
 
 To boot a pack of your own instead, `diskpack` makes one: a fresh label,
-microcode 323 in `MCR1`, and the System 100 band copied into `LOD1` from the
-pack you fetched. Then boot with `--disk-pack mine.img` in place of the
-fetched pack.
+microcode 323 in `MCR1`, and the System 100 band, which is the fetched pack's
+`LOD2`, copied into `LOD1`. Then boot with `--disk-pack mine.img` in place of
+the fetched pack.
 
     target/release/diskpack mine.img initialize
     target/release/diskpack mine.img load MCR1
-    target/release/diskpack mine.img load-from LOD1 vendor/run/disk-sys-100-0.img LOD1
+    target/release/diskpack mine.img load-from LOD1 vendor/run/disk-sys-100-0.img LOD2
 
 [Making a pack](#making-a-pack) has the rest of what `diskpack` does:
 partitions added, grown, zeroed and deleted, and bands dumped and loaded.
@@ -474,8 +474,8 @@ written is refused whole and changes nothing.
     diskpack: name MIT-LISPM-2
     diskpack: load MCR1
     MCR1: 12449 control store words, 114 blocks of 148, the rest zeroed
-    diskpack: load-from LOD1 vendor/run/disk-sys-100-0.img LOD1
-    LOD1: 24225 blocks of 24225 from vendor/run/disk-sys-100-0.img LOD1
+    diskpack: load-from LOD1 vendor/run/disk-sys-100-0.img LOD2
+    LOD1: 24225 blocks of 24225 from vendor/run/disk-sys-100-0.img LOD2
     diskpack: quit
 
 That pack boots. Most commands have a short form --- `i` for `initialize`, `p` for
@@ -514,15 +514,16 @@ so every word's halves are swapped on the way in and the rest of the partition
 is zeroed. With no file it takes microcode 323 itself, which is built in ---
 `mit/sys/ubin/ucadr.mcr`, the release's own file, committed beside the boot
 PROM's --- so a pack that boots can be made from a fresh checkout with nothing
-fetched. Every other partition takes its file as it stands. Either way the
+fetched. Every other partition takes its file as it stands. Either way the rest
+of the partition is zeroed, and the
 partition's comment becomes what went into it --- the file's name, or
 `UCADR 323` for the built-in, which is MIT's own wording in that very field
 on the release's own pack --- cut to the sixteen characters a descriptor holds,
 because the file is not on the pack and the comment is the only place the
 pack says what a partition is. `load-from` is the same move between two
-packs --- `load-from LOD1 <pack> LOD1` --- with no
+packs --- `load-from LOD1 <pack> LOD2` --- with no
 file in between; ours has to be at least as big as theirs, so that all of
-what is copied lands.
+what is copied lands, and what is past it in ours is zeroed.
 
 MIT's own editor holds the label and writes it on `^W`, and this does not,
 because the reason for the two states is not here: the label MIT is editing
