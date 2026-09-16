@@ -78,8 +78,8 @@ pub enum Size {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// A fresh T-300 label, as `LE-INITIALIZE-LABEL` writes one.
-    Initialize,
+    /// A fresh T-300 label with the partitions [`Layout`] asks for.
+    Initialize(Layout),
     /// The label and its partition table.
     Show,
     /// The drive's brand name, the pack's name, and the label's comment.
@@ -132,11 +132,134 @@ pub enum Command {
     Help,
 }
 
+/// What `initialize` lays out on a T-300: how many microcode partitions,
+/// how many bands, and how many megabytes of FILE.
+///
+/// A microcode partition is MIT's 148 blocks and PAGE is MIT's 202 cylinders,
+/// whatever the counts: `PACK-TYPES` in `sys/io/dledit.lisp`, which gives
+/// PAGE as "Full address space". The bands share what is left after PAGE, in
+/// whole cylinders, and FILE, if there is one, is at the end of the pack.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Layout {
+    pub mcrs: u32,
+    pub lods: u32,
+    pub file_mb: u32,
+}
+
+impl Default for Layout {
+    /// Two microloads, four bands and no FILE.
+    fn default() -> Self {
+        Layout { mcrs: 2, lods: 4, file_mb: 0 }
+    }
+}
+
+impl Layout {
+    /// The label this layout makes of a T-300 at `image`, or why it cannot be
+    /// made.
+    ///
+    /// The counts are one to nine: a band's name is `LOD` and one digit, as
+    /// `SET-CURRENT-BAND` in `sys/io/dledit.lisp` builds it, and a microcode
+    /// partition's the same. A label's first block holds eighteen partitions,
+    /// and it is the one the boot PROM reads. **A band bigger than PAGE is
+    /// refused**: a cold boot copies the band into PAGE, "page partition not
+    /// big enuf" in `sys/ucadr/uc-cold-disk.lisp`, so the blocks past PAGE's
+    /// size could never hold anything.
+    pub fn label(&self, image: &Path) -> Result<Label, String> {
+        if !(1..=9).contains(&self.mcrs) {
+            return Err(format!(
+                "{} microcode partitions: initialize makes 1 to 9 microcode partitions, \
+                 MCR1 to MCR9",
+                self.mcrs
+            ));
+        }
+        if !(1..=9).contains(&self.lods) {
+            return Err(format!(
+                "{} bands: initialize makes 1 to 9 bands, LOD1 to LOD9, a band's name being \
+                 LOD and one digit",
+                self.lods
+            ));
+        }
+        let partitions = self.mcrs + 1 + self.lods + u32::from(self.file_mb > 0);
+        if partitions > 18 {
+            return Err(format!("{partitions} partitions, and a label's first block holds 18"));
+        }
+        let mut label = Label::initialize(image, &T300);
+        let per_cylinder = label.blocks_per_cylinder;
+        let mit = |name: &str| {
+            T300.partitions
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, size)| T300.blocks_of(*size))
+                .expect("MIT's T-300 table has it")
+        };
+        let (mcr_blocks, page_blocks) = (mit("MCR1"), mit("PAGE"));
+        let entry = |name: String, start: u32, blocks: u32| Partition {
+            name,
+            start,
+            blocks,
+            comment: String::new(),
+        };
+
+        let mut table = Vec::new();
+        let mut block = label.first_block();
+        for k in 1..=self.mcrs {
+            table.push(entry(format!("MCR{k}"), block, mcr_blocks));
+            block += mcr_blocks;
+        }
+        let page = block.div_ceil(per_cylinder) * per_cylinder;
+        table.push(entry("PAGE".to_string(), page, page_blocks));
+
+        // Whole cylinders from here: the bands after PAGE, FILE at the end.
+        let cylinders = u64::from(label.cylinders);
+        let bands_from = u64::from((page + page_blocks).div_ceil(per_cylinder));
+        let blocks_per_mb = 1024 * 1024 / BLOCK_BYTES;
+        let file = (u64::from(self.file_mb) * blocks_per_mb).div_ceil(u64::from(per_cylinder));
+        let room = cylinders
+            .checked_sub(bands_from + file)
+            .filter(|&room| room >= u64::from(self.lods))
+            .ok_or_else(|| {
+                format!(
+                    "no room for {} bands: after PAGE and {} MB of FILE the pack has {} \
+                     cylinders left",
+                    self.lods,
+                    self.file_mb,
+                    cylinders.saturating_sub(bands_from + file)
+                )
+            })?;
+        let share = room / u64::from(self.lods);
+        let page_cylinders = u64::from(page_blocks) / u64::from(per_cylinder);
+        if share * u64::from(per_cylinder) > u64::from(page_blocks) {
+            return Err(format!(
+                "{} bands of {share} cylinders each would each be bigger than PAGE's \
+                 {page_cylinders}, and a band bigger than PAGE can never be filled: ask for \
+                 more bands, or for megabytes of FILE",
+                self.lods
+            ));
+        }
+        let band_blocks = (share * u64::from(per_cylinder)) as u32;
+        for k in 0..self.lods {
+            let start = (bands_from + share * u64::from(k)) as u32 * per_cylinder;
+            table.push(entry(format!("LOD{}", k + 1), start, band_blocks));
+        }
+        if file > 0 {
+            let start = ((cylinders - file) as u32) * per_cylinder;
+            table.push(entry("FILE".to_string(), start, file as u32 * per_cylinder));
+        }
+        label.partitions = table;
+        Ok(label)
+    }
+}
+
 /// What `help` says.
 pub const HELP: &str = "\
-initialize, i           a fresh label for a Trident T-300, the drive a
-                        CADR's pack goes in: its geometry, its drive and its
-                        partitions, laid out as MIT lays them out
+initialize, i [<mcrs> [<lods> [<file MB>]]]
+                        a fresh label for a Trident T-300, the drive a
+                        CADR's pack goes in: <mcrs> microcode partitions of
+                        148 blocks, 2 if not given; PAGE, 202 cylinders; <lods>
+                        bands sharing what is left, 4 if not given, each no
+                        bigger than PAGE; and FILE of <file MB> at the end, none
+                        if not given.  A layout that cannot be is refused and
+                        no pack is made
 show, s                 the label and its partition table
 drive <text>            the drive's brand name
 name <text>             the pack's name
@@ -209,7 +332,7 @@ pub fn parse(line: &str) -> Result<Option<Command>, String> {
     };
     match word {
         "show" | "s" => bare(Command::Show),
-        "initialize" | "i" => bare(Command::Initialize),
+        "initialize" | "i" => parse_initialize(arg),
         "quit" | "q" => bare(Command::Quit),
         "help" | "h" | "?" => bare(Command::Help),
         "current" | "c" => parse_current(arg),
@@ -259,6 +382,24 @@ pub fn parse(line: &str) -> Result<Option<Command>, String> {
         }
         other => Err(format!("{other} is no command; help lists them")),
     }
+}
+
+/// `initialize`'s counts: microcode partitions, bands and megabytes of FILE,
+/// the last ones left out taking [`Layout::default`]'s.
+fn parse_initialize(arg: &str) -> Result<Option<Command>, String> {
+    let words: Vec<&str> = arg.split_whitespace().collect();
+    if words.len() > 3 {
+        return Err("initialize wants at most three counts: microcode partitions, bands, \
+                    and megabytes of FILE"
+            .to_string());
+    }
+    let mut layout = Layout::default();
+    let what = ["microcode partitions", "bands", "megabytes of FILE"];
+    let slots = [&mut layout.mcrs, &mut layout.lods, &mut layout.file_mb];
+    for ((word, what), slot) in words.iter().zip(what).zip(slots) {
+        *slot = word.parse().map_err(|_| format!("{word} is no count of {what}"))?;
+    }
+    Ok(Some(Command::Initialize(layout)))
 }
 
 /// A partition by number or by name: `1` is `LOD1`, the band being what a
@@ -441,7 +582,7 @@ impl Pack {
             Command::Quit => Ok(String::new()),
             Command::Show => Ok(show(self.label()?)),
             Command::Current => Ok(current(self.label()?)),
-            Command::Initialize => {
+            Command::Initialize(layout) => {
                 // The one command that makes a 257 MiB file, given a path
                 // that came out of someone's shell.  A path that is a typo is
                 // usually a file that is there, and the pack it would make of
@@ -466,7 +607,7 @@ impl Pack {
                         u64::from(T300.geometry.blocks()) * BLOCK_BYTES / (1024 * 1024)
                     ));
                 }
-                let label = Label::initialize(&self.path, &T300);
+                let label = layout.label(&self.path)?;
                 let said = format!("{}{}", show(&label), self.made(&label));
                 self.commit(label)?;
                 Ok(said)

@@ -483,11 +483,18 @@ That pack boots. Most commands have a short form --- `i` for `initialize`, `p` f
 `current` --- and `help` lists both; `dump`, `load-from`, `zero`, `drive`, `name`
 and `comment` have none.
 
-`initialize` lays out a Trident T-300, the drive a CADR's pack goes in, with
-the partitions MIT's own `PACK-TYPES` gives it --- eight microcode partitions,
-a paging area, eight bands and a file partition, which together fill the pack
-exactly. It is the only drive there is here: `muir` attaches every pack as a
-T-300, and a pack that could not be booted would be a pack for nothing.
+`initialize` lays out a Trident T-300, the drive a CADR's pack goes in:
+`initialize <mcrs> <lods> <file MB>`, each count optional. Microcode partitions
+are MIT's 148 blocks each, two if not given, and the paging area is MIT's 202
+cylinders, which is already every page the machine can use. The bands share
+what is left in whole cylinders, four if not given, and FILE is that many
+megabytes at the end of the pack, none if not given. So a bare `initialize`
+is two microloads and four bands of 153 cylinders, about 48 MiB each, filling
+the pack exactly. A band is never bigger than the paging area, since a cold
+boot copies the band into it; a layout that would make one bigger, or ask for
+more than nine of either, is refused and no pack is made. It is the only drive
+there is here: `muir` attaches every pack as a T-300, and a pack that could
+not be booted would be a pack for nothing.
 
 `partition <name> <size>` adds one, on the end where there is room; `modify`
 changes one that is there, its size or its comment. A size is blocks, `75c` cylinders, `25%` of the pack,
