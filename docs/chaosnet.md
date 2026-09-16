@@ -230,11 +230,17 @@ which is said here, since that is this page's rule.
 Fairchild 9401 at LMTBUF `0C09`. That part divides by one of eight
 polynomials chosen by a three-bit code on its select pins, and the sheet's
 Table 1 lists all eight --- `src/part.rs` carries the table as `CRC9401`,
-cited to the sheet. **All three select pins are grounded on this board**,
-which makes the code 0 and the polynomial **CRC-16,
+cited to the sheet. **All three select pins are grounded on the transmit generator**,
+which makes its code 0 and its polynomial **CRC-16,
 `x^16 + x^15 + x^2 + 1`**. Both sources agree that they are grounded:
 `data/CADRIO.netlist` has pins 3, 5 and 8 of `0C09` on `GND`, and
 `mit/cadrio/iob.wlr` has the same three, naming each as a select as it goes.
+
+**The board carries a second 9401 and it is not wired alike.** The receive
+generator, at LMRBUF `0C07`, takes `RACT` on pin 3 with pins 5 and 8
+grounded, `-CRC.PRE` on pin 2, `RRESET` on pin 4 and `CRCERR` off pin 13.
+So its code is 0 while the receiver is idle and something else for as long
+as the receiver is active.
 
 **Which pin is which select, the board settles.** The sheet's connection
 diagram and its logic symbol disagree over pins 3, 5 and 11. Pin 11 stops
@@ -244,10 +250,16 @@ serial output can only be feeding the 9401's data input --- and MIT's wire
 list names that pin `D` outright. That leaves 3, 5 and 8 as the three
 selects. The two sources then **disagree about the order**: MIT's wire list
 names pin 3 `S2`, pin 5 `S1` and pin 8 `S0`, where `src/part.rs` has 3 as
-`S0` and 8 as `S2`. **It changes nothing here, because all three are
-grounded**, so the code is 0 read from either end --- but the wire list is
-the board as built, and it is the one to follow if a board is ever found
-selecting anything else.
+`S0` and 8 as `S2`. **It changes nothing for the transmit generator**, whose three
+pins are grounded, so its code is 0 read from either end. **It decides the
+receive generator**, where `RACT` sits on the pin in dispute: during
+reception the code is 1 under `src/part.rs`'s naming and 4 under the wire
+list's, and those are two different polynomials. So the board that settles
+the order is this board, by what the receiver does with a frame whose check
+word is known, rather than the sheet by argument. The wire list is the board
+as built and outranks the sheet's own diagram; where its pin names and the
+board's behavior disagree, that is a finding to state and not a preference
+to exercise.
 
 **The bit order is the shift registers'.** The two 74165s at LMTBUF `0B12`
 and `0B13` shift each sixteen-bit word out most-significant bit first, and
@@ -368,9 +380,10 @@ transmitter also aborts." On the board, `COLLISION` is `TBUSY` with
 flip-flop, the 74S112 at LMMODU `0A09`, takes it on `-FCLK^`. So a
 transmitter looks for interference once per period of the board's 8 MHz
 clock --- **interference that is not there at an edge is missed, and the
-transmitter goes on until an edge finds it.** `D OUT` is `TTL.D.OUT AND
--ABORT` at the same `0B08`, so the driver goes off at the edge that sets
-`ABORT`, and the cable is held high for four cells after it.
+transmitter goes on until an edge finds it.** The same `0B08` carries a second NOR, `-TTL.D.OUT` on its pin 4 from
+`ABORT` and `D OUT` on pins 5 and 6, so `ABORT` setting forces that output
+low and the line driver holds the cable **high** for four cells: the abort
+signal itself, rather than the driver merely going off.
 `tests/chaos_netlist.rs::the_board_aborts_its_transmission_on_interference`
 watches `INTERFERENCE IN`, `COLLISION`, `ABORT`, `TBUSY`, `TABORTED` and
 `TDONE` in turn and holds `ABORT` within a few cells of the first
@@ -403,9 +416,11 @@ board does.
 
 The destination word then matches all the same, and the 74S10 at LMMYNM
 `0D02` makes `-LOST.ONE` from `MATCH SO FAR`, `ITS.ME` and `-RACT`. That
-wire does two things: it steps Lost Count, and it runs to pin 4 of the 74S112
-at LMMODU `0A09`, which `mit/cadrio/iob.wlr` names `-SET1` --- the preset of
-the very same `ABORT` flip-flop the collision detector uses. The 26LS31 at
+wire has exactly two pins in `data/CADRIO.netlist`: the gate's own output,
+and pin 4 of the 74S112 at LMMODU `0A09`, which `mit/cadrio/iob.wlr` names
+`-SET1` --- the preset of the very same `ABORT` flip-flop the collision
+detector uses. **It does not step Lost Count**; that counter is clocked from
+`ITS.ME`, as below. The 26LS31 at
 LMLNDR `0A02` then holds the cable high for four bit cells.
 
 **The instant is twelve microseconds in.** The three hardware words go
