@@ -95,7 +95,7 @@ pub const TDONE_AFTER_ABORT_NS: u64 = 125;
 /// held while the cable is busy, counted down on every second terminal
 /// count while it is idle, and a frame ready starts [`TURN_START_NS`]
 /// after the count that carries the low byte from 0 to 255 --- bit 7's
-/// rise, the 74S74 at 0B15 clocking `TSTART` from `TSREMPTY AND CW AND
+/// rise, the 74S74 at LMMODU 0B15 clocking `TSTART` from `TSREMPTY AND CW AND
 /// -CBLBSY`.  Only the low byte matters to bit 7, so only it is kept.
 #[derive(Clone, Debug)]
 struct Turn {

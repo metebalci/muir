@@ -684,7 +684,10 @@ fn table(base: &str) -> Option<Pinout> {
         // diagram and its logic symbol disagree over pins 3, 5 and 11; the
         // board settles it, since LMTBUF C09 takes pin 11 from the transmit
         // shift register's `QH`, which can only be the data input, leaving
-        // 3 and 5 as `S0` and `S1`.
+        // 3 and 5 as `S0` and `S1`.  MIT's wire list names them the
+        // other way round --- pin 3 `S2`, pin 5 `S1`, pin 8 `S0` --- which
+        // changes nothing here, all three being grounded on the one board
+        // that carries a 9401, but the wire list is the board as built.
         "9401" => p(14, &[12, 13], Totem, Datasheet),
         // SN74S287 (`sn74s287.pdf`), 1,024 bits as 256 words of four with
         // three-state outputs, 16-pin: address on 5, 6, 7, 4, 3, 2, 1 and

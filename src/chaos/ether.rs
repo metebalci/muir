@@ -182,7 +182,7 @@ pub fn refill(words: usize) -> u64 {
 /// packet from `source`: page LMMYNM computes `source - me` bit-serially
 /// as the source word goes by, low bit first, in the 74S287 at 0D01 ---
 /// `MATCH SO FAR` the difference bit, `RS2` the borrow --- and the
-/// 74LS164s at 0B18 and 0B19 shift the difference bits in as they are
+/// 74LS164s at LMTURN 0B18 and 0B19 shift the difference bits in as they are
 /// made, so that at `SRC STB`, when the word is over, they hold bits 14
 /// down to 3 of the difference, the newest first; the low byte the
 /// counter takes is bits 14 to 7, bit 14 at the bottom.  The turn comes
