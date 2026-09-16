@@ -628,18 +628,26 @@ each measurement. **What would settle it:** the interface on a real cable
 or in fabric, one made busy and the other made to send to it, with the
 sender's CSR read.
 
-**The check word's arrangement has never met real hardware.** The
-polynomial is read off the 9401's data sheet and the board's grounded select
-pins, and the bit order off its shift registers, but the seed, the shift
-direction and whether the appended source word falls inside the division
-were fixed by matching the netlist board's own output, as [the check
-word](#the-check-word) says. That is a simulator agreeing with itself: all
-three choices were settled by what `data/CADRIO.netlist` computed and not by
-what a 9401 did, and a wrong guess about two of them that cancelled would
-look exactly like a right one. **What would settle it:** the interface in
-FPGA fabric --- a real 9401's logic on a real part --- looping a frame back
-and reporting its check word, which fixes all three at once against
-something that is not this program.
+**The check word's seed and shift direction have never met real
+hardware.** The polynomial is read off the 9401's data sheet and the
+board's grounded select pins, and the bit order off its shift registers,
+but the seed and the shift direction were fixed by matching the netlist
+board's own output, as [the check word](#the-check-word) says. That much is
+a simulator agreeing with itself: both were settled by what
+`data/CADRIO.netlist` computed and not by what a 9401 did, and a pair of
+wrong guesses that cancelled would look exactly like a right one.
+**What would settle it:** a real 9401 on a real board, over a frame whose
+words are published, or an MIT file that states the arrangement. Fabric
+cannot, unless its check word is computed from the drawings rather than
+transcribed from a model.
+
+**The appended source word is covered by the divider, and that one is not
+fitted.** The interface appends the source itself, and driving the netlist
+board's own two 9401s over one frame while changing only that word changes
+the check word: `3050` gives `135771`, `3060` gives `135651`, `177100`
+gives `25206`, `177101` gives `125203`. Were the appended word outside the
+division, all four would be equal. So its inclusion is held by the wiring
+and the part rather than by the constant that was fitted to them.
 
 **Whether the receive buffer reads as zeros above the last bit of a short
 run.** A receiver that took wreckage has a partial word at the top of its
