@@ -73,24 +73,24 @@ serves. On `chip` it is a second netlist on the backplane, that same
 `LISPMTV.netlist` wrapped to the color addresses instead of the main
 screen's; on `micro` and `rtl` it is the model, as the rest of the machine
 is. And the I/O board is two machines' worth of function on one board: 94
-parts on the keyboard, mouse, clock and serial pages against 84 on the
-Chaosnet's, near enough half each. They are not two boards in disguise,
-though, which is why the diagram does not draw them apart. Forty-seven
-signals cross between the halves --- the buffered Unibus data and address
-lines, the reset, the address decode that makes the Chaosnet's own select,
-and its bus reply and interrupt going back out through the I/O half --- and
-the clock the I/O half counts microseconds on is the Chaosnet half's own 32
-MHz crystal. The serial port is on that half too --- the Signetics 2651 at
-IOBSER 0A12, its 5.0688 MHz baud-rate can beside it, and the MC1488 and
-MC1489 out to the RS-232 connector at J9 --- and until recently it was the
-one thing on the board with no far end outside muir. `--serial` gives it
-one: a TCP endpoint, off unless asked for, which plugs the cable when
-something connects --- DSR, DCD and CTS asserted as a device on a null-modem
-does with its DTR and RTS, because the 2651 is conditioned to transmit on
-`-CTS` low and receive on `-DCD` low, so carrying bytes is not enough. The
-far end takes its rate and framing from the port, whatever the machine
-programmed into it: a far end that picks its own produces garbage rather
-than an error.
+parts on the keyboard, mouse, clock and serial pages against 84 on
+[the Chaosnet's](chaosnet.md), near enough half each. They are not two
+boards in disguise, though, which is why the diagram does not draw them
+apart. Forty-seven signals cross between the halves --- the buffered Unibus
+data and address lines, the reset, the address decode that makes the
+Chaosnet's own select, and its bus reply and interrupt going back out
+through the I/O half --- and the clock the I/O half counts microseconds on
+is the Chaosnet half's own 32 MHz crystal. The serial port is on that half
+too --- the Signetics 2651 at IOBSER 0A12, its 5.0688 MHz baud-rate can
+beside it, and the MC1488 and MC1489 out to the RS-232 connector at J9 ---
+and until recently it was the one thing on the board with no far end outside
+muir. `--serial` gives it one: a TCP endpoint, off unless asked for, which
+plugs the cable when something connects --- DSR, DCD and CTS asserted as a
+device on a null-modem does with its DTR and RTS, because the 2651 is
+conditioned to transmit on `-CTS` low and receive on `-DCD` low, so carrying
+bytes is not enough. The far end takes its rate and framing from the port,
+whatever the machine programmed into it: a far end that picks its own
+produces garbage rather than an error.
 
 The five cables carry two buses. One is the memory bus. The other is the
 diagnostic bus, SPY: sixteen registers on the processor's two boards, read

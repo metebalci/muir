@@ -37,20 +37,20 @@ and in two. MIT counted these boards twice itself, by the locations it
 stuffed and by the packages each part type takes, and every board but the
 SIMPLE TV has one of those counts or both to answer to.
 
-> The Chaosnet interface shares the I/O board rather than having one of
-> its own, and MIT drew the two separately: fourteen pages for the board
-> proper and thirteen for Chaosnet. All twenty-seven are in the netlist,
-> 94 parts against 84, five chips having gates on both sides. The
-> interface runs: it knows its own address off the switches, a packet
-> written into its transmitter comes back out of its receiver with the
-> check word right, and it trades packets with the other stations on its
-> cable, taking broadcasts and passing over other hosts'. Those stations
-> are off the host: `--chaos-udp` is the cable, putting the board on a
-> network as Chaosnet over UDP while `--chaos-address` sets its switches,
-> and a band's file and time host --- what MIT's associated machine, OZ,
-> ran --- is a program of its own there,
-> [ozd](https://github.com/metebalci/ozd). A CADR had no such server
-> inside it, and neither has muir.
+> [The Chaosnet interface](chaosnet.md) shares the I/O board rather than
+> having one of its own, and MIT drew the two separately: fourteen pages
+> for the board proper and thirteen for Chaosnet. All twenty-seven are
+> in the netlist, 94 parts against 84, five chips having gates on both
+> sides. The interface runs: it knows its own address off the switches,
+> a packet written into its transmitter comes back out of its receiver
+> with the check word right, and it trades packets with the other
+> stations on its cable, taking broadcasts and passing over other
+> hosts'. Those stations are off the host: `--chaos-udp` is the cable,
+> putting the board on a network as Chaosnet over UDP while
+> `--chaos-address` sets its switches, and a band's file and time host
+> --- what MIT's associated machine, OZ, ran --- is a program of its own
+> there, [ozd](https://github.com/metebalci/ozd). A CADR had no such
+> server inside it, and neither has muir.
 
 The boards this program runs are not written here. They are MIT's own
 engineering files, recovered from the ITS backup tapes, extracted by a

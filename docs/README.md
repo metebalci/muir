@@ -8,7 +8,7 @@ claims a test holds, and marks what is not established as **unverified**,
 with what would settle it.
 
 `manual.md` is the entry: what muir does when you run it, every flag, and
-what it is doing underneath. Four companions carry the sections that stand
+what it is doing underneath. Seven companions carry the sections that stand
 on their own, and each links back to it.
 
 | Document | What it is |
@@ -20,3 +20,4 @@ on their own, and each links back to it.
 | `sources.md` | Sources and attribution: what this is built on, how it was written, the license, and the name |
 | `keyboard-boot.md` | The keyboard boot chord, Control-Meta-Control-Meta-Rubout: the firmware that detects it, the I/O board that decodes it, the wire it takes to the processor link by link, and what muir has of it |
 | `tv.md` | The TV board: the SIMPLE TV and the LISPM TV, the one programming interface they share, the sync program that makes the raster, the color map, the color TV as System 100 drives it, and what muir has of it |
+| `chaosnet.md` | The Chaosnet board: MIT's interface as it shares the I/O board, the registers the software sees, the cable and its coding, whose turn it is to transmit, the abort signal in both its uses, and what muir has of it |
