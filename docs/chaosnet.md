@@ -663,15 +663,49 @@ it is the authority here because a muir on a real Chaosnet reaches one
 through `cbridge`. **What would settle it:** watching one of them, or one
 interoperation.
 
-**Whether subnet 376 is reserved.** muir's default address, `177001`, is on
-subnet 376 so that a run started without `--chaos-address` cannot answer
-where a real Chaosnet put somebody. That the subnet is set aside for private
-use is the Global Chaosnet's own convention and is **not** in any MIT file
-here; no MIT document in this tree reserves a subnet. What does not depend
-on the convention is the part that matters: no host table in this tree names
-a host on subnet 376, so no band here calls it. **What would settle it:** a
-copy of MIT's network-wide host table, rather than the release's trimmed
-one.
+**Whether MIT set subnet 376 aside.** muir's default address, `177001`, is
+on subnet 376 --- 254 decimal, the subnet being the address's high byte ---
+so that a run started without `--chaos-address` cannot answer where a real
+Chaosnet put somebody. That such a subnet is set aside for private use is
+the Global Chaosnet's own convention and is **not** in any MIT file here;
+no MIT document in this tree reserves a subnet, and no host table in this
+tree names a host on subnet 376, so no band here calls it. **What would
+settle it:** a copy of MIT's network-wide host table, rather than the
+release's trimmed one.
+
+**What a System 100 band does with an address on that subnet is measured,
+not unverified: it never reaches a listener.** The band's routing table is
+96 entries --- `(DEFCONST ROUTING-TABLE-SIZE 96.)` at
+`vendor/system-100-0/sys/network/chaos/chsncp.lisp:253`, where the release
+that continues the line has `256.` at
+`vendor/system-304-0/sys-304-0/network/chaos/chsncp.lisp:253` --- and
+`RESET-ROUTING-TABLE` writes `(AREF ROUTING-TABLE MY-SUBNET)`, and the cost
+and type tables likewise, with no bounds test (same file, lines 311 to 317);
+the send path does test a subnet against the table's length (lines 1934 and
+1937). So a subnet of 96 or more is past the end of the table the
+reset writes. Booted on `micro` off the System 100 pack with no
+`--chaos-address`, the band stops at cold boot in the error handler:
+
+    >>TRAP 4302 (SUBSCRIPT-OOB M-Q M-S (NIL XAREF-RECHECK-INDEX) M-A)
+    The subscript 254 for #<ART-16B-96 10730160> was out of range in SYSTEM:SET-AR-1.
+    While in the function
+    CHAOS::RESET-ROUTING-TABLE
+     ← CHAOS::INITIALIZE-NCP-COLD
+     ← SYSTEM:EVAL1
+
+The array prints its own size, `ART-16B-96`, so the machine gives the
+constant back without the file being read. Under it the handler offers "Use
+different subscripts" and "Abort the CHAOS-NCP initialization", and
+unattended nothing takes either: the screen was the same 150 million
+microcycles on. **The table's length decides this, not the number 376**: at
+`57401`, subnet 95, the same band goes past the reset and cold-boots, and at
+`60001`, subnet 96, it traps with the subscript 96. A file and time host on
+the cable makes no difference --- the band at `177001` traps with one at
+3060 as without. **The same band at `3050` boots to its listener**, where
+`chaos:my-subnet` reads 6, `(array-length chaos:routing-table)` and the cost
+and type tables all read 96, and `(aref chaos:routing-table
+chaos:my-subnet)` reads 1576, which is 3050 octal: its own address, which is
+what the reset writes there.
 
 **The memo's round and the board's round.** AIM-628 §2.6, memo page 8,
 gives "a typical value for the token's round-trip time" as 64 microseconds.
