@@ -34,14 +34,18 @@
 //!   sender stopped, [`BUSY_ABORT_NS`] into the frame. The netlist board
 //!   drives its own cable and does this in its gates; a behavioral board
 //!   has the ether do it for it, from the receiver's state it is given
-//!   through [`Ether::board_receiver`].
+//!   through [`Ether::board_receiver`].  The frame it decides on is a
+//!   model transmitter's or the netlist board's alike: the board makes
+//!   its own bits and has no `Transmission` here, so its frame is timed
+//!   from its transceiver's first edge and its addresses are read off
+//!   the cells that have gone by.
 //! - **A station cannot offer its next frame at once.** Its host refills
 //!   the outgoing buffer a word at a time and reads `START`, which is
 //!   [`refill`], and its turn then comes on the turn timer's round,
 //!   [`ROUND_NS`]. [`Node::station`] says which nodes stand for
 //!   stations; [`Capture`] is an instrument and does not.
 
-use super::packet::{Framed, Received, frame, unframe_any};
+use super::packet::{Framed, Received, frame, header_on_the_wire, unframe_any};
 use super::wire::{self, Decoder};
 use std::collections::{BTreeMap, VecDeque};
 
@@ -300,6 +304,22 @@ struct Transmission {
     deaf: bool,
 }
 
+/// A frame the netlist board's transceiver is putting on the cable, as
+/// the behavioral board's receiver has to take it.  A model
+/// transmitter's frame is a [`Transmission`] and carries the two
+/// instants the receiver decides at; the netlist board's is only a level
+/// its transceiver drives, so they are timed from that level's first
+/// edge and the addresses come off what the decoder has taken.
+struct FromCable {
+    /// The frame's `START^`, [`RACT_NS`] in, until it is past.
+    ract_at: Option<u64>,
+    /// The instant its destination word has gone by, [`BUSY_ABORT_NS`]
+    /// in, until it is past.
+    dest_at: Option<u64>,
+    /// Whether the receiver found its buffer full at `START^`.
+    ract_off: bool,
+}
+
 /// A frame waiting to start.
 struct Waiting {
     /// When it may start.
@@ -337,6 +357,9 @@ pub struct Ether {
     board: Option<Board>,
     /// What the board's transceiver drives, as last read.
     board_tx: bool,
+    /// A frame the netlist board's transceiver is putting on the cable,
+    /// while the behavioral board's receiver still has to decide on it.
+    from_cable: Option<FromCable>,
     /// The model transmitters' frames on the cable, any number at once.
     sending: Vec<Transmission>,
     waiting: Vec<Waiting>,
@@ -381,6 +404,7 @@ impl Ether {
             nodes: Vec::new(),
             board: None,
             board_tx: false,
+            from_cable: None,
             sending: Vec::new(),
             waiting: Vec::new(),
             level: false,
@@ -543,10 +567,20 @@ impl Ether {
         self.board_tx || self.board.as_ref().is_some_and(|b| b.aborting)
     }
 
-    /// Whether the board's transceiver would report interference: the
-    /// board is driving high and so is a model transmitter.
+    /// Whether the netlist board's transceiver would report
+    /// interference: it is driving high and so is another transceiver on
+    /// the cable.  AIM-628 §2.3, a transceiver "detects interference
+    /// (another transceiver transmitting at the same time as this one)
+    /// and informs the interface" --- so every other driver counts and
+    /// not only a frame.  The behavioral board's busy-receiver abort
+    /// signal is one of them, which is §2.6's "the transmitter does not
+    /// distinguish receiver-busy aborts from real collisions" (memo page
+    /// 8); `a_busy_model_receiver_stops_the_netlist_board_which_reads_transmit_abort`
+    /// in `tests/chaos_two_boards.rs` holds it.  The one driver that is
+    /// not interference is this transceiver's own: it hears itself, which
+    /// is why the cable's level takes it in and this does not.
     pub fn interference(&self) -> bool {
-        self.board_tx && self.model_tx()
+        self.board_tx && (self.model_tx() || self.board.as_ref().is_some_and(|b| b.aborting))
     }
 
     /// Whether the cable is busy: something has been on it within the
@@ -586,6 +620,19 @@ impl Ether {
         // What the model transmitters did up to `now`, with the board as
         // it was driving until then.
         self.play(now);
+        // A frame's first edge from the netlist board: its transceiver
+        // taking an idle cable high.  The board makes its own bits, so
+        // there is no [`Transmission`] to carry the instants the
+        // behavioral board's receiver decides at, and they are timed from
+        // here.  Its driver coming on inside a frame is its own busy
+        // receiver's abort signal instead, and starts nothing.
+        if tx && !self.board_tx && !self.busy(now) && self.board.is_some() {
+            self.from_cable = Some(FromCable {
+                ract_at: Some(now + RACT_NS),
+                dest_at: Some(now + BUSY_ABORT_NS),
+                ract_off: false,
+            });
+        }
         self.board_tx = tx;
         self.interfere(now);
         self.set_level(now, self.board_high() || self.model_tx());
@@ -604,12 +651,14 @@ impl Ether {
         let edges = self.sending.iter().filter_map(|s| s.waveform.front().map(|&(t, _)| t));
         let ticks = self.sending.iter().filter_map(|s| (contended && !s.deaf).then_some(s.tick));
         let dests = self.sending.iter().flat_map(|s| [s.ract_at, s.dest_at]).flatten();
+        let from_cable = self.from_cable.iter().flat_map(|f| [f.ract_at, f.dest_at]).flatten();
         let starts = self.waiting.iter().map(|w| w.at);
         let pending = self.board.as_ref().and_then(|b| b.pending.as_ref().map(|&(t, _)| t));
         let abort = self.board.as_ref().and_then(|b| b.abort_until);
         edges
             .chain(ticks)
             .chain(dests)
+            .chain(from_cable)
             .chain(starts)
             .chain(pending)
             .chain(abort)
@@ -675,6 +724,7 @@ impl Ether {
                 })
                 .flatten()
                 .chain(self.board.as_ref().and_then(|b| b.abort_until))
+                .chain(self.from_cable.iter().flat_map(|f| [f.ract_at, f.dest_at]).flatten())
                 .min();
             let Some(t) = due.filter(|&t| t <= now) else { break };
             // As the levels stood up to `t`: what a clock edge at `t`
@@ -730,6 +780,18 @@ impl Ether {
             if inactive && let Some(b) = self.board.as_mut() {
                 b.not_taken = true;
             }
+            // And `START^` for a frame the netlist board is putting on the
+            // cable, timed from its first edge.
+            if self.from_cable.as_ref().is_some_and(|f| f.ract_at == Some(t)) {
+                let full = self.board.as_ref().is_some_and(|b| b.receive_done);
+                if let Some(f) = self.from_cable.as_mut() {
+                    f.ract_at = None;
+                    f.ract_off = full;
+                }
+                if full && let Some(b) = self.board.as_mut() {
+                    b.not_taken = true;
+                }
+            }
             let arrived: Vec<(u16, u16, bool)> = self
                 .sending
                 .iter_mut()
@@ -741,6 +803,18 @@ impl Ether {
                 .collect();
             for (source, dest, ract_off) in arrived {
                 self.busy_receiver(t, source, dest, ract_off);
+            }
+            // The netlist board's frame the same way, its two addresses
+            // read off the cells that have gone by: the behavioral
+            // board's receiver decides on what it has heard, as the
+            // netlist board's receiver does.  A frame cut short before
+            // its destination word --- wreckage, or one aborted --- has
+            // nothing to decide on and is let be.
+            if self.from_cable.as_ref().is_some_and(|f| f.dest_at == Some(t)) {
+                let ract_off = self.from_cable.take().unwrap().ract_off;
+                if let Some((source, dest)) = header_on_the_wire(self.decoder.bits()) {
+                    self.busy_receiver(t, source, dest, ract_off);
+                }
             }
             self.interfere(t);
             self.set_level(t, self.board_high() || self.model_tx());

@@ -50,26 +50,26 @@ impl Nets {
     }
 }
 
-pub struct OnCable {
-    pub ether: Ether,
+/// The transceiver's wires against a cable, wherever that cable is kept.
+/// [`OnCable`] is this with the cable it drives; an [`Ether`] is owned by
+/// whatever it is plugged into, so a cable with a second interface on it
+/// --- `tests/chaos_two_boards.rs`, where the behavioral interface holds
+/// the ether --- is reached by the netlist board's transceiver through
+/// here.
+pub struct Transceiver {
     nets: Nets,
     last: Option<(bool, bool)>,
 }
 
-impl OnCable {
-    /// Wires `ether` to the transceiver nets of `n`, the I/O board.
-    pub fn new(n: &Netlist, ether: Ether) -> OnCable {
-        OnCable::from_nets(Nets::of(n), ether)
+impl Transceiver {
+    /// The transceiver of `n`, the I/O board.
+    pub fn new(n: &Netlist) -> Transceiver {
+        Transceiver::from_nets(Nets::of(n))
     }
 
     /// The same, with the nets already found.
-    pub fn from_nets(nets: Nets, ether: Ether) -> OnCable {
-        OnCable { ether, nets, last: None }
-    }
-
-    /// Whether the netlist is a board with the transceiver on it.
-    pub fn fits(n: &Netlist) -> bool {
-        n.by_name_id("TRANS.DATA+").is_some()
+    pub fn from_nets(nets: Nets) -> Transceiver {
+        Transceiver { nets, last: None }
     }
 
     /// Forgets what was last put on the nets, for a board brought up again.
@@ -83,14 +83,14 @@ impl OnCable {
         matches!(c.board_level(self.nets.trans_p), (Level::High, true))
     }
 
-    /// Gives the ether what the board drives at `now`, lets it do what is
+    /// Gives `ether` what the board drives at `now`, lets it do what is
     /// due, and puts the cable's level and interference on the board's
     /// receive pairs, settled at `now`. Returns whether the nets moved.
-    pub fn apply(&mut self, c: &mut Chip, now: u64) -> bool {
+    pub fn apply(&mut self, c: &mut Chip, ether: &mut Ether, now: u64) -> bool {
         let tx = self.board_tx(c);
-        self.ether.board(now, tx);
-        self.ether.at(now);
-        let want = (self.ether.level(), self.ether.interference());
+        ether.board(now, tx);
+        ether.at(now);
+        let want = (ether.level(), ether.interference());
         if self.last == Some(want) {
             return false;
         }
@@ -103,6 +103,45 @@ impl OnCable {
         c.transition(now);
         self.last = Some(want);
         true
+    }
+}
+
+/// A netlist board's transceiver and the cable it is the only board on.
+pub struct OnCable {
+    pub ether: Ether,
+    transceiver: Transceiver,
+}
+
+impl OnCable {
+    /// Wires `ether` to the transceiver nets of `n`, the I/O board.
+    pub fn new(n: &Netlist, ether: Ether) -> OnCable {
+        OnCable::from_nets(Nets::of(n), ether)
+    }
+
+    /// The same, with the nets already found.
+    pub fn from_nets(nets: Nets, ether: Ether) -> OnCable {
+        OnCable { ether, transceiver: Transceiver::from_nets(nets) }
+    }
+
+    /// Whether the netlist is a board with the transceiver on it.
+    pub fn fits(n: &Netlist) -> bool {
+        n.by_name_id("TRANS.DATA+").is_some()
+    }
+
+    /// Forgets what was last put on the nets, for a board brought up again.
+    pub fn reattach(&mut self) {
+        self.transceiver.reattach();
+    }
+
+    /// What the board is putting on the cable.
+    pub fn board_tx(&self, c: &Chip) -> bool {
+        self.transceiver.board_tx(c)
+    }
+
+    /// [`Transceiver::apply`], on the cable this board owns.
+    pub fn apply(&mut self, c: &mut Chip, now: u64) -> bool {
+        let OnCable { ether, transceiver } = self;
+        transceiver.apply(c, ether, now)
     }
 
     /// When the ether next has something of its own to do after `now`.

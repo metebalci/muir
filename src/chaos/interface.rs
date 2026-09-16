@@ -73,7 +73,17 @@ pub mod csr {
     /// Transmit Interrupt Enable (read/write).
     pub const TRANSMIT_INT_ENABLE: u16 = 0o40;
     /// Transmit Abort (read only): "the last transmission was aborted, by
-    /// a collision or because the receiver was busy."
+    /// a collision or because the receiver was busy."  Both are measured,
+    /// and the busy receiver both ways round: `tests/chaos_two_boards.rs`
+    /// puts the netlist board and the behavioral interface on one cable
+    /// and has each stop the other's transmitter with the abort signal
+    /// §2.5 gives a full buffer, reading this bit at the sender each
+    /// time.  A collision is
+    /// `the_board_aborts_its_transmission_on_interference` in
+    /// `tests/chaos_netlist.rs`.  One bit answers for both because §2.6
+    /// (memo page 8) says the transmitter cannot tell them apart: "the
+    /// transmitter does not distinguish receiver-busy aborts from real
+    /// collisions."
     pub const TRANSMIT_ABORT: u16 = 0o100;
     /// Transmit Done (read only): "set to 1 when a transmission is
     /// completed or aborted, and cleared to 0 when a word is written into

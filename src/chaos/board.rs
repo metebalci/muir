@@ -596,9 +596,15 @@ impl Interface {
     /// interface by name is aborted on the cable
     /// ([`super::ether::Ether::board_lost`], and
     /// `the_busy_receiver_aborts_a_frame_addressed_to_it` in
-    /// `tests/chaos_netlist.rs`).  What can still arrive with the buffer
-    /// full is a frame looped back inside the interface, where the cable
-    /// is unused and the ether sees nothing: it is counted here.
+    /// `tests/chaos_netlist.rs`).  That holds whoever put the frame
+    /// there: a model transmitter's carries the instants itself, and a
+    /// netlist board's on the same cable is timed from its transceiver's
+    /// first edge, which
+    /// `a_busy_model_receiver_stops_the_netlist_board_which_reads_transmit_abort`
+    /// in `tests/chaos_two_boards.rs` measures.  What can still arrive
+    /// with the buffer full is a frame looped back inside the interface,
+    /// where the cable is unused and the ether sees nothing: it is
+    /// counted here.
     fn arrive(&mut self, now: u64, r: &Received) {
         let Some(&dest) = r.framed.buffer.last() else { return };
         let mine = dest == self.address || dest == 0 || self.csr & csr::SPY != 0;

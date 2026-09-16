@@ -220,6 +220,19 @@ pub fn frame(buffer: &[u16], source: u16) -> Vec<bool> {
     bits
 }
 
+/// The source and destination words of a frame from the bits that have
+/// gone by on the cable, for a receiver that must decide before the run
+/// ends. AIM-628 §2.5, memo pages 5 and 6: the three hardware words "are
+/// transmitted first, in the order check, source, destination", and
+/// "Words are transmitted least-significant bit first" --- so the first
+/// sixteen cells carry the check word, the next sixteen the source and
+/// the next sixteen the destination, each least-significant bit first.
+/// `None` until the destination word is whole, 48 cells in.
+pub fn header_on_the_wire(bits: &[bool]) -> Option<(u16, u16)> {
+    let word = |k: usize| (0..16).map(|i| (bits[k * 16 + i] as u16) << i).sum();
+    (bits.len() >= 48).then(|| (word(1), word(2)))
+}
+
 /// A packet taken off the cable: [`frame`] undone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Framed {
@@ -301,4 +314,29 @@ fn received(bits: &[bool]) -> Received {
     over.push(source);
     let check_ok = whole && check_word(&over) == check;
     Received { framed: Framed { buffer, source, check, check_ok }, bits: count }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The addresses read off the wire are the ones [`frame`] put
+    /// there.** [`header_on_the_wire`] takes them from the first 48 cells
+    /// while the frame is still going by, and must agree with what
+    /// [`unframe_any`] reads out of the whole run.
+    #[test]
+    fn the_header_on_the_wire_is_the_frames_own_addresses() {
+        for (source, dest) in [(0o3050u16, 0o3060u16), (0o177001, 0), (0o4401, 0o4403)] {
+            let buffer = vec![0o1000, 4, dest, 0, source, 0o21, 1, 0, 0x4954, 0x454d, dest];
+            let bits = frame(&buffer, source);
+            assert_eq!(
+                header_on_the_wire(&bits[..48]),
+                Some((source, dest)),
+                "the source and destination 48 cells in"
+            );
+            assert_eq!(header_on_the_wire(&bits[..47]), None, "and not before they are whole");
+            let r = unframe_any(&bits);
+            assert_eq!((r.framed.source, r.framed.buffer.last().copied()), (source, Some(dest)));
+        }
+    }
 }
