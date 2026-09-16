@@ -674,7 +674,7 @@ impl Buses {
             // The I/O board's answer times hold nothing: the board's clock
             // runs from power-on and every time it gives is worked out
             // from the instant it is asked.
-            io_timing: busint::IoBoardTiming {},
+            io_timing: _,
             unibus_pending,
         } = self;
         w.bool(*memory_boards);

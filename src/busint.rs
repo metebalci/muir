@@ -29,6 +29,7 @@
 //!   the other masters on the bus, of which the disk is one.
 //!
 
+use crate::clock::{GRID_NS, TimingModel};
 use crate::{disk_controller, ioboard, spy, tv};
 
 /// "it is the responsibility of the bus master to assert good address, write,
@@ -356,6 +357,9 @@ pub struct MemoryBoard {
     /// Held in reset by `-XBUS INIT`, which the interface asserts for as
     /// long as the processor's Unibus reset is on.
     in_reset: bool,
+    /// Whose time the twin keeps. Not in a checkpoint: the interface that
+    /// owns the board says, [`Busint::keep_timing_model`].
+    timing: TimingModel,
 }
 
 /// How many memory boards the machine has by default: 2M words, 64K a
@@ -432,17 +436,34 @@ pub const MEMORY_POWER_ON_EDGE: u64 = 22;
 
 impl Default for MemoryBoard {
     fn default() -> Self {
-        let up = rising_edge(MEMORY_POWER_ON_EDGE + MEMORY_BUSY_STAGES);
-        let off = rising_edge(MEMORY_POWER_ON_EDGE + REFRESH_TRIGGER_STAGES);
+        MemoryBoard::with_timing_model(TimingModel::Cadr)
+    }
+}
+
+impl MemoryBoard {
+    /// The board at power-on, on `model`'s time: its crystal is a clock
+    /// that runs freely from power-on and the refresh one-shot a delay its
+    /// cycle starts, [`TimingModel`].
+    pub fn with_timing_model(model: TimingModel) -> MemoryBoard {
+        let edge = |j| model.free_running(rising_edge(j));
+        let up = edge(MEMORY_POWER_ON_EDGE + MEMORY_BUSY_STAGES);
+        let off = edge(MEMORY_POWER_ON_EDGE + REFRESH_TRIGGER_STAGES);
         MemoryBoard {
             idle_at: up,
-            refresh_time_at: off + REFRESH_NS,
+            refresh_time_at: off + model.triggered(REFRESH_NS),
             time_off_at: off,
             release_at: 0,
             refresh_stage: 0,
             refresh_rq_at: 0,
             in_reset: false,
+            timing: model,
         }
+    }
+
+    /// The `j`-th rising edge of the board's crystal as the twin takes it:
+    /// [`rising_edge`], at the first tick at or after it on the grid.
+    fn edge(&self, j: u64) -> u64 {
+        self.timing.free_running(rising_edge(j))
     }
 }
 
@@ -476,12 +497,12 @@ impl MemoryBoard {
         }
         self.in_reset = false;
         if self.refresh_stage == 2 {
-            self.idle_at = rising_edge(rising_edge_after(now) + MEMORY_RELEASE_STAGES);
+            self.idle_at = self.edge(rising_edge_after(now) + MEMORY_RELEASE_STAGES);
             // `-REFRESH NOW` is `REFRESH CYC` and the board not idle; the
             // reset held `IDLE A`, so it falls as the release lets the
             // cycle go, and the one-shot runs from the release.
             self.time_off_at = now;
-            self.refresh_time_at = now + REFRESH_NS;
+            self.refresh_time_at = now + self.timing.triggered(REFRESH_NS);
             self.refresh_stage = 0;
         }
     }
@@ -497,14 +518,14 @@ impl MemoryBoard {
         // `IDLE` returns when `-BUSY` lifts and the request is gone.
         let idle = self.idle_at.max(self.release_at);
         let taken = rising_edge_after(self.refresh_rq_at.max(idle));
-        if rising_edge(taken) >= before {
+        if self.edge(taken) >= before {
             return false;
         }
-        self.idle_at = rising_edge(taken + MEMORY_BUSY_STAGES);
+        self.idle_at = self.edge(taken + MEMORY_BUSY_STAGES);
         // `TIME FOR REFRESH` falls as the cycle begins, and the one-shot
         // runs from there.
-        self.time_off_at = rising_edge(taken + REFRESH_TRIGGER_STAGES);
-        self.refresh_time_at = self.time_off_at + REFRESH_NS;
+        self.time_off_at = self.edge(taken + REFRESH_TRIGGER_STAGES);
+        self.refresh_time_at = self.time_off_at + self.timing.triggered(REFRESH_NS);
         self.refresh_stage = 0;
         true
     }
@@ -532,7 +553,7 @@ impl MemoryBoard {
         // that takes it.
         let idle = self.idle_at.max(self.release_at);
         let taken = rising_edge_after(self.refresh_rq_at.max(idle));
-        rising_edge(taken).saturating_add(1)
+        self.edge(taken).saturating_add(1)
     }
 
     /// Whether `TIME FOR REFRESH` is up at `now`: from the one-shot's end
@@ -547,10 +568,10 @@ impl MemoryBoard {
         loop {
             let taken = rising_edge_after(rq.max(self.idle_at));
             // A refresh request already up at that edge goes first.
-            if self.refresh_before(rising_edge(taken) + 1) {
+            if self.refresh_before(self.edge(taken) + 1) {
                 continue;
             }
-            self.idle_at = rising_edge(taken + MEMORY_BUSY_STAGES);
+            self.idle_at = self.edge(taken + MEMORY_BUSY_STAGES);
             // Until the master lifts the request the board is not idle,
             // however long the cycle's busy has been over: a refresh waiting
             // in that gap waits for the release. `rtl` says when the release
@@ -559,7 +580,7 @@ impl MemoryBoard {
             // the twin must not guess. Found with main memory as twins on
             // `chip`'s far end, at 536,673 in the boot.
             self.release_at = u64::MAX;
-            return rising_edge(taken + MEMORY_CYCLE_STAGES);
+            return self.edge(taken + MEMORY_CYCLE_STAGES);
         }
     }
 }
@@ -581,7 +602,9 @@ impl MemoryBoard {
 /// `-MSYN`; the counter's low half, which latches the count, takes one
 /// edge and [`IOB_USEC_LOW_NS`].
 #[derive(Clone, Debug, Default)]
-pub struct IoBoardTiming {}
+pub struct IoBoardTiming {
+    timing: TimingModel,
+}
 
 /// From power-on to the first rising edge of the board's `1 USEC CLK`:
 /// the 74S163 at IOBCLK 0C21 counting the 16 MHz `MCLK^` from its
@@ -632,6 +655,13 @@ pub const IOB_HALF_USEC_PHASE_NS: u64 = 203;
 pub const IOB_SERIAL_NS: u64 = 750;
 
 impl IoBoardTiming {
+    /// The board's answer times on `model`'s time: its clocks run freely
+    /// from power-on and its delay lines are delays a strobe starts,
+    /// [`TimingModel`].
+    pub fn with_timing_model(model: TimingModel) -> IoBoardTiming {
+        IoBoardTiming { timing: model }
+    }
+
     /// The first rising edge of the microsecond clock strictly after `t`.
     fn usec_edge_after(&self, t: u64) -> u64 {
         let first = IOB_FIRST_USEC_EDGE_NS;
@@ -641,9 +671,15 @@ impl IoBoardTiming {
         first + ((t - first) / 1_000 + 1) * 1_000
     }
 
-    /// The first `FCLK^` edge at or after `t`.
-    fn fclk_edge_at_or_after(t: u64) -> u64 {
-        t.div_ceil(IOB_FCLK_NS) * IOB_FCLK_NS
+    /// The first `FCLK^` edge taken at or after `t`. On the grid an edge is
+    /// taken at the first tick at or after it, so with `t` on a tick that is
+    /// the first edge less than a tick before `t`.
+    fn fclk_edge_at_or_after(&self, t: u64) -> u64 {
+        let from = match self.timing {
+            TimingModel::Cadr => t,
+            TimingModel::Fpga => t.saturating_sub(GRID_NS - 1),
+        };
+        from.div_ceil(IOB_FCLK_NS) * IOB_FCLK_NS
     }
 
     /// The first half-microsecond edge strictly after `t`.
@@ -657,24 +693,30 @@ impl IoBoardTiming {
     /// written when `write`.
     pub fn answer(&self, uaddr: u32, write: bool, msyn: u64) -> u64 {
         use crate::chaos::interface as chaos;
+        let t = self.timing;
         match uaddr {
-            ioboard::USEC_LOW => self.usec_edge_after(msyn) + IOB_USEC_LOW_NS,
-            ioboard::USEC_HIGH | ioboard::CLOCK | ioboard::GPIO => msyn + IOB_STRAIGHT_NS,
+            ioboard::USEC_LOW => {
+                t.free_running(self.usec_edge_after(msyn)) + t.triggered(IOB_USEC_LOW_NS)
+            }
+            ioboard::USEC_HIGH | ioboard::CLOCK | ioboard::GPIO => {
+                msyn + t.triggered(IOB_STRAIGHT_NS)
+            }
             // The Chaosnet interface's registers answer straight off ---
             // `MY ADDRESS` read in 250 ns on the netlist board --- but for
             // the transmit buffer's write and START, through the
             // transmitter, and the receive buffer's read, through its RAM
             // on `FCLK^`.
-            chaos::WRITE_BUFFER if write => msyn + IOB_CHAOS_BUFFER_NS,
-            chaos::START => msyn + IOB_CHAOS_BUFFER_NS,
+            chaos::WRITE_BUFFER if write => msyn + t.triggered(IOB_CHAOS_BUFFER_NS),
+            chaos::START => msyn + t.triggered(IOB_CHAOS_BUFFER_NS),
             chaos::READ_BUFFER => {
-                Self::fclk_edge_at_or_after(msyn + IOB_RBUF_SETUP_NS) + IOB_STRAIGHT_NS
+                let edge = self.fclk_edge_at_or_after(msyn + t.triggered(IOB_RBUF_SETUP_NS));
+                t.free_running(edge) + t.triggered(IOB_STRAIGHT_NS)
             }
-            u if ioboard::chaos_register(u) => msyn + IOB_STRAIGHT_NS,
+            u if ioboard::chaos_register(u) => msyn + t.triggered(IOB_STRAIGHT_NS),
             ioboard::SERIAL_FIRST..=ioboard::SERIAL_LAST => {
-                Self::half_usec_edge_after(msyn) + IOB_SERIAL_NS
+                t.free_running(Self::half_usec_edge_after(msyn)) + t.triggered(IOB_SERIAL_NS)
             }
-            _ => self.usec_edge_after(msyn) + 1_000 + IOB_STRAIGHT_NS,
+            _ => t.free_running(self.usec_edge_after(msyn) + 1_000) + t.triggered(IOB_STRAIGHT_NS),
         }
     }
 }
@@ -1246,6 +1288,10 @@ pub struct Busint {
     /// `rtl` run. Never later than the truth: whatever moves a twin lowers
     /// it to that twin's, and the edge that reaches it recomputes it.
     memory_next: u64,
+    /// Whose time the interface keeps, its memory boards' and I/O board's
+    /// twins with it. Not in a checkpoint: the engine that owns it says,
+    /// [`Busint::keep_timing_model`].
+    timing: TimingModel,
 }
 
 impl Default for Busint {
@@ -1258,11 +1304,16 @@ impl Busint {
     /// The interface with `boards` memory boards' twins on its Xbus: as
     /// many as the machine has, [`crate::machine::Machine::memory_boards`].
     pub fn new(boards: usize) -> Busint {
+        Busint::with_timing_model(boards, TimingModel::Cadr)
+    }
+
+    /// The interface at power-on on `model`'s time, [`TimingModel`].
+    pub fn with_timing_model(boards: usize, model: TimingModel) -> Busint {
         Busint {
             state: State::Idle,
             write: false,
-            memory: vec![MemoryBoard::default(); boards],
-            io: IoBoardTiming::default(),
+            memory: vec![MemoryBoard::with_timing_model(model); boards],
+            io: IoBoardTiming::with_timing_model(model),
             board: None,
             device_ns: IDEAL_DEVICE_NS,
             unibus_master: false,
@@ -1285,7 +1336,24 @@ impl Busint {
             debug_out: None,
             debug_out_pending: false,
             debug_out_timeout_at: u64::MAX,
-            memory_next: MemoryBoard::default().next_change(),
+            memory_next: MemoryBoard::with_timing_model(model).next_change(),
+            timing: model,
+        }
+    }
+
+    /// Whose time the interface keeps.
+    pub fn timing_model(&self) -> TimingModel {
+        self.timing
+    }
+
+    /// Says whose time the interface and its twins keep, without starting
+    /// them over: for a checkpoint read back, whose instants are already on
+    /// that time.
+    pub fn keep_timing_model(&mut self, model: TimingModel) {
+        self.timing = model;
+        self.io.timing = model;
+        for m in &mut self.memory {
+            m.timing = model;
         }
     }
 }
@@ -1534,7 +1602,8 @@ impl Busint {
                                         strobe,
                                     });
                                     self.debug_out_pending = true;
-                                    self.debug_out_timeout_at = debug_timeout_at(now);
+                                    self.debug_out_timeout_at =
+                                        self.timing.free_running(debug_timeout_at(now));
                                     (u64::MAX, u64::MAX, false)
                                 } else {
                                     (msyn, msyn, false)
@@ -1565,7 +1634,7 @@ impl Busint {
         if self.debug_modifier & debug_modifier::TIMEOUT_INHIBIT != 0 {
             u64::MAX
         } else {
-            nxm_timeout_at(now)
+            self.timing.free_running(nxm_timeout_at(now))
         }
     }
 
@@ -1880,11 +1949,11 @@ impl Busint {
                 {
                     let _ = (loadmd, answered);
                     let lift = self.debug_requested_at.saturating_add(req.hold_ns);
-                    let edge = crate::chip::gated_rise_after(
+                    let edge = self.timing.free_running(crate::chip::gated_rise_after(
                         crate::chip::VCO_PERIOD,
                         self.granted_at,
                         lift.max(self.granted_at),
-                    );
+                    ));
                     // The same shape as a Unibus cycle timing out unheld.
                     let nxm = edge + TIMEOUT_NS;
                     self.state = State::Granted {
@@ -2408,6 +2477,7 @@ impl MemoryBoard {
             refresh_stage,
             refresh_rq_at,
             in_reset,
+            timing: _,
         } = *self;
         w.u64(idle_at);
         w.u64(release_at);
@@ -2427,6 +2497,7 @@ impl MemoryBoard {
             refresh_stage: r.u8()?,
             refresh_rq_at: r.u64()?,
             in_reset: r.bool()?,
+            timing: TimingModel::Cadr,
         })
     }
 }
@@ -2439,7 +2510,7 @@ impl Busint {
             state,
             write,
             memory,
-            io: IoBoardTiming {},
+            io: _,
             board,
             device_ns,
             unibus_master,
@@ -2463,6 +2534,7 @@ impl Busint {
             debug_out_pending,
             debug_out_timeout_at,
             memory_next,
+            timing: _,
         } = self;
         state.save(w);
         w.bool(*write);
@@ -2508,6 +2580,7 @@ impl Busint {
         }
         for m in self.memory.iter_mut() {
             *m = MemoryBoard::load(r)?;
+            m.timing = self.timing;
         }
         self.board = r.opt(crate::checkpoint::Reader::u8)?;
         self.device_ns = r.u64()?;

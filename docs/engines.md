@@ -140,6 +140,25 @@ takes the same two words as the board flags: `model` anywhere, `netlist` on
 `chip` alone, and the bare flag the netlist on `chip` and the model
 elsewhere.
 
+**`--timing-model` is `rtl`'s alone.** `cadr` runs it on the board's
+nanoseconds and `fpga` on the 10 ns grid muir-fpga's fabric runs on, as
+`TimingModel` in `src/clock.rs` states and `tests/timing_model.rs` holds. The
+microcycle is the read phase's tap rounded up to a tick and the 60 ns restart
+after it, so 140, 150, 160 and 220 ns at the four speeds. A delay that
+something starts ends at the first tick at or past it, counted from its
+start: the bus interface's delay lines, a memory board's refresh one-shot, a
+drive's seek and access time. A clock that runs freely from power-on keeps
+its exact phase, each edge taken at the first tick at or after it: the bus
+interface's timeout clock, a memory board's crystal, the I/O board's
+microsecond, half-microsecond and `FCLK^` clocks. A free-running clock read
+only at the processor's own instants, the display's sync program or the
+drive's spindle, needs nothing more: read on a tick, its count is the same
+either way. The Chaosnet cable's bit timing keeps the board's nanoseconds
+under both, the fabric having none. `micro` and `chip` keep the board's time
+and refuse the flag. **Unverified:** that the fabric keeps these rules, which
+a reference regenerated from `rtl` under `fpga` and passed by the fabric
+would settle.
+
 **The mixed machines are instruments, not configurations.** A run meant to
 work the machine wants `rtl`, which runs the models throughout at about
 twice the hardware and is the engine for ordinary use; whoever asks for

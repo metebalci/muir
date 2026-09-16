@@ -182,6 +182,34 @@ fn chip_checkpoints_at_its_stop_and_another_resumes_from_it() {
     assert!(text(&out).contains("--tv-board"), "{}", text(&out));
 }
 
+/// **An `rtl` checkpoint carries its timing model**, and a resume under the
+/// other is refused by the flag's name: every instant in it is on the time
+/// it was run on. Resumed under its own, it runs on.
+#[test]
+fn a_resume_has_the_checkpoint_s_timing_model() {
+    let dir = scratch("checkpoint-timing-model");
+    let chk = dir.join("fpga.chk");
+    let out = muir()
+        .args(["--rtl", "--timing-model", "fpga", "--stop-after", "100", "--checkpoint"])
+        .arg(&chk)
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "the first run failed:\n{t}");
+    assert!(chk.exists(), "the checkpoint was written:\n{t}");
+
+    let out = muir()
+        .args(["--rtl", "--timing-model", "fpga", "--stop-after", "10", "--resume"])
+        .arg(&chk)
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "the resumed run failed:\n{t}");
+
+    let out = muir().args(["--rtl", "--stop-after", "10", "--resume"]).arg(&chk).run();
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(2), "not a usage error:\n{t}");
+    assert!(t.contains("written under --timing-model fpga, and this run is under cadr"), "{t}");
+}
+
 /// **An engine's checkpoint carries the display board too**, and a resume
 /// onto the other board is refused by the flag's name, as a `chip`
 /// checkpoint's header refuses one.  The board is not in the header here

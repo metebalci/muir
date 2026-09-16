@@ -415,6 +415,19 @@ fn the_display_board_is_named_on_every_engine() {
     assert!(t.contains("TV model lispm-tv"), "chip with the model board:\n{t}");
 }
 
+/// **`--timing-model` is `cadr` or `fpga`, and `fpga` is `rtl`'s.** The
+/// grid is what muir-fpga's fabric runs on, and it is `rtl`'s references
+/// that fabric is held to; `chip` and `micro` keep the board's time, so a
+/// run that asks for the grid on either is refused by the engine's name.
+#[test]
+fn the_timing_model_is_cadr_or_fpga_and_fpga_is_rtls() {
+    refused(&["--timing-model", "fast"], "--timing-model");
+    refused(&["--timing-model"], "--timing-model");
+    for engine in ["--micro", "--chip"] {
+        refused_saying(&[engine, "--timing-model", "fpga"], "--timing-model fpga is rtl's");
+    }
+}
+
 /// **`--color-tv` takes a word, and the bare flag is the netlist on `chip`
 /// and the model everywhere else.** The second display board is a board
 /// like the others: a netlist on `chip`'s backplane unless a flag says
