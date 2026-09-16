@@ -45,6 +45,18 @@ have the display, keyboard and mouse, which are the machine's only way in
 or out. RFB's `None` security is the only type offered, so no password.
 The boot ends at a Lisp Listener.
 
+To boot a pack of your own instead, `diskpack` makes one: a fresh label,
+microcode 323 in `MCR1`, and the System 100 band copied into `LOD1` from the
+pack you fetched. Then boot with `--disk-pack mine.img` in place of the
+fetched pack.
+
+    target/release/diskpack mine.img initialize
+    target/release/diskpack mine.img load MCR1
+    target/release/diskpack mine.img load-from LOD1 vendor/run/disk-sys-100-0.img LOD1
+
+[Making a pack](#making-a-pack) has the rest of what `diskpack` does:
+partitions added, grown, zeroed and deleted, and bands dumped and loaded.
+
 [Install](#install) and [Running it](#running-it) below have the rest, and
 so does [the install page](https://muir.metebalci.com/#install).
 
