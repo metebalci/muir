@@ -203,3 +203,49 @@ fn the_start_says_which_prom_the_machine_runs() {
         "the named file, and that it is MIT's:\n{t}"
     );
 }
+
+/// **The start says when the run is paced**, and says it differently on
+/// `chip`: there the flag is taken and will never bite, the engine being
+/// far slower than the machine it runs, and a line that promised the
+/// machine's own speed would be a promise the run does not keep.
+///
+/// And nothing is said when nothing was asked for: `--pace` is off by
+/// default, so an unpaced run's start has no line about it at all.
+#[test]
+fn the_start_says_when_the_run_is_paced() {
+    let out = muir().args(["--micro", "--pace", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(
+        t.contains("pace: the machine's own speed, 145 ns a microcycle"),
+        "micro says what it is held to:\n{t}"
+    );
+
+    let out = muir()
+        .args([
+            "--chip",
+            "--main-memory",
+            "model",
+            "--io-board",
+            "model",
+            "--tv",
+            "model",
+            "--main-memory-boards",
+            "4",
+            "--pace",
+            "--stop-after",
+            "1",
+        ])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(
+        t.contains("pace: the machine's own speed; chip is far slower than that"),
+        "chip says the flag will not bite:\n{t}"
+    );
+
+    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(!t.contains("pace:"), "off by default, and the start says nothing:\n{t}");
+}

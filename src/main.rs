@@ -21,7 +21,7 @@
 //!          [--disk-controller netlist|model]
 //!          [--disk-pack <image>[,<unit>][,ro]] [--io-board netlist|model]
 //!          [--main-memory netlist|model] [--main-memory-boards <n>]
-//!          [--no-debug-cable-listen]
+//!          [--no-debug-cable-listen] [--pace]
 //!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
 //!          [--stop-after <microcycles>]
 //!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
@@ -349,6 +349,77 @@ const TERMINAL_CHECK: u64 = 4_096;
 /// long to reach the port, which is about one character's own time at 300
 /// baud, the rate MIT's `sys/io1/serial.lisp` defaults to.
 const SERIAL_INTERVAL: Duration = TERMINAL_INTERVAL;
+
+/// The longest a paced run waits at once: half the terminal's own
+/// interval, so that a keystroke never waits on the pacing longer than it
+/// already waits on the poll.  A run further ahead than this waits again
+/// at the next check rather than in one long sleep.
+const PACE_SLEEP: Duration = Duration::from_millis(16);
+
+/// The least a paced run waits for; a lead shorter than this is carried to
+/// the next check instead.  A host rounds a sleep up rather than down, and
+/// the shorter the sleep the larger that rounding is as a share of it ---
+/// a quarter of a millisecond asked for came back as four tenths where
+/// this was measured --- so a run of very short waits pays the rounding on
+/// every one of them and wakes the core thousands of times a second to do
+/// it, which is the opposite of what `--pace` is for.
+const PACE_FLOOR: Duration = Duration::from_millis(1);
+
+/// **The machine's own speed, when `--pace` asks for it**: how long a run
+/// that has got ahead of the hardware waits before its next microcycle.
+///
+/// It is here, beside the intervals the run loops already keep, because
+/// nothing inside the machine knows what a wall clock is.  An engine keeps
+/// the machine's own nanoseconds, [`Machine::ns`], and the only place
+/// those meet the host's clock is the loop that also polls the terminal.
+/// Keeping the arithmetic in one small thing with no clock of its own is
+/// what lets the rule be tested without one: every instant below is passed
+/// in.
+///
+/// **The rule.** The machine's nanoseconds since the anchor, against the
+/// wall clock's since the same anchor.  Ahead, the difference is waited
+/// for, [`PACE_SLEEP`] at most; behind, the anchor moves to now.  So a run
+/// that loses time --- a heavy microcycle, a loaded host, `chip`, which is
+/// far slower than the hardware and never waits at all --- comes back to
+/// the machine's speed without sprinting past it to make the loss up.  A
+/// run that stalled and then ran at nine times speed would be worse than
+/// one that is simply late.
+struct Pace {
+    /// The wall clock where the machine's own clock was last set against
+    /// it.
+    from: Instant,
+    /// The machine's nanoseconds there.
+    ns: u64,
+}
+
+impl Pace {
+    /// The anchor the run begins at.
+    fn new(now: Instant, ns: u64) -> Pace {
+        Pace { from: now, ns }
+    }
+
+    /// The anchor moved to here, for time the machine spent standing
+    /// still: held at the prompt, or stepped by a debugger on the cable.
+    /// What went by while it stood is not time it owes.
+    fn anchor(&mut self, now: Instant, ns: u64) {
+        self.from = now;
+        self.ns = ns;
+    }
+
+    /// How long to wait now, if at all.  Nothing when the run is level
+    /// with the machine or behind it, and nothing when it is ahead by less
+    /// than [`PACE_FLOOR`]; behind, the anchor moves to `now`, so that the
+    /// time lost is not a debt to be run off afterwards.
+    fn owed(&mut self, now: Instant, ns: u64) -> Option<Duration> {
+        let machine = Duration::from_nanos(ns.saturating_sub(self.ns));
+        let wall = now.saturating_duration_since(self.from);
+        let Some(ahead) = machine.checked_sub(wall) else {
+            self.anchor(now, ns);
+            return None;
+        };
+        (ahead >= PACE_FLOOR).then(|| ahead.min(PACE_SLEEP))
+    }
+}
 
 /// The port a terminal is served at unless `--terminal` says another:
 /// VNC's display :0, RFB's convention.
@@ -817,7 +888,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--keyboard-mapping-trace]
             [--main-memory netlist|model]
             [--main-memory-boards <n>] [--no-auto-boot]
-            [--no-debug-cable-listen] [--prom <file>]
+            [--no-debug-cable-listen] [--pace] [--prom <file>]
             [--resume <file>] [--serial <endpoint>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
@@ -1102,6 +1173,27 @@ A simulator of the MIT CADR Lisp Machine.
                                connector empty by themselves, wanting a
                                machine on its own, and the start says so.
                                [default: the connector is there]
+  --pace                       run at the machine's own speed rather than
+                               as fast as the host will take it: the
+                               machine's own nanoseconds are the target, and
+                               a run ahead of them waits. Without it micro
+                               is about nine times a CADR and rtl about
+                               twice, so much of a paced run of either is
+                               spent waiting rather than computing, and the
+                               core it was pinning is left idle for that
+                               share of it. One speed, the machine's own:
+                               there is no factor. A run that falls behind
+                               --- a loaded host, a heavy microcycle ---
+                               does not then sprint to make it up, and time
+                               held at the prompt is not made up either. A
+                               wait the host rounds up is not taken back
+                               either, so a paced run keeps the machine's
+                               speed or falls a little under it, never over.
+                               Taken on chip, which is far slower
+                               than the machine and so never waits at all;
+                               not on an end of the debug cable, where the
+                               two machines pace each other. [default: off,
+                               as fast as the host runs it]
   --prom <file>                the boot PROM to run, an MCR microcode file
                                as MIT's own sys/ubin/promh.mcr is: at most
                                the 512 words the machine fetches before it
@@ -2322,6 +2414,9 @@ struct Run<'a> {
     /// The run starts held, with the machine as `--no-auto-boot` left it:
     /// the button unpressed, and nothing to run until the prompt's `boot`.
     hold: bool,
+    /// `--pace`: the run is held to the machine's own speed, waiting when
+    /// it is ahead of it ([`Pace`]).
+    pace: bool,
     /// Whether a recording carries the clocks below the screen, which
     /// `--tv-capture-no-time` turns off: the prompt's `startcapture` makes
     /// its recorder with it.
@@ -2611,7 +2706,17 @@ fn time_engine<S: Stepper>(
     serial: Option<&mut Endpoint>,
     run: Run,
 ) {
-    let Run { stop, capture, color_capture, checkpoint, setup, hold: held, clocks, color } = run;
+    let Run {
+        stop,
+        capture,
+        color_capture,
+        checkpoint,
+        setup,
+        hold: held,
+        pace: paced,
+        clocks,
+        color,
+    } = run;
     let t = Instant::now();
     let mut ran = 0;
     let mut halt = None;
@@ -2622,6 +2727,9 @@ fn time_engine<S: Stepper>(
     let mut mouse = Mouse::new();
     let mut last_poll = Instant::now();
     let mut last_serial = Instant::now();
+    // `--pace`: the machine's own clock against the host's, anchored where
+    // the run begins.
+    let mut pace = paced.then(|| Pace::new(Instant::now(), s.engine().machine().ns));
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
     let mut color_capture = color_capture.map(|(path, time)| (path, ColorRecorder::new(time)));
     let mut hold = Hold::open(held);
@@ -2734,6 +2842,19 @@ fn time_engine<S: Stepper>(
             Writes::Alone { name, capture: &mut capture, clocks }
         };
         hold.lines(s.engine_mut(), ran, setup, &mut writes);
+        // `--pace`: the wait that keeps the run at the machine's own
+        // speed, taken at the end of the turn so that the terminal, the
+        // port and the prompt have had theirs first.  Held at the prompt,
+        // or stepped by a debugger on the cable, there is nothing to pace
+        // and the anchor moves instead.
+        if let Some(pace) = pace.as_mut() {
+            let ns = s.engine().machine().ns;
+            if hold.on || s.on_cable() {
+                pace.anchor(Instant::now(), ns);
+            } else if let Some(wait) = pace.owed(Instant::now(), ns) {
+                std::thread::sleep(wait);
+            }
+        }
     }
     hold.done();
     // One last turn, so that what the port sent between the final poll and
@@ -3678,7 +3799,17 @@ fn time_chip(
     color_tv: ColorTv,
     watch: Option<WatchSpec>,
 ) {
-    let Run { stop, capture, color_capture, checkpoint, setup, hold, clocks, mut color } = run;
+    let Run {
+        stop,
+        capture,
+        color_capture,
+        checkpoint,
+        setup,
+        hold,
+        pace: paced,
+        clocks,
+        mut color,
+    } = run;
     let ChipMachine {
         mut cpu,
         mut clk,
@@ -3757,6 +3888,12 @@ fn time_chip(
     let mut capture = capture.map(|(path, time)| (path, Recorder::new(time)));
     let mut color_capture = color_capture.map(|(path, time)| (path, ColorRecorder::new(time)));
     let mut last_check = Instant::now();
+    // `--pace`, taken here and never acted on: `chip` is some thousands of
+    // times slower than the hardware, so the run is never ahead of the
+    // machine's clock for [`Pace`] to hold it back.  It is wired up all
+    // the same, so that the flag means one thing on every engine and it is
+    // the rule that decides, not the engine.
+    let mut pace = paced.then(|| Pace::new(Instant::now(), end.machine().clk.time_ns()));
     let prompt = Prompt::open();
     // The same hold the other two engines have: nothing is ticked while it
     // is on, so the netlist stands where it stopped and can be looked at.
@@ -4102,6 +4239,16 @@ fn time_chip(
                 prompt.show();
             }
         }
+        // `--pace`, as on the other two engines: wait when the run is
+        // ahead of the machine's clock, which on `chip` it never is.
+        if let Some(pace) = pace.as_mut() {
+            let ns = m.clk.time_ns();
+            if held || on_cable {
+                pace.anchor(Instant::now(), ns);
+            } else if let Some(wait) = pace.owed(Instant::now(), ns) {
+                std::thread::sleep(wait);
+            }
+        }
     }
     if let Some(prompt) = prompt.as_ref() {
         prompt.done();
@@ -4188,6 +4335,9 @@ fn main() {
     let mut udp_default_peer: Option<SocketAddr> = None;
     let mut cycles: Option<u64> = None;
     let mut auto_boot = true;
+    // `--pace`: the run held to the machine's own speed instead of going
+    // as fast as the host will take it.
+    let mut pace = false;
     let mut checkpoint: Option<PathBuf> = None;
     let mut prom_file: Option<PathBuf> = None;
     let mut keyboard_file: Option<PathBuf> = None;
@@ -4552,6 +4702,7 @@ fn main() {
             (None, "--keyboard-mapping-dump") => keyboard_dump = true,
             (None, "--keyboard-mapping-trace") => keyboard_trace = true,
             (None, "--no-auto-boot") => auto_boot = false,
+            (None, "--pace") => pace = true,
             (None, "--prom") => match args.next() {
                 Some(path) => prom_file = Some(PathBuf::from(path)),
                 None => usage("--prom wants an MCR microcode file"),
@@ -4773,6 +4924,16 @@ fn main() {
     // builds two machines, has no one machine to resume.
     if checkpoint.is_some() && cabled == 1 {
         usage("--checkpoint is one machine on its own, not the lashup");
+    }
+    // Pacing is one machine's clock against the host's.  Two machines on a
+    // cable already pace each other through the cable's own clock --- each
+    // runs as far as the other has promised and then waits for it --- so
+    // an end that slept on top of that would only hold the other up, and
+    // neither end would be at the machine's speed for it.
+    if pace && cabled == 1 {
+        usage(
+            "--pace is one machine at its own speed, not the lashup: the cable paces the two machines, and an end that slept would only hold the other up",
+        );
     }
     if resume.is_some() && debuggee {
         usage("--resume is one machine on its own, not the lashup in one process, which runs two");
@@ -5207,6 +5368,21 @@ fn main() {
         } else {
             writeln!(s, "stop: {}", stops.join(", ")).unwrap();
         }
+        // `--pace`: what the run is held to, and on `chip` that the flag
+        // will not bite --- the engine being far slower than the machine,
+        // the run is never ahead of its clock.
+        if pace {
+            writeln!(
+                s,
+                "pace: {}",
+                if which == Which::Chip {
+                    "the machine's own speed; chip is far slower than that, so nothing waits"
+                } else {
+                    "the machine's own speed, 145 ns a microcycle; the run waits when it is ahead"
+                }
+            )
+            .unwrap();
+        }
         // `chip` is the engine whose runs go for hours, and had no prompt
         // when this was added; the person watching one needs to be told
         // this exists or it does not pay. Issue 86.
@@ -5274,6 +5450,7 @@ fn main() {
                 checkpoint,
                 setup: &setup,
                 hold: !auto_boot,
+                pace,
                 clocks: capture_tv_time,
                 color: color_screen.as_mut(),
             };
@@ -5342,6 +5519,7 @@ fn main() {
                     checkpoint: None,
                     setup: &setup,
                     hold: !auto_boot,
+                    pace,
                     clocks: capture_tv_time,
                     color: color_screen.as_mut(),
                 };
@@ -5379,6 +5557,7 @@ fn main() {
                     checkpoint,
                     setup: &setup,
                     hold: !auto_boot,
+                    pace,
                     clocks: capture_tv_time,
                     color: color_screen.as_mut(),
                 };
@@ -5432,6 +5611,7 @@ fn main() {
                 checkpoint,
                 setup: &setup,
                 hold: !auto_boot,
+                pace,
                 clocks: capture_tv_time,
                 color: color_screen.as_mut(),
             };
@@ -5688,5 +5868,102 @@ mod tests {
         assert_eq!(endpoint_at(Some("0.0.0.0"), base), "0.0.0.0:5900".parse().ok());
         assert_eq!(endpoint_at(Some("127.0.0.1:7"), base), "127.0.0.1:7".parse().ok());
         assert_eq!(endpoint_at(Some("x"), base), None);
+    }
+
+    /// **A paced run waits when it is ahead of the machine's clock, and at
+    /// no other time.** The arithmetic is [`Pace`]'s and the instants are
+    /// passed in, so the rule is held here without a wall clock: what a run
+    /// does with the answer --- sleep for it --- is the one line in each run
+    /// loop that this does not reach.
+    ///
+    /// The cap is the responsiveness of the run: the terminal, the keyboard
+    /// and the prompt are polled on the same loop, so a lead is waited off
+    /// in frames rather than in one long sleep.
+    #[test]
+    fn the_pace_waits_only_when_the_run_is_ahead_of_the_machine() {
+        assert!(PACE_SLEEP <= TERMINAL_INTERVAL, "a wait never outlasts a terminal poll");
+
+        let t = Instant::now();
+        let mut pace = Pace::new(t, 0);
+
+        // 20 ms of the machine's time in 5 ms of the host's: 15 ms ahead,
+        // and 15 ms is what it waits.
+        assert_eq!(
+            pace.owed(t + Duration::from_millis(5), 20_000_000),
+            Some(Duration::from_millis(15)),
+            "ahead by 15 ms"
+        );
+
+        // Exactly level: the two clocks agree, so there is nothing to wait
+        // for.
+        assert_eq!(pace.owed(t + Duration::from_millis(20), 20_000_000), None, "level");
+
+        // Ahead by less than the floor: carried to the next check rather
+        // than slept away in a wait the host would round up.
+        assert_eq!(
+            pace.owed(t + Duration::from_millis(20), 20_500_000),
+            None,
+            "half a millisecond ahead is carried"
+        );
+
+        // Further ahead than one wait: capped, and the rest is waited for
+        // at the checks after this one.
+        assert_eq!(
+            pace.owed(t + Duration::from_millis(10), 60_000_000),
+            Some(PACE_SLEEP),
+            "50 ms ahead waits one frame of it"
+        );
+    }
+
+    /// **A paced run that has fallen behind never runs the debt off.** It
+    /// starts again from where it is: the anchor moves to now, and the
+    /// next lead is measured from there. A run that stalled and then went
+    /// at nine times speed to make the stall up would be worse than one
+    /// that is simply late.
+    ///
+    /// Three ways to fall behind, one rule for all of them: a host that
+    /// took longer over the microcycles than the machine would have, an
+    /// engine slower than the hardware, which `chip` always is, and a run
+    /// standing at the prompt with nothing running at all.
+    #[test]
+    fn the_pace_never_runs_off_a_debt() {
+        let t = Instant::now();
+
+        // A second of the host's time for 100 ms of the machine's: behind,
+        // so nothing is waited for...
+        let mut pace = Pace::new(t, 0);
+        assert_eq!(pace.owed(t + Duration::from_secs(1), 100_000_000), None, "behind waits not");
+        // ...and the 900 ms are gone with the anchor. From here the run is
+        // paced as one that had never stalled: 20 ms of machine time in 5
+        // ms of the host's is 15 ms ahead, not 15 ms less a debt.
+        assert_eq!(
+            pace.owed(t + Duration::from_millis(1005), 120_000_000),
+            Some(Duration::from_millis(15)),
+            "and the debt is not carried into the next wait"
+        );
+
+        // A long stall --- a minute of the host's clock and not one
+        // microcycle --- is the same: nothing to wait for, nothing to make
+        // up afterwards.
+        let mut pace = Pace::new(t, 500_000_000);
+        let stalled = t + Duration::from_secs(60);
+        assert_eq!(pace.owed(stalled, 500_000_000), None, "a minute of stall waits not");
+        assert_eq!(
+            pace.owed(stalled + Duration::from_millis(2), 512_000_000),
+            Some(Duration::from_millis(10)),
+            "and the minute is not run off"
+        );
+
+        // Held at the prompt, where the run loops move the anchor rather
+        // than measuring against it: ten seconds of somebody typing is not
+        // ten seconds the machine owes when `continue` runs it on.
+        let mut pace = Pace::new(t, 0);
+        let typed = t + Duration::from_secs(10);
+        pace.anchor(typed, 0);
+        assert_eq!(
+            pace.owed(typed + Duration::from_millis(1), 10_000_000),
+            Some(Duration::from_millis(9)),
+            "the hold is not a debt"
+        );
     }
 }
