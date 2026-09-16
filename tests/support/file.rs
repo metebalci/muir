@@ -359,10 +359,9 @@ impl Control {
     /// reach a file outside the tree it serves: [`super::ChaosServer::serving`]
     /// promises that what it writes, renames and deletes stays there. The
     /// tree is the root and what the root's own links lead to ---
-    /// each release's fetch script puts its sources under the root by such
-    /// a link, `sys` for System 304 and `tree` for System 100, under the
-    /// name that release's band asks for, read and written as the band
-    /// would --- and nothing
+    /// the release's fetch script puts its sources under the root by such
+    /// a link, `tree` for System 100, under the name that band asks for,
+    /// read and written as the band would --- and nothing
     /// else. So the pathname is taken component by component under the
     /// root, with `..` and `.` refused rather than followed; then the
     /// deepest part of the result that exists is resolved on the host,

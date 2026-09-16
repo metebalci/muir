@@ -48,9 +48,6 @@ pub struct Cc {
     /// while nothing writes its frame buffer, and that is what a frame of
     /// it says.
     pub rec: Recorder,
-    /// The release A booted, which says where its sources are and what its
-    /// Chaosnet numbers were.
-    pub release: Release,
     /// Microcycles of A with neither cable moving after which a form asked
     /// of it is given up on.  [`Cc::STALL`] to begin with, which is right
     /// for a form that runs; a form that *compiles* is quiet for as long
@@ -59,77 +56,6 @@ pub struct Cc {
     next_sample: u64,
     /// The Chaosnet server's root, held for as long as the machines are up.
     _root_held: MutexGuard<'static, ()>,
-}
-
-/// Which release machine A boots.
-///
-/// The two are different machines and want different Chaosnet numbers, and
-/// their sources are in different places: System 100's under
-/// `vendor/system-100-0/sys`, System 304's under
-/// `vendor/system-304-0/sys-304-0`, each linked into the FILE service's
-/// root under the name its own band asks for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Release {
-    /// **The target.** Its `SYS: CC;` is shipped compiled, so CC loads
-    /// from the release's own QFASLs.
-    System100,
-    /// The release that continues it.  It ships no QFASL for CC, so CC is
-    /// compiled from source before it can be loaded, which is twenty-odd
-    /// minutes of the machine's time.
-    System304,
-}
-
-impl Release {
-    /// The pack this release boots from, or `None` with the skip line if
-    /// its fetch script has not been run.
-    pub fn pack(self) -> Option<PathBuf> {
-        match self {
-            Release::System100 => pack_100(),
-            Release::System304 => crate::support::pack_304(),
-        }
-    }
-
-    /// The boot PROM's image in this release's `SYS: UBIN;`.  Both
-    /// releases carry the same `promh.mcr`, and each is read from its own
-    /// rather than from the other's.
-    pub fn prom(self) -> Option<PathBuf> {
-        match self {
-            Release::System100 => vendor(&["system-100-0", "sys", "ubin", "promh.mcr"]),
-            Release::System304 => vendor(&["system-304-0", "sys-304-0", "ubin", "promh.mcr"]),
-        }
-    }
-
-    /// The name the server answers `STATUS` with: `MIT-OZ`, which is
-    /// System 100's `sys/site/hosts.text` name for 3060, and `OZ` for
-    /// System 304, the name its band resolves to 4403 --- asked at its
-    /// listener, `(send (si:parse-host "OZ") :chaos-address)` answers
-    /// 2307 decimal.
-    ///
-    /// **Unverified** that `OZ` is that host's own name there rather than
-    /// a nickname of it: System 304's host table is in the pack and not
-    /// in the sources, so there is no file here to read it from, and the
-    /// name is seen only in a `STATUS` answer, which nothing in these
-    /// tests reads. `(si:get-host-from-address #o4403 :chaos)`
-    /// (`network/host.lisp`) asked at the band's listener would settle it.
-    pub fn server_name(self) -> String {
-        match self {
-            Release::System100 => "MIT-OZ".to_string(),
-            Release::System304 => "OZ".to_string(),
-        }
-    }
-
-    /// This machine's Chaosnet address and its file and time host's, as
-    /// this release's band holds them: `MIT-LISPM-1` at 3050 with `MIT-OZ`
-    /// at 3060, `AMS-LISPM-1` at 4401 with `OZ` at 4403.  A server
-    /// answering anywhere else is a server the band never calls, and
-    /// `chaos::Config`'s default address is on subnet 376, which is no
-    /// band's on purpose --- so the pair comes from here.
-    pub fn chaos(self) -> (u16, u16) {
-        match self {
-            Release::System100 => crate::support::CHAOS_100,
-            Release::System304 => crate::support::CHAOS_304,
-        }
-    }
 }
 
 /// The one Chaosnet server root the tests share, `vendor/run/file-root`:
@@ -448,26 +374,20 @@ pub fn boot_and_login() -> Option<Cc> {
     boot_and_login_with(false)
 }
 
-/// The same, `debuggee_pack` saying whether B has A's pack under it too.
+/// The same, `debuggee_pack` saying whether B has A's pack under it too,
+/// and `None` with the skip line if the pack or the file root is missing.
 ///
-/// **This runs the target, System 100.**  [`boot_and_login_on`] boots
-/// either release; the tests that debug B through CC take this one,
-/// because the acceptance test is the target's.
+/// **This runs the target, System 100**: its pack is what A boots, its
+/// band's numbers are what A's Chaosnet is given, and its sources are what
+/// the FILE service's link points at.  What is typed afterwards is the
+/// caller's.  The boot PROM is read from the release's own `SYS: UBIN;`
+/// rather than from the committed copy.
 pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
-    boot_and_login_on(Release::System100, debuggee_pack)
-}
-
-/// Boots A on `release` to its listener with B on the cable and logs in,
-/// B running the boot PROM with `debuggee_pack` saying whether A's pack is
-/// under it as well.
-///
-/// The release decides three things and nothing else: which pack A boots,
-/// which Chaosnet numbers its band calls with, and which tree the FILE
-/// service's link points at.  What is typed afterwards is the caller's.
-pub fn boot_and_login_on(release: Release, debuggee_pack: bool) -> Option<Cc> {
-    let (Some(prom), Some(pack), Some(root)) =
-        (release.prom(), release.pack(), crate::support::file_root())
-    else {
+    let (Some(prom), Some(pack), Some(root)) = (
+        vendor(&["system-100-0", "sys", "ubin", "promh.mcr"]),
+        pack_100(),
+        crate::support::file_root(),
+    ) else {
         return None;
     };
     // One run at a time under the shared root, from here to the end of
@@ -484,17 +404,13 @@ pub fn boot_and_login_on(release: Release, debuggee_pack: bool) -> Option<Cc> {
     let mut a = Machine::new();
     a.load_prom(&prom);
     a.disk.attach(0, Unit::open(&pack, Geometry::T300).expect("the release's pack"));
-    // The band's own numbers.  At any other pair the machine boots and
-    // reaches no server at all: 4403 is off 3050's subnet, so System 304's
-    // band, hearing no route to it, never transmits.
-    let (me, server) = release.chaos();
+    // The band's own numbers, out of its host table.  A server answering
+    // anywhere else is a server the band never calls, and the machine then
+    // boots but stops to ask for the date and reaches no files.
+    let (me, server) = crate::support::CHAOS_100;
     a.chaos.address = me;
     a.chaos.trace = std::env::var_os("MUIR_CHAOS_TRACE").is_some();
-    ChaosServer::new(server)
-        .named(&release.server_name())
-        .serving(root.clone())
-        .at_time(time::TEST_UNIVERSAL)
-        .plug(&mut a, 0);
+    ChaosServer::new(server).serving(root.clone()).at_time(time::TEST_UNIVERSAL).plug(&mut a, 0);
     // `Cc::data_frames` counts what has crossed A's cable, and the log is
     // off unless a run asks for it.
     a.ioboard.chaos.as_mut().unwrap().ether_mut().unwrap().keep_log(true);
@@ -512,10 +428,7 @@ pub fn boot_and_login_on(release: Release, debuggee_pack: bool) -> Option<Cc> {
     // files and all.
     b.chaos.address = me;
     b.chaos.trace = std::env::var_os("MUIR_CHAOS_TRACE").is_some();
-    ChaosServer::new(server)
-        .named(&release.server_name())
-        .at_time(time::TEST_UNIVERSAL)
-        .plug(&mut b, 0);
+    ChaosServer::new(server).at_time(time::TEST_UNIVERSAL).plug(&mut b, 0);
     let (mut ea, mut eb) = (Rtl::new(a), Rtl::new(b));
     ea.boot();
     eb.boot();
@@ -528,16 +441,15 @@ pub fn boot_and_login_on(release: Release, debuggee_pack: bool) -> Option<Cc> {
         k: Keyboard::new(),
         root,
         rec: Recorder::pair(true),
-        release,
         stall: Cc::STALL,
         next_sample: 0,
         _root_held: root_held,
     };
 
     // A to its prompt: the listener's `;Reading at top level` line.  Where
-    // it lands depends on how tall the herald above it is --- six lines on
-    // System 304's band, one fewer on System 100's --- so the rows watched
-    // are the band the line falls in for either, as
+    // it lands depends on how tall the herald above it is --- five lines
+    // on System 100's band --- so the rows watched are a band the line
+    // falls in rather than one row of it, as
     // `support::wait_for_the_prompt` watches them.
     while lit_rows(&cc.l, 84..130) < 400 {
         cc.run(500_000);

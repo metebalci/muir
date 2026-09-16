@@ -66,13 +66,9 @@ record of which recovered files can be trusted.
 Rust, no crate dependencies. The target is
 [System 100](https://tumbleweed.nu/system-100-0-release/), microcode 323 ---
 the restored last MIT release, recovered from TID/671 in the MIT Tapes of Tech
-Square project. It will not run with earlier microcode.
-[System 304](https://tumbleweed.nu/system-304-0-release/), the current release
-of the line that continues it, boots here too, with its own pack and its own
-Chaosnet numbers, and the console program CC runs on both: CC called
-`MAKE-ARRAY` in a form System 304 removed, which kept it from loading there
-until upstream rewrote the seven calls on 7 September 2026. The two-machine
-lashup, the acceptance test, is run on the target's band.
+Square project. It will not run with earlier microcode. It is the one release
+muir fetches and tests, and the two-machine lashup --- the acceptance test ---
+is run on its band.
 
 ## Three engines
 
@@ -201,34 +197,28 @@ build and the tests read is committed.
 The engines boot from a pack, which is not part of the repository:
 
     tools/fetch-system-100.sh     # the target
-    tools/fetch-system-304.sh     # optional; the release after it
 
-Each puts its pack and its system sources under `vendor/`, where the tests
+It puts the pack and the system sources under `vendor/`, where the tests
 look, and checks every file against its SHA-256 sum. They come from muir's
-own GitHub releases, [`system-304-0`](https://github.com/metebalci/muir/releases/tag/system-304-0)
-and [`system-100-0`](https://github.com/metebalci/muir/releases/tag/system-100-0),
-so that the bytes the tests were written against stay the bytes: the packs
-byte for byte as [upstream](https://tumbleweed.nu/lm-3/) publishes them, and
-System 304's sources, which upstream ships no tarball of, built from the
-project's own Fossil repository at the check-in that carries CC's rewritten
-`MAKE-ARRAY` calls --- each script says exactly what it fetched and from
-where. Everything in them is under the
-AGPL, muir's own license. Without them, everything needing a pack skips and
-says so. Windows is untested; the scripts are POSIX shell, so use WSL.
+own GitHub release
+[`system-100-0`](https://github.com/metebalci/muir/releases/tag/system-100-0),
+so that the bytes the tests were written against stay the bytes: the pack
+byte for byte as [upstream](https://tumbleweed.nu/lm-3/) publishes it, and
+the script says exactly what it fetched and from where. Everything in it is
+under the AGPL, muir's own license. Without it, everything needing a pack
+skips and says so. Windows is untested; the script is POSIX shell, so use
+WSL.
 
-The two packs are different machines and want different flags. System 100's
-band is `MIT-LISPM-1`, whose host table puts it at 3050 with `MIT-OZ` at
-3060; System 304's is `AMS-LISPM-1` at 4401 with its file and time host `OZ`
-at 4403. Neither address is what `--chaos-address` defaults to --- that is
-177001, on subnet 376, the Chaosnet's private range, which is no band's on
-purpose --- so a run that wants its band to reach a host names the band's
-own address, plugs the cable in with `--chaos-udp`, and names the host with
+The pack's band wants numbers of its own. System 100's band is
+`MIT-LISPM-1`, whose host table puts it at 3050 with `MIT-OZ` at 3060.
+That is not what `--chaos-address` defaults to --- the default is 177001,
+on subnet 376, the Chaosnet's private range, which is no band's on purpose
+--- so a run that wants its band to reach a host names the band's own
+address, plugs the cable in with `--chaos-udp`, and names the host with
 `--chaos-udp-peer`:
 
     muir --disk-pack vendor/run/disk-sys-100-0.img \
         --chaos-address 3050 --chaos-udp --chaos-udp-peer 3060@127.0.0.1:42043
-    muir --disk-pack vendor/run/disk-sys-304-0.img \
-        --chaos-address 4401 --chaos-udp --chaos-udp-peer 4403@127.0.0.1:42043
 
 ## Running it
 
@@ -259,9 +249,9 @@ about stepping says so, so muir reads it off `FLAG-1` where a console would,
 and `boot` presses the button that starts it again. `chip` holds the same
 way, reading the nets those registers are buffered from.
 
-Every engine boots MIT's own PROM, `sys/ubin/promh.mcr` --- one file across
-the releases --- which is built in, so nothing under `vendor/` is needed to
-start a machine.
+Every engine boots MIT's own PROM, `sys/ubin/promh.mcr`, the release's own
+file, which is built in, so nothing under `vendor/` is needed to start a
+machine.
 `--prom <file>` runs another one instead, out of an MCR microcode file as
 MIT's own is, and the start says how that file stands to MIT's: word for
 word, or how many words apart. That last is worth having --- recovered
@@ -513,7 +503,7 @@ PROM's --- so a pack that boots can be made from a fresh checkout with nothing
 fetched. Every other partition takes its file as it stands. Either way the
 partition's comment becomes what went into it --- the file's name, or
 `UCADR 323` for the built-in, which is MIT's own wording in that very field
-on both releases' packs --- cut to the sixteen characters a descriptor holds,
+on the release's own pack --- cut to the sixteen characters a descriptor holds,
 because the file is not on the pack and the comment is the only place the
 pack says what a partition is. `load-from` is the same move between two
 packs --- `load-from LOD1 <pack> LOD1` --- with no
