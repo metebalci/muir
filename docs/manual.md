@@ -12,6 +12,8 @@ This file is the program itself. Beside it:
   level matters, and what each engine models
 - [Where the netlists come from](netlists.md) --- MIT's own files, how a
   board becomes a netlist, and what each board is checked against
+- [The Chaosnet board](chaosnet.md) --- the interface that shares the I/O
+  board, the cable it talks on, and what muir does at each engine
 - [Sources and attribution](sources.md) --- what this is built on, how it
   was written, the license, and the name
 

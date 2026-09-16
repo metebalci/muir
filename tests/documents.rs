@@ -381,3 +381,146 @@ fn the_documents_agree_on_the_cold_boot_runs() {
         assert_eq!(quoted(what, text, before, after), want, "{what}: {before:?}");
     }
 }
+
+/// **`docs/chaosnet.md` quotes numbers that live in the source.** The
+/// intervals on that page were measured on the netlist board and then
+/// frozen into a `const` in `src/chaos/`; the register addresses and CSR
+/// masks are AIM-628 §7's, as `src/chaos/interface.rs` holds them. The
+/// page is a second copy of all of it, and a second copy that nothing
+/// reconciles is worse than no copy at all, because it looks checked.
+/// So the page is read here and held to the code it describes.
+///
+/// **What is not read back, and why.** The page also quotes figures that
+/// are not constants anywhere: the 257 slots two of the board's own
+/// packets sit apart, the 12,060 and 12,310 ns either side of the busy
+/// receiver's abort, and AIM-628's own 4032 data bits and 64-microsecond
+/// token. Those are measured inside a test or quoted from the memo rather
+/// than stored, so there is nothing here to compare them against --- the
+/// tests the page names beside each are what hold them.
+#[test]
+fn the_chaosnet_page_quotes_the_sources_own_numbers() {
+    use muir::chaos::interface::csr;
+    use muir::chaos::{board, ether, interface, packet, udp, wire};
+    const CHAOSNET: &str = include_str!("../docs/chaosnet.md");
+
+    // The table of measured constants: a row names one and gives the
+    // nanoseconds it holds.
+    let t = markdown(CHAOSNET, &["Constant", "Nanoseconds"]);
+    let want: BTreeMap<&str, u64> = [
+        ("CELL_NS", wire::CELL_NS),
+        ("SAMPLE_NS", wire::SAMPLE_NS),
+        ("LOCKOUT_NS", wire::LOCKOUT_NS),
+        ("IDLE_NS", wire::IDLE_NS),
+        ("SLOT_NS", ether::SLOT_NS),
+        ("ROUND_NS", ether::ROUND_NS),
+        ("ABORT_NS", ether::ABORT_NS),
+        ("ABORT_HOLD_NS", ether::ABORT_HOLD_NS),
+        ("BUSY_ABORT_NS", ether::BUSY_ABORT_NS),
+        ("RACT_NS", ether::RACT_NS),
+        ("REFILL_WORD_NS", ether::REFILL_WORD_NS),
+        ("TURN_TC_NS", board::TURN_TC_NS),
+        ("TURN_FIRST_TC_NS", board::TURN_FIRST_TC_NS),
+        ("TURN_LOAD_NS", board::TURN_LOAD_NS),
+        ("TURN_START_NS", board::TURN_START_NS),
+        ("CBLBSY_OFF_NS", board::CBLBSY_OFF_NS),
+        ("TDONE_BEFORE_END_NS", board::TDONE_BEFORE_END_NS),
+        ("TSR_READY_NS", board::TSR_READY_NS),
+        ("TDONE_AFTER_ABORT_NS", board::TDONE_AFTER_ABORT_NS),
+    ]
+    .into_iter()
+    .collect();
+    let mut seen = 0;
+    for row in &t.rows {
+        let name = t.get(row, "Constant");
+        let n = want.get(name);
+        let n =
+            n.unwrap_or_else(|| panic!("chaosnet.md names a constant nothing here has: {name}"));
+        assert_eq!(t.number(row, "Nanoseconds") as u64, *n, "chaosnet.md: {name}");
+        seen += 1;
+    }
+    assert_eq!(seen, want.len(), "a row for every constant the page is held to");
+
+    /// An octal figure as the page writes it, MIT's own way of writing
+    /// these: a base the table cannot be read in without knowing it.
+    fn octal(what: &str, cell: &str) -> u32 {
+        u32::from_str_radix(cell, 8)
+            .unwrap_or_else(|_| panic!("chaosnet.md: {what} {cell:?} is not octal"))
+    }
+
+    // The registers, by the name AIM-628 §7 gives each.
+    let t = markdown(CHAOSNET, &["Address", "Register", "Read or write"]);
+    let registers: BTreeMap<&str, u32> = [
+        ("Command/Status Register", interface::CSR),
+        ("My Address", interface::MY_ADDRESS),
+        ("Write Buffer", interface::WRITE_BUFFER),
+        ("Read Buffer", interface::READ_BUFFER),
+        ("Bit Count", interface::BIT_COUNT),
+        ("Start Transmission", interface::START),
+    ]
+    .into_iter()
+    .collect();
+    let mut seen = 0;
+    for row in &t.rows {
+        let name = t.get(row, "Register");
+        let at = registers.get(name);
+        let at = at.unwrap_or_else(|| panic!("chaosnet.md names a register nothing has: {name}"));
+        assert_eq!(octal("the address", t.get(row, "Address")), *at, "chaosnet.md: {name}");
+        seen += 1;
+    }
+    assert_eq!(seen, registers.len(), "a row for every register");
+
+    // The CSR's bits, by the name AIM-628 §7 gives each.
+    let t = markdown(CHAOSNET, &["Mask", "Bit", "Kind"]);
+    let bits: BTreeMap<&str, u16> = [
+        ("Timer Interrupt Enable", csr::TIMER_INT_ENABLE),
+        ("Loop Back", csr::LOOP_BACK),
+        ("Spy", csr::SPY),
+        ("Clear Receiver", csr::CLEAR_RECEIVER),
+        ("Receive Interrupt Enable", csr::RECEIVE_INT_ENABLE),
+        ("Transmit Interrupt Enable", csr::TRANSMIT_INT_ENABLE),
+        ("Transmit Abort", csr::TRANSMIT_ABORT),
+        ("Transmit Done", csr::TRANSMIT_DONE),
+        ("Clear Transmitter", csr::CLEAR_TRANSMITTER),
+        ("Lost Count", csr::LOST_COUNT),
+        ("Reset", csr::RESET),
+        ("CRC Error", csr::CRC_ERROR),
+        ("Receive Done", csr::RECEIVE_DONE),
+    ]
+    .into_iter()
+    .collect();
+    let mut seen = 0;
+    for row in &t.rows {
+        let name = t.get(row, "Bit");
+        let mask = bits.get(name);
+        let mask =
+            mask.unwrap_or_else(|| panic!("chaosnet.md names a CSR bit nothing has: {name}"));
+        assert_eq!(octal("the mask", t.get(row, "Mask")) as u16, *mask, "chaosnet.md: {name}");
+        seen += 1;
+    }
+    assert_eq!(seen, bits.len(), "a row for every CSR bit");
+
+    // **Lost Count's width is the claim, not its mask's value**: the page
+    // calls the field four bits, so the mask must have four.
+    assert_eq!(csr::LOST_COUNT.count_ones(), 4, "Lost Count is four bits wide");
+    assert!(
+        flowed(CHAOSNET).contains("four bits holding"),
+        "chaosnet.md should still call Lost Count four bits"
+    );
+
+    // The figures the prose states rather than tabulates.
+    for (before, after, want) in [
+        ("one slot is ", " ns and a whole round is", ether::SLOT_NS as usize),
+        ("a whole round is ", " of them", (ether::ROUND_NS / ether::SLOT_NS) as usize),
+        ("assigns as ", " over MIT's", udp::TRANSMIT_TRIES as usize),
+        ("bits --- the ", " bytes §3.5 gives", packet::MAX_DATA),
+    ] {
+        assert_eq!(quoted("docs/chaosnet.md", CHAOSNET, before, after), want, "{before:?}");
+    }
+
+    // The interrupt vector, which the page quotes from AIM-628 in octal.
+    assert_eq!(board::VECTOR, 0o270);
+    assert!(
+        flowed(CHAOSNET).contains("Chaosnet interface is 270"),
+        "chaosnet.md should quote AIM-628's interrupt vector"
+    );
+}
