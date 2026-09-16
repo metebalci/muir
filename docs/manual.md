@@ -597,6 +597,48 @@ the start says so.
 
 Default: the connector is there, at `127.0.0.1:7661`.
 
+### `--pace`
+
+Run at the machine's own speed rather than as fast as the host will take it:
+the machine's own nanoseconds are the target, and a run that is ahead of
+them waits until they catch up.
+
+Without it an engine runs as fast as it can. `micro` is about nine times a
+CADR and `rtl` about twice, so much of a paced run of either is spent
+waiting rather than computing --- which is the other half of what this is
+for: the core the run was pinning is left idle for that share of it, and the
+host can power it down between waits.
+
+**One speed, the machine's own: there is no factor.** A wait is never longer
+than half the terminal's own interval, so a keystroke waits no longer on the
+pacing than it already waits on the poll; a run further ahead than that
+waits again at the next check instead of in one long sleep.
+
+**A wait the host rounds up is time the run does not take back.** A sleep is
+asked for and the host decides when it is over, which is a little late
+rather than a little early, and the pacing does not claw that back any more
+than it claws back a stall. So a paced run keeps the machine's speed or
+falls a little under it, and never goes over it.
+
+**A run that falls behind does not sprint to catch up.** Behind --- a loaded
+host, a heavy microcycle, an engine slower than the hardware --- the pacing
+starts again from where the run is rather than making the loss up
+afterwards: a run that stalled and then ran at nine times speed would be
+worse than one that is simply late. Time held at the prompt is the same:
+what went by while nothing ran is not a debt, and the run goes on from
+`continue` at the machine's speed.
+
+On `chip` the flag is taken and never waits: that engine is some thousands
+of times slower than the machine, so the run is never ahead of its clock.
+It is refused on an end of the debug cable --- `--debug-in-process`,
+`--debug-cable-listen`, `--debug-cable-connect` --- where the two machines
+already pace each other through the cable's own clock, and an end that slept
+on top of that would only hold the other up. A debugger that connects to a
+paced machine's own connector takes the pacing off while it is on the cable,
+for the same reason, and the machine is paced again when it goes.
+
+Default: off, and the run goes as fast as the host runs it.
+
 ### `--prom <file>`
 
 The boot PROM to run, an MCR microcode file as MIT's own

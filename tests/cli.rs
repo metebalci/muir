@@ -1342,3 +1342,27 @@ fn the_color_tv_capture_records_the_color_screen() {
         "--color-tv-capture",
     );
 }
+
+/// **`--pace` is one machine at its own speed, and a lashup is refused
+/// it.** Two machines on a cable already pace each other through the
+/// cable's own clock: each runs as far as the other has promised and then
+/// waits for it. An end that also slept on its own clock would hold the
+/// other up at its next request, and neither end would be at the machine's
+/// speed for it. All three shapes of cable run refuse the flag rather than
+/// taking it and quietly doing something else with it.
+#[test]
+fn the_pace_is_one_machine_at_its_own_speed() {
+    for args in [
+        &["--rtl", "--pace", "--debug-in-process", "--stop-after", "1"][..],
+        &["--rtl", "--pace", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1"][..],
+        &["--rtl", "--pace", "--debug-cable-connect", "127.0.0.1:65500", "--stop-after", "1"][..],
+    ] {
+        refused(args, "--pace");
+    }
+    // The machine on its own takes it, on the engines that can outrun the
+    // hardware and on the one that cannot.
+    for engine in ["--micro", "--rtl"] {
+        let out = muir().args([engine, "--pace", "--stop-after", "1"]).run();
+        assert!(out.status.success(), "{engine} --pace:\n{}", text(&out));
+    }
+}
