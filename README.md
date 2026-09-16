@@ -468,8 +468,8 @@ written is refused whole and changes nothing.
 
 That pack boots. Most commands have a short form --- `i` for `initialize`, `p` for
 `partition`, `m` for `modify`, `l` for `load`, `d` for `delete`, `c` for
-`current` --- and `help` lists both; `dump`, `load-from`, `drive`, `name` and
-`comment` have none.
+`current` --- and `help` lists both; `dump`, `load-from`, `zero`, `drive`, `name`
+and `comment` have none.
 
 `initialize` lays out a Trident T-300, the drive a CADR's pack goes in, with
 the partitions MIT's own `PACK-TYPES` gives it --- eight microcode partitions,
@@ -482,7 +482,9 @@ changes one that is there, its size or its comment. A size is blocks, `75c` cyli
 or `rest` for what is left to the end of it. Nothing shrinks and nothing is
 ever moved down: a partition that grows pushes the entries after it up, and
 the tool says which moved --- what moves is the entry in the table, and
-nothing on the pack moves at all, which is what makes it worth saying. `delete` is how a partition gives its blocks back.
+nothing on the pack moves at all, which is what makes it worth saying. `delete` is how a partition gives its blocks back:
+it zeros them, then takes the entry out. `zero <partition>` zeros a partition
+and leaves its entry where it is, with its comment emptied.
 
 `current` prints the label's two names for its own partitions --- MIT's own
 display gives them as "Current microload = MCR1, current virtual memory load
