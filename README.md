@@ -594,7 +594,7 @@ Chaosnet server of their own on the modeled cable, in process. It lives in
     examples/  development tools; none is part of the simulator.
                examples/README.md
     tools/     fetching, and one script per board to re-extract a netlist
-    pages/     the front page and the manual, published by
+    pages/     the front page and the recording, published by
                .github/workflows/pages.yml
     docs/      findings about the machine read from mit/, each claim cited
                to its file and held by a test where one can. docs/README.md
