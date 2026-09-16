@@ -166,11 +166,11 @@ delete, d <partition>   take it out; its blocks are zeroed and free where
 zero <partition>        zeros over every block of it, its entry and its size
                         left as they are and its comment emptied
 load, l <partition> [<file>]
-                        a file into a partition.  An MCR one holds microcode
-                        and takes a microcode file, which goes in the way the
-                        machine reads one --- every word's halves swapped and
-                        the rest of the partition zeroed --- and anything
-                        else takes the file as it stands.  Without a file,
+                        a file into a partition, and the rest of the
+                        partition zeroed.  An MCR one holds microcode and
+                        takes a microcode file, which goes in the way the
+                        machine reads one, every word's halves swapped, and
+                        anything else takes the file as it stands.  Without a file,
                         the built-in microcode 323, System 100's own.  The
                         partition's comment becomes the file's name, or
                         UCADR 323 for the built-in, cut to the sixteen
@@ -179,7 +179,8 @@ load-from <partition> <pack> <partition>
                         a partition of another pack into ours, block for
                         block.  Both sides are packs, so the words are
                         already the way the disk holds them and nothing is
-                        swapped; ours must be at least as big as theirs
+                        swapped; ours must be at least as big as theirs, and
+                        what is past their blocks in ours is zeroed
 dump <partition> <file> a partition out to a file
 quit, q                 leave
 help, h, ?              this
@@ -668,14 +669,19 @@ impl Pack {
         Ok(said)
     }
 
-    /// Writes zeros over `blocks` blocks from `start`, a megabyte or so at a
-    /// time: a band is 24,225 blocks.
+    /// Writes zeros over `blocks` blocks from `start`.
     fn zero_blocks(&self, start: u32, blocks: u32) -> Result<(), String> {
         let mut f = self.image(true)?;
         f.seek(SeekFrom::Start(start as u64 * BLOCK_BYTES))
             .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        self.write_zeros(&mut f, blocks as u64 * BLOCK_BYTES)
+    }
+
+    /// Writes `bytes` zeros where `f` stands, a megabyte or so at a time: a
+    /// band is 24,225 blocks.
+    fn write_zeros(&self, f: &mut File, bytes: u64) -> Result<(), String> {
         let zeros = vec![0u8; BLOCK_BYTES as usize * 256];
-        let mut left = blocks as u64 * BLOCK_BYTES;
+        let mut left = bytes;
         while left > 0 {
             let n = zeros.len().min(left as usize);
             f.write_all(&zeros[..n]).map_err(|e| format!("{}: {e}", self.path.display()))?;
@@ -750,9 +756,9 @@ impl Pack {
     /// zeroed with it, so that a microload partition holds one microcode and
     /// not the tail of the last one.
     ///
-    /// Anything else goes in as it stands, and what is past it is left alone:
-    /// a band is written over a band, and zeroing the rest of a partition
-    /// 24,225 blocks long would write 24 MB to say nothing.
+    /// Anything else goes in as it stands, and the rest of the partition is
+    /// zeroed too, so that a partition holds what went into it and not the
+    /// tail of whatever was there before.
     ///
     /// Which of the two it is, the partition says: an `MCR` one holds
     /// microcode and takes a microcode file, and everything else takes what
@@ -821,8 +827,9 @@ impl Pack {
             }
             None => {
                 f.write_all(&bytes).map_err(|e| format!("{}: {e}", self.path.display()))?;
+                self.write_zeros(&mut f, room - bytes.len() as u64)?;
                 format!(
-                    "{name}: {} blocks of {blocks} written, the rest left as it was\n",
+                    "{name}: {} blocks of {blocks} written, the rest zeroed\n",
                     blocks_of(bytes.len())
                 )
             }
@@ -857,8 +864,8 @@ impl Pack {
     ///
     /// The way a band is moved from the pack it came on to a pack of one's
     /// own without a file in between.  Both sides are packs, so the words are
-    /// already the way the controller reads them and nothing is swapped or
-    /// zeroed: it is the blocks, as they are.
+    /// already the way the controller reads them and nothing is swapped: it is
+    /// the blocks, as they are, and what is past them in ours is zeroed.
     ///
     /// Ours has to be at least as big as theirs, so that all of what is being
     /// copied lands: a partition that arrived cut short would be a band with
@@ -905,11 +912,16 @@ impl Pack {
             ours.write_all(&buf[..n]).map_err(|e| format!("{}: {e}", self.path.display()))?;
             left -= n as u64;
         }
+        // Ours may be bigger than theirs, and what is past their blocks is
+        // zeroed rather than left as whatever was there.
+        let rest = blocks - theirs.blocks;
+        self.write_zeros(&mut ours, rest as u64 * BLOCK_BYTES)?;
         Ok(format!(
-            "{name}: {} blocks of {blocks} from {} {}\n",
+            "{name}: {} blocks of {blocks} from {} {}{}\n",
             theirs.blocks,
             pack.display(),
-            theirs.name
+            theirs.name,
+            if rest > 0 { ", the rest zeroed" } else { "" }
         ))
     }
 

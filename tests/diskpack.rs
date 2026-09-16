@@ -624,7 +624,7 @@ fn a_band_copied_from_another_pack_arrives() {
 ///
 /// The whole point of the tool, and the one check that goes through the
 /// machine rather than around it: a fresh pack, the built-in microcode in
-/// `MCR1`, the System 100 pack's `LOD1` in `LOD1`, and then a machine booted
+/// `MCR1`, the System 100 pack's band, its `LOD2`, in `LOD1`, and then a machine booted
 /// off it.  The boot PROM finds this label with its own `DECODE-LABEL` and
 /// `SEARCH-LABEL`, walks the sections of the microload partition it names,
 /// and turns itself off --- which it cannot do unless the label, the
@@ -644,7 +644,7 @@ fn a_pack_made_here_boots() {
         Command::Name("MIT-LISPM-2".to_string()),
         Command::Comment("made by diskpack".to_string()),
         Command::Load { partition: "MCR1".to_string(), file: None },
-        Command::LoadFrom { partition: "LOD1".to_string(), pack: theirs, from: "LOD1".to_string() },
+        Command::LoadFrom { partition: "LOD1".to_string(), pack: theirs, from: "LOD2".to_string() },
     ] {
         made.run(c).unwrap();
     }
@@ -1053,4 +1053,68 @@ fn an_entry_off_the_end_is_deleted_and_what_is_on_the_pack_zeroed() {
     assert!(said.contains(&format!("{name} is gone")), "{said}");
     assert!(blocks_at(&path, on_pack - 1, 1).iter().all(|&b| b == 0), "the last block on the pack");
     assert!(Label::open(&path).unwrap().partition(&name).is_none(), "and the entry is gone");
+}
+
+/// **A file loaded into a partition leaves zeros after it, not what was there
+/// before.** `FILE` filled with ones by a file its own size, then a block and a
+/// half loaded over it: those bytes, then zeros to the partition's end, so a
+/// partition holds what went into it and not the tail of the last thing.
+#[test]
+fn a_file_loaded_zeros_the_rest_of_the_partition() {
+    let dir = scratch("diskpack-load-zeros");
+    let (mut pack, path) = pack_at(&dir, "pack.img");
+    pack.run(Command::Initialize).unwrap();
+    let (start, blocks) = extent_of(&path, "FILE");
+    let full = dir.join("full.dump");
+    std::fs::write(&full, vec![0xffu8; blocks as usize * BLOCK_BYTES as usize]).unwrap();
+    pack.run(Command::Load { partition: "FILE".to_string(), file: Some(full) }).unwrap();
+
+    let small = dir.join("small.dump");
+    let bytes = BLOCK_BYTES as usize * 3 / 2;
+    std::fs::write(&small, vec![0x11u8; bytes]).unwrap();
+    let said =
+        pack.run(Command::Load { partition: "FILE".to_string(), file: Some(small) }).unwrap();
+    assert!(
+        said.contains(&format!("FILE: 2 blocks of {blocks} written, the rest zeroed")),
+        "{said}"
+    );
+    let got = blocks_at(&path, start, blocks);
+    assert!(got[..bytes].iter().all(|&b| b == 0x11), "the file");
+    assert!(got[bytes..].iter().all(|&b| b == 0), "and zeros to the end");
+}
+
+/// **`load-from` leaves zeros after what it copied.** Their `FILE` made ten
+/// blocks of `0x22`, ours filled with ones first: after the copy, their ten
+/// blocks and then zeros to the end of ours.
+#[test]
+fn load_from_zeros_the_rest_of_ours() {
+    let dir = scratch("diskpack-load-from-zeros");
+    let (mut ours, our_path) = pack_at(&dir, "ours.img");
+    ours.run(Command::Initialize).unwrap();
+    let (start, blocks) = extent_of(&our_path, "FILE");
+    let full = dir.join("full.dump");
+    std::fs::write(&full, vec![0xffu8; blocks as usize * BLOCK_BYTES as usize]).unwrap();
+    ours.run(Command::Load { partition: "FILE".to_string(), file: Some(full) }).unwrap();
+
+    let (mut theirs, their_path) = pack_at(&dir, "theirs.img");
+    theirs.run(Command::Initialize).unwrap();
+    theirs.run(Command::Delete("FILE".to_string())).unwrap();
+    theirs.run(parse("partition FILE 10").unwrap().unwrap()).unwrap();
+    let ten = dir.join("ten.dump");
+    std::fs::write(&ten, vec![0x22u8; 10 * BLOCK_BYTES as usize]).unwrap();
+    theirs.run(Command::Load { partition: "FILE".to_string(), file: Some(ten) }).unwrap();
+
+    let said = ours
+        .run(Command::LoadFrom {
+            partition: "FILE".to_string(),
+            pack: their_path,
+            from: "FILE".to_string(),
+        })
+        .unwrap();
+    assert!(said.contains(&format!("FILE: 10 blocks of {blocks} from")), "{said}");
+    assert!(said.contains("the rest zeroed"), "{said}");
+    let got = blocks_at(&our_path, start, blocks);
+    let copied = 10 * BLOCK_BYTES as usize;
+    assert!(got[..copied].iter().all(|&b| b == 0x22), "theirs");
+    assert!(got[copied..].iter().all(|&b| b == 0), "and zeros to the end of ours");
 }
