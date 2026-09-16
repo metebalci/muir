@@ -948,3 +948,109 @@ fn what_was_loaded_is_in_the_comment() {
     pack.run(Command::Load { partition: "LOD1".to_string(), file: Some(short) }).unwrap();
     assert_eq!(Label::open(&path).unwrap().partition("LOD1").unwrap().comment, "lod1.dump");
 }
+
+/// The bytes of blocks `start..start + blocks` of the pack at `path`, read
+/// where they are rather than with the whole pack.
+fn blocks_at(path: &Path, start: u32, blocks: u32) -> Vec<u8> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).unwrap();
+    f.seek(SeekFrom::Start(start as u64 * BLOCK_BYTES)).unwrap();
+    let mut bytes = vec![0u8; blocks as usize * BLOCK_BYTES as usize];
+    f.read_exact(&mut bytes).unwrap();
+    bytes
+}
+
+/// Where a partition of the label at `path` is: its first block and how many.
+fn extent_of(path: &Path, name: &str) -> (u32, u32) {
+    let label = Label::open(path).unwrap();
+    let p = label.partition(name).unwrap();
+    (p.start, p.blocks)
+}
+
+/// **`zero` takes a partition, and has no one-letter form.** A band is a
+/// number as everywhere else and a name is the rest of the line, as for
+/// `delete`. It writes over everything in the partition, so a stray `z`
+/// is not enough to do it.
+#[test]
+fn zero_takes_a_partition_and_has_no_short_form() {
+    assert_eq!(parse("zero LOD1").unwrap().unwrap(), Command::Zero("LOD1".to_string()));
+    assert_eq!(parse("zero 2").unwrap().unwrap(), Command::Zero("LOD2".to_string()));
+    assert_eq!(parse("zero mcr1").unwrap().unwrap(), Command::Zero("MCR1".to_string()));
+    assert!(parse("zero").is_err(), "a partition is wanted");
+    assert!(parse("z LOD1").is_err(), "no short form");
+}
+
+/// **`zero` writes zeros over a partition and over nothing else.** Every
+/// byte of `MCR1` after the built-in microcode was loaded into it; `MCR2`
+/// beside it, loaded too, byte for byte as it was. The entry stays where it
+/// is, and its comment, which said what was in it, now says nothing.
+#[test]
+fn zero_writes_zeros_over_a_partition_and_nothing_else() {
+    let dir = scratch("diskpack-zero");
+    let (mut pack, path) = pack_at(&dir, "pack.img");
+    pack.run(Command::Initialize).unwrap();
+    pack.run(Command::Load { partition: "MCR1".to_string(), file: None }).unwrap();
+    pack.run(Command::Load { partition: "MCR2".to_string(), file: None }).unwrap();
+    let (start, blocks) = extent_of(&path, "MCR1");
+    let (next, next_blocks) = extent_of(&path, "MCR2");
+    assert_eq!(start + blocks, next, "the two are side by side");
+    assert!(blocks_at(&path, start, blocks).iter().any(|&b| b != 0), "something to zero");
+    let beside = blocks_at(&path, next, next_blocks);
+
+    let said = pack.run(Command::Zero("MCR1".to_string())).unwrap();
+    assert!(said.contains(&format!("MCR1: {blocks} blocks zeroed")), "{said}");
+    assert!(blocks_at(&path, start, blocks).iter().all(|&b| b == 0), "every byte of MCR1");
+    assert_eq!(blocks_at(&path, next, next_blocks), beside, "MCR2 as it was");
+    assert_eq!(extent_of(&path, "MCR1"), (start, blocks), "the entry where it was");
+    assert_eq!(Label::open(&path).unwrap().partition("MCR1").unwrap().comment, "");
+}
+
+/// **Deleting a partition zeros its blocks before its entry goes.** What was
+/// in `MCR2` does not stay on the pack described by nothing; `MCR3` after it
+/// is untouched.
+#[test]
+fn deleting_zeros_the_partitions_blocks() {
+    let dir = scratch("diskpack-delete-zeros");
+    let (mut pack, path) = pack_at(&dir, "pack.img");
+    pack.run(Command::Initialize).unwrap();
+    pack.run(Command::Load { partition: "MCR2".to_string(), file: None }).unwrap();
+    pack.run(Command::Load { partition: "MCR3".to_string(), file: None }).unwrap();
+    let (start, blocks) = extent_of(&path, "MCR2");
+    let (next, next_blocks) = extent_of(&path, "MCR3");
+    assert!(blocks_at(&path, start, blocks).iter().any(|&b| b != 0), "something to zero");
+    let after = blocks_at(&path, next, next_blocks);
+
+    let said = pack.run(Command::Delete("MCR2".to_string())).unwrap();
+    assert!(said.contains(&format!("MCR2 is gone: {blocks} blocks at {start}, zeroed")), "{said}");
+    assert!(blocks_at(&path, start, blocks).iter().all(|&b| b == 0), "every byte of MCR2");
+    assert_eq!(blocks_at(&path, next, next_blocks), after, "MCR3 as it was");
+}
+
+/// **An entry that runs off the end of the pack can still be deleted,** its
+/// blocks that are on the pack zeroed. A table like that cannot be made
+/// here, but a pack from elsewhere can carry one, and delete is how it is put
+/// right.
+#[test]
+fn an_entry_off_the_end_is_deleted_and_what_is_on_the_pack_zeroed() {
+    let dir = scratch("diskpack-delete-off-end");
+    let (mut pack, path) = pack_at(&dir, "pack.img");
+    pack.run(Command::Initialize).unwrap();
+    let mut label = Label::open(&path).unwrap();
+    let on_pack = label.blocks();
+    let last = label.partitions.last_mut().unwrap();
+    let (name, start) = (last.name.clone(), last.start);
+    last.blocks = on_pack - start + 100;
+    label.write().unwrap();
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.seek(SeekFrom::Start((on_pack - 1) as u64 * BLOCK_BYTES)).unwrap();
+        f.write_all(&[0xff; BLOCK_BYTES as usize]).unwrap();
+    }
+    let (mut pack, _) = pack_at(&dir, "pack.img");
+
+    let said = pack.run(Command::Delete(name.clone())).unwrap();
+    assert!(said.contains(&format!("{name} is gone")), "{said}");
+    assert!(blocks_at(&path, on_pack - 1, 1).iter().all(|&b| b == 0), "the last block on the pack");
+    assert!(Label::open(&path).unwrap().partition(&name).is_none(), "and the entry is gone");
+}

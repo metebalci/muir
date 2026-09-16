@@ -106,7 +106,11 @@ pub enum Command {
         size: Size,
         comment: Option<String>,
     },
+    /// Take a partition out: its blocks zeroed where they are, then its
+    /// entry gone and nothing moved.
     Delete(String),
+    /// Zeros over every block of a partition, its entry left where it is.
+    Zero(String),
     /// A file into a partition: the blocks as they stand, or a microcode
     /// file the way the machine reads one.  See `Pack::load`.
     Load {
@@ -157,7 +161,10 @@ modify, m <partition> <size> [<comment>]
                         is too, which is the thing to watch.  Nothing is
                         ever moved down and nothing shrinks: delete is how a
                         partition gives blocks back
-delete, d <partition>   take it out; its blocks are free where they were
+delete, d <partition>   take it out; its blocks are zeroed and free where
+                        they were
+zero <partition>        zeros over every block of it, its entry and its size
+                        left as they are and its comment emptied
 load, l <partition> [<file>]
                         a file into a partition.  An MCR one holds microcode
                         and takes a microcode file, which goes in the way the
@@ -209,6 +216,9 @@ pub fn parse(line: &str) -> Result<Option<Command>, String> {
         "name" => Ok(Some(Command::Name(rest("the pack's name")?))),
         "comment" => Ok(Some(Command::Comment(rest("a comment")?))),
         "delete" | "d" => Ok(Some(Command::Delete(partition_named(&rest("a partition")?)))),
+        // No short form: it writes over everything in a partition, which a
+        // stray letter should not be enough to do.
+        "zero" => Ok(Some(Command::Zero(partition_named(&rest("a partition")?)))),
         "partition" | "p" => parse_partition(arg, false),
         "modify" | "m" => parse_partition(arg, true),
         "load" | "l" => {
@@ -478,6 +488,7 @@ impl Pack {
                 self.set_partition(&name, size, comment, true)
             }
             Command::Delete(name) => self.delete(&name),
+            Command::Zero(name) => self.zero(&name),
             Command::Load { partition, file } => self.load(&partition, file),
             Command::LoadFrom { partition, pack, from } => self.load_from(&partition, &pack, &from),
             Command::Dump { partition, file } => self.dump(&partition, &file),
@@ -615,6 +626,13 @@ impl Pack {
         Ok(said)
     }
 
+    /// Takes a partition out, zeroing its blocks first, so that what was in
+    /// it does not stay on the pack with no entry to say so.
+    ///
+    /// The table is checked before a block is written, so a delete the label
+    /// cannot take zeros nothing. Only the blocks on the pack are zeroed: an
+    /// entry that runs off the end is one a pack from elsewhere can carry,
+    /// and deleting it is how it is put right.
     fn delete(&mut self, name: &str) -> Result<String, String> {
         let at = self.partition(name)?.0;
         let mut label = self.taken()?;
@@ -622,8 +640,15 @@ impl Pack {
             label.partitions.iter().map(|p| (p.name.clone(), p.start)).collect();
         let gone = label.partitions.remove(at);
         label.lay_out(at);
+        if let Some(bad) = overrun(&label) {
+            return Err(bad);
+        }
+        let on_pack = gone.end().min(label.blocks()).saturating_sub(gone.start);
+        if on_pack > 0 {
+            self.zero_blocks(gone.start, on_pack)?;
+        }
         let said = format!(
-            "{} is gone: {} blocks at {}\n{}",
+            "{} is gone: {} blocks at {}, zeroed\n{}",
             gone.name,
             gone.blocks,
             gone.start,
@@ -631,6 +656,32 @@ impl Pack {
         );
         self.commit(label)?;
         Ok(said)
+    }
+
+    /// Zeros over every block of a partition. Its entry stays as it is, and
+    /// its comment, which said what was in it, is emptied.
+    fn zero(&mut self, name: &str) -> Result<String, String> {
+        let (start, blocks, name) = self.extent(name)?;
+        self.zero_blocks(start, blocks)?;
+        let mut said = format!("{name}: {blocks} blocks zeroed\n");
+        said.push_str(&self.describe(&name, "")?);
+        Ok(said)
+    }
+
+    /// Writes zeros over `blocks` blocks from `start`, a megabyte or so at a
+    /// time: a band is 24,225 blocks.
+    fn zero_blocks(&self, start: u32, blocks: u32) -> Result<(), String> {
+        let mut f = self.image(true)?;
+        f.seek(SeekFrom::Start(start as u64 * BLOCK_BYTES))
+            .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        let zeros = vec![0u8; BLOCK_BYTES as usize * 256];
+        let mut left = blocks as u64 * BLOCK_BYTES;
+        while left > 0 {
+            let n = zeros.len().min(left as usize);
+            f.write_all(&zeros[..n]).map_err(|e| format!("{}: {e}", self.path.display()))?;
+            left -= n as u64;
+        }
+        Ok(())
     }
 
     /// The pack's file, for a command that reads or writes blocks.
