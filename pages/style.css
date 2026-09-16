@@ -158,19 +158,21 @@ code { font-family: var(--mono); font-size: var(--fs-mono); font-weight: 400; }
   gap: 1.75rem;
 }
 
-/* Which page this is, highlighted as a selection is: ink under the words
-   and no wider than they are. */
 .desk-note {
   font-family: var(--mono);
   font-size: var(--fs-mono-small);
   font-weight: 400;
   letter-spacing: 0.04em;
-  width: fit-content;
-  background: var(--ink);
-  color: var(--paper);
-  padding: 0.1rem 0.4rem;
+  padding-inline: 0.15rem;
+  margin-bottom: 0.9rem;
 }
 .desk-note b { font-weight: 600; }
+.desk-note a, .desk-note [aria-current="page"] { white-space: nowrap; }
+.desk-note [aria-current="page"] {
+  background: var(--spot);
+  box-shadow: 0 0 0 0.15rem var(--spot);
+  color: var(--ink);
+}
 
 /* Each section is paper on the halftone desk, with its panels above and the
    machine's own status line ruled off at the foot. */
