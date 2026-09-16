@@ -685,12 +685,17 @@ impl PackType {
 /// that these numbers came across right.
 ///
 /// The System 100 distribution pack is *not* this table: its PAGE is 65536
-/// blocks rather than the 65246 that 202 cylinders come to --- 65536 pages is
-/// what a 24-bit address space holds, which MIT's own comment claims for 202
-/// cylinders and is 290 blocks short of --- with everything after it moved up
-/// and FILE 290 blocks shorter, so that it still ends at the last block.  So
-/// a pack initialized from this table is a T-300 as MIT laid one out, not a
-/// copy of the pack we boot.
+/// blocks rather than the 65246 that 202 cylinders come to, with everything
+/// after it moved up and FILE 290 blocks shorter, so that it still ends at the
+/// last block.  **202 cylinders is already MIT's "Full address space"**, and
+/// 65536 is more than it: a page number is sixteen bits, but the pages from
+/// 64508 up are A memory, the Xbus and the Unibus, mapped directly and never
+/// paged (`LOWEST-A-MEM-VIRTUAL-ADDRESS`, `ucadr/uc-cadr.lisp:9-16`), and
+/// `io/disk.lisp:1254` sets `VIRTUAL-MEMORY-SIZE` to the smaller of that and
+/// PAGE.  So PAGE is used to block 64508 either way: MIT's 202 cylinders
+/// leave 738 blocks over and the release's 65536 leave 1028.  A pack laid out
+/// from this table is a T-300 as MIT laid one out, not a copy of the pack we
+/// boot.
 pub const T300: PackType = PackType {
     drive: "Trident T-300",
     geometry: Geometry::T300,

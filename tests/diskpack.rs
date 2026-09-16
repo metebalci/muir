@@ -14,7 +14,7 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use muir::band::{BLOCK_WORDS, Label, T300};
-use muir::diskpack::{Command, Pack, Size, parse, parse_size};
+use muir::diskpack::{Command, Layout, Pack, Size, parse, parse_size};
 use muir::engine::Engine;
 use support::scratch;
 
@@ -34,6 +34,17 @@ fn rows(want: &[(&str, u32, u32)]) -> Vec<(String, u32, u32)> {
 /// A pack of the tool's own, in a directory of the test's own.
 fn pack_at(dir: &Path, name: &str) -> (Pack, PathBuf) {
     let path = dir.join(name);
+    let (pack, _) = Pack::open(&path);
+    (pack, path)
+}
+
+/// A pack with MIT's own T-300 table on it, `Label::initialize`'s: eight
+/// microcode partitions, PAGE, eight bands and FILE, the table the tests of
+/// editing one are written against. `initialize` itself lays out what it is
+/// asked for, which is not this.
+fn mit_pack_at(dir: &Path, name: &str) -> (Pack, PathBuf) {
+    let path = dir.join(name);
+    Label::initialize(&path, &T300).write().unwrap();
     let (pack, _) = Pack::open(&path);
     (pack, path)
 }
@@ -267,8 +278,7 @@ fn every_short_form_means_the_same_thing() {
 #[test]
 fn a_partition_is_added_once_and_changed_after_that() {
     let dir = scratch("diskpack-add");
-    let (mut pack, _) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, _) = mit_pack_at(&dir, "pack.img");
 
     let add = |size| Command::Partition { name: "MCR1".to_string(), size, comment: None };
     let e = pack.run(add(Size::Blocks(148))).unwrap_err();
@@ -296,8 +306,7 @@ fn a_partition_is_added_once_and_changed_after_that() {
 #[test]
 fn growing_moves_what_follows_and_says_so() {
     let dir = scratch("diskpack-grow");
-    let (mut pack, path) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, path) = mit_pack_at(&dir, "pack.img");
 
     // The System 100 pack's PAGE is 65536 blocks, 290 more than the 65246
     // that MIT's 202 cylinders come to.  Growing PAGE into a full table
@@ -379,8 +388,7 @@ fn a_percentage_and_the_rest_fill_the_pack() {
 #[test]
 fn deleting_frees_its_blocks_and_moves_nothing() {
     let dir = scratch("diskpack-delete");
-    let (mut pack, _) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, _) = mit_pack_at(&dir, "pack.img");
     let said = pack.run(Command::Delete("MCR2".to_string())).unwrap();
     assert!(said.contains("MCR2 is gone: 148 blocks at 165"), "{said}");
     assert!(!said.contains("moves from"), "nothing moved: {said}");
@@ -399,8 +407,7 @@ fn deleting_frees_its_blocks_and_moves_nothing() {
 #[test]
 fn a_comment_moves_nothing() {
     let dir = scratch("diskpack-comment");
-    let (mut pack, _) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, _) = mit_pack_at(&dir, "pack.img");
     let said = pack
         .run(Command::Modify {
             name: "MCR1".to_string(),
@@ -429,7 +436,7 @@ fn what_is_not_there_is_refused() {
         .unwrap_err();
     assert!(e.contains("there is no label yet"), "{e}");
 
-    pack.run(Command::Initialize).unwrap();
+    pack.run(Command::Initialize(Layout { mcrs: 3, ..Layout::default() })).unwrap();
     let e = pack.run(Command::Microload("MCR9".to_string())).unwrap_err();
     assert!(e.contains("no partition named MCR9"), "{e}");
     assert!(e.contains("MCR1 MCR2 MCR3"), "it says what there is: {e}");
@@ -461,8 +468,7 @@ fn what_is_not_there_is_refused() {
 #[test]
 fn a_microcode_partition_takes_a_microcode_file() {
     let dir = scratch("diskpack-not-microcode");
-    let (mut pack, _) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, _) = mit_pack_at(&dir, "pack.img");
 
     let not_microcode = dir.join("band.dump");
     std::fs::write(&not_microcode, [0u8; 1024]).unwrap();
@@ -519,8 +525,7 @@ fn the_system_100_label_written_back_is_the_same_bytes() {
 fn the_microcode_written_is_the_microcode_on_the_pack() {
     let Some(pack) = support::pack_100() else { return };
     let dir = scratch("diskpack-microcode");
-    let (mut ours, path) = pack_at(&dir, "fresh.img");
-    ours.run(Command::Initialize).unwrap();
+    let (mut ours, path) = mit_pack_at(&dir, "fresh.img");
     let said = ours
         .run(Command::Load { partition: "MCR1".to_string(), file: None })
         .expect("the built-in microcode into MCR1");
@@ -562,8 +567,7 @@ fn a_band_dumped_and_loaded_arrives() {
     theirs.run(Command::Dump { partition: "LOD1".to_string(), file: dump.clone() }).unwrap();
     assert_eq!(std::fs::metadata(&dump).unwrap().len(), 24225 * BLOCK_BYTES, "the whole partition");
 
-    let (mut ours, path) = pack_at(&dir, "fresh.img");
-    ours.run(Command::Initialize).unwrap();
+    let (mut ours, path) = mit_pack_at(&dir, "fresh.img");
     ours.run(Command::Load { partition: "LOD1".to_string(), file: Some(dump) }).unwrap();
 
     // The band reads as a band: this is the same reader `examples/band.rs`
@@ -584,8 +588,7 @@ fn a_band_dumped_and_loaded_arrives() {
 fn a_band_copied_from_another_pack_arrives() {
     let Some(theirs) = support::pack_100() else { return };
     let dir = scratch("diskpack-load-from");
-    let (mut ours, path) = pack_at(&dir, "fresh.img");
-    ours.run(Command::Initialize).unwrap();
+    let (mut ours, path) = mit_pack_at(&dir, "fresh.img");
 
     let said = ours
         .run(Command::LoadFrom {
@@ -640,7 +643,7 @@ fn a_pack_made_here_boots() {
     let dir = scratch("diskpack-boots");
     let (mut made, path) = pack_at(&dir, "made.img");
     for c in [
-        Command::Initialize,
+        Command::Initialize(Layout::default()),
         Command::Name("MIT-LISPM-2".to_string()),
         Command::Comment("made by diskpack".to_string()),
         Command::Load { partition: "MCR1".to_string(), file: None },
@@ -780,7 +783,7 @@ fn initialize_does_not_write_over_a_file() {
 
     let (mut pack, said) = Pack::open(&path);
     assert!(said.contains("is not a pack"), "{said}");
-    let e = pack.run(Command::Initialize).unwrap_err();
+    let e = pack.run(Command::Initialize(Layout::default())).unwrap_err();
     assert!(e.contains("is not a pack"), "{e}");
     assert_eq!(std::fs::read(&path).unwrap(), note, "the file is as it was");
 }
@@ -794,11 +797,10 @@ fn initialize_does_not_write_over_a_file() {
 #[test]
 fn initialize_does_not_replace_a_pack() {
     let dir = scratch("diskpack-not-over-a-pack");
-    let (mut pack, path) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, path) = mit_pack_at(&dir, "pack.img");
     pack.run(Command::Name("MIT-LISPM-2".to_string())).unwrap();
 
-    let e = pack.run(Command::Initialize).unwrap_err();
+    let e = pack.run(Command::Initialize(Layout::default())).unwrap_err();
     assert!(e.contains("is a pack already"), "{e}");
     assert!(e.contains("MIT-LISPM-2"), "it says what it found: {e}");
     assert_eq!(Label::open(&path).unwrap().pack_name, "MIT-LISPM-2", "the label is as it was");
@@ -813,8 +815,7 @@ fn initialize_does_not_replace_a_pack() {
 #[test]
 fn a_size_no_pack_could_hold_is_refused() {
     let dir = scratch("diskpack-huge");
-    let (mut pack, path) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, path) = mit_pack_at(&dir, "pack.img");
     let before = std::fs::read(&path).unwrap()[..1024].to_vec();
 
     for size in [Size::Cylinders(20_000_000), Size::Cylinders(13_300_000), Size::Blocks(u32::MAX)] {
@@ -867,8 +868,7 @@ fn a_label_with_nonsense_in_it_is_refused() {
 #[test]
 fn load_from_refuses_a_source_that_is_too_short() {
     let dir = scratch("diskpack-short-source");
-    let (mut ours, our_path) = pack_at(&dir, "ours.img");
-    ours.run(Command::Initialize).unwrap();
+    let (mut ours, our_path) = mit_pack_at(&dir, "ours.img");
 
     // A pack whose label is a T-300's and whose file stops after the label.
     let theirs = dir.join("theirs.img");
@@ -921,8 +921,7 @@ fn the_free_space_is_all_of_it() {
 #[test]
 fn what_was_loaded_is_in_the_comment() {
     let dir = scratch("diskpack-comments");
-    let (mut pack, path) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, path) = mit_pack_at(&dir, "pack.img");
 
     // The built-in microcode writes MIT's own words for it, in the field MIT
     // put them in.
@@ -987,8 +986,7 @@ fn zero_takes_a_partition_and_has_no_short_form() {
 #[test]
 fn zero_writes_zeros_over_a_partition_and_nothing_else() {
     let dir = scratch("diskpack-zero");
-    let (mut pack, path) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, path) = mit_pack_at(&dir, "pack.img");
     pack.run(Command::Load { partition: "MCR1".to_string(), file: None }).unwrap();
     pack.run(Command::Load { partition: "MCR2".to_string(), file: None }).unwrap();
     let (start, blocks) = extent_of(&path, "MCR1");
@@ -1011,8 +1009,7 @@ fn zero_writes_zeros_over_a_partition_and_nothing_else() {
 #[test]
 fn deleting_zeros_the_partitions_blocks() {
     let dir = scratch("diskpack-delete-zeros");
-    let (mut pack, path) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, path) = mit_pack_at(&dir, "pack.img");
     pack.run(Command::Load { partition: "MCR2".to_string(), file: None }).unwrap();
     pack.run(Command::Load { partition: "MCR3".to_string(), file: None }).unwrap();
     let (start, blocks) = extent_of(&path, "MCR2");
@@ -1033,8 +1030,7 @@ fn deleting_zeros_the_partitions_blocks() {
 #[test]
 fn an_entry_off_the_end_is_deleted_and_what_is_on_the_pack_zeroed() {
     let dir = scratch("diskpack-delete-off-end");
-    let (mut pack, path) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (_, path) = mit_pack_at(&dir, "pack.img");
     let mut label = Label::open(&path).unwrap();
     let on_pack = label.blocks();
     let last = label.partitions.last_mut().unwrap();
@@ -1062,8 +1058,7 @@ fn an_entry_off_the_end_is_deleted_and_what_is_on_the_pack_zeroed() {
 #[test]
 fn a_file_loaded_zeros_the_rest_of_the_partition() {
     let dir = scratch("diskpack-load-zeros");
-    let (mut pack, path) = pack_at(&dir, "pack.img");
-    pack.run(Command::Initialize).unwrap();
+    let (mut pack, path) = mit_pack_at(&dir, "pack.img");
     let (start, blocks) = extent_of(&path, "FILE");
     let full = dir.join("full.dump");
     std::fs::write(&full, vec![0xffu8; blocks as usize * BLOCK_BYTES as usize]).unwrap();
@@ -1089,15 +1084,13 @@ fn a_file_loaded_zeros_the_rest_of_the_partition() {
 #[test]
 fn load_from_zeros_the_rest_of_ours() {
     let dir = scratch("diskpack-load-from-zeros");
-    let (mut ours, our_path) = pack_at(&dir, "ours.img");
-    ours.run(Command::Initialize).unwrap();
+    let (mut ours, our_path) = mit_pack_at(&dir, "ours.img");
     let (start, blocks) = extent_of(&our_path, "FILE");
     let full = dir.join("full.dump");
     std::fs::write(&full, vec![0xffu8; blocks as usize * BLOCK_BYTES as usize]).unwrap();
     ours.run(Command::Load { partition: "FILE".to_string(), file: Some(full) }).unwrap();
 
-    let (mut theirs, their_path) = pack_at(&dir, "theirs.img");
-    theirs.run(Command::Initialize).unwrap();
+    let (mut theirs, their_path) = mit_pack_at(&dir, "theirs.img");
     theirs.run(Command::Delete("FILE".to_string())).unwrap();
     theirs.run(parse("partition FILE 10").unwrap().unwrap()).unwrap();
     let ten = dir.join("ten.dump");
@@ -1117,4 +1110,110 @@ fn load_from_zeros_the_rest_of_ours() {
     let copied = 10 * BLOCK_BYTES as usize;
     assert!(got[..copied].iter().all(|&b| b == 0x22), "theirs");
     assert!(got[copied..].iter().all(|&b| b == 0), "and zeros to the end of ours");
+}
+
+/// A pack `initialize` made with `layout`, and its table as name, first block
+/// and blocks.
+fn initialized(dir: &Path, layout: Layout) -> (PathBuf, Vec<(String, u32, u32)>) {
+    let (mut pack, path) = pack_at(dir, "pack.img");
+    pack.run(Command::Initialize(layout)).unwrap();
+    let label = Label::open(&path).unwrap();
+    let table = label.partitions.iter().map(|p| (p.name.clone(), p.start, p.blocks)).collect();
+    (path, table)
+}
+
+/// **`initialize` with no counts is two microloads, four bands and no FILE.**
+///
+/// The microcode partitions are MIT's 148 blocks each from block 17, PAGE is
+/// MIT's 202 cylinders from the first cylinder boundary after them, and the
+/// 612 cylinders left are the four bands' in equal shares of 153 cylinders,
+/// which fill the pack exactly. Each is smaller than PAGE, which a band has
+/// to be: a cold boot copies the band into PAGE.
+#[test]
+fn initialize_lays_out_two_microloads_and_four_bands() {
+    assert_eq!(Layout::default(), Layout { mcrs: 2, lods: 4, file_mb: 0 });
+    let dir = scratch("diskpack-layout-default");
+    let (path, table) = initialized(&dir, Layout::default());
+    assert_eq!(
+        table,
+        rows(&[
+            ("MCR1", 17, 148),
+            ("MCR2", 165, 148),
+            ("PAGE", 323, 65246),
+            ("LOD1", 65569, 49419),
+            ("LOD2", 114988, 49419),
+            ("LOD3", 164407, 49419),
+            ("LOD4", 213826, 49419),
+        ])
+    );
+    let label = Label::open(&path).unwrap();
+    assert_eq!(213826 + 49419, label.blocks(), "the bands end at the pack's end");
+    assert_eq!(label.microload_partition, "MCR1");
+    assert_eq!(label.current_band, "LOD1");
+}
+
+/// **A FILE partition is megabytes at the end of the pack, in whole
+/// cylinders, and the bands share what is left before it.**
+///
+/// One microload and three bands with 2 MB of FILE: 2,048 blocks is seven
+/// cylinders at the pack's end; 605 cylinders are left after PAGE, which is
+/// three bands of 201 and two cylinders over, free between the last band and
+/// FILE.
+#[test]
+fn a_file_partition_is_megabytes_at_the_end() {
+    let dir = scratch("diskpack-layout-file");
+    let (_, table) = initialized(&dir, Layout { mcrs: 1, lods: 3, file_mb: 2 });
+    assert_eq!(
+        table,
+        rows(&[
+            ("MCR1", 17, 148),
+            ("PAGE", 323, 65246),
+            ("LOD1", 65569, 64923),
+            ("LOD2", 130492, 64923),
+            ("LOD3", 195415, 64923),
+            ("FILE", 260984, 2261),
+        ])
+    );
+}
+
+/// **The counts are words after `initialize`, the three of them or fewer.**
+#[test]
+fn initialize_takes_its_counts() {
+    let layout = |mcrs, lods, file_mb| Some(Command::Initialize(Layout { mcrs, lods, file_mb }));
+    assert_eq!(parse("initialize").unwrap(), layout(2, 4, 0));
+    assert_eq!(parse("i 1").unwrap(), layout(1, 4, 0));
+    assert_eq!(parse("initialize 1 2").unwrap(), layout(1, 2, 0));
+    assert_eq!(parse("initialize 3 5 100").unwrap(), layout(3, 5, 100));
+    assert!(parse("initialize two").is_err(), "a count is a number");
+    assert!(parse("initialize 1 2 3 4").is_err(), "three at most");
+}
+
+/// **A layout that cannot be is refused, and no pack is made.**
+///
+/// A band bigger than PAGE can never be filled, so a share bigger than PAGE is
+/// refused rather than laid out: two microloads and three bands would be 204
+/// cylinders each against PAGE's 202. The counts are one to nine, a name being
+/// `MCR` or `LOD` and one digit. A label's first block holds eighteen
+/// partitions, and a FILE that leaves the bands no room is no layout either.
+#[test]
+fn a_layout_that_cannot_be_is_refused() {
+    let dir = scratch("diskpack-layout-refused");
+    let cases = [
+        (Layout { mcrs: 2, lods: 3, file_mb: 0 }, "bigger than PAGE"),
+        (Layout { mcrs: 0, lods: 4, file_mb: 0 }, "1 to 9 microcode partitions"),
+        (Layout { mcrs: 10, lods: 4, file_mb: 0 }, "1 to 9 microcode partitions"),
+        (Layout { mcrs: 2, lods: 0, file_mb: 0 }, "1 to 9 bands"),
+        (Layout { mcrs: 2, lods: 10, file_mb: 0 }, "1 to 9 bands"),
+        (Layout { mcrs: 9, lods: 9, file_mb: 1 }, "20 partitions"),
+        (Layout { mcrs: 2, lods: 4, file_mb: 300 }, "no room"),
+    ];
+    for (layout, says) in cases {
+        let (mut pack, path) = pack_at(&dir, "refused.img");
+        let e = pack.run(Command::Initialize(layout.clone())).unwrap_err();
+        assert!(e.contains(says), "{layout:?}: {e}");
+        assert!(!path.exists(), "{layout:?}: no pack made");
+    }
+    // Nine and eight is eighteen, which fits.
+    let (mut pack, _) = pack_at(&dir, "eighteen.img");
+    pack.run(Command::Initialize(Layout { mcrs: 9, lods: 8, file_mb: 0 })).unwrap();
 }
