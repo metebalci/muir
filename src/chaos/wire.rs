@@ -119,6 +119,16 @@ impl Decoder {
         }
     }
 
+    /// The bits sampled so far of the run now on the line: what a
+    /// receiver on the cable has taken of it. A receiver decides on a
+    /// frame's destination word long before the run ends
+    /// ([`crate::chaos::ether::BUSY_ABORT_NS`]), and for a frame the
+    /// netlist board is putting on the cable these bits are all the ether
+    /// has of it.
+    pub fn bits(&self) -> &[bool] {
+        &self.bits
+    }
+
     /// When the decoder next needs to be told the time: the sample due,
     /// or the moment the line will have been idle long enough. A line
     /// held high --- an abort signal --- is not idle and has no such
