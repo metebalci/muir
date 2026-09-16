@@ -28,8 +28,7 @@
 use crate::isa::Insn;
 
 /// The release's own microcode as a file: `sys/ubin/ucadr.mcr`, which is
-/// microcode 323, the version this project targets --- and one file across
-/// System 100 and System 304, which `tests/mcr.rs` holds it to.
+/// microcode 323, the version this project targets.
 ///
 /// Byte for byte what the release ships, committed in `mit/` beside the boot
 /// PROM's own file so that what a pack made here loads is the target's own

@@ -1905,65 +1905,6 @@ fn the_lockout_ends_between_the_mid_cell_transition_and_the_next_cell() {
     assert_eq!(wire::decode(&changes), vec![bits.to_vec()]);
 }
 
-/// **The System 304 band calls its file and time host at 4403, and this
-/// machine answers there as 4401.** [`support::CHAOS_304`] is the pair
-/// every machine test runs with, and it is the band's own: asked at its
-/// listener, `(send (si:parse-host "OZ") :chaos-address)` answers 2307
-/// decimal, which is 4403, and `si:local-host` is `AMS-LISPM-1`, which its
-/// host table puts at 4401.
-///
-/// What that pair buys is on the cable here: the boot puts an `RFC "TIME"`
-/// on it, addressed from 4401 to 4403, and the server answers. At any
-/// other pair nothing is sent at all --- 4403 is on another subnet from
-/// 3050, and the band, hearing no route to it, never transmits --- and the
-/// machine comes up asking for the date instead. Neither release's address
-/// is what `chaos::Config` defaults to --- that is subnet 376's and no
-/// band's --- so each release's tests hand their band the pair it holds.
-#[test]
-fn the_304_band_reaches_the_server_at_its_own_numbers() {
-    let (Some(pack), Some(root)) = (support::pack_304(), support::file_root()) else {
-        return;
-    };
-    use muir::engine::Engine as _;
-    let mut e = muir::rtl::Rtl::new(support::machine_with_pack(&pack));
-    e.boot();
-    let m = e.machine_mut();
-    m.chaos.address = support::CHAOS_304.0;
-    support::ChaosServer::new(support::CHAOS_304.1)
-        .named("OZ")
-        .serving(root)
-        .at_time(support::time::TEST_UNIVERSAL)
-        .plug(m, 0);
-    m.ioboard.chaos.as_mut().unwrap().ether_mut().unwrap().keep_log(true);
-    let ran = support::wait_for_the_prompt(&mut e);
-
-    let ether = e.machine().ioboard.chaos.as_ref().unwrap().ether().unwrap();
-    let packets: Vec<Packet> = ether
-        .log
-        .iter()
-        .filter_map(|ev| match ev {
-            muir::chaos::ether::Event::Sent(_, _, b) => Some(&b[..]),
-            muir::chaos::ether::Event::Heard(_, f) => Some(&f.buffer[..]),
-            muir::chaos::ether::Event::Collision(_) => None,
-        })
-        .filter_map(|b| Packet::from_buffer(b).ok().map(|(p, _)| p))
-        .collect();
-    eprintln!("at the prompt after {ran}: {} packets on the cable", packets.len());
-    let time_rfc = packets
-        .iter()
-        .find(|p| p.opcode == op::RFC && p.data.starts_with(b"TIME"))
-        .expect("the band asked for the time");
-    assert_eq!(
-        (time_rfc.source, time_rfc.dest),
-        support::CHAOS_304,
-        "from this machine to its file and time host"
-    );
-    assert!(
-        packets.iter().any(|p| p.opcode == op::ANS && p.source == support::CHAOS_304.1),
-        "and the server answered it"
-    );
-}
-
 /// **A write is not put into place until the synchronous mark has come,
 /// however early the CLOSE arrives.**
 ///

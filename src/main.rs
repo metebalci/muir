@@ -169,8 +169,8 @@
 //! `--chaos-udp-peer` names is then a station on that cable, taking its
 //! turn on it. Which numbers a run wants are its band's:
 //! `--chaos-address 3050 --chaos-udp` with
-//! `--chaos-udp-peer 3060@<where the host is>` for the System 100 pack,
-//! `4401` with `4403@...` for System 304's. Every engine has a Chaosnet.
+//! `--chaos-udp-peer 3060@<where the host is>` for the System 100 pack.
+//! Every engine has a Chaosnet.
 //! muir stays a leaf: a frame goes out only when this machine put it on
 //! the cable, so one peer's is never carried on to another, and a
 //! `cbridge` beside it is what routes.
@@ -911,11 +911,11 @@ A simulator of the MIT CADR Lisp Machine.
                                or not anything is plugged in: --chaos-udp
                                is the cable. Which
                                address to give is the band's own: 3050 on
-                               System 100 and 4401 on System 304, whose file
-                               and time hosts are 3060 and 4403 --- not
-                               muir, but another program on the network,
-                               named with --chaos-udp-peer. [default:
-                               177001, on subnet 376 and no band's]
+                               System 100, whose file and time host is 3060
+                               --- not muir, but another program on the
+                               network, named with --chaos-udp-peer.
+                               [default: 177001, on subnet 376 and no
+                               band's]
   --chaos-trace                every Chaosnet packet and frame on the cable,
                                to stderr. [default: off]
   --chaos-udp [<endpoint>]     the Chaosnet cable, plugged in: Chaosnet over

@@ -65,7 +65,7 @@ fn a_key_typed_at_the_listener_is_read_and_echoed() {
     // The form is echoed on the line under the prompt's two, rows 128 to
     // 142, and its value printed on the next; the cursor, which blinks
     // two hundred pixels either way, is below both. The rows follow the
-    // herald's height, and System 304's is a line taller.
+    // herald's height, which is System 100's.
     let echo = lit_rows(&e, 128..142);
     let value = lit_rows(&e, 142..156);
     eprintln!("the echo line has {echo} pixels lit, the value's line {value}");

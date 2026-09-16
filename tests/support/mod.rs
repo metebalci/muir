@@ -46,15 +46,6 @@ pub fn mit_text(parts: &[&str]) -> String {
     String::from_utf8_lossy(&std::fs::read(mit(parts)).unwrap()).into_owned()
 }
 
-/// The **System 304** pack, put there by `tools/fetch-system-304.sh`. That
-/// release boots here and has tests of its own --- the band reaching the
-/// server at its own numbers, and `tests/cc_304.rs`, which compiles CC on
-/// it --- but it is not what the machine tests run: the target is System
-/// 100 and the acceptance test is its band's.
-pub fn pack_304() -> Option<PathBuf> {
-    vendor(&["run", "disk-sys-304-0.img"])
-}
-
 /// The pack the machine tests boot: **System 100**, what this project
 /// targets, put there by `tools/fetch-system-100.sh`. It is also the
 /// fixture the label and band tests are written against --- their
@@ -76,40 +67,28 @@ pub fn pack_100() -> Option<PathBuf> {
 /// Chaosnet passes these.
 pub const CHAOS_100: (u16, u16) = (0o3050, 0o3060);
 
-/// The Chaosnet numbers the **System 304** band holds: this machine
-/// `AMS-LISPM-1` at 4401, and `OZ`, its file and time host, at 4403. Read
-/// out of the band itself --- `(send (si:parse-host "OZ") :chaos-address)`
-/// answers 2307 decimal, and `si:local-host` is `AMS-LISPM-1` when the
-/// switches say 4401 --- and enforced by
-/// `tests/chaos.rs::the_304_band_reaches_the_server_at_its_own_numbers`.
-/// A server answering anywhere else is a server this band never calls.
-pub const CHAOS_304: (u16, u16) = (0o4401, 0o4403);
-
 /// The directory the Chaosnet server's FILE service serves as its `/`,
 /// `vendor/run/file-root`, or `None` with the skip line.
 ///
 /// A directory of its own rather than `vendor/` or a release, because the
 /// service writes, renames and deletes under its root and fetched material
-/// should not be in reach of a running machine by accident. Each band asks
+/// should not be in reach of a running machine by accident. The band asks
 /// its file host under a name of its own --- System 100's translates
-/// `SYS: SYS2; FOO LISP` to `//TREE//SYS2//FOO LISP`, and System 304's to
-/// `OZ: //sys//sys2//foo.lisp` --- so
+/// `SYS: SYS2; FOO LISP` to `//TREE//SYS2//FOO LISP` --- so
 ///
 /// ```text
 /// mkdir -p vendor/run/file-root
-/// ln -s ../../system-100-0/sys       vendor/run/file-root/tree
-/// ln -s ../../system-304-0/sys-304-0 vendor/run/file-root/sys
+/// ln -s ../../system-100-0/sys vendor/run/file-root/tree
 /// ```
 ///
-/// makes `SYS:` resolve for either, one root serving both. The fetch
-/// script for each release makes its own link.
+/// makes `SYS:` resolve, and the release's fetch script makes that link.
 pub fn file_root() -> Option<PathBuf> {
     vendor(&["run", "file-root"])
 }
 
-/// A file under `vendor/`, where the fetch scripts put the releases, or
-/// `None` with a line saying so: a test that needs a release skips
-/// without it, and says that it did.
+/// A file under `vendor/`, where the fetch script puts the release, or
+/// `None` with a line saying so: a test that needs it skips without it,
+/// and says that it did.
 pub fn vendor(parts: &[&str]) -> Option<PathBuf> {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vendor");
     p.extend(parts);
@@ -124,11 +103,10 @@ pub fn vendor(parts: &[&str]) -> Option<PathBuf> {
 /// A source file of the System 100 release, `vendor/system-100-0/sys/<file>`,
 /// as text, or `None` with the skip line.
 ///
-/// **The two releases' sources are not interchangeable**, which is why this
-/// names one: `window/shwarm.lisp`, for one, carries the display geometry
-/// as `DEFCONST`s here and does not there. A test reads whichever release
-/// its fact is from, and one that wants the target's takes
-/// [`release_304`].
+/// **The name says which release**, because a fact read out of one
+/// release's sources is not a fact about another's: `window/shwarm.lisp`,
+/// for one, carries the display geometry as `DEFCONST`s here and does not
+/// in System 304, the release that continues the line.
 pub fn release(file: &str) -> Option<String> {
     let p = vendor(&["system-100-0", "sys", file])?;
     Some(String::from_utf8_lossy(&std::fs::read(p).unwrap()).into_owned())
@@ -138,17 +116,6 @@ pub fn release(file: &str) -> Option<String> {
 /// a path: for `SYS: UBIN;`, where the readers want bytes rather than text.
 pub fn release_100_file(parts: &[&str]) -> Option<PathBuf> {
     let mut p = vec!["system-100-0", "sys"];
-    p.extend_from_slice(parts);
-    vendor(&p)
-}
-
-/// A file of the System 304 sources, `vendor/system-304-0/sys-304-0/<file>`,
-/// or `None` with the skip line. The upstream release is the pack alone,
-/// so these are built from the project's own Fossil repository, at the
-/// check-in that carries CC's rewritten `MAKE-ARRAY` calls;
-/// `tools/fetch-system-304.sh` says which one and how.
-pub fn release_304(parts: &[&str]) -> Option<PathBuf> {
-    let mut p = vec!["system-304-0", "sys-304-0"];
     p.extend_from_slice(parts);
     vendor(&p)
 }
@@ -497,9 +464,9 @@ pub fn quiet() -> Vec<(&'static str, Level)> {
 /// settle. Returns the microcycles it took.
 ///
 /// The pair is the caller's because it is the band's and not muir's:
-/// [`CHAOS_100`] for the System 100 pack, [`CHAOS_304`] for the other, and
-/// a band reached at any other pair --- the default address included ---
-/// boots but stops to ask for the date and reaches no files. The server is
+/// [`CHAOS_100`] for the System 100 pack, and a band reached at any other
+/// pair --- the default address included --- boots but stops to ask for
+/// the date and reaches no files. The server is
 /// the harness's, [`ChaosServer`]: `muir` has none, and a run of it names
 /// an external host with `--chaos-udp-peer` instead.
 ///
@@ -518,10 +485,10 @@ pub fn boot_to_the_prompt<E: Engine>(e: &mut E, chaos: (u16, u16), file_root: Pa
 /// so it does that and comes here.
 pub fn wait_for_the_prompt<E: Engine>(e: &mut E) -> u64 {
     // The `;Reading at top level` line, which is the prompt appearing.
-    // Where it lands depends on how tall the herald above it is --- six
-    // lines on System 304's band, one fewer on System 100's --- so the
-    // rows watched are the band the line falls in for either, and the
-    // herald itself is above all of them.
+    // Where it lands depends on how tall the herald above it is --- five
+    // lines on System 100's band --- so the rows watched are a band the
+    // line falls in rather than one row of it, and the herald itself is
+    // above all of them.
     let reading = |e: &E| {
         let tv = &e.machine().tv;
         (84..130usize)

@@ -72,12 +72,6 @@ pub mod wire;
 /// `--chaos-address 3050`, and reaches its host with
 /// `--chaos-udp-peer 3060@<where the host is>`.
 ///
-/// System 304's band answers differently, and was asked at its listener:
-/// `si:local-host` is `AMS-LISPM-1` at 4401, and `OZ` --- `AMS-BRIDGE-1`
-/// under its other name --- is at 4403, which is where it looks for both
-/// its files and its time. A run with that pack is given
-/// `--chaos-address 4401` and `--chaos-udp-peer 4403@<where the host is>`.
-///
 /// **The default is no real host's address, deliberately**: 177001, on
 /// subnet 376. muir models the CADR and not one distribution of it, so a
 /// default taken from one band's host table would be the wrong default for

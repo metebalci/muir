@@ -12,10 +12,6 @@
 # diagnostic of the machine among them. The two downloads, some 34 MB, are
 # cached on the script's hash; the pack is unpacked from them on every run.
 #
-# System 304 is not fetched here. It boots too and has a test of its own,
-# which skips in both jobs the way everything needing `vendor/` does, and is
-# run on a desk with `tools/fetch-system-304.sh` in place.
-#
 # The compiler version comes from rust-toolchain.toml, so it is pinned here
 # the same way it is pinned on a desk. `--locked` refuses to update
 # Cargo.lock, so a dependency added without regenerating it fails the build
@@ -114,7 +110,5 @@ jobs:
 
       # Everything, with the pack there: the engines boot the band, the
       # tests' Chaosnet server serves the sources, and CC checks the machine.
-      # The System 304 test skips, as it does on a fresh clone; that
-      # release is not fetched here.
       - name: Tests, with the release
         run: cargo test --locked

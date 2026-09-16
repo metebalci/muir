@@ -25,8 +25,7 @@ drive, which the boot waits on for ever. A pack is named: `--disk-pack
 vendor/run/disk-sys-100-0.img`, where `tools/fetch-system-100.sh` puts the
 System 100 pack, and with it `--chaos-address 3050`, which is that band's
 own address, and `--chaos-udp-peer 3060@<where ozd is>`, which is where that
-band looks for its files and the date. System 304's pack boots too and wants
-`--chaos-address 4401` with `--chaos-udp-peer 4403@...`.
+band looks for its files and the date.
 
 ```text
 target/release/muir
@@ -126,10 +125,9 @@ address alone: `--chaos-udp` is the cable, and a machine without it sends
 nothing however its switches read.
 
 Which address a run wants is its band's own, out of its host table: System
-100's puts this machine at `3050` and its file and time host at `3060`,
-System 304's at `4401` and `4403`. muir is not that host --- a CADR had no
-file or time server in it --- so the host is another program on the network,
-named with `--chaos-udp-peer`. A host answering anywhere else is one the
+100's puts this machine at `3050` and its file and time host at `3060`. muir
+is not that host --- a CADR had no file or time server in it --- so the host
+is another program on the network, named with `--chaos-udp-peer`. A host answering anywhere else is one the
 band never calls, and the machine then boots but stops to ask for the date
 and reaches no files.
 
@@ -138,8 +136,7 @@ range --- and so no band's. muir models the CADR and not one distribution of
 it, and a default out of one band's host table would be the wrong default
 for every other; a default in the private range cannot collide with an
 address a real Chaosnet allocated. A run that wants its band to reach a host
-names the band's address: `--chaos-address 3050` for the System 100 pack,
-`4401` for System 304's.
+names the band's address: `--chaos-address 3050` for the System 100 pack.
 
 ### `--chaos-trace`
 

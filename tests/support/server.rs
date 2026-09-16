@@ -693,9 +693,8 @@ fn fmt_data(op: u8, data: &[u8]) -> String {
 /// the whole boot over the Chaosnet stays in one process.
 ///
 /// The address is the band's, not muir's: System 100's band calls its file
-/// and time host at 3060 (`support::CHAOS_100`) and System 304's at 4403
-/// (`support::CHAOS_304`), and a server answering anywhere else is a server the
-/// band never calls.
+/// and time host at 3060 (`support::CHAOS_100`), and a server answering
+/// anywhere else is a server the band never calls.
 pub struct ChaosServer {
     /// Where the server answers.
     pub address: u16,
@@ -720,7 +719,8 @@ impl ChaosServer {
     /// A server at `address` answering STATUS, TIME and UPTIME, and no
     /// files. The name is `MIT-OZ`, System 100's own in
     /// `sys/site/hosts.text` for the file and time host it calls at 3060;
-    /// [`ChaosServer::named`] is how System 304's tests say `OZ` instead.
+    /// [`ChaosServer::named`] is how a test says another band's name
+    /// instead.
     pub fn new(address: u16) -> ChaosServer {
         ChaosServer {
             address,
@@ -739,7 +739,7 @@ impl ChaosServer {
     }
 
     /// Serves `root` as its `/`: the band asks it for `/tree/sys/...` on
-    /// System 100 and `/sys/...` on System 304.
+    /// System 100.
     pub fn serving(mut self, root: PathBuf) -> ChaosServer {
         self.file_root = Some(root);
         self
