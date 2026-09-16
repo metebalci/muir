@@ -254,9 +254,8 @@ names pin 3 `S2`, pin 5 `S1` and pin 8 `S0`, where `src/part.rs` has 3 as
 pins are grounded, so its code is 0 read from either end. **It decides the
 receive generator**, where `RACT` sits on the pin in dispute: during
 reception the code is 1 under `src/part.rs`'s naming and 4 under the wire
-list's, and those are two different polynomials. So the board that settles
-the order is this board, by what the receiver does with a frame whose check
-word is known, rather than the sheet by argument. The wire list is the board
+list's, and those are two different polynomials. **The board has now answered**, by what its
+receiver does with a frame it has just sent. The wire list is the board
 as built and outranks the sheet's own diagram; where its pin names and the
 board's behavior disagree, that is a finding to state and not a preference
 to exercise.
@@ -643,18 +642,31 @@ each measurement. **What would settle it:** the interface on a real cable
 or in fabric, one made busy and the other made to send to it, with the
 sender's CSR read.
 
+**A real 9401's pin names.** The transmit generator's three
+select pins are grounded, so its code is 0 whichever naming is used, but the
+receive generator takes `RACT` on the pin the data sheet's two diagrams
+disagree about, and there the naming decides the polynomial. The board
+requires pin 3 to be the low bit of the code: with it, the receiver divides
+by the reciprocal of the transmitter's polynomial, which is what a frame
+sent in reverse bit order needs and what the sheet itself calls CRC-16
+reverse; with the wire list's naming it divides by an unrelated degree-eight
+polynomial and cannot check a frame the board has just sent, which
+`the_receive_generator_divides_by_the_reciprocal_polynomial` in
+`tests/chaos_netlist.rs` measures both ways. So MIT's wire list and this
+board's behavior cannot both be right about the names. **The conflict is not
+about wiring**: both sources agree exactly which net reaches which pin
+number, and the wire list's function column comes from a CAD body library
+that inherits the same contradictory sheet. **What would settle it:** a data
+sheet whose connection diagram and logic symbol agree, or the part in hand.
+
 **The check word's seed and shift direction have never met real
-hardware.** The polynomial is read off the 9401's data sheet and the
-board's grounded select pins, and the bit order off its shift registers,
-but the seed and the shift direction were fixed by matching the netlist
-board's own output, as [the check word](#the-check-word) says. That much is
-a simulator agreeing with itself: both were settled by what
-`data/CADRIO.netlist` computed and not by what a 9401 did, and a pair of
-wrong guesses that cancelled would look exactly like a right one.
-**What would settle it:** a real 9401 on a real board, over a frame whose
-words are published, or an MIT file that states the arrangement. Fabric
-cannot, unless its check word is computed from the drawings rather than
-transcribed from a model.
+hardware.** They were fixed by matching the netlist board's own output, as
+[the check word](#the-check-word) says, which is a simulator agreeing with
+itself, and a pair of wrong guesses that cancelled would look exactly like a
+right one. What the receive generator adds is a constraint rather than a
+proof: the two dividers must be reciprocals for a frame to check, and they
+are. **What would settle it:** a real 9401 on a real board, over a frame
+whose words are published, or an MIT file that states the arrangement.
 
 **The appended source word is covered by the divider, and that one is not
 fitted.** The interface appends the source itself, and driving the netlist
