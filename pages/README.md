@@ -1,4 +1,4 @@
-# site/
+# pages/
 
 The front page and the recording, served at
 [muir.metebalci.com](https://muir.metebalci.com) --- a custom domain over GitHub
@@ -67,4 +67,4 @@ Build and deployment -> Source: **GitHub Actions**, and Custom domain:
 To look at it before pushing, open `index.html` in a browser, or serve the
 directory:
 
-    python3 -m http.server -d site 8000
+    python3 -m http.server -d pages 8000

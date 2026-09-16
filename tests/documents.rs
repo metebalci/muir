@@ -3,7 +3,7 @@
 
 //! The numbers the documents quote about the netlists.
 //!
-//! `README.md`, `data/README.md` and `site/index.html` each carry a table
+//! `README.md`, `data/README.md` and `pages/index.html` each carry a table
 //! of the netlists and how many parts are on each board, and
 //! `data/README.md` carries the pages and the `part` records with them.
 //! `docs/netlists.md` says the same totals in prose.
@@ -198,12 +198,12 @@ fn the_data_inventory_counts_every_netlist_correctly() {
 #[test]
 fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
     const README: &str = include_str!("../README.md");
-    const SITE: &str = include_str!("../site/index.html");
+    const SITE: &str = include_str!("../pages/index.html");
     const NETLISTS: &str = include_str!("../docs/netlists.md");
     let files = netlists();
     for (what, t) in [
         ("README.md", markdown(README, &["Netlist", "Board", "Parts"])),
-        ("site/index.html", html(SITE, &["Netlist", "Board", "Parts"])),
+        ("pages/index.html", html(SITE, &["Netlist", "Board", "Parts"])),
     ] {
         let mut seen = 0;
         for row in &t.rows {
@@ -234,16 +234,16 @@ fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
     for (what, text, before, after, want) in [
         ("README.md", README, "the SIMPLE TV and the color TV, is ", " of them", machine),
         ("README.md", README, "of them, and ", " with all thirty-two", full),
-        ("site/index.html", SITE, "own drawings: ", " on the processor", processor),
-        ("site/index.html", SITE, "on the processor, ", " in the machine", machine),
+        ("pages/index.html", SITE, "own drawings: ", " on the processor", processor),
+        ("pages/index.html", SITE, "on the processor, ", " in the machine", machine),
         (
-            "site/index.html",
+            "pages/index.html",
             SITE,
             "the SIMPLE TV and the color TV, and ",
             " with all thirty-two",
             full,
         ),
-        ("site/index.html", SITE, "id=\"whole-machine\">", "</p>", machine),
+        ("pages/index.html", SITE, "id=\"whole-machine\">", "</p>", machine),
         (
             "docs/netlists.md",
             NETLISTS,
@@ -298,7 +298,7 @@ fn the_documents_say_how_many_netlists_there_are_in_words() {
     for (what, text) in [
         ("README.md", include_str!("../README.md")),
         ("data/README.md", include_str!("../data/README.md")),
-        ("site/index.html", include_str!("../site/index.html")),
+        ("pages/index.html", include_str!("../pages/index.html")),
         ("docs/manual.md", include_str!("../docs/manual.md")),
         ("docs/engines.md", include_str!("../docs/engines.md")),
         ("docs/machine.md", include_str!("../docs/machine.md")),
@@ -326,7 +326,7 @@ fn the_documents_say_how_many_netlists_there_are_in_words() {
 /// right where it stands.
 #[test]
 fn the_documents_agree_on_the_cold_boot_runs() {
-    const SITE: &str = include_str!("../site/index.html");
+    const SITE: &str = include_str!("../pages/index.html");
     const NETLISTS: &str = include_str!("../docs/netlists.md");
     const README: &str = include_str!("../README.md");
     const ENGINES: &str = include_str!("../docs/engines.md");
@@ -355,12 +355,12 @@ fn the_documents_agree_on_the_cold_boot_runs() {
     // `docs/engines.md` quotes the wall clock and not the microcycles, so
     // the wall clock is all that is read out of it.
     for (what, text, before, after, want) in [
-        ("site/index.html", SITE, "simulation: ", " days", FIRST.days),
-        ("site/index.html", SITE, "simulation: 2 days ", " hours", FIRST.hours),
-        ("site/index.html", SITE, "2 days 14 hours and ", " million microcycles", FIRST.millions),
-        ("site/index.html", SITE, "12 September 2026, and ", " days", SECOND.days),
-        ("site/index.html", SITE, "2026, and 2 days ", " hours", SECOND.hours),
-        ("site/index.html", SITE, "2 days 21 hours and ", " million", SECOND.millions),
+        ("pages/index.html", SITE, "simulation: ", " days", FIRST.days),
+        ("pages/index.html", SITE, "simulation: 2 days ", " hours", FIRST.hours),
+        ("pages/index.html", SITE, "2 days 14 hours and ", " million microcycles", FIRST.millions),
+        ("pages/index.html", SITE, "12 September 2026, and ", " days", SECOND.days),
+        ("pages/index.html", SITE, "2026, and 2 days ", " hours", SECOND.hours),
+        ("pages/index.html", SITE, "2 days 21 hours and ", " million", SECOND.millions),
         ("docs/netlists.md", NETLISTS, "It took ", " days", FIRST.days),
         ("docs/netlists.md", NETLISTS, "It took 2 days ", " hours", FIRST.hours),
         ("docs/netlists.md", NETLISTS, "2 days 14 hours and ", " million", FIRST.millions),

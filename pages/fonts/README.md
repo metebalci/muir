@@ -1,4 +1,4 @@
-# `site/fonts/`
+# `pages/fonts/`
 
 The three faces the pages use, carried here so that reading them asks nothing
 of a third party.

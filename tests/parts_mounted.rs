@@ -18,7 +18,7 @@
 //!   digits, but not the bypass capacitors, resistor packs, busbars and
 //!   pull-up networks, which nothing here simulates.
 //!
-//! The README, `data/README.md` and `site/index.html` quote the third.
+//! The README, `data/README.md` and `pages/index.html` quote the third.
 //! **Reading those documents is `tests/documents.rs`**, which takes the
 //! number out of each and compares it with the netlist; what this file
 //! does is hold the netlists themselves to MIT's own three counts of the
