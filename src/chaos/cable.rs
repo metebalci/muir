@@ -4,7 +4,7 @@
 //! The netlist board on the ether: its transceiver's four wires read
 //! and driven, as [`crate::disk_unit::OnCable`] does the drive's.
 //!
-//! The transceiver at LMDETC A03 has no model; what is modeled is what
+//! The transceiver at LMLNDR 0A03 has no model; what is modeled is what
 //! it hands the board and takes from it. Out: `TRANS.DATA+`, the line
 //! driver's true output, high while the interface puts a one on the
 //! cable, and released while Loop Back holds the driver off. In: the

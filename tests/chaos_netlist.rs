@@ -1242,8 +1242,9 @@ fn the_busy_receiver_aborts_only_what_is_addressed_to_it() {
 /// LMMYNM 0F04, clocked by `ITS.ME` falling with `-RACT` up and cleared
 /// by Clear Receiver. A '161 wraps: eighteen frames for the board with
 /// the buffer taken by the first leave seventeen counted and the field
-/// reading 1. The behavioral interface stops at 15 instead, which is
-/// where the two part company.
+/// reading 1. The behavioral interface wraps with it, which
+/// `the_lost_count_wraps_at_sixteen_on_both_alike` in `tests/chaos_rtl.rs`
+/// holds.
 #[test]
 fn the_lost_count_wraps_at_sixteen() {
     let n = cadrio();
