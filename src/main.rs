@@ -25,6 +25,7 @@
 //!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
 //!          [--stop-after <microcycles>]
 //!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
+//!          [--timing-model cadr|fpga]
 //!          [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
 //!          [--tv-capture <gif>] [--tv-capture-no-time]
 //!
@@ -278,7 +279,7 @@ use muir::cable::{Boards, DebugIn, FarEnd};
 use muir::capture::{ColorRecorder, Recorder, local_time, wall_clock};
 use muir::checkpoint::Checkpoint;
 use muir::chip::Chip;
-use muir::clock::{Behavioral, Clock};
+use muir::clock::{Behavioral, Clock, TimingModel};
 use muir::disk_unit::{Geometry, Unit};
 use muir::engine::Engine;
 use muir::isa::Insn;
@@ -892,6 +893,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--resume <file>] [--serial <endpoint>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
+            [--timing-model cadr|fpga]
             [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
             [--tv-capture <gif>] [--tv-capture-no-time]
             [--watch <from>[-<to>]:<net>,<net>,...] [-V|--version]";
@@ -1249,6 +1251,12 @@ A simulator of the MIT CADR Lisp Machine.
                                offered. [default: 127.0.0.1:5900, VNC's
                                display :0, or the first free display above
                                it]
+  --timing-model cadr|fpga     rtl: whose time the processor keeps: the
+                               CADR's own, or the 10 ns grid muir-fpga's
+                               fabric runs on, where a delay rounds up to
+                               the next tick and a free-running clock's
+                               edge is taken at the first tick at or after
+                               it. [default: cadr]
   --tv netlist|model           chip: the display. [default: netlist]
   --tv-board simple-tv|lispm-tv
                                which display board, on every engine: the
@@ -3477,6 +3485,20 @@ fn chip_busy_with(cpu: &Chip, far: &FarEnd, memrq: netlist::NetId) -> Option<&'s
 /// built before the file is opened. So the file is read, and a board apart
 /// from the flag's ends the run then --- by the flag's name, as the other
 /// refusal does.
+/// A checkpoint `rtl` wrote on one timing model resumed under another is
+/// refused by the flag's name: every instant in it is on the time it was
+/// run on.
+fn refuse_timing_model((path, _): &(PathBuf, Checkpoint), saved: TimingModel, flag: TimingModel) {
+    if saved != flag {
+        usage(&format!(
+            "--resume {}: written under --timing-model {}, and this run is under {}",
+            path.display(),
+            saved.name(),
+            flag.name()
+        ));
+    }
+}
+
 fn resume_engine<E: Engine>(
     name: &str,
     e: &mut E,
@@ -4353,6 +4375,7 @@ fn main() {
     let mut io = true;
     let mut tv = true;
     let mut tv_board = TvBoard::SimpleTv;
+    let mut timing_model = TimingModel::Cadr;
     // The color TV, the second display board: off unless `--color-tv`
     // fits it, because a CADR has one screen unless somebody plugged a
     // second board in, and `COLOR-EXISTS-P` is System 100 asking which
@@ -4549,6 +4572,10 @@ fn main() {
                 Some("model") => tv = false,
                 _ => usage("--tv wants netlist or model"),
             },
+            (None, "--timing-model") => match args.next().as_deref().and_then(TimingModel::parse) {
+                Some(model) => timing_model = model,
+                None => usage("--timing-model wants cadr or fpga"),
+            },
             (None, "--tv-board") => match args.next().as_deref() {
                 Some("simple-tv") => tv_board = TvBoard::SimpleTv,
                 Some("lispm-tv") => tv_board = TvBoard::LispmTv,
@@ -4740,6 +4767,15 @@ fn main() {
     }
 
     let which = which.unwrap_or(Which::Rtl);
+    // The grid is muir-fpga's, and it is `rtl`'s references its fabric is
+    // held to; `micro` and `chip` keep the board's time.
+    if timing_model != TimingModel::Cadr && which != Which::Rtl {
+        usage(&format!(
+            "--timing-model {} is rtl's, and this run is {}",
+            timing_model.name(),
+            if which == Which::Micro { "micro" } else { "chip" }
+        ));
+    }
     // **Which color TV, now that the engine is known.** `--color-tv
     // netlist` is a board on `chip`'s backplane and there is no backplane
     // to put one on elsewhere, so it is refused by the engine's name as
@@ -5463,6 +5499,7 @@ fn main() {
             m.chaos = chaos.clone();
             m.plug_chaos(0);
             let mut e = Rtl::new(m);
+            e.set_timing_model(timing_model);
             if auto_boot {
                 e.boot();
             }
@@ -5481,6 +5518,7 @@ fn main() {
                 mb.chaos = debuggee_chaos.clone();
                 mb.plug_chaos(0);
                 let mut b = Rtl::new(mb);
+                b.set_timing_model(timing_model);
                 b.boot();
                 time_lashup(
                     Lashup::new(e, b),
@@ -5511,6 +5549,7 @@ fn main() {
                 let reader = stream.try_clone().expect("a second handle on the cable");
                 if let Some(p) = &resume {
                     resume_engine("rtl", &mut e, tv_board, color_tv, p);
+                    refuse_timing_model(p, e.timing_model(), timing_model);
                 }
                 let run = Run {
                     stop,
@@ -5549,6 +5588,7 @@ fn main() {
             } else {
                 if let Some(p) = &resume {
                     resume_engine("rtl", &mut e, tv_board, color_tv, p);
+                    refuse_timing_model(p, e.timing_model(), timing_model);
                 }
                 let run = Run {
                     stop,

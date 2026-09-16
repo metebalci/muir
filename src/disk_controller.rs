@@ -34,6 +34,7 @@
 //! modeled, as the level MIT describes: microcode 323 enables it on every
 //! transfer and takes it in `DISK-SWAP-HANDLER`.
 
+use crate::clock::TimingModel;
 use crate::disk_unit::{self, BLOCK_WORDS, Unit, format};
 
 /// The divider between the timeout clock and `TIMEOUT`, the 74393 at
@@ -124,6 +125,11 @@ pub struct Controller {
     /// The words move inside the store to START whichever it is. What
     /// waits is the done.
     pub timed: bool,
+    /// Whose time the drive's spans are counted on, [`TimingModel`]: on
+    /// the grid a span is a delay the command starts, so it ends at the
+    /// first tick at or past it. Not in a checkpoint: the engine that owns
+    /// the controller says.
+    timing: TimingModel,
     /// When the transfer in flight is done, on the machine's clock.
     done_at: u64,
     /// The machine's clock as of the last time it spoke to the controller:
@@ -218,10 +224,20 @@ impl Controller {
         self.now = now;
     }
 
+    /// Counts the drive's spans on `model`'s time.
+    pub fn set_timing_model(&mut self, model: TimingModel) {
+        self.timing = model;
+    }
+
+    /// Whose time the drive's spans are counted on.
+    pub fn timing_model(&self) -> TimingModel {
+        self.timing
+    }
+
     /// The operation is done `ns` from now, or at once where the run has
     /// not asked for the drive's time: [`Controller::timed`].
     fn done_in(&mut self, ns: u64) {
-        self.done_at = self.now + if self.timed { ns } else { 0 };
+        self.done_at = self.now + if self.timed { self.timing.triggered(ns) } else { 0 };
     }
 
     /// Raises the selected unit's attention `ns` from now.
@@ -242,7 +258,7 @@ impl Controller {
     /// Charged like [`Controller::done_in`], so a model that is not
     /// charging the drive's time raises it at once.
     fn attention_in(&mut self, ns: u64) {
-        let at = self.now + if self.timed { ns } else { 0 };
+        let at = self.now + if self.timed { self.timing.triggered(ns) } else { 0 };
         if let Some(u) = self.units[self.selected()].as_mut() {
             u.raise_attention(at);
         }
@@ -798,7 +814,7 @@ impl Controller {
     /// jumper", which this model has in, as MIT's text has it.
     fn hang(&mut self) {
         self.timeout = true;
-        self.done_at = self.now + TIMEOUT_NS;
+        self.done_at = self.now + self.timing.triggered(TIMEOUT_NS);
     }
 
     /// `-RESET ERR`: the 74LS08 at DCCMD 0D14 pulls it for `-LOAD CMD` as
@@ -1260,6 +1276,7 @@ impl Controller {
     pub fn save(&self, w: &mut crate::checkpoint::Writer) {
         let Controller {
             timed,
+            timing: _,
             done_at,
             now,
             cmd,

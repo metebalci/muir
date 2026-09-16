@@ -104,7 +104,7 @@ enum Stall {
     /// `-HANG`: both clocks stop.
     Hang,
 }
-use crate::clock::Speed;
+use crate::clock::{Speed, TimingModel};
 use crate::engine::Engine;
 use crate::machine::{Halt, IMEM_WORDS, Machine};
 use crate::spy;
@@ -358,6 +358,9 @@ pub struct Rtl {
     speed: Speed,
     /// `SPEED1A, SPEED0A`, the first stage.
     speed_a: Speed,
+    /// Whose nanoseconds [`Rtl::ns`] counts: the board's, or muir-fpga's
+    /// grid. See [`TimingModel`].
+    timing: TimingModel,
     /// Simulated nanoseconds since reset, off the delay-line taps. The
     /// engine's own rate has nothing to do with it.
     ns: u64,
@@ -549,6 +552,7 @@ impl Rtl {
             stat: 0,
             speed: Speed::ExtraSlow,
             speed_a: Speed::ExtraSlow,
+            timing: TimingModel::Cadr,
             ns: 0,
             busint_bus: 0,
             loadmd_at: u64::MAX,
@@ -673,6 +677,20 @@ impl Rtl {
     /// Accumulated from the delay-line taps a microcycle at a time, so it
     /// says what the hardware would have taken and nothing about how long
     /// this engine took to work it out.
+    /// Runs on `model`'s time from here: `muir` sets it before the machine
+    /// boots.
+    pub fn set_timing_model(&mut self, model: TimingModel) {
+        assert_eq!(self.ns, 0, "a timing model is chosen before the machine runs");
+        self.timing = model;
+        self.busint = Busint::with_timing_model(self.m.memory_boards(), model);
+        self.m.disk.set_timing_model(model);
+    }
+
+    /// Whose time this engine keeps.
+    pub fn timing_model(&self) -> TimingModel {
+        self.timing
+    }
+
     pub fn ns(&self) -> u64 {
         self.ns
     }
@@ -1575,7 +1593,7 @@ impl Rtl {
             // 100 ns on the parity loop's timed-out read, where the board
             // takes no hang at all.
             Stall::Hang => {
-                let cycle = self.speed.cycle_ns(r.ilong) as u64;
+                let cycle = self.timing.cycle_ns(self.speed, r.ilong) as u64;
                 let finish = self
                     .busint
                     .ack_at()
@@ -1656,7 +1674,7 @@ impl Rtl {
             self.debug_cycle(self.ns + SPEEDCLK_NS);
         }
         self.speedclk();
-        self.ns += self.speed.cycle_ns(r.ilong) as u64;
+        self.ns += self.timing.cycle_ns(self.speed, r.ilong) as u64;
         self.bus_cycle(self.ns);
         self.after_memack(self.ns);
         self.busint.mclk_edge(self.ns, self.bus_responder);
@@ -1784,7 +1802,7 @@ impl Rtl {
         // the board samples it --- `ILONG` and the speed bits only choose
         // which tap ends the read phase --- so it is a number and not a
         // mechanism.
-        self.ns += self.speed.cycle_ns(r.ilong) as u64;
+        self.ns += self.timing.cycle_ns(self.speed, r.ilong) as u64;
 
         // page LC
         if r.destlc {
@@ -2192,7 +2210,7 @@ impl Rtl {
         // The ring held by the debug cable's reset: time passes and nothing
         // else --- to the strobe that may lift it, else a cycle's worth,
         // and never past the caller's limit.
-        let period = self.speed.cycle_ns(false) as u64;
+        let period = self.timing.cycle_ns(self.speed, false) as u64;
         if self.clock_held {
             let mut to = (self.ns + period).min(self.step_limit.max(self.ns));
             if let Some(lift) = self.busint.debug_strobe_until()
@@ -2367,7 +2385,7 @@ impl Rtl {
             // the board does not: `DISK-RECALIBRATE` in microcode 323, two
             // register writes three instructions apart, where `chip` took no
             // wait. The boot PROM has no such pair.
-            let edge = self.ns + self.speed.cycle_ns(r.ilong) as u64;
+            let edge = self.ns + self.timing.cycle_ns(self.speed, r.ilong) as u64;
             self.bus_cycle(edge);
             self.after_memack(edge);
             // The master clock edge, after the bus has landed what it will
@@ -2480,6 +2498,7 @@ impl Engine for Rtl {
             stat,
             speed,
             speed_a,
+            timing,
             ns,
             busint_bus,
             loadmd_at,
@@ -2563,6 +2582,7 @@ impl Engine for Rtl {
         w.u32(*stat);
         w.speed(*speed);
         w.speed(*speed_a);
+        w.u8(*timing as u8);
         w.u64(*ns);
         w.u32(*busint_bus);
         w.u64(*loadmd_at);
@@ -2646,10 +2666,22 @@ impl Engine for Rtl {
         self.stat = r.u32()?;
         self.speed = r.speed()?;
         self.speed_a = r.speed()?;
+        self.timing = match r.u8()? {
+            0 => TimingModel::Cadr,
+            1 => TimingModel::Fpga,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "checkpoint: not a timing model",
+                ));
+            }
+        };
         self.ns = r.u64()?;
         self.busint_bus = r.u32()?;
         self.loadmd_at = r.u64()?;
         self.executed = r.opt(Reader::u16)?;
+        self.busint.keep_timing_model(self.timing);
+        self.m.disk.set_timing_model(self.timing);
         Ok(())
     }
 

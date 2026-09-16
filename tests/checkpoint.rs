@@ -132,10 +132,12 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// taken with is a word at the front of it, and a netlist one is a second
 /// device board in the file after it --- and version 26 the sync bits a
 /// display was holding when its sync program last started, which are what
-/// its mode register reads until that program's first instruction lands.
+/// its mode register reads until that program's first instruction lands,
+/// and version 27 whose time an `rtl` run keeps, `--timing-model`, which
+/// `tests/timing_model.rs` and `tests/muir_checkpoint.rs` hold.
 #[test]
-fn the_format_is_version_26_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 26, "a new version needs its own tests");
+fn the_format_is_version_27_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 27, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -143,14 +145,14 @@ fn the_format_is_version_26_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 26u32.to_le_bytes());
+    assert_eq!(&good[at..at + 4], 27u32.to_le_bytes());
     for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 26"), "{err}");
+        assert!(err.contains("reads 27"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

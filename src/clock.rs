@@ -127,6 +127,83 @@ impl Speed {
     }
 }
 
+/// Whose time `rtl` keeps: the CADR's own, or the 10 ns grid muir-fpga's
+/// fabric runs on. `--timing-model` chooses; `chip` and `micro` keep the
+/// board's time whatever it says.
+///
+/// **The grid's rules are muir-fpga's**, stated so that references taken
+/// from `rtl` come out as its fabric runs. A delay that something starts
+/// is rounded up on its own, from its own start, to the next tick
+/// ([`TimingModel::triggered`]). A clock that runs freely from power-on
+/// keeps its phase exactly, and each edge is acted on at the first tick
+/// at or after it ([`TimingModel::free_running`]), which is rounding that
+/// never drifts. The microcycle is the read phase's tap rounded up, the
+/// `ILONG` taps as one sum, and the restart after it rounded up on its own
+/// ([`TimingModel::cycle_ns`]). `tests/timing_model.rs` holds muir to
+/// those rules. **Unverified:** that the fabric keeps them, which its
+/// source on the 10 ns grid, not yet published, or a reference
+/// regenerated from `rtl` under `fpga` and passed by the fabric, would
+/// settle.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TimingModel {
+    /// The board's own nanoseconds.
+    #[default]
+    Cadr = 0,
+    /// muir-fpga's grid: every instant on a [`GRID_NS`] tick.
+    Fpga = 1,
+}
+
+/// The tick of muir-fpga's grid.
+pub const GRID_NS: u64 = 10;
+
+impl TimingModel {
+    /// The name `--timing-model` takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            TimingModel::Cadr => "cadr",
+            TimingModel::Fpga => "fpga",
+        }
+    }
+
+    /// The model `--timing-model` names, if it names one.
+    pub fn parse(word: &str) -> Option<TimingModel> {
+        match word {
+            "cadr" => Some(TimingModel::Cadr),
+            "fpga" => Some(TimingModel::Fpga),
+            _ => None,
+        }
+    }
+
+    /// A delay `ns` long that something starts: on the grid, the next
+    /// tick at or past it, counted from its own start.
+    pub fn triggered(self, ns: u64) -> u64 {
+        self.tick(ns)
+    }
+
+    /// An edge of a clock that runs freely from power-on, whose exact
+    /// instant is `at`: on the grid, the first tick at or after it. The
+    /// phase is kept, so the next edge is reckoned from the clock's own
+    /// period and not from this.
+    pub fn free_running(self, at: u64) -> u64 {
+        self.tick(at)
+    }
+
+    fn tick(self, ns: u64) -> u64 {
+        match self {
+            TimingModel::Cadr => ns,
+            TimingModel::Fpga => ns.div_ceil(GRID_NS) * GRID_NS,
+        }
+    }
+
+    /// The whole microcycle: [`Speed::cycle_ns`] on the board; on the grid,
+    /// the tap rounded up and the restart rounded up after it.
+    pub fn cycle_ns(self, speed: Speed, ilong: bool) -> u32 {
+        let read = self.triggered(speed.read_phase_ns(ilong) as u64);
+        let restart = self.triggered(RESTART_AFTER_READ_NS as u64);
+        (read + restart) as u32
+    }
+}
+
 /// `TPTSE` is *cleared* at `-TPR5` and *set* at `-TPR25`, so it is asserted
 /// for almost the whole cycle and drops for twenty nanoseconds at the start
 /// of each one.

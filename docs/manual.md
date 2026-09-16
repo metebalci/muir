@@ -720,6 +720,22 @@ needs no password. [The terminal](#the-terminal) has the rest.
 Default: `127.0.0.1:5900`, VNC's display :0, or the first free display above
 it.
 
+### `--timing-model cadr|fpga`
+
+**rtl:** whose time the processor and its boards keep. `cadr` is the board's
+own nanoseconds. `fpga` is the 10 ns grid muir-fpga's fabric runs on, so that
+references taken from `rtl` come out as that fabric runs: a delay something
+starts ends at the first tick at or past it, counted from its start, and a
+clock that runs freely from power-on keeps its exact phase, each edge taken at
+the first tick at or after it. A microcycle at normal speed is 150 ns there
+rather than 145. [What each engine models](engines.md#what-each-engine-models)
+says which delays and clocks those are.
+
+Refused on `micro` and `chip`, which keep the board's time. A checkpoint
+carries it, and a resume under the other is refused.
+
+Default: `cadr`.
+
 ### `--tv netlist|model`
 
 **chip:** the display.
