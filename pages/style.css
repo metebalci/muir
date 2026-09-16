@@ -158,12 +158,17 @@ code { font-family: var(--mono); font-size: var(--fs-mono); font-weight: 400; }
   gap: 1.75rem;
 }
 
+/* Which page this is, highlighted as a selection is: ink under the words
+   and no wider than they are. */
 .desk-note {
   font-family: var(--mono);
   font-size: var(--fs-mono-small);
   font-weight: 400;
   letter-spacing: 0.04em;
-  padding-inline: 0.15rem;
+  width: fit-content;
+  background: var(--ink);
+  color: var(--paper);
+  padding: 0.1rem 0.4rem;
 }
 .desk-note b { font-weight: 600; }
 
