@@ -681,13 +681,33 @@ fn table(base: &str) -> Option<Pinout> {
         // Fairchild 9401 CRC generator/checker (`9401.pdf`), 14-pin: `CP`
         // 1, `-P` 2, `S0` 3, `MR` 4, `S1` 5, `S2` 8, `CWE` 10, `D` 11, `Q`
         // 12, `ER` 13, and 6 and 9 not connected. The sheet's connection
-        // diagram and its logic symbol disagree over pins 3, 5 and 11; the
-        // board settles it, since LMTBUF C09 takes pin 11 from the transmit
-        // shift register's `QH`, which can only be the data input, leaving
-        // 3 and 5 as `S0` and `S1`.  MIT's wire list names them the
-        // other way round --- pin 3 `S2`, pin 5 `S1`, pin 8 `S0` --- which
-        // changes nothing here, all three being grounded on the one board
-        // that carries a 9401, but the wire list is the board as built.
+        // diagram and its logic symbol disagree over pins 3, 5 and 11.
+        // Pin 11 the board settles: LMTBUF C09 takes it from the transmit
+        // shift register's `QH`, which can only be the data input, and
+        // MIT's wire list names it `D` on both the board's 9401s.
+        //
+        // The three selects the wire list names the other way round ---
+        // pin 3 `S2`, pin 5 `S1`, pin 8 `S0`. The wiring is not in
+        // dispute, only the names, and **the I/O board carries two 9401s
+        // which are not wired alike**: the transmit generator at LMTBUF
+        // C09 has all three selects on `GND`, code 0 read from either end,
+        // but the receive generator at LMRBUF C07 grounds 5 and 8 and
+        // takes `RACT` on pin 3, so the disputed pin is the one carrying a
+        // signal. Pin 3 is the low bit here, making the receiver's code 1
+        // while it is active --- the sheet's `CRC-16 reverse`, the
+        // reciprocal of the transmitter's CRC-16, which is what a frame
+        // sent in reverse bit order (AIM-628 §2.5) has to be divided by.
+        // Under the wire list's names it would be code 4, a degree-8
+        // polynomial unrelated to CRC-16, and the board could not check a
+        // frame it had just sent. The test named
+        // `the_receive_generator_divides_by_the_reciprocal_polynomial` in
+        // `tests/chaos_netlist.rs` measures the receiver reaching zero on
+        // the last bit of its own loopback, and it does not reach zero
+        // under the other order. The board's
+        // behavior and the wire list's select names cannot both be right;
+        // the behavior is followed here, and a real 9401's pin names stay
+        // **unverified** --- what would settle them is a sheet whose two
+        // diagrams agree, or the part in hand.
         "9401" => p(14, &[12, 13], Totem, Datasheet),
         // SN74S287 (`sn74s287.pdf`), 1,024 bits as 256 words of four with
         // three-state outputs, 16-pin: address on 5, 6, 7, 4, 3, 2, 1 and
@@ -1915,7 +1935,10 @@ fn ls33(i: &[bool]) -> Level {
 /// The eight polynomials a 9401 can be told to divide by, `9401.pdf`
 /// Table 1, indexed by `S2 S1 S0`: the degree, and the exponents below it
 /// that are fed back. `x^16 + x^15 + x^2 + 1` is CRC-16 and is what the
-/// I/O board's transmitter selects, with all three select pins grounded.
+/// I/O board's transmit generator selects, with all three select pins
+/// grounded. Entry 1 is its reciprocal, and is what the board's receive
+/// generator selects while `RACT` is up, a frame arriving in reverse bit
+/// order; see the `9401` arm of the pinout table for which pin is which.
 const CRC9401: [(u32, u16); 8] = [
     (16, 1 << 15 | 1 << 2 | 1), // CRC-16
     (16, 1 << 14 | 1 << 1 | 1), // CRC-16 reverse

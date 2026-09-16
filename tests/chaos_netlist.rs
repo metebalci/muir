@@ -166,6 +166,138 @@ fn a_packet_loops_back_through_the_board() {
     assert!(c_after & csr::CRC_ERROR == 0, "CRC error after reading out: {c_after:#08o}");
 }
 
+/// **The board's two 9401s are not wired alike, and the receiver's
+/// select pin settles which pin is which.** `data/CADRIO.netlist`: the
+/// transmit generator at LMTBUF `0C09` has pins 3, 5 and 8 all on `GND`,
+/// so its code is 0 --- CRC-16 --- whichever way round the three are
+/// named. The receive generator at LMRBUF `0C07` grounds only 5 and 8 and
+/// takes **`RACT` on pin 3**, with `CWE` (pin 10) tied to `HI1` so it
+/// divides whenever it is clocked, and `ER` (pin 13) on `CRCERR`, which
+/// is the CSR's CRC Error bit through the 74LS244 at LMDATP `0D17`. So
+/// the pin in dispute is the one pin of the three carrying a signal.
+///
+/// `mit/cadrio/iob.wlr` names those pins the other way round from
+/// `src/part.rs`: it has pin 3 `S2`, pin 5 `S1` and pin 8 `S0`, on both
+/// parts. **The wiring is not in dispute** --- the wire list and the
+/// netlist give the same nets on the same pin numbers, and the wire list
+/// names pin 11 `D` on both, which is what settles pin 11 --- only the
+/// three select names, which the data sheet's own connection diagram and
+/// logic symbol disagree about as well.
+///
+/// What is measured here is the board deciding it, on a frame it
+/// transmitted itself. `RACT` is up for every one of the clock edges
+/// that enter the frame and none fall outside it, so the code is not 0
+/// during the division under either naming; and the register reaches all
+/// zero on the last of those edges, `CRCERR` falling with it. That only
+/// happens with pin 3 as the **low** bit of the code: `RACT` up is then
+/// code 1, the sheet's "CRC-16 reverse", which is the reciprocal of the
+/// transmitter's CRC-16 --- and the reciprocal is what this stream needs,
+/// because AIM-628 §2.5 puts a frame on the cable in reverse bit order
+/// (`chaos::packet::frame` reverses the bits, and a reversed message is
+/// divisible by the reciprocal of the polynomial that divides the
+/// original). Under the wire list's names the code would be 4, a degree-8
+/// polynomial unrelated to CRC-16: with the model's mapping flipped to
+/// `(pin 3 << 2) | (pin 5 << 1) | pin 8` this test fails at `CRCERR`, and
+/// `a_packet_loops_back_through_the_board` reports CRC Error on a frame
+/// the board had just sent.
+///
+/// **Unverified: that a real 9401 carries the pin names `src/part.rs`
+/// gives it.** What is held here is narrower and does not need them --- a
+/// board that cannot check its own frame is not the board MIT ran, so the
+/// wire list's select names and this board's behavior cannot both be
+/// right. What would settle the names: a Fairchild 9401 sheet whose
+/// connection diagram and logic symbol agree, or the part in hand.
+#[test]
+fn the_receive_generator_divides_by_the_reciprocal_polynomial() {
+    fn net_of(pins: &[(u8, String)], pin: u8) -> &str {
+        pins.iter().find(|(p, _)| *p == pin).map_or("(unwired)", |(_, net)| net.as_str())
+    }
+    let n = cadrio();
+    let generator = |page: &str, reference: &str| -> Vec<(u8, String)> {
+        let mut v: Vec<(u8, String)> = n
+            .parts
+            .iter()
+            .filter(|p| p.page == page && p.reference == reference && p.kind == "9401")
+            .flat_map(|p| p.pins.iter().map(|&(pin, net)| (pin, n.net(net).to_string())))
+            .collect();
+        v.sort();
+        v
+    };
+
+    // The two generators as the netlist wires them.
+    let tx = generator("LMTBUF", "0C09");
+    let rx = generator("LMRBUF", "0C07");
+    eprintln!("LMTBUF 0C09 (transmit): {tx:?}");
+    eprintln!("LMRBUF 0C07 (receive):  {rx:?}");
+    for pin in [3, 5, 8] {
+        assert_eq!(net_of(&tx, pin), "GND", "the transmit generator's select pin {pin}");
+    }
+    assert_eq!(net_of(&rx, 3), "RACT", "the receive generator's pin 3 is not grounded");
+    assert_eq!(net_of(&rx, 5), "GND", "the receive generator's pin 5");
+    assert_eq!(net_of(&rx, 8), "GND", "the receive generator's pin 8");
+    assert_eq!(net_of(&rx, 10), "HI1", "CWE tied high: it divides whenever it is clocked");
+    assert_eq!(net_of(&rx, 13), "CRCERR", "ER is where the CSR's CRC Error bit comes from");
+    assert!(
+        net_of(&rx, 12).starts_with("NC"),
+        "and Q is unused: the receiver never shifts a check word out, it only divides"
+    );
+
+    // The receive generator's own clock pin, rather than a net named
+    // nearby: pin 1 is the open-collector 74S00 at LMRBUF 0D07 gating
+    // ROCLK^ with RICLK^. Being open collector it swings between Low and
+    // Z, Z pulled up as the high state, so the high-to-low transition the
+    // 9401 clocks on is the one into Low --- which is how `fell` reads it.
+    let clock = n
+        .parts
+        .iter()
+        .find(|p| p.page == "LMRBUF" && p.reference == "0C07" && p.kind == "9401")
+        .and_then(|p| p.pins.iter().find(|&&(pin, _)| pin == 1).map(|&(_, net)| net))
+        .expect("the receive generator's clock pin");
+
+    let mut b = board(&n);
+    let words = rfc_time(MY_ADDRESS, MY_ADDRESS);
+    let started = start_loopback(&mut b, &words);
+    let mut cp = b.chip.net(clock);
+    let (mut clocked_active, mut clocked_idle) = (0usize, 0usize);
+    let mut last_edge = 0u64;
+    let mut crcerr_at_last_edge = Level::X;
+    let mut crcerr_rose = false;
+    while b.now < started + 400_000 {
+        b.run(b.now + 25);
+        let now = b.chip.net(clock);
+        if cp != Level::Low && now == Level::Low {
+            if b.level("RACT") == Level::High {
+                clocked_active += 1;
+            } else {
+                clocked_idle += 1;
+            }
+            last_edge = b.now;
+            crcerr_at_last_edge = b.level("CRCERR");
+        }
+        cp = now;
+        if b.level("CRCERR") == Level::High {
+            crcerr_rose = true;
+        }
+    }
+    let bits = (words.len() + 2) * 16;
+    eprintln!(
+        "{clocked_active} clock edges with RACT up, {clocked_idle} with it down; \
+         the last at {} ns, CRCERR {crcerr_at_last_edge:?}",
+        last_edge - started
+    );
+    assert_eq!(clocked_active, bits, "every bit of the frame is clocked in with RACT up");
+    assert_eq!(clocked_idle, 0, "and none with it down, so the code is never 0 while it divides");
+    assert!(crcerr_rose, "the register held a remainder during the frame: CRCERR never went up");
+    assert_eq!(
+        crcerr_at_last_edge,
+        Level::Low,
+        "the receive generator reached all zero on the frame's last bit"
+    );
+    let (_, c) = b.cycle(chaos::CSR, None);
+    eprintln!("CSR {c:#08o}");
+    assert!(c & csr::CRC_ERROR == 0, "so the software reads no CRC error: {c:#08o}");
+}
+
 /// A read of 764142 done by hand, printing the decode chain at each step.
 /// Run alone with `--ignored --nocapture`; it is a diagnostic, not a check.
 #[test]
