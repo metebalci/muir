@@ -417,6 +417,22 @@ line driver on at 12,260, and Lost Count stepping at 12,310 --- and holds
 the driver on for four cells, the packet already in the buffer untouched,
 and the sender's frame ending as wreckage on the cable.
 
+**The sender is told, and reads Transmit Abort.** Two interfaces on one
+cable measure it both ways round.
+`tests/chaos_two_boards.rs::a_busy_netlist_board_stops_the_sending_interface_which_reads_transmit_abort`
+makes the netlist board the busy receiver: its driver comes on 12,250 ns
+into the frame and the sending interface reads Transmit Abort 375 ns after
+that, which is three edges of its 8 MHz clock, since a transmitter finds
+interference only at an edge and only while its own driver is high.
+`tests/chaos_two_boards.rs::a_busy_model_receiver_stops_the_netlist_board_which_reads_transmit_abort`
+turns it round: the interface's abort signal at 12,260 ns, the board's
+transceiver finding interference 240 ns later at the first cell where its
+own driver is high, and `TABORTED` one clock edge after that, 365 ns in
+all. Each receiver counted one frame in Lost Count and kept the packet it
+already held. One bit answers for both uses of the signal because §2.6,
+memo page 8, says the transmitter cannot tell them apart: "the transmitter
+does not distinguish receiver-busy aborts from real collisions."
+
 **Only what is specifically addressed is aborted.** AIM-628, memo page 6:
 "Note that a receiver whose packet buffer is full will only generate an
 abort signal if the packet was specifically addressed to it." That is
@@ -600,17 +616,17 @@ broadcast goes to the named peers and never to the route of last resort.
 
 ## Unverified
 
-**Whether a sending interface reads Transmit Abort when a busy receiver
-aborts its frame.** AIM-628 §7 says Transmit Abort is set when a
-transmission was aborted "by a collision or because the receiver was busy",
-and the two cases reach the board by the same wire --- `-LOST.ONE` presets
-the same `ABORT` flip-flop at LMMODU `0A09` that a collision sets --- so on
-the *receiving* board the mechanism is measured and held. What is not held
-is the *sending* board's side of it, because no test here puts two netlist
-boards on one cable: the sender in every busy-receiver test is a model
-transmitter, which stops at its next clock edge but has no CSR to read.
-**What would settle it:** two netlist boards on one ether, one made busy,
-the other made to send to it, and the sender's CSR read.
+**Whether a real interface reads Transmit Abort from a busy receiver.**
+Both sides of it are measured here, in [the abort
+signal](#the-abort-signal-in-both-its-uses): a netlist board stopped by a
+behavioral interface, and a behavioral interface stopped by the netlist
+board, each sender reading the bit. But both parties are this program.
+Two netlist boards on one ether is not buildable in this harness either,
+an ether carrying one behavioral board and one transceiver, so what is
+held is the model against itself with the board's own gates on one side of
+each measurement. **What would settle it:** the interface on a real cable
+or in fabric, one made busy and the other made to send to it, with the
+sender's CSR read.
 
 **The check word's arrangement has never met real hardware.** The
 polynomial is read off the 9401's data sheet and the board's grounded select
