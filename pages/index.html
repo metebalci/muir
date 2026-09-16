@@ -108,7 +108,8 @@
           <li><a href="#machine"><span class="tag">PLAN</span><span class="nm">The machine</span><span class="no">04</span></a></li>
           <li><a href="#boards"><span class="tag">SPEC</span><span class="nm">Seven netlists</span><span class="no">05</span></a></li>
           <li><a href="#install"><span class="tag">DO IT</span><span class="nm">Build and boot</span><span class="no">06</span></a></li>
-          <li><a href="#colophon"><span class="tag">END</span><span class="nm">Colophon</span><span class="no">07</span></a></li>
+          <li><a href="#diskpack"><span class="tag">PACK</span><span class="nm">Making a pack</span><span class="no">07</span></a></li>
+          <li><a href="#colophon"><span class="tag">END</span><span class="nm">Colophon</span><span class="no">08</span></a></li>
         </ol>
         <p class="small" style="margin-top:auto;">Every flag, every table and the long form of everything here is in <a href="https://github.com/metebalci/muir/blob/main/docs/manual.md">the manual</a>.</p>
       </nav>
@@ -450,6 +451,29 @@ cargo build --release</pre>
     </footer>
   </section>
 
+  <!-- --------------------------------------------------------- diskpack -->
+  <section id="diskpack" aria-label="Making a pack">
+    <div class="panel bare">
+      <span class="eyebrow">Pack</span>
+      <h2 class="title t-m">Making a pack</h2>
+    </div>
+
+    <div class="panel">
+      <p class="small">The fetched pack is not the only one. <code>diskpack</code>, built beside <code>muir</code>, makes a pack of your own and edits its label: partitions added, grown, zeroed and deleted, microcode and bands loaded and dumped. This makes one with microcode 323 and the System&nbsp;100 band, the fetched pack&rsquo;s <code>LOD2</code>, to boot with <code>--disk-pack mine.img</code>:</p>
+<pre class="term cmd">target/release/diskpack mine.img initialize
+target/release/diskpack mine.img load MCR1
+target/release/diskpack mine.img load-from LOD1 vendor/run/disk-sys-100-0.img LOD2</pre>
+      <div class="actions">
+        <a class="key" href="https://github.com/metebalci/muir#making-a-pack">Everything diskpack does</a>
+      </div>
+    </div>
+
+    <footer class="wholine">
+      <div class="label">muir &middot; Making a pack</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>07</span></div>
+    </footer>
+  </section>
+
   <!-- --------------------------------------------------------- colophon -->
   <section id="colophon" aria-label="Colophon">
     <div class="panel bare">
@@ -481,7 +505,7 @@ cargo build --release</pre>
 
     <footer class="wholine">
       <div class="label">muir &middot; Colophon</div>
-      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>07</span></div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>08</span></div>
     </footer>
   </section>
 
