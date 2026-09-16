@@ -1,7 +1,7 @@
-# Publishes site/ to GitHub Pages.
+# Publishes pages/ to GitHub Pages.
 #
 # One-time setup: in the repository, Settings -> Pages -> Build and deployment
-# -> Source: "GitHub Actions". Nothing is built; site/ is uploaded as it is.
+# -> Source: "GitHub Actions". Nothing is built; pages/ is uploaded as it is.
 
 name: pages
 
@@ -9,7 +9,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'site/**'
+      - 'pages/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -34,6 +34,6 @@ jobs:
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: pages
       - id: deployment
         uses: actions/deploy-pages@v4

@@ -8,7 +8,7 @@
 //! the tree would notice it going stale. It did: it listed the DISK
 //! MULTIPLEXOR among the drawings nothing reads for as long as it took
 //! anyone to look, `data/DM.netlist` having been built from those very
-//! sheets. This is the guard, and it is the same shape as `tests/site.rs`.
+//! sheets. This is the guard, and it is the same shape as `tests/pages.rs`.
 //!
 //! `mit/` and `data/` are both committed, so this never skips.
 
@@ -123,7 +123,7 @@ fn the_drawings_no_netlist_reads_are_the_ones_the_inventory_names() {
     let short = unread.values().map(Vec::len).sum::<usize>();
     assert_eq!((all - short, all), (274, 351), "read, and every drawing there is");
 
-    // And the README says the same, as `tests/site.rs` holds the manual to
+    // And the README says the same, as `tests/pages.rs` holds the manual to
     // its counts. A number in prose drifts; a number a test reads back does
     // not.
     const README: &str = include_str!("../mit/README.md");
