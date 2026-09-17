@@ -13,6 +13,15 @@ Every netlist in the repository is held pin for pin to MIT's own wire list
 for the same board, and where a fact is believed but unchecked the code that
 depends on it says so.
 
+Three examples of why. Two builds of the boot PROM both call themselves
+version 9 and differ in 214 of their 454 words, and nothing about a copy
+announces which it is ([`--prom`](manual.md#--prom-file), `tests/prom.rs`). A
+PROM file may be the programming image rather than the microinstructions,
+and in the image bit 47 is parity and bit 46 holds `IR<47>`, so reading bit
+46 there as the statistics bit is silently wrong (`src/prom.rs`). And the
+CADR documentation gives the dispatch's level-2 map bits as 14 and 15, where
+the hardware uses 18 and 19 (`src/micro.rs`, at the dispatch).
+
 - **The CADR** --- MIT AI Laboratory, around 1978. Tom Knight, David Moon,
   Jack Holloway and Guy Steele.
 
@@ -77,9 +86,23 @@ muir is [AGPL-3.0-or-later](https://www.gnu.org/licenses/agpl-3.0.html).
 > cooperation with the community in the case of network server software."
 > From the license's own preamble, in `LICENSE`.
 
-MIT's own drawings and wire lists are committed in `mit/`, unmodified;
-`mit/README.md` is the inventory and says what is MIT's work rather than
-this project's.
+The AGPL matches `ams/cadr4` and the System 100 release. The MIT license
+was considered and rejected: it would permit a closed-source derivative, and
+not permitting one is the point.
+
+Two parts of the tree are not this project's work throughout and are not
+covered by its copyright. `mit/` is MIT's, written at the AI Laboratory
+between 1977 and 1981, with `mit/sys/` a snapshot of the System 100 release
+under the release's own AGPL; `mit/README.md` is the inventory and says what
+is claimed there, which is nothing, and `data/README.md` says what is whose
+in the files made from it. `tools/soap4/` is the reader for MIT's drawings,
+C that came here from `ams/cadr4` under the AGPL: `soap4.c` follows Brad
+Parker's `soap.c` of 2004 and `unpack4.c` John Wilson's `unpack.c` of 1993,
+each keeping its original header and naming its original author in its
+copyright line. Neither original carries a license, so the AGPL covers the
+work done on them and cannot make a grant for what came before it. That is
+the one open licensing question in this repository, and `tools/README.md`
+has the detail.
 
 ## The name
 

@@ -120,4 +120,4 @@ else
     echo "made vendor/run/file-root/tree -> the release's sources"
 fi
 
-echo "done; see the Install section of README.md"
+echo "done; the quick start in README.md says what to run"

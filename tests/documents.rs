@@ -3,9 +3,9 @@
 
 //! The numbers the documents quote about the netlists.
 //!
-//! `README.md`, `data/README.md` and `pages/index.html` each carry a table
-//! of the netlists and how many parts are on each board, and
-//! `data/README.md` carries the pages and the `part` records with them.
+//! `data/README.md` and `pages/index.html` each carry a table of the
+//! netlists and how many parts are on each board, and `data/README.md`
+//! carries the pages and the `part` records with them.
 //! `docs/netlists.md` says the same totals in prose.
 //! **Nothing read any of them.** `tests/parts_mounted.rs` asserts the same
 //! figures against the netlists and says in a comment that the documents
@@ -182,11 +182,11 @@ fn the_data_inventory_counts_every_netlist_correctly() {
     assert_eq!(seen, netlists().len(), "a row for every netlist in data/");
 }
 
-/// **The part counts the front page and the README quote are the
-/// netlists'.** Neither carries the disk multiplexor, which no engine runs,
-/// so what is checked is every row that is there and not that every netlist
-/// is a row --- `data/README.md` is the inventory and is held to that
-/// above.
+/// **The part counts the front page and the netlists page quote are the
+/// netlists'.** The front page's table does not carry the disk multiplexor,
+/// which no engine runs, so what is checked is every row that is there and
+/// not that every netlist is a row --- `data/README.md` is the inventory and
+/// is held to that above.
 ///
 /// The whole machine's total is quoted in prose rather than in a table, so
 /// it is read out of the sentence that makes the claim and summed here from
@@ -196,15 +196,11 @@ fn the_data_inventory_counts_every_netlist_correctly() {
 /// found, because a figure the reader sees first is the worst one to leave
 /// unchecked.
 #[test]
-fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
-    const README: &str = include_str!("../README.md");
+fn the_site_and_the_netlists_page_quote_the_netlists_own_part_counts() {
     const SITE: &str = include_str!("../pages/index.html");
     const NETLISTS: &str = include_str!("../docs/netlists.md");
     let files = netlists();
-    for (what, t) in [
-        ("README.md", markdown(README, &["Netlist", "Board", "Parts"])),
-        ("pages/index.html", html(SITE, &["Netlist", "Board", "Parts"])),
-    ] {
+    for (what, t) in [("pages/index.html", html(SITE, &["Netlist", "Board", "Parts"]))] {
         let mut seen = 0;
         for row in &t.rows {
             let file = t.get(row, "Netlist");
@@ -232,8 +228,6 @@ fn the_readme_and_the_site_quote_the_netlists_own_part_counts() {
         + board("LISPMTV.netlist");
     let full = machine + 31 * memory;
     for (what, text, before, after, want) in [
-        ("README.md", README, "the SIMPLE TV and the color TV, is ", " of them", machine),
-        ("README.md", README, "of them, and ", " with all thirty-two", full),
         ("pages/index.html", SITE, "own drawings: ", " on the processor", processor),
         ("pages/index.html", SITE, "on the processor, ", " in the machine", machine),
         (
@@ -317,7 +311,8 @@ fn the_documents_say_how_many_netlists_there_are_in_words() {
 
 /// **Two `chip` runs took System 100 from the pack to its who-line with
 /// every board a netlist**, and four documents quote how long each took:
-/// the front page, `README.md`, `docs/netlists.md` and `docs/engines.md`.
+/// the front page, `docs/netlists.md`, `docs/engines.md` and
+/// `docs/manual.md`.
 ///
 /// Nothing here can measure a run again --- each is days of gate-level
 /// simulation --- so what the figures are held to is each other. That is
@@ -328,8 +323,8 @@ fn the_documents_say_how_many_netlists_there_are_in_words() {
 fn the_documents_agree_on_the_cold_boot_runs() {
     const SITE: &str = include_str!("../pages/index.html");
     const NETLISTS: &str = include_str!("../docs/netlists.md");
-    const README: &str = include_str!("../README.md");
     const ENGINES: &str = include_str!("../docs/engines.md");
+    const MANUAL: &str = include_str!("../docs/manual.md");
 
     /// A run on the wall clock, and the microcycles it executed, in
     /// millions, from the boot PROM's first to `Cold-booted` on the screen.
@@ -353,7 +348,8 @@ fn the_documents_agree_on_the_cold_boot_runs() {
     }
 
     // `docs/engines.md` quotes the wall clock and not the microcycles, so
-    // the wall clock is all that is read out of it.
+    // the wall clock is all that is read out of it. `docs/manual.md` quotes
+    // the first run twice, and each is read.
     for (what, text, before, after, want) in [
         ("pages/index.html", SITE, "simulation: ", " days", FIRST.days),
         ("pages/index.html", SITE, "simulation: 2 days ", " hours", FIRST.hours),
@@ -367,12 +363,18 @@ fn the_documents_agree_on_the_cold_boot_runs() {
         ("docs/netlists.md", NETLISTS, "came up the same way, in ", " days", SECOND.days),
         ("docs/netlists.md", NETLISTS, "same way, in 2 days ", " hours", SECOND.hours),
         ("docs/netlists.md", NETLISTS, "2 days 21 hours and ", " million", SECOND.millions),
-        ("README.md", README, "netlist controller on 12 September 2026 in ", " days", FIRST.days),
-        ("README.md", README, "12 September 2026 in 2 days ", " hours", FIRST.hours),
-        ("README.md", README, "2 days 14 hours and ", " million", FIRST.millions),
-        ("README.md", README, "on the cable as well, in ", " days", SECOND.days),
-        ("README.md", README, "as well, in 2 days ", " hours", SECOND.hours),
-        ("README.md", README, "2 days 21 hours and ", " million", SECOND.millions),
+        ("docs/manual.md", MANUAL, "this controller on 12 September 2026 in ", " days", FIRST.days),
+        (
+            "docs/manual.md",
+            MANUAL,
+            "controller on 12 September 2026 in 2 days ",
+            " hours",
+            FIRST.hours,
+        ),
+        ("docs/manual.md", MANUAL, "2026 in 2 days 14 hours and ", " million", FIRST.millions),
+        ("docs/manual.md", MANUAL, "this way on 12 September 2026 after ", " days", FIRST.days),
+        ("docs/manual.md", MANUAL, "way on 12 September 2026 after 2 days ", " hours", FIRST.hours),
+        ("docs/manual.md", MANUAL, "2026 after 2 days 14 hours and ", " million", FIRST.millions),
         ("docs/engines.md", ENGINES, "12 September 2026, after ", " days", FIRST.days),
         ("docs/engines.md", ENGINES, "2026, after 2 days ", " hours", FIRST.hours),
         ("docs/engines.md", ENGINES, "on the cable as well, after ", " days", SECOND.days),

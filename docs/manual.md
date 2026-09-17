@@ -6,6 +6,8 @@ underneath. The front page, with the pictures and the short way in, is at
 
 This file is the program itself. Beside it:
 
+- [Making a pack](diskpack.md) --- `diskpack`, the second binary: a pack of
+  one's own, its partitions, and bands loaded and dumped
 - [The machine it models](machine.md) --- the boards, the two buses, and
   what each one reaches outside muir
 - [How the engines work](engines.md) --- `micro`, `rtl` and `chip`, why the
@@ -17,6 +19,37 @@ This file is the program itself. Beside it:
 - [Sources and attribution](sources.md) --- what this is built on, how it
   was written, the license, and the name
 
+## Installing
+
+muir needs a Rust toolchain and nothing else: the version is pinned in
+`rust-toolchain.toml`, there are no crate dependencies, and everything the
+build and the tests read is committed, so `cargo test` passes on a fresh
+clone with nothing fetched.
+
+```text
+git clone https://github.com/metebalci/muir
+cd muir
+cargo build --release
+tools/fetch-system-100.sh
+```
+
+The engines boot from a pack, which is not part of the repository.
+`tools/fetch-system-100.sh` puts the System 100 pack and the release's
+sources under `vendor/`, where the tests look, and checks every file against
+its SHA-256 sum. They come from muir's own GitHub release
+[`system-100-0`](https://github.com/metebalci/muir/releases/tag/system-100-0),
+so that the bytes the tests were written against stay the bytes: the pack
+byte for byte as [upstream](https://tumbleweed.nu/lm-3/) publishes it, and
+the script says exactly what it fetched and from where. Everything in it is
+under the AGPL, muir's own license. Without it, every test needing a pack
+skips and says so. Windows is untested; the script is POSIX shell, so use
+WSL.
+
+A band also wants its file and time host, which is not muir ---
+[the Chaosnet](#the-chaosnet) says why --- and
+[ozd](https://github.com/metebalci/ozd) is built and run beside it, as its
+own README says.
+
 ## Running it
 
 muir builds to one binary. Run it with no flags and it starts an `rtl`
@@ -24,8 +57,10 @@ machine, presses the boot button, and runs the boot PROM with no pack in the
 drive, which the boot waits on for ever. A pack is named: `--disk-pack
 vendor/run/disk-sys-100-0.img`, where `tools/fetch-system-100.sh` puts the
 System 100 pack, and with it `--chaos-address 3050`, which is that band's
-own address, and `--chaos-udp-peer 3060@<where ozd is>`, which is where that
-band looks for its files and the date.
+own address, `--chaos-udp`, which is the cable, and `--chaos-udp-peer
+3060@<where ozd is>`, which is where that band looks for its files and the
+date. ozd has the protocol's own port, 42042, so a machine on the same
+computer takes another.
 
 ```text
 target/release/muir
@@ -40,12 +75,12 @@ is usually in this block.
 
 ```text
 $ muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050 \
-       --chaos-udp-peer 3060@127.0.0.1:42043 --stop-after 2000000
+       --chaos-udp 42043 --chaos-udp-peer 3060@127.0.0.1:42042 --stop-after 2000000
 engine: rtl
 memory: 32 boards, 2 MW
 pack: vendor/run/disk-sys-100-0.img in unit 0
 chaosnet: 3050
-chaosnet over udp: 127.0.0.1:42042, 3060 at 127.0.0.1:42043
+chaosnet over udp: 127.0.0.1:42043, 3060 at 127.0.0.1:42042
 terminal: vnc://127.0.0.1:5900 --- RFB, no password
 debug cable: DBGIN listening at 127.0.0.1:7661
 stop: after 2000000 microcycles
@@ -198,7 +233,7 @@ names is dropped.
 
 ### `--chaos-udp-peer <address>@<host>:<port>`
 
-A Chaosnet host reached over UDP and where it lives: `3060@127.0.0.1:42043`,
+A Chaosnet host reached over UDP and where it lives: `3060@127.0.0.1:42042`,
 the address in octal or subnet:host and the host a name or an address,
 resolved once at the start. The port may be left off for `42042`. This is
 how a run names its band's file and time host.
