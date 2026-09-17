@@ -15,7 +15,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use support::{Run, muir, text};
+use support::{Run, muir, muir_default, text};
 
 /// **A paced run takes about the machine's own time**, and this holds it to
 /// a third of that.
@@ -50,4 +50,37 @@ fn a_paced_run_waits_for_the_machine_it_is_running_ahead_of() {
         "a paced run of {MICROCYCLES} microcycles took {took:?}, less than the {least:?} \
          that is a third of the machine's own time:\n{t}"
     );
+}
+
+/// **`rtl` and `chip` run at the machine's own speed unless told not to,
+/// and `micro` as fast as the host takes it unless told to.**
+///
+/// The machine's own nanoseconds are what the band's clock counts, so a run
+/// that got ahead of them would keep the band's time ahead of the day. `rtl`
+/// is the engine for working the machine; `chip` is slower than the machine
+/// and never waits, so pacing it costs nothing; `micro` is the fast engine.
+/// `--pace` and `--no-pace` say otherwise, and of the two the last given
+/// wins. The start says which a run is.
+#[test]
+fn micro_is_the_engine_that_is_not_paced_unless_told_to() {
+    let models = ["--main-memory", "model", "--io-board", "model", "--disk-controller", "model"];
+    let paced = |args: &[&str]| {
+        let out = muir_default()
+            .arg("--no-debug-cable-listen")
+            .args(args)
+            .args(["--stop-after", "1"])
+            .run();
+        let t = text(&out);
+        assert!(out.status.success(), "{args:?}:\n{t}");
+        t.contains("pace: the machine's own speed")
+    };
+    assert!(paced(&[]), "rtl, the engine a bare run is, paces");
+    assert!(paced(&["--rtl"]), "rtl paces");
+    assert!(!paced(&["--rtl", "--no-pace"]), "unless told not to");
+    assert!(!paced(&["--micro"]), "micro does not");
+    assert!(paced(&["--micro", "--pace"]), "unless told to");
+    let chip: Vec<&str> = ["--chip"].into_iter().chain(models).collect();
+    assert!(paced(&chip), "chip paces, and never waits");
+    assert!(paced(&["--rtl", "--no-pace", "--pace"]), "the last given wins");
+    assert!(!paced(&["--rtl", "--pace", "--no-pace"]), "either way round");
 }

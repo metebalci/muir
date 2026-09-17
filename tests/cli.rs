@@ -1378,4 +1378,15 @@ fn the_pace_is_one_machine_at_its_own_speed() {
         let out = muir().args([engine, "--pace", "--stop-after", "1"]).run();
         assert!(out.status.success(), "{engine} --pace:\n{}", text(&out));
     }
+    // Not asked for, the pace `rtl` takes by default is left off a lashup
+    // rather than refused: nobody gave the flag the refusal would be about.
+    for args in [
+        &["--rtl", "--debug-in-process", "--no-debug-cable-listen", "--stop-after", "1"][..],
+        &["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1"][..],
+    ] {
+        let out = muir_default().args(args).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{args:?}:\n{t}");
+        assert!(!t.contains("pace:"), "{args:?} is not paced:\n{t}");
+    }
 }
