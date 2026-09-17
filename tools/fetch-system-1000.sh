@@ -25,12 +25,13 @@
 # The sums are the ones the release's own notes publish; SYSTEM_1000_BASE
 # names another place to download from.
 #
-# The band in the pack was built for the Z54 site's Chaosnet, not System
+# The band in the pack was built for the LMZ site's Chaosnet, not System
 # 100's: the machine LISPM-1 at 177201, and its file, time and host table
 # server OZ at 177200, which serves the sources' `sys` and `site` and a
 # writable `lispm` home. So it is run with ozd at 177200 and muir at 177201,
-# as the release's notes give the two commands. A pack of the release as
-# first published looks for OZ at 177201, and these sums refuse it.
+# as the release's notes give the two commands. The release has been
+# replaced under the same tag, and a copy fetched before that is refused by
+# these sums: move it away and run this again.
 #
 # Re-running this is safe: whatever is already in place is left alone, and
 # nothing else in vendor/ is touched.
@@ -46,9 +47,9 @@ run=$muir/vendor/run
 # The SHA-256 of each file, as the release's notes publish them.
 sum_of() {
     case $1 in
-    lmz-1000-sys.tar.gz) echo 9492a0ca770f4f8098e7f04f68ee57c7261c4f5c6b568a26d1416e105b46d954 ;;
-    lmz-1000-pack.img.gz) echo d486d5acd29dadfc8110dd5c2dc71668c72542649bd9c3f9a34337f0c83c6383 ;;
-    lmz-1000-pack.img) echo 195608a498a54da3eb96ead5b19dd9814465d616e30334750171bfa99b2ddedf ;;
+    lmz-1000-sys.tar.gz) echo ebc046800cf7378ad6ecccd74c07a78df93ed926e963acf20174b4606c87978f ;;
+    lmz-1000-pack.img.gz) echo f576d26bb09fc64b58684783f505e19809f857de2cd5615930cfd11ec718bc5b ;;
+    lmz-1000-pack.img) echo 3d9b1ac84e0037b9c62578df2bee2f4741cb4e308746a2c98d0eaf8da8598929 ;;
     esac
 }
 
