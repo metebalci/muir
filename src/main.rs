@@ -21,7 +21,7 @@
 //!          [--disk-controller netlist|model]
 //!          [--disk-pack <image>[,<unit>][,ro]] [--io-board netlist|model]
 //!          [--main-memory netlist|model] [--main-memory-boards <n>]
-//!          [--no-debug-cable-listen] [--pace]
+//!          [--no-debug-cable-listen] [--no-pace] [--pace]
 //!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
 //!          [--stop-after <microcycles>]
 //!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
@@ -889,7 +889,8 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--keyboard-mapping-trace]
             [--main-memory netlist|model]
             [--main-memory-boards <n>] [--no-auto-boot]
-            [--no-debug-cable-listen] [--pace] [--prom <file>]
+            [--no-debug-cable-listen] [--no-pace] [--pace]
+            [--prom <file>]
             [--resume <file>] [--serial <endpoint>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
@@ -1175,10 +1176,14 @@ A simulator of the MIT CADR Lisp Machine.
                                connector empty by themselves, wanting a
                                machine on its own, and the start says so.
                                [default: the connector is there]
+  --no-pace                    run as fast as the host will take it, rather
+                               than at the machine's own speed. Of this and
+                               --pace the last given wins. [default: rtl and
+                               chip are paced, micro is not]
   --pace                       run at the machine's own speed rather than
                                as fast as the host will take it: the
                                machine's own nanoseconds are the target, and
-                               a run ahead of them waits. Without it micro
+                               a run ahead of them waits. Unpaced, micro
                                is about nine times a CADR and rtl about
                                twice, so much of a paced run of either is
                                spent waiting rather than computing, and the
@@ -1191,11 +1196,12 @@ A simulator of the MIT CADR Lisp Machine.
                                wait the host rounds up is not taken back
                                either, so a paced run keeps the machine's
                                speed or falls a little under it, never over.
-                               Taken on chip, which is far slower
-                               than the machine and so never waits at all;
-                               not on an end of the debug cable, where the
-                               two machines pace each other. [default: off,
-                               as fast as the host runs it]
+                               On chip, which is far slower than the
+                               machine, it never waits at all. Refused on an
+                               end of the debug cable, where the two
+                               machines pace each other, and not taken there
+                               by default. [default: on for rtl and chip,
+                               off for micro]
   --prom <file>                the boot PROM to run, an MCR microcode file
                                as MIT's own sys/ubin/promh.mcr is: at most
                                the 512 words the machine fetches before it
@@ -4357,9 +4363,10 @@ fn main() {
     let mut udp_default_peer: Option<SocketAddr> = None;
     let mut cycles: Option<u64> = None;
     let mut auto_boot = true;
-    // `--pace`: the run held to the machine's own speed instead of going
-    // as fast as the host will take it.
-    let mut pace = false;
+    // `--pace` and `--no-pace`: the run held to the machine's own speed, or
+    // left to go as fast as the host will take it; of the two the last given
+    // wins, and neither given is the engine's own default, below.
+    let mut pace: Option<bool> = None;
     let mut checkpoint: Option<PathBuf> = None;
     let mut prom_file: Option<PathBuf> = None;
     let mut keyboard_file: Option<PathBuf> = None;
@@ -4729,7 +4736,8 @@ fn main() {
             (None, "--keyboard-mapping-dump") => keyboard_dump = true,
             (None, "--keyboard-mapping-trace") => keyboard_trace = true,
             (None, "--no-auto-boot") => auto_boot = false,
-            (None, "--pace") => pace = true,
+            (None, "--pace") => pace = Some(true),
+            (None, "--no-pace") => pace = Some(false),
             (None, "--prom") => match args.next() {
                 Some(path) => prom_file = Some(PathBuf::from(path)),
                 None => usage("--prom wants an MCR microcode file"),
@@ -4966,11 +4974,18 @@ fn main() {
     // runs as far as the other has promised and then waits for it --- so
     // an end that slept on top of that would only hold the other up, and
     // neither end would be at the machine's speed for it.
-    if pace && cabled == 1 {
+    if pace == Some(true) && cabled == 1 {
         usage(
             "--pace is one machine at its own speed, not the lashup: the cable paces the two machines, and an end that slept would only hold the other up",
         );
     }
+    // Neither given, `rtl` and `chip` are paced and `micro` is not.  The
+    // machine's own nanoseconds are what the band's clock counts, so a run
+    // that got ahead of them keeps the band's time ahead of the day: `rtl` is
+    // the engine for working the machine, `chip` is slower than the machine
+    // and never waits, and `micro` is the fast engine.  A lashup takes no
+    // pace nobody asked for, for the reason above.
+    let pace = pace.unwrap_or(which != Which::Micro && cabled == 0);
     if resume.is_some() && debuggee {
         usage("--resume is one machine on its own, not the lashup in one process, which runs two");
     }

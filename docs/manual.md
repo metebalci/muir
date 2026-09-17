@@ -594,13 +594,28 @@ the start says so.
 
 Default: the connector is there, at `127.0.0.1:7661`.
 
+### `--no-pace`
+
+Run as fast as the host will take it, rather than at the machine's own speed:
+the one engine that does that by default is `micro`. Of this and `--pace`,
+the last given wins.
+
+Default: `rtl` and `chip` are paced, `micro` is not.
+
 ### `--pace`
 
 Run at the machine's own speed rather than as fast as the host will take it:
 the machine's own nanoseconds are the target, and a run that is ahead of
 them waits until they catch up.
 
-Without it an engine runs as fast as it can. `micro` is about nine times a
+**It is what keeps the band's clock right.** A CADR has no clock chip: the
+band asks its time host for the time once, when it boots, and counts the I/O
+board's microsecond clock from there (`INITIALIZE-TIMEBASE` and
+`UPDATE-TIMEBASE` in `sys/io1/time.lisp`). That clock counts the machine's own
+nanoseconds, so a run that gets ahead of them keeps the band's time ahead of
+the day by as much.
+
+Unpaced, an engine runs as fast as it can. `micro` is about nine times a
 CADR and `rtl` about twice, so much of a paced run of either is spent
 waiting rather than computing --- which is the other half of what this is
 for: the core the run was pinning is left idle for that share of it, and the
@@ -625,16 +640,17 @@ worse than one that is simply late. Time held at the prompt is the same:
 what went by while nothing ran is not a debt, and the run goes on from
 `continue` at the machine's speed.
 
-On `chip` the flag is taken and never waits: that engine is some thousands
-of times slower than the machine, so the run is never ahead of its clock.
+On `chip` it never waits: that engine is some thousands of times slower than
+the machine, so the run is never ahead of its clock.
 It is refused on an end of the debug cable --- `--debug-in-process`,
 `--debug-cable-listen`, `--debug-cable-connect` --- where the two machines
 already pace each other through the cable's own clock, and an end that slept
 on top of that would only hold the other up. A debugger that connects to a
 paced machine's own connector takes the pacing off while it is on the cable,
-for the same reason, and the machine is paced again when it goes.
+for the same reason, and the machine is paced again when it goes. Given
+neither flag, a run on an end of the cable is not paced.
 
-Default: off, and the run goes as fast as the host runs it.
+Default: on for `rtl` and `chip`, off for `micro`.
 
 ### `--prom <file>`
 

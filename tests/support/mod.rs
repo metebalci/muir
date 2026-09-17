@@ -792,11 +792,14 @@ pub fn type_at<E: Engine>(e: &mut E, k: &mut Keyboard, text: &str) {
 /// running beside each other would fight over and a real debugger on the
 /// host could find: `--no-debug-cable-listen`.  A test that wants the
 /// connector gives `--debug-cable-listen 127.0.0.1:0` after it, the last
-/// of the two winning; [`muir_default`] is the run as a person gets it.  A
+/// of the two winning; [`muir_default`] is the run as a person gets it.
+/// And as fast as the host goes, `--no-pace`, where a person's `rtl` or
+/// `chip` would be paced; a test that wants pacing gives `--pace` after it.  A
 /// test that types at the prompt opens stdin as a pipe instead.
 pub fn muir() -> std::process::Command {
     let mut c = muir_default();
     c.arg("--no-debug-cable-listen");
+    c.arg("--no-pace");
     c
 }
 
