@@ -26,10 +26,11 @@
 # names another place to download from.
 #
 # The band in the pack was built for the Z54 site's Chaosnet, not System
-# 100's: the machine LISPM-1 at 177202, and its file, time and host table
-# server OZ at 177201, which serves the sources' `sys` and `site` and a
-# writable `lispm` home. So it is run with ozd at 177201 and muir at 177202,
-# as the release's notes give the two commands.
+# 100's: the machine LISPM-1 at 177201, and its file, time and host table
+# server OZ at 177200, which serves the sources' `sys` and `site` and a
+# writable `lispm` home. So it is run with ozd at 177200 and muir at 177201,
+# as the release's notes give the two commands. A pack of the release as
+# first published looks for OZ at 177201, and these sums refuse it.
 #
 # Re-running this is safe: whatever is already in place is left alone, and
 # nothing else in vendor/ is touched.
@@ -45,9 +46,9 @@ run=$muir/vendor/run
 # The SHA-256 of each file, as the release's notes publish them.
 sum_of() {
     case $1 in
-    lmz-1000-sys.tar.gz) echo ad14fcd803564e6742c30eb12c34c1cd125fc20e37460d837479e01f80fb29b1 ;;
-    lmz-1000-pack.img.gz) echo bcf2f269a90dda06ec512ea8ef6c24ffedff5a90213a2c0524743d6b11ec93a3 ;;
-    lmz-1000-pack.img) echo f94586d6464504437c8d3574ab412e472a3e5af06bef5a6fd041aee18fa68b31 ;;
+    lmz-1000-sys.tar.gz) echo 9492a0ca770f4f8098e7f04f68ee57c7261c4f5c6b568a26d1416e105b46d954 ;;
+    lmz-1000-pack.img.gz) echo d486d5acd29dadfc8110dd5c2dc71668c72542649bd9c3f9a34337f0c83c6383 ;;
+    lmz-1000-pack.img) echo 195608a498a54da3eb96ead5b19dd9814465d616e30334750171bfa99b2ddedf ;;
     esac
 }
 
