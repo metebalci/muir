@@ -139,7 +139,7 @@
 
       <div class="panel">
         <p class="say r">Tom Knight, David Moon, Jack Holloway and Guy Steele drew me in about 1978. MIT built about thirty of me, and the first Lisp machines LMI and Symbolics sold were built on me.</p>
-        <p class="small">muir brings the CADR back by simulating its hardware rather than imitating its software, and boots System 100, the last release of the Lisp Machine software MIT made, restored from tapes the MIT Tapes of Tech Square project recovered. <b>muir is written in Rust and has no crate dependencies.</b></p>
+        <p class="small">muir brings the CADR back by simulating its hardware, not by reimplementing Lisp, and boots System 100, the last release of the Lisp Machine software MIT made, restored from tapes the MIT Tapes of Tech Square project recovered. <b>muir is written in Rust and has no crate dependencies.</b></p>
       </div>
 
       <figure class="panel wide">
@@ -159,7 +159,7 @@
     <div class="panel bare">
       <span class="eyebrow">How</span>
       <h2 class="title t-l">What muir does</h2>
-      <p class="small" style="margin-top:0.4rem;">muir does not imitate the Lisp software. It simulates the machine that software ran on, from MIT&rsquo;s own drawings of its boards, so programs written for the real hardware run unchanged &mdash; MIT&rsquo;s debugger for the machine as well as the Lisp system.</p>
+      <p class="small" style="margin-top:0.4rem;">muir has no Lisp of its own. It simulates the machine, from MIT&rsquo;s own drawings of its boards, and MIT&rsquo;s software runs on it unchanged: the microcode, the Lisp system, and MIT&rsquo;s debugger for the machine.</p>
       <p class="small">The CADR&rsquo;s processor carries out each instruction as a series of small steps, written in <b>microcode</b>; one step is a <b>microcycle</b>, and the real machine did about 6.9 million of them a second. muir simulates it at three levels of detail, and all three agree at the end of every microcycle, so the fast ones can be checked against the slow one.</p>
     </div>
 
