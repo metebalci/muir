@@ -202,23 +202,26 @@ fn every_link_between_the_documents_leads_somewhere() {
 
 /// **The front page's links into the repository lead somewhere too.** It
 /// is served on its own site, so it names each file by its GitHub address;
-/// the part after `blob/main/` or `tree/main/` is a path here.
+/// the part after `blob/main/` or `tree/main/` is a path here, and an
+/// anchor on the repository's own address is a heading of `README.md`,
+/// which is the page GitHub shows there.
 #[test]
 fn the_front_page_links_into_the_repository_lead_somewhere() {
     let page = root().join("pages/index.html");
     let text = std::fs::read_to_string(&page).expect("the front page is committed");
     let mut wrong = Vec::new();
     let mut checked = 0;
-    for prefix in [
-        "https://github.com/metebalci/muir/blob/main/",
-        "https://github.com/metebalci/muir/tree/main/",
+    for (prefix, from, lead) in [
+        ("https://github.com/metebalci/muir/blob/main/", "index", ""),
+        ("https://github.com/metebalci/muir/tree/main/", "index", ""),
+        ("https://github.com/metebalci/muir#", "README.md", "#"),
     ] {
         for piece in text.split(prefix).skip(1) {
-            let target = &piece[..piece.find('"').expect("an attribute ends")];
+            let target = format!("{lead}{}", &piece[..piece.find('"').expect("an attribute ends")]);
             checked += 1;
             // Resolved as if written in a file at the root.
-            if let Some(why) = broken(&root().join("index"), target) {
-                wrong.push(format!("pages/index.html: {prefix}{target}: {why}"));
+            if let Some(why) = broken(&root().join(from), &target) {
+                wrong.push(format!("pages/index.html: {prefix}: {target}: {why}"));
             }
         }
     }
