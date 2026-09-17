@@ -1,7 +1,7 @@
 # `tools/`
 
 Scripts that make the committed fixtures in `data/` from MIT's files in
-`mit/`, one that fetches what is not committed, and one that checks the
+`mit/`, two that fetch what is not committed, and one that checks the
 first lot still make what is committed. None of them runs as part of the
 build --- CI runs `check-netlists.sh` on every push, which is what says the
 fixtures and the drawings have not drifted apart. `data/README.md` says
@@ -16,6 +16,7 @@ Ubuntu, `gcc` on Fedora --- and only when a netlist has to be made again.
 | Script | Makes |
 |---|---|
 | `fetch-system-100.sh` | `vendor/`: the System 100 release --- the target --- and a directory for muir to serve it from. Nothing in `vendor/` is committed |
+| `fetch-system-1000.sh` | `vendor/system-1000/` and `vendor/run/lmz-1000-pack.img`: LMZ System 1000, the release that continues System 100, from the `lmz-1000` release of metebalci/lmz, every file checked against the sums its notes publish |
 | `cadr-netlist.sh`, `busint-netlist.sh`, `cadrm-netlist.sh`, `cadrio-netlist.sh`, `cadrdc-netlist.sh`, `simpletv-netlist.sh`, `lispmtv-netlist.sh`, `dm-netlist.sh` | `data/<BOARD>.netlist`, one board each: MIT's drawings read with `soap4`, then reconciled with MIT's wire list by `examples/reconcile.rs` |
 | `check-netlists.sh` | nothing. It runs all eight of those and says whether each committed netlist is still what its script makes, putting the committed files back afterwards. CI runs it on every push |
 | `newdsk-proms.sh` | `data/newdsk-d0?.prom`, the disk controller's control store, assembled from `mit/cadrdc/newdsk.31` by `examples/dcmicro.rs` |
