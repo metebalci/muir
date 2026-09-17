@@ -30,7 +30,7 @@ Hand-written files, no build step and no generator:
                   that screenshot alone at its own size, black behind it, as
                   lashup.html is for the recording
     system-100.png
-                  the screenshot in step 4 of the install: System 100 at its
+                  the screenshot in A Lisp Machine, near the top: System 100 at its
                   Lisp Listener, 768 x 963, which is the machine's own frame
                   buffer and the size the page shows it at. Made by starting
                   `target/release/muir` as step 4 says, waiting for the boot,

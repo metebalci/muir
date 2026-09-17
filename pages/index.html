@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>muir — a chip-level simulator of the MIT CADR Lisp Machine</title>
-<meta name="description" content="muir simulates the MIT CADR Lisp Machine at three fidelity levels, down to the parts of MIT's own drawings: 985 on the processor, 2,016 in the machine. Written in Rust, with no dependencies.">
+<meta name="description" content="muir brings back the MIT CADR Lisp Machine, a workstation built at MIT around 1978 to run Lisp, by simulating its hardware from MIT's own drawings: 985 on the processor, 2,016 in the machine, every part of every board. It boots MIT's last release of the Lisp Machine software. Written in Rust, with no dependencies.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -80,9 +80,9 @@
   <section aria-label="muir">
     <div class="masthead">
       <div class="masthead-text">
-        <span class="eyebrow">A chip-level simulator of the MIT CADR Lisp Machine</span>
+        <span class="eyebrow">The MIT Lisp Machine, simulated chip by chip</span>
         <h1 class="title t-xl">muir</h1>
-        <p class="lede">A simulator of the MIT CADR Lisp Machine that goes all the way down to its chips.</p>
+        <p class="lede">Around 1978, MIT built a computer to run Lisp: the CADR Lisp Machine. muir brings it back on your own computer, simulated from MIT&rsquo;s drawings of its boards.</p>
         <div class="actions">
           <a class="key" href="#install">Install</a>
           <a class="key lm" href="https://github.com/metebalci/muir/blob/main/docs/manual.md">Manual</a>
@@ -103,13 +103,14 @@
       <nav class="panel contents" aria-label="Contents">
         <span class="eyebrow">Contents</span>
         <ol class="toc">
-          <li><a href="#what"><span class="tag">WHAT</span><span class="nm">What it is</span><span class="no">02</span></a></li>
-          <li><a href="#engines"><span class="tag">SPEED</span><span class="nm">Three engines</span><span class="no">03</span></a></li>
-          <li><a href="#machine"><span class="tag">PLAN</span><span class="nm">The machine</span><span class="no">04</span></a></li>
-          <li><a href="#boards"><span class="tag">SPEC</span><span class="nm">Seven netlists</span><span class="no">05</span></a></li>
-          <li><a href="#install"><span class="tag">DO IT</span><span class="nm">Build and boot</span><span class="no">06</span></a></li>
-          <li><a href="#diskpack"><span class="tag">PACK</span><span class="nm">Making a pack</span><span class="no">07</span></a></li>
-          <li><a href="#colophon"><span class="tag">END</span><span class="nm">Colophon</span><span class="no">08</span></a></li>
+          <li><a href="#what"><span class="tag">WHAT</span><span class="nm">A Lisp Machine</span><span class="no">02</span></a></li>
+          <li><a href="#engines"><span class="tag">HOW</span><span class="nm">What muir does</span><span class="no">03</span></a></li>
+          <li><a href="#install"><span class="tag">DO IT</span><span class="nm">Build and boot</span><span class="no">04</span></a></li>
+          <li><a href="#diskpack"><span class="tag">PACK</span><span class="nm">Making a pack</span><span class="no">05</span></a></li>
+          <li><a href="#machine"><span class="tag">PLAN</span><span class="nm">Inside the machine</span><span class="no">06</span></a></li>
+          <li><a href="#boards"><span class="tag">SPEC</span><span class="nm">Seven netlists</span><span class="no">07</span></a></li>
+          <li><a href="#lashup"><span class="tag">TEST</span><span class="nm">Two machines</span><span class="no">08</span></a></li>
+          <li><a href="#colophon"><span class="tag">END</span><span class="nm">Colophon</span><span class="no">09</span></a></li>
         </ol>
         <p class="small" style="margin-top:auto;">Every flag, every table and the long form of everything here is in <a href="https://github.com/metebalci/muir/blob/main/docs/manual.md">the manual</a>.</p>
       </nav>
@@ -121,108 +122,174 @@
     </footer>
   </section>
 
-  <!-- ------------------------------------------------------ what it is -->
-  <section id="what" aria-label="What it is">
+  <!-- ----------------------------------------------------- a lisp machine -->
+  <section id="what" aria-label="A Lisp Machine">
     <div class="panel bare">
       <span class="eyebrow">What</span>
-      <h2 class="title t-l">What it is</h2>
+      <h2 class="title t-l">A Lisp Machine</h2>
     </div>
 
     <div class="panels two">
       <div class="panel tone">
-        <p class="say">Hi. I'm CADR, a computer from the MIT AI Lab. They built about thirty of me. muir rebuilds me from my own drawings, chip by chip.</p>
+        <p class="say">Hi. I'm CADR, a computer built at the MIT AI Lab to run Lisp. I was one person's workstation: a screen, a keyboard, a mouse and a network, and the system on me &mdash; the windows, the editor, the network code &mdash; was all written in Lisp.</p>
         <svg class="chara" viewBox="0 0 132 150" style="width:52%; align-self:center; margin-top:auto;" role="img" aria-label="CADR">
           <use href="#cadr-body"/><use href="#face-happy"/>
         </svg>
       </div>
 
       <div class="panel">
-        <p class="say r">Tom Knight, David Moon, Jack Holloway and Guy Steele drew me in about 1978. The first Lisp machines LMI and Symbolics sold were built on me.</p>
+        <p class="say r">Tom Knight, David Moon, Jack Holloway and Guy Steele drew me in about 1978. MIT built about thirty of me, and the first Lisp machines LMI and Symbolics sold were built on me.</p>
+        <p class="small">muir brings the CADR back by simulating its hardware rather than imitating its software, and boots System 100, the last release of the Lisp Machine software MIT made, restored from tapes the MIT Tapes of Tech Square project recovered. <b>muir is written in Rust and has no crate dependencies.</b></p>
+      </div>
+
+      <figure class="panel wide">
+        <a href="system-100.html" target="_blank" rel="noopener" style="display:block; width:min(100%, 17rem); margin-inline:auto;"><img class="shot" src="system-100.png" width="768" height="963" loading="lazy" style="width:100%;" alt="The CADR screen: MIT System, band 2 of MIT-LISPM-1; Experimental System 100.0; Microcode 323; MIT Lisp Machine One, with associated machine OZ; and a Lisp Listener reading at top level."></a>
+        <figcaption class="cap" style="align-self:center;">What you see once muir has booted System&nbsp;100: the Lisp Listener, where you type Lisp and the machine answers. The machine&rsquo;s screen, keyboard and mouse reach you over RFB, so any VNC viewer is <a href="https://github.com/metebalci/muir/blob/main/docs/manual.md#the-terminal">its terminal</a>.</figcaption>
+      </figure>
+    </div>
+
+    <footer class="wholine">
+      <div class="label">muir &middot; A Lisp Machine</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>02</span></div>
+    </footer>
+  </section>
+
+  <!-- --------------------------------------------------- three engines -->
+  <section id="engines" aria-label="What muir does">
+    <div class="panel bare">
+      <span class="eyebrow">How</span>
+      <h2 class="title t-l">What muir does</h2>
+      <p class="small" style="margin-top:0.4rem;">muir does not imitate the Lisp software. It simulates the machine that software ran on, from MIT&rsquo;s own drawings of its boards, so programs written for the real hardware run unchanged &mdash; MIT&rsquo;s debugger for the machine as well as the Lisp system.</p>
+      <p class="small">The CADR&rsquo;s processor carries out each instruction as a series of small steps, written in <b>microcode</b>; one step is a <b>microcycle</b>, and the real machine did about 6.9 million of them a second. muir simulates it at three levels of detail, and all three agree at the end of every microcycle, so the fast ones can be checked against the slow one.</p>
+    </div>
+
+    <div class="panels three engines">
+      <div class="panel">
+        <p class="cap"><span class="mono">micro</span> &middot; the fast one</p>
+        <svg class="chara" viewBox="0 0 184 150" style="width:90%; align-self:center;" role="img" aria-label="CADR, with a rocket taking off beside it">
+          <use href="#cadr-body"/><use href="#face-happy"/><use href="#rocket"/>
+        </svg>
+        <p class="big-number">60 M/s</p>
+        <p class="small"><b>about 9x the machine</b></p>
+        <p class="small">What each microcycle does, and nothing about when. The quickest way to boot the system and use it.</p>
+      </div>
+
+      <div class="panel">
+        <p class="cap"><span class="mono">rtl</span> &middot; the everyday one</p>
+        <svg class="chara" viewBox="0 0 132 150" style="width:66%; align-self:center;" role="img" aria-label="CADR">
+          <use href="#cadr-body"/><use href="#face-happy"/>
+        </svg>
+        <p class="big-number">16 M/s</p>
+        <p class="small"><b>about 2x the machine, flat out</b></p>
+        <p class="small">What each microcycle does and <em>when</em>: waits on the buses, timeouts, the debug cable. It could run twice the machine&rsquo;s speed, but by default it is held to the machine&rsquo;s own, so the machine&rsquo;s clock keeps the day&rsquo;s time; <code>--no-pace</code> lets it run flat out.</p>
+      </div>
+
+      <div class="panel tone">
+        <p class="cap"><span class="mono">chip</span> &middot; every chip</p>
+        <svg class="chara" viewBox="0 0 132 150" style="width:66%; align-self:center;" role="img" aria-label="CADR, sweating">
+          <use href="#cadr-body"/><use href="#face-tired"/>
+        </svg>
+        <p class="big-number">1,400/s</p>
+        <p class="small"><b>about 1/5,000 of the machine</b></p>
+        <p class="small">MIT&rsquo;s drawings of every board, simulated part by part and wire by wire. Far too slow to use, and the reference the other two are checked against.</p>
+      </div>
+    </div>
+
+    <p class="small">The worst case, with everything fitted: the color TV on every engine, and on <code>chip</code> MIT's disk controller with its multiplexor as well, every board a netlist. Rates are flat out, with no pacing, from <code>cargo run --release --example benchmark -- --everything</code> on one core of an Apple M4, rounded down; without the second display board <code>chip</code> runs about 2,000/s and the other two the same. The machine's own microcycle is 145 ns, so the hardware runs 6.9 M of them a second. What each engine computes on the way to the next one is <a href="https://github.com/metebalci/muir/blob/main/docs/engines.md">in the manual</a>.</p>
+
+    <footer class="wholine">
+      <div class="label">muir &middot; What muir does</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>03</span></div>
+    </footer>
+  </section>
+
+  <!-- ------------------------------------------------------- installing -->
+  <section id="install" aria-label="Installing">
+    <div class="panel bare">
+      <span class="eyebrow">Do it</span>
+      <h2 class="title t-l">Build and boot</h2>
+      <p class="small" style="margin-top:0.4rem;">No binaries are distributed; you build it yourself. A fresh clone needs nothing else &mdash; there are no crate dependencies.</p>
+    </div>
+
+    <div class="panels three">
+      <div class="panel">
+        <div class="step-head"><span class="step-num">1</span><h3>The Rust toolchain</h3></div>
+<pre class="term cmd">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</pre>
+        <p class="small">Install <code>rustup</code>, then open a new shell so <code>cargo</code> is on the path; the compiler version is pinned in the repository.</p>
+      </div>
+
+      <div class="panel">
+        <div class="step-head"><span class="step-num">2</span><h3>Clone and build</h3></div>
+<pre class="term cmd">git clone https://github.com/metebalci/muir
+cd muir
+cargo build --release</pre>
+        <p class="small">That builds it. <code>cargo test</code> beside it is optional, and a fresh clone passes with nothing fetched.</p>
+      </div>
+
+      <div class="panel">
+        <div class="step-head"><span class="step-num">3</span><h3>The System 100 release</h3></div>
+<pre class="term cmd">tools/fetch-system-100.sh</pre>
+        <p class="small">A <b>disk pack</b>, a file that stands in for the machine&rsquo;s disk and holds its microcode and a <b>band</b>, the saved Lisp world it boots into; and the system&rsquo;s sources. Neither is part of muir: the script fetches them and checks every file against its SHA-256 sum.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+        <div class="step-head"><span class="step-num">4</span><h3>Run System 100</h3></div>
+<pre class="term cmd">target/release/muir --disk-pack vendor/run/disk-sys-100-0.img \
+    --chaos-address 3050 --chaos-udp --chaos-udp-peer 3060@127.0.0.1:42043</pre>
+        <p class="small">The everyday engine, <code>rtl</code>, booting the pack. The <b>Chaosnet</b> is the machine&rsquo;s network, and this band expects to be machine 3050 on it and to ask host 3060 for the date and for its files. It prints where its screen is: point any VNC viewer there.</p>
+        <p class="say quiet" style="margin-top:0.35rem;">The file and time host at 3060 is not me. A CADR had no such server in it, so it is a program of its own on the network &mdash; <a href="https://github.com/metebalci/ozd">ozd</a>.</p>
+        <p class="small">A band that reaches no host boots all the same, but stops to ask for the date: <b>Super-B</b> at the debugger, then the date and time it asks for and <b>y</b>, finish it.</p>
+        <div class="actions" style="margin-top:auto;">
+          <a class="key" href="https://github.com/metebalci/muir/blob/main/docs/manual.md#running-it">What a run says</a>
+          <a class="key lm" href="https://github.com/metebalci/muir/blob/main/docs/manual.md#the-command-line">Every flag</a>
+        </div>
+      </div>
+
+    <footer class="wholine">
+      <div class="label">muir &middot; Build and boot</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>04</span></div>
+    </footer>
+  </section>
+
+  <!-- --------------------------------------------------------- diskpack -->
+  <section id="diskpack" aria-label="Making a pack">
+    <div class="panel bare">
+      <span class="eyebrow">Pack</span>
+      <h2 class="title t-m">Making a pack</h2>
+    </div>
+
+    <div class="panel">
+      <p class="small">The fetched pack is not the only one. <code>diskpack</code>, built beside <code>muir</code>, makes a pack of your own and edits its label: partitions added, grown, zeroed and deleted, microcode and bands loaded and dumped. This makes one with microcode 323 and the System&nbsp;100 band, the fetched pack&rsquo;s <code>LOD2</code>, to boot with <code>--disk-pack mine.img</code>:</p>
+<pre class="term cmd">target/release/diskpack mine.img initialize
+target/release/diskpack mine.img load MCR1
+target/release/diskpack mine.img load-from LOD1 vendor/run/disk-sys-100-0.img LOD2</pre>
+      <div class="actions">
+        <a class="key" href="https://github.com/metebalci/muir#making-a-pack">Everything diskpack does</a>
+      </div>
+    </div>
+
+    <footer class="wholine">
+      <div class="label">muir &middot; Making a pack</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>05</span></div>
+    </footer>
+  </section>
+
+  <!-- ------------------------------------------------- the centerfold -->
+  <section id="machine" aria-label="Inside the machine">
+    <div class="panel bare">
+      <span class="eyebrow">Plan</span>
+      <h2 class="title t-l">Inside the machine</h2>
+      <p class="small" style="margin-top:0.4rem;">For the curious: the CADR is a set of boards on two buses, and this is how muir puts them together. Every box is a board, simulated from MIT&rsquo;s drawings on <code>chip</code> and as a model of the board on the other two engines.</p>
+    </div>
+
+    <div class="panel">
         <p class="cap light">The specification, as muir models it:</p>
 <pre class="term">PROCESSOR  32-bit, microcoded
 CONTROL    48 bits x 16K words
 CYCLE      <b>145 ns</b>
 BUSES      Xbus and Unibus
 BUILT      about 30</pre>
-        <!-- No margin-top:auto here: the panel is as tall as the drawing
-             beside it, and pushing this to the foot leaves a hole in the
-             middle of the panel rather than a margin at the bottom of it. -->
-        <p class="small"><b>muir is written in Rust and has no crate dependencies.</b> The target is System 100, microcode 323 &mdash; the restored last MIT release, recovered from the MIT Tapes of Tech Square project.</p>
-      </div>
-
-      <figure class="panel wide split">
-        <a href="lashup.html" target="_blank" rel="noopener">
-          <img class="shot" src="lashup-small.gif" width="1240" height="794" loading="lazy" alt="Two CADR screens side by side. The left machine runs CC; the right machine's screen stops changing when CC halts it through the debug cable.">
-        </a>
-        <div class="beside">
-          <p class="say">And when it all works, one of me halts another through the debug cable and reads it out. That is muir's acceptance test.</p>
-          <svg class="chara" viewBox="0 0 132 150" style="width:44%; align-self:flex-end;" role="img" aria-label="CADR, waving">
-            <use href="#cadr-body"/><use href="#face-happy"/><use href="#arm-wave"/>
-          </svg>
-          <figcaption class="cap" style="margin-top:auto;">The acceptance test, recorded as it ran: CC on the left machine seizes the right one through the debug cable, and the right screen goes still at that instant and never moves again. <a href="lashup.html" target="_blank" rel="noopener">Full size</a>.</figcaption>
-        </div>
-      </figure>
-    </div>
-
-    <footer class="wholine">
-      <div class="label">muir &middot; What it is</div>
-      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>02</span></div>
-    </footer>
-  </section>
-
-  <!-- --------------------------------------------------- three engines -->
-  <section id="engines" aria-label="Three engines">
-    <div class="panel bare">
-      <span class="eyebrow">Speed</span>
-      <h2 class="title t-l">Three engines</h2>
-      <p class="small" style="margin-top:0.4rem;">One machine, three fidelity levels. All three reach the same architectural state at every microcycle boundary, so the fast one can be checked against the slow one.</p>
-    </div>
-
-    <div class="panels three engines">
-      <div class="panel">
-        <p class="cap"><span class="mono">micro</span> &middot; no timing model</p>
-        <svg class="chara" viewBox="0 0 184 150" style="width:90%; align-self:center;" role="img" aria-label="CADR, with a rocket taking off beside it">
-          <use href="#cadr-body"/><use href="#face-happy"/><use href="#rocket"/>
-        </svg>
-        <p class="big-number">60 M/s</p>
-        <p class="small"><b>about 9x the machine</b></p>
-        <p class="small">One evaluation a microinstruction: decode, execute, write back. Nothing waits for an instant.</p>
-      </div>
-
-      <div class="panel">
-        <p class="cap"><span class="mono">rtl</span> &middot; the timing model</p>
-        <svg class="chara" viewBox="0 0 132 150" style="width:66%; align-self:center;" role="img" aria-label="CADR">
-          <use href="#cadr-body"/><use href="#face-happy"/>
-        </svg>
-        <p class="big-number">16 M/s</p>
-        <p class="small"><b>about 2x the machine</b></p>
-        <p class="small">Every datapath signal on the machine's own two-phase clock, and everything that is a matter of <em>when</em>: bus waits, arbitration, timeouts, the debug cable.</p>
-      </div>
-
-      <div class="panel tone">
-        <p class="cap"><span class="mono">chip</span> &middot; the netlist</p>
-        <svg class="chara" viewBox="0 0 132 150" style="width:66%; align-self:center;" role="img" aria-label="CADR, sweating">
-          <use href="#cadr-body"/><use href="#face-tired"/>
-        </svg>
-        <p class="big-number">1,400/s</p>
-        <p class="small"><b>about 1/5,000 of the machine</b></p>
-        <p class="small">MIT's own drawings as netlists, every board on both buses, the parts resolved net by net. Netlist-accurate: the reference the other two are held to.</p>
-      </div>
-    </div>
-
-    <p class="small">The worst case, with everything fitted: the color TV on every engine, and on <code>chip</code> MIT's disk controller with its multiplexor as well, every board a netlist. Rates from <code>cargo run --release --example benchmark -- --everything</code> on one core of an Apple M4, rounded down; without the second display board <code>chip</code> runs about 2,000/s and the other two the same. The machine's own microcycle is 145 ns, so the hardware runs 6.9 M of them a second. What each engine computes on the way to the next one is <a href="https://github.com/metebalci/muir/blob/main/docs/engines.md">in the manual</a>.</p>
-
-    <footer class="wholine">
-      <div class="label">muir &middot; Three engines</div>
-      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>03</span></div>
-    </footer>
-  </section>
-
-  <!-- ------------------------------------------------- the centerfold -->
-  <section id="machine" aria-label="The machine it models">
-    <div class="panel bare">
-      <span class="eyebrow">Plan</span>
-      <h2 class="title t-l">The machine it models</h2>
     </div>
 
     <figure class="panel">
@@ -343,8 +410,8 @@ BUILT      about 30</pre>
     </figure>
 
     <footer class="wholine">
-      <div class="label">muir &middot; The machine it models</div>
-      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>04</span></div>
+      <div class="label">muir &middot; Inside the machine</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>06</span></div>
     </footer>
   </section>
 
@@ -353,6 +420,7 @@ BUILT      about 30</pre>
     <div class="panel bare">
       <span class="eyebrow">Spec</span>
       <h2 class="title t-l">Seven netlists</h2>
+      <p class="small" style="margin-top:0.4rem;">Each board as a <b>netlist</b>: every chip on it and every wire between them, read out of MIT&rsquo;s own CAD files. These are what the <code>chip</code> engine simulates.</p>
     </div>
 
     <div class="panels two boards-split">
@@ -391,86 +459,37 @@ BUILT      about 30</pre>
 
     <footer class="wholine">
       <div class="label">muir &middot; Seven netlists</div>
-      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>05</span></div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>07</span></div>
     </footer>
   </section>
 
-  <!-- ------------------------------------------------------- installing -->
-  <section id="install" aria-label="Installing">
+  <!-- ---------------------------------------------------- the acceptance test -->
+  <section id="lashup" aria-label="The acceptance test">
     <div class="panel bare">
-      <span class="eyebrow">Do it</span>
-      <h2 class="title t-l">Build and boot</h2>
-      <p class="small" style="margin-top:0.4rem;">No binaries are distributed; you build it yourself. A fresh clone needs nothing else &mdash; there are no crate dependencies.</p>
+      <span class="eyebrow">Test</span>
+      <h2 class="title t-l">Two machines, one debugging the other</h2>
+      <p class="small" style="margin-top:0.4rem;">A real CADR could be debugged from another CADR. A cable joined the two machines&rsquo; bus interfaces, and a program on one could stop the other, step it and read out its insides, even when its own software had crashed. That program is <b>CC</b>, MIT&rsquo;s console debugger for the machine.</p>
+      <p class="small">muir&rsquo;s acceptance test is exactly that. Two simulated machines are joined by the simulated debug cable. The first boots System&nbsp;100, logs in and loads CC over the network; CC then halts the second machine and reads back where it had got to. It passes only if the processor, memory, disk, network, file loading and both ends of the debug cable all behave as MIT built them.</p>
     </div>
 
-    <div class="panels three">
-      <div class="panel">
-        <div class="step-head"><span class="step-num">1</span><h3>The Rust toolchain</h3></div>
-<pre class="term cmd">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</pre>
-        <p class="small">Install <code>rustup</code>, then open a new shell so <code>cargo</code> is on the path; the compiler version is pinned in the repository.</p>
-      </div>
-
-      <div class="panel">
-        <div class="step-head"><span class="step-num">2</span><h3>Clone and build</h3></div>
-<pre class="term cmd">git clone https://github.com/metebalci/muir
-cd muir
-cargo build --release</pre>
-        <p class="small">That builds it. <code>cargo test</code> beside it is optional, and a fresh clone passes with nothing fetched.</p>
-      </div>
-
-      <div class="panel">
-        <div class="step-head"><span class="step-num">3</span><h3>The System 100 release</h3></div>
-<pre class="term cmd">tools/fetch-system-100.sh</pre>
-        <p class="small">The disk pack and the system sources, which are not part of muir: the script fetches them and checks every file against its SHA-256 sum.</p>
-      </div>
-    </div>
-
-    <div class="panels two wide run-split">
-      <div class="panel">
-        <div class="step-head"><span class="step-num">4</span><h3>Run System 100</h3></div>
-<pre class="term cmd">target/release/muir --disk-pack vendor/run/disk-sys-100-0.img \
-    --chaos-address 3050 --chaos-udp --chaos-udp-peer 3060@127.0.0.1:42043</pre>
-        <p class="small">One engine from the boot PROM, with the pack on the disk controller's cable and the band's own Chaosnet numbers named: <code>--rtl</code> is the default, implied when neither <code>--micro</code> nor <code>--chip</code> is given.</p>
-        <p class="say quiet" style="margin-top:0.35rem;">The file and time host at 3060 is not me. A CADR had no such server in it, so it is a program of its own on the network &mdash; <a href="https://github.com/metebalci/ozd">ozd</a>.</p>
-        <p class="small">A band that reaches no host boots all the same, but stops to ask for the date: <b>Super-B</b> at the debugger, then the date and time it asks for and <b>y</b>, finish it.</p>
-        <div class="actions" style="margin-top:auto;">
-          <a class="key" href="https://github.com/metebalci/muir/blob/main/docs/manual.md#running-it">What a run says</a>
-          <a class="key lm" href="https://github.com/metebalci/muir/blob/main/docs/manual.md#the-command-line">Every flag</a>
+    <div class="panels two">
+      <figure class="panel wide split">
+        <a href="lashup.html" target="_blank" rel="noopener">
+          <img class="shot" src="lashup-small.gif" width="1240" height="794" loading="lazy" alt="Two CADR screens side by side. The left machine runs CC; the right machine's screen stops changing when CC halts it through the debug cable.">
+        </a>
+        <div class="beside">
+          <p class="say">And when it all works, one of me halts another through the debug cable and reads it out. That is muir's acceptance test.</p>
+          <svg class="chara" viewBox="0 0 132 150" style="width:44%; align-self:flex-end;" role="img" aria-label="CADR, waving">
+            <use href="#cadr-body"/><use href="#face-happy"/><use href="#arm-wave"/>
+          </svg>
+          <figcaption class="cap" style="margin-top:auto;">The acceptance test, recorded as it ran: CC on the left machine seizes the right one through the debug cable, and the right screen goes still at that instant and never moves again. <a href="lashup.html" target="_blank" rel="noopener">Full size</a>.</figcaption>
         </div>
-      </div>
-
-      <figure class="panel">
-        <a href="system-100.html" target="_blank" rel="noopener" style="display:block; width:min(100%, 17rem); margin-inline:auto;"><img class="shot" src="system-100.png" width="768" height="963" loading="lazy" style="width:100%;" alt="The CADR screen: MIT System, band 2 of MIT-LISPM-1; Experimental System 100.0; Microcode 323; MIT Lisp Machine One, with associated machine OZ; and a Lisp Listener reading at top level."></a>
-        <figcaption class="cap">The boot when it has finished: System&nbsp;100.0 on microcode 323, reading at Lisp Listener 1. The screen, keyboard and mouse go out over RFB, so any VNC viewer is <a href="https://github.com/metebalci/muir/blob/main/docs/manual.md#the-terminal">the machine's terminal</a>.</figcaption>
       </figure>
     </div>
 
     <footer class="wholine">
-      <div class="label">muir &middot; Build and boot</div>
-      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>06</span></div>
-    </footer>
-  </section>
-
-  <!-- --------------------------------------------------------- diskpack -->
-  <section id="diskpack" aria-label="Making a pack">
-    <div class="panel bare">
-      <span class="eyebrow">Pack</span>
-      <h2 class="title t-m">Making a pack</h2>
-    </div>
-
-    <div class="panel">
-      <p class="small">The fetched pack is not the only one. <code>diskpack</code>, built beside <code>muir</code>, makes a pack of your own and edits its label: partitions added, grown, zeroed and deleted, microcode and bands loaded and dumped. This makes one with microcode 323 and the System&nbsp;100 band, the fetched pack&rsquo;s <code>LOD2</code>, to boot with <code>--disk-pack mine.img</code>:</p>
-<pre class="term cmd">target/release/diskpack mine.img initialize
-target/release/diskpack mine.img load MCR1
-target/release/diskpack mine.img load-from LOD1 vendor/run/disk-sys-100-0.img LOD2</pre>
-      <div class="actions">
-        <a class="key" href="https://github.com/metebalci/muir#making-a-pack">Everything diskpack does</a>
-      </div>
-    </div>
-
-    <footer class="wholine">
-      <div class="label">muir &middot; Making a pack</div>
-      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>07</span></div>
+      <div class="label">muir &middot; The acceptance test</div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>08</span></div>
     </footer>
   </section>
 
@@ -505,7 +524,7 @@ target/release/diskpack mine.img load-from LOD1 vendor/run/disk-sys-100-0.img LO
 
     <footer class="wholine">
       <div class="label">muir &middot; Colophon</div>
-      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>08</span></div>
+      <div class="bar"><span>09/15/26 14:20:11</span><span>USER:</span><span>Cold-booted</span><span>09</span></div>
     </footer>
   </section>
 
