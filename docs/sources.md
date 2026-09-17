@@ -65,7 +65,7 @@ depends on it says so.
 ## How it was written
 
 muir is implemented entirely by [Claude
-Code](https://claude.com/claude-code), on Anthropic's Opus 5 and Fable 5.1
+Code](https://claude.com/claude-code), on Anthropic's Opus and Fable
 models.
 
 ## License

@@ -644,7 +644,7 @@ depending on it says **unverified**, and why.
 ## How it was written
 
 muir is implemented entirely by [Claude Code](https://claude.com/claude-code),
-on Anthropic's Opus 5 and Fable 5.1 models.
+on Anthropic's Opus and Fable models.
 
 ## License
 
