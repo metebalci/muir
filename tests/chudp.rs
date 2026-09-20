@@ -865,12 +865,21 @@ fn a_datagram_reaches_a_running_muirs_cable() {
 /// frame.** The other direction has been held for a long time by
 /// `a_datagram_reaches_a_running_muirs_cable`; this one had nothing.
 ///
-/// Every other send test here feeds a synthetic frame from a stub node,
-/// so all of them would pass on a muir that never put a datagram on the
-/// wire at all --- which is exactly the doubt a report of "muir sends
-/// nothing" raised, and which cost an afternoon to settle by hand. The
-/// gap was between the board's own transmit and this node: a frame the
-/// real hardware model builds, rather than one a test wrote.
+/// **What the gap was, measured rather than assumed.** Cutting
+/// `send_to` here so that nothing leaves the socket fails eight tests,
+/// seven of them older than this one: the send tests hand
+/// [`Chudp::receive`] a synthetic frame but assert on a real peer socket
+/// receiving it, so a link that never sent was already caught. The claim
+/// that the suite would pass on a muir that put no datagram on the wire
+/// was wrong, and was made here before the control was run.
+///
+/// The gap is narrower and is between the board's own transmit and this
+/// node: every one of those tests writes the frame itself, so none of
+/// them starts from what the hardware model actually builds. A fault in
+/// the words the board puts on the cable --- their count, their order,
+/// their trailer --- reaches the socket in all of them because the test
+/// wrote the words. That is the doubt a report of "muir sends nothing"
+/// raised, and what cost an afternoon to settle by hand.
 ///
 /// The band asks for the time as it comes up, so the first thing any
 /// machine with a pack puts on the cable is an `RFC` for `TIME` --- it
