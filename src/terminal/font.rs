@@ -157,9 +157,8 @@ fn leader(qfasl: &[u8]) -> Leader {
     // seven unrelated constants. The leader is the one place where
     // seven of them stand together and an eighth does not follow.
     let op = |k: usize| k + 4 <= qfasl.len() && qfasl[k..k + 2] == RASTER_OP;
-    let run = |k: usize| {
-        (0..RUN).all(|j| op(k + 4 * j)) && !op(k + 4 * RUN) && (k < 4 || !op(k - 4))
-    };
+    let run =
+        |k: usize| (0..RUN).all(|j| op(k + 4 * j)) && !op(k + 4 * RUN) && (k < 4 || !op(k - 4));
     let at = (0..qfasl.len()).step_by(2).find(|&k| run(k)).expect("a font file carries its leader");
     let v: Vec<usize> = (0..RUN)
         .map(|j| u16::from_le_bytes([qfasl[at + 4 * j + 2], qfasl[at + 4 * j + 3]]) as usize)
@@ -347,8 +346,10 @@ impl Fonts {
     pub fn read(&mut self, frame: &Frame) -> Text {
         let rows = (frame.height / CHAR_HEIGHT).min(ROWS);
         let cols = (frame.width / CHAR_WIDTH).min(COLS);
-        let cells: Vec<Glyph> =
-            (0..rows).flat_map(|y| (0..cols).map(move |x| (x, y))).map(|(x, y)| Self::cell(frame, x, y)).collect();
+        let cells: Vec<Glyph> = (0..rows)
+            .flat_map(|y| (0..cols).map(move |x| (x, y)))
+            .map(|(x, y)| Self::cell(frame, x, y))
+            .collect();
         let system = match self.pinned {
             Some(pinned) => pinned,
             None => {

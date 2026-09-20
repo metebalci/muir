@@ -152,8 +152,8 @@ fn strip(buf: &[u8], data: &mut Vec<u8>, size: &mut Option<(usize, usize)>) -> u
             }
             SB => {
                 // A subnegotiation runs to IAC SE; only NAWS is read.
-                let Some(end) = (at + 2..buf.len() - 1)
-                    .find(|&k| buf[k] == IAC && buf.get(k + 1) == Some(&SE))
+                let Some(end) =
+                    (at + 2..buf.len() - 1).find(|&k| buf[k] == IAC && buf.get(k + 1) == Some(&SE))
                 else {
                     break;
                 };
@@ -372,8 +372,7 @@ impl Client {
         }
         let (_, height) = self.size;
         let used = text.used();
-        let all: Vec<String> =
-            (0..used).map(|y| text.line(y).iter().collect::<String>()).collect();
+        let all: Vec<String> = (0..used).map(|y| text.line(y).iter().collect::<String>()).collect();
         let window = self.anchor(&all, text.cursor, height);
         let end = (window + height).min(used);
         let lines = all.get(window..end).unwrap_or_default().to_vec();
@@ -506,10 +505,7 @@ impl Glass {
 
     /// Where each is listening, for the run to say.
     pub fn addrs(&self) -> Vec<(SocketAddr, bool)> {
-        self.ttys
-            .iter()
-            .filter_map(|t| t.addr().ok().map(|a| (a, t.read_only)))
-            .collect()
+        self.ttys.iter().filter_map(|t| t.addr().ok().map(|a| (a, t.read_only))).collect()
     }
 }
 
@@ -566,7 +562,9 @@ impl GlassTty {
                 Ok((stream, who)) => {
                     if self.clients.len() >= MAX_CLIENTS {
                         if self.trace {
-                            eprintln!("glass tty: {who} turned away: {MAX_CLIENTS} clients already");
+                            eprintln!(
+                                "glass tty: {who} turned away: {MAX_CLIENTS} clients already"
+                            );
                         }
                         continue;
                     }

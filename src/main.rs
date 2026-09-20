@@ -472,7 +472,11 @@ fn glass_spec(arg: Option<&str>) -> Result<GlassAt, String> {
     }
     let addr = endpoint(endpoint_spec, GLASS_TTY_PORT)
         .ok_or("wants nothing, a port, an address or address:port, and ro")?;
-    Ok(GlassAt { addr, port_named: names_a_port(endpoint_spec), read_only: read_only.unwrap_or(false) })
+    Ok(GlassAt {
+        addr,
+        port_named: names_a_port(endpoint_spec),
+        read_only: read_only.unwrap_or(false),
+    })
 }
 
 /// Where a terminal is served, and how hard: the endpoint; whether the
@@ -5698,7 +5702,14 @@ fn main() {
                 clocks: capture_tv_time,
                 color: color_screen.as_mut(),
             };
-            time_engine("micro", Alone(e), terminal.as_mut(), Some(&mut glass), serial.as_mut(), run);
+            time_engine(
+                "micro",
+                Alone(e),
+                terminal.as_mut(),
+                Some(&mut glass),
+                serial.as_mut(),
+                run,
+            );
         }
         Which::Rtl => {
             let mut m = machine(&prom, packs, boards, tv_board, color_tv);
