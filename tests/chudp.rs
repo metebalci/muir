@@ -861,6 +861,94 @@ fn a_datagram_reaches_a_running_muirs_cable() {
     child.kill();
 }
 
+/// **A running machine's own frame reaches a peer over UDP, and is a
+/// frame.** The other direction has been held for a long time by
+/// `a_datagram_reaches_a_running_muirs_cable`; this one had nothing.
+///
+/// Every other send test here feeds a synthetic frame from a stub node,
+/// so all of them would pass on a muir that never put a datagram on the
+/// wire at all --- which is exactly the doubt a report of "muir sends
+/// nothing" raised, and which cost an afternoon to settle by hand. The
+/// gap was between the board's own transmit and this node: a frame the
+/// real hardware model builds, rather than one a test wrote.
+///
+/// The band asks for the time as it comes up, so the first thing any
+/// machine with a pack puts on the cable is an `RFC` for `TIME` --- it
+/// arrives within a second or so of the start, which is what makes this
+/// cheap enough to run every time. What is checked is the whole of the
+/// framing the peer depends on: the CHUDP header, the addresses in the
+/// trailer, and the Internet checksum over the rest.
+#[test]
+fn a_running_machines_own_frame_reaches_a_peer() {
+    let Some(pack) = support::pack_100() else { return };
+    let (peer, peer_at) = peer_socket();
+    peer.set_read_timeout(Some(Duration::from_secs(1))).expect("a timeout");
+    let child = support::muir()
+        .args(["--micro", "--stop-after", "4000000000"])
+        .args(["--chaos-address", &format!("{ME:o}")])
+        .args(["--chaos-udp", "127.0.0.1:0"])
+        // **The band calls 3060, not any peer a test invents.** System
+        // 100's own band is MIT-LISPM-1 at 3050 and its file and time
+        // host is MIT-OZ at 3060, so that is the address its frames are
+        // for; a peer entry naming anything else leaves them with nowhere
+        // to go, which is what the first version of this test did.
+        .args(["--chaos-udp-peer", &format!("{SERVER:o}@{peer_at}")])
+        .args(["--disk-pack", &pack.display().to_string()])
+        .start();
+    child
+        .stderr()
+        .wait_until(|t| t.contains("chaosnet over udp: 127."), "muir says where it is listening");
+    let mut datagram = [0u8; 1024];
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let n = loop {
+        assert!(
+            Instant::now() < deadline,
+            "no frame reached the peer; muir wrote:\n{}",
+            child.stderr().so_far()
+        );
+        if let Ok((n, from)) = peer.recv_from(&mut datagram) {
+            assert_eq!(from.ip(), peer_at.ip(), "from the machine's own socket");
+            break n;
+        }
+    };
+    child.kill();
+
+    // A frame, and the peer's own reading of it: the header this speaks,
+    // then the words of the packet most significant byte first.
+    let d = &datagram[..n];
+    assert_eq!(d[0], udp::VERSION, "the version");
+    assert_eq!(d[1], udp::PACKET, "the function: here is a Chaos packet");
+    let words: Vec<u16> =
+        d[udp::HEADER..].chunks(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+    assert!(words.len() >= 3, "a trailer at least: {words:?}");
+    let (body, check) = words.split_at(words.len() - 1);
+    // The trailer's first two words are the cable's: where it is going on
+    // this subnet, and who sent it.
+    assert_eq!(body[body.len() - 2], SERVER, "the trailer's destination");
+    assert_eq!(body[body.len() - 1], ME, "the trailer's source");
+    // The Internet checksum over everything before it, which is what a
+    // peer refuses a frame for.
+    let mut sum: u32 = 0;
+    for w in body {
+        sum += *w as u32;
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    assert_eq!(check[0], !(sum as u16), "the trailer's checksum");
+    // And it reads, by the same reader that takes `cbridge`'s own
+    // datagrams: the packet ends at the cable destination, the trailer's
+    // source and checksum being the frame's rather than the packet's.
+    let f = udp::unwrap(d).expect("a frame a peer can read");
+    assert_eq!(f.source, ME, "the frame's sender");
+    let (p, cable_dest) = Packet::from_buffer(&f.buffer).expect("a packet");
+    assert_eq!(cable_dest, SERVER, "the next hop on this subnet");
+    assert_eq!(p.opcode, op::RFC, "an RFC");
+    assert_eq!(p.source, ME, "the packet's own source");
+    assert_eq!(p.dest, SERVER, "the packet's own destination");
+    // The band asks its file and time host for the time as it comes up,
+    // which is the first thing any machine with a pack puts on the cable.
+    assert_eq!(String::from_utf8_lossy(&p.data), "TIME", "the contact it asks for");
+}
+
 // --- who may have files -------------------------------------------------
 
 /// A packet as the ether would hand it to a node.
