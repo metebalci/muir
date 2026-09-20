@@ -343,6 +343,38 @@ fn the_mode_registers_bow_bit_swaps_the_screen() {
     assert_eq!(&swapped[4..8], &white, "and white once BOW is set");
 }
 
+/// **A flip of `MODE BOW` reaches a viewer that has already seen the
+/// screen.** The bit inverts every pixel without changing a word of the
+/// frame buffer, and the software does flip it: the release's only reads
+/// of the mode register are `shwarm.lisp`'s three read-modify-writes of
+/// it. A viewer is sent what changed by comparing the frame buffer's
+/// words against the copy it was last sent, and those words are the same
+/// across a flip, so the change has to be noticed some other way.
+#[test]
+fn a_flip_of_bow_reaches_a_viewer_that_has_seen_the_screen() {
+    let (mut v, _) = Viewer::connect();
+    scramble(&mut v.tv);
+    assert_eq!(v.update(false, 4).len(), 1, "the whole screen goes first");
+    v.tv.write_control(0, tv::mode::BOW, 0);
+    // Incremental: what has changed since the viewer's copy. Every pixel
+    // has.
+    let mut request = vec![3u8, 1];
+    for k in [0u16, 0, tv::WIDTH as u16, tv::HEIGHT as u16] {
+        request.extend_from_slice(&k.to_be_bytes());
+    }
+    v.stream.write_all(&request).unwrap();
+    let mut got = [0u8; 4];
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut n = 0;
+    while n < got.len() && Instant::now() < deadline {
+        v.terminal.poll(Frame::of(&v.tv));
+        n += v.stream.read(&mut got[n..]).unwrap_or(0);
+    }
+    assert_eq!(n, got.len(), "BOW flipped every pixel and the viewer was sent nothing");
+    assert_eq!(got[0], 0, "a FramebufferUpdate");
+    assert!(u16::from_be_bytes([got[2], got[3]]) > 0, "at least one rectangle");
+}
+
 /// **A frame and the frame buffer agree on which way round the screen
 /// is.** The rule lives in [`Tv::shows_white`] and again in
 /// [`Frame::shows_white`], because a frame may be a monitor's raster and
