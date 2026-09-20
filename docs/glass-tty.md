@@ -93,6 +93,15 @@ machine is settled by the microcode, `sys/ucadr/uc-tv.lisp:21-39`: "LEFT
 ADJUSTED AND PROCESSED FROM LEFT TO RIGHT. (RIGHT TO LEFT ON 32-BIT TVS)".
 The CADR is the 32-bit TV, so row 0 is in the low bits.
 
+**None of those numbers is written down in muir.** Each font declares its
+own shape --- char height and width, raster width, rasters per word, words
+per character --- and the decoder reads the leader rather than assuming
+any of it, so one path serves both fonts and a third would need no new
+code. `the_fonts_declare_the_grid_the_readback_uses` holds what the files
+declare to the grid the readback cuts a screen into. That test earns its
+place: every other test here draws a glyph and reads it back on the same
+pitch, so all of them would pass just as well if that pitch were wrong.
+
 **Both fonts are committed**, in `mit/sys/fonts/`, byte for byte the
 release's own files, as `mit/sys/ubin/promh.mcr` is for the boot PROM.
 `the_committed_fonts_are_the_ones_system_100_ships` holds each to the

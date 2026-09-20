@@ -31,6 +31,16 @@
 //! blank --- so the grid is [`COLS`] by [`ROWS`] whichever font is in
 //! force, and only the glyphs change.
 //!
+//! **None of those numbers is written down here.** Each font declares its
+//! own shape in its leader and [`Leader`] reads it, so one decoder serves
+//! both and a third would need no new code: the system font's four 8-bit
+//! rows to a word fall out as one row a byte, and the cold load's four
+//! 7-bit rows leave the top of each word unused, without either being a
+//! case. `tests/font.rs` holds the declared shape to the grid the
+//! readback cuts a screen into --- the one check here that is not
+//! circular, since every round trip draws and reads on the same pitch and
+//! would pass just as well if that pitch were wrong.
+//!
 //! The layout is MIT's, `sys/window/tvdefs.lisp:517` for the `FONT`
 //! defstruct and `tvdefs.lisp:557-561` for the data: "an integral number
 //! of words per character. Each word contains an integral number of rows
@@ -103,10 +113,72 @@ fn raster(qfasl: &[u8]) -> &[u8] {
     &qfasl[at + 4..at + 4 + want]
 }
 
+/// The leader of a font, as far as reading its rasters needs it:
+/// `tvdefs.lisp:517`'s fields, read out of the file rather than written
+/// down here.
+///
+/// **The two fonts differ in three of these and the decoder must not
+/// assume any of them.** They are declared, so they are read: a width
+/// hard-coded here would be a claim about a file that the file itself
+/// answers, and the first font that disagreed would decode into nonsense
+/// rather than failing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Leader {
+    /// `FONT-CHAR-HEIGHT`, the cell's height.
+    pub char_height: usize,
+    /// `FONT-CHAR-WIDTH`, the cell's width --- the pitch a character is
+    /// drawn at, and so what sets the grid. 8 in both of these.
+    pub char_width: usize,
+    /// `FONT-RASTER-WIDTH`, how many of the cell's columns the glyphs
+    /// use: 8 in the system font and 7 in the cold load's.
+    pub raster_width: usize,
+    /// `FONT-RASTERS-PER-WORD`, "(FLOOR 32. RASTER-WIDTH)".
+    pub rasters_per_word: usize,
+    /// `FONT-WORDS-PER-CHAR`, "(CEILING RASTER-HEIGHT RASTERS-PER-WORD)".
+    pub words_per_char: usize,
+}
+
+/// The leader's constants, which the file carries as a run of the same
+/// operation the raster uses, each with its value: baseline,
+/// words-per-char, rasters-per-word, raster-width, raster-height,
+/// char-width, char-height --- the leader in reverse, as the loader
+/// pushes it.
+///
+/// Only the first seven are read, which is as far as the fields this
+/// needs go; the raster's own operation carries a count of 768 and is
+/// never one of them.
+fn leader(qfasl: &[u8]) -> Leader {
+    /// The leader's fields this reads: seven, and the run is exactly
+    /// that long in both files.
+    const RUN: usize = 7;
+    // **The run is what picks them out, not the operation**, for the
+    // reason [`raster`] gives: the operation occurs on its own all over
+    // both files, and the first seven from the front of the file are
+    // seven unrelated constants. The leader is the one place where
+    // seven of them stand together and an eighth does not follow.
+    let op = |k: usize| k + 4 <= qfasl.len() && qfasl[k..k + 2] == RASTER_OP;
+    let run = |k: usize| {
+        (0..RUN).all(|j| op(k + 4 * j)) && !op(k + 4 * RUN) && (k < 4 || !op(k - 4))
+    };
+    let at = (0..qfasl.len()).step_by(2).find(|&k| run(k)).expect("a font file carries its leader");
+    let v: Vec<usize> = (0..RUN)
+        .map(|j| u16::from_le_bytes([qfasl[at + 4 * j + 2], qfasl[at + 4 * j + 3]]) as usize)
+        .collect();
+    Leader {
+        char_height: v[6],
+        char_width: v[5],
+        raster_width: v[3],
+        rasters_per_word: v[2],
+        words_per_char: v[1],
+    }
+}
+
 /// A character font: the glyphs, and what each one means.
 pub struct Font {
     /// What MIT calls the file this came from.
     pub name: &'static str,
+    /// What the file declares about itself.
+    pub leader: Leader,
     /// `FONT-RASTER-WIDTH`: how many of the cell's eight columns the
     /// glyphs use.
     pub raster_width: usize,
@@ -119,45 +191,45 @@ pub struct Font {
 }
 
 impl Font {
-    /// The 8-wide system font, `cptfont.qfasl`: one row a byte, twelve
-    /// rows, three 32-bit words a character.
-    fn system() -> Font {
-        let data = raster(CPTFONT_QFASL);
+    /// A font file, decoded by what it declares about itself.
+    ///
+    /// **One path serves both fonts.** `FONT-RASTERS-PER-WORD` rows are
+    /// packed into each 32-bit word, each `FONT-RASTER-WIDTH` bits wide,
+    /// row 0 in the low bits --- `uc-tv.lisp:21-39`, the 32-bit TV's
+    /// order. The system font's 4 rows of 8 bits fill the word exactly
+    /// and so are one row a byte; the cold load's 4 rows of 7 leave the
+    /// top four bits of every word unused. Neither is a special case
+    /// here, because neither width is written down: they are read.
+    fn read(qfasl: &'static [u8], name: &'static str) -> Font {
+        let leader = leader(qfasl);
+        let data = raster(qfasl);
+        let (per_word, width) = (leader.rasters_per_word, leader.raster_width);
+        assert!(per_word > 0 && width > 0 && width <= 8, "{name}: a raster of {width} bits");
         let mut glyphs = vec![[0u8; CHAR_HEIGHT]; GLYPHS];
         for (c, glyph) in glyphs.iter_mut().enumerate() {
-            let at = c * CHAR_HEIGHT;
-            glyph.copy_from_slice(&data[at..at + CHAR_HEIGHT]);
-        }
-        Font::of("cptfont", 8, glyphs)
-    }
-
-    /// The 7-wide cold-load font, `cptfon.qfasl`: `FONT-RASTERS-PER-WORD`
-    /// is 4, so four 7-bit rows are packed into each 32-bit word at bit
-    /// offsets 0, 7, 14 and 21, and the top four bits of every word are
-    /// unused --- `tests/font.rs` holds that nothing is ever set there.
-    fn cold_load() -> Font {
-        let data = raster(CPTFON_QFASL);
-        let mut glyphs = vec![[0u8; CHAR_HEIGHT]; GLYPHS];
-        for (c, glyph) in glyphs.iter_mut().enumerate() {
-            for w in 0..CHAR_HEIGHT / 4 {
+            for w in 0..leader.words_per_char {
                 let at = c * CHAR_HEIGHT + w * 4;
                 let word = u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
-                for r in 0..4 {
-                    glyph[w * 4 + r] = (word >> (r * 7)) as u8 & 0x7f;
+                for r in 0..per_word {
+                    let row = w * per_word + r;
+                    if row < CHAR_HEIGHT {
+                        glyph[row] = (word >> (r * width)) as u8 & ((1u16 << width) - 1) as u8;
+                    }
                 }
             }
         }
-        Font::of("cptfon", 7, glyphs)
+        Font::of(name, leader, glyphs)
     }
 
-    fn of(name: &'static str, raster_width: usize, glyphs: Vec<Glyph>) -> Font {
+    fn of(name: &'static str, leader: Leader, glyphs: Vec<Glyph>) -> Font {
+        let raster_width = leader.raster_width;
         let mut by_raster = HashMap::new();
         for (c, glyph) in glyphs.iter().enumerate() {
             if *glyph != [0; CHAR_HEIGHT] {
                 by_raster.entry(*glyph).or_insert(c as u8);
             }
         }
-        Font { name, raster_width, glyphs, by_raster }
+        Font { name, leader, raster_width, glyphs, by_raster }
     }
 
     /// The raster of one character.
@@ -216,7 +288,12 @@ impl Default for Fonts {
 
 impl Fonts {
     pub fn new() -> Fonts {
-        Fonts { system: Font::system(), cold_load: Font::cold_load(), last: true, pinned: None }
+        Fonts {
+            system: Font::read(CPTFONT_QFASL, "cptfont"),
+            cold_load: Font::read(CPTFON_QFASL, "cptfon"),
+            last: true,
+            pinned: None,
+        }
     }
 
     /// The name a `,font=` argument may give, and what it pins to.
