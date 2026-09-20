@@ -221,6 +221,11 @@ struct Viewer {
     /// Whether `was` has ever been filled: until it has, an incremental
     /// request is answered with the whole screen.
     seen: bool,
+    /// Which way round the screen was when `was` was filled: the display
+    /// board's [`tv::mode::BOW`].  It inverts every pixel without
+    /// changing a word of the frame buffer, so `was` alone cannot say
+    /// that the screen has changed across a flip of it.
+    was_black_on_white: Option<bool>,
     request: Option<Request>,
     /// The pixels of [`Viewer::format`], made ready to copy out: remade
     /// whenever the viewer changes the format.
@@ -399,6 +404,7 @@ impl Viewer {
             told: (0, 0),
             was: vec![0; visible],
             seen: false,
+            was_black_on_white: None,
             request: None,
             pixels: Pixels::new(PixelFormat::RGB888),
             full_at: None,
@@ -585,6 +591,16 @@ impl Viewer {
             if !self.format.true_color {
                 self.outbox.extend(rfb::color_map_of(&map));
             }
+        }
+        // `MODE BOW` the same way: the board's own bit shows a one bit
+        // black rather than white, which inverts every pixel on the
+        // screen and changes not a word of the frame buffer, so what the
+        // viewer holds says nothing about the screen once it flips. The
+        // software does flip it --- the release's only reads of the mode
+        // register are `shwarm.lisp`'s three read-modify-writes of it.
+        if self.was_black_on_white != Some(frame.black_on_white) {
+            self.was_black_on_white = Some(frame.black_on_white);
+            self.seen = false;
         }
         let Some(request) = self.request else { return };
         // A frame of another size than the last: what the viewer was sent
