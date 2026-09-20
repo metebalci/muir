@@ -60,7 +60,7 @@ plausible, and it is worth setting out, because the interesting part is not
 the extraction --- it is what the extraction is answerable to.
 
 The files are in `mit/` in the repository, committed unmodified and byte for
-byte as they arrived: 682 of them, 20 MB, under the ten directory names they
+byte as they arrived: 684 of them, 20 MB, under the ten directory names they
 were dumped from, which are MIT's own. About 380 are read by nothing here
 --- two thirds of the bytes --- and are carried because they are the
 machine's own record.
@@ -87,8 +87,9 @@ them.
 > The rest --- `.wd`, `.bin`, `.uml`, `.wss`, `.augat` and the board notes
 > --- are per-page wire-wrap data, a packed archive of drawings already
 > held as `.drw`, and production listings. Nothing here reads them. Beside
-> the boards sit MIT's own PROM images and microcode sources, and AI Memo
-> 528, the CADR manual, in the 15 May 1980 printing.
+> the boards sit MIT's own PROM images and microcode sources, the two
+> character fonts a screen is read back through, and AI Memo 528, the CADR
+> manual, in the 15 May 1980 printing.
 
 ## How a board becomes a netlist
 

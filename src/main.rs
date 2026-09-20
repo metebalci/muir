@@ -19,7 +19,8 @@
 //!          [--debuggee-disk-pack <image>[,<unit>][,ro]]
 //!          [--debuggee-terminal [<endpoint>]]
 //!          [--disk-controller netlist|model]
-//!          [--disk-pack <image>[,<unit>][,ro]] [--io-board netlist|model]
+//!          [--disk-pack <image>[,<unit>][,ro]] [--glass-tty [<endpoint>][,ro]]
+//!          [--io-board netlist|model]
 //!          [--main-memory netlist|model] [--main-memory-boards <n>]
 //!          [--no-debug-cable-listen] [--no-pace] [--pace]
 //!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
@@ -291,6 +292,7 @@ use muir::part::Level;
 use muir::prompt::{Command, Memory, NetName};
 use muir::rtl::Rtl;
 use muir::serial::Endpoint;
+use muir::terminal::glass_tty::{Glass, GlassTty};
 use muir::terminal::keyboard::{BootKeys, Keyboard, Mapping};
 use muir::terminal::mouse::Mouse;
 use muir::terminal::{Frame, Terminal};
@@ -431,6 +433,48 @@ const TERMINAL_PORT: u16 = 5900;
 /// to 5999 from the default port.
 const TERMINAL_DISPLAYS: u16 = 100;
 
+/// The port a glass TTY is served at unless `--glass-tty` says another.
+///
+/// **This is muir's own number and no convention.** Telnet's port is 23
+/// and a server on it needs privilege this has no business asking for,
+/// so the protocol's own number is not available; 10023 is that number
+/// with room in front of it, picked here and written down as a choice
+/// rather than a fact.
+const GLASS_TTY_PORT: u16 = 10023;
+
+/// Where a glass TTY is served, and whether what is typed at it reaches
+/// the machine: `--glass-tty [<endpoint>][,ro]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GlassAt {
+    addr: SocketAddr,
+    port_named: bool,
+    read_only: bool,
+}
+
+/// `--glass-tty`'s argument: an endpoint, `ro`, either, both in either
+/// order, or nothing at all.
+///
+/// The endpoint is [`endpoint`]'s --- nothing, a port, an address, or
+/// address:port, on the loopback unless an address says otherwise --- and
+/// `ro` is the drive's read-only switch spelled as `--disk-pack` spells
+/// it, because it means the same thing: look and do not touch.
+fn glass_spec(arg: Option<&str>) -> Result<GlassAt, String> {
+    let mut endpoint_spec = None;
+    let mut read_only = None;
+    for part in arg.unwrap_or_default().split(',').filter(|p| !p.is_empty()) {
+        if part == "ro" || part == "rw" {
+            if read_only.replace(part == "ro").is_some() {
+                return Err("ro or rw twice".into());
+            }
+        } else if endpoint_spec.replace(part).is_some() {
+            return Err("the endpoint twice".into());
+        }
+    }
+    let addr = endpoint(endpoint_spec, GLASS_TTY_PORT)
+        .ok_or("wants nothing, a port, an address or address:port, and ro")?;
+    Ok(GlassAt { addr, port_named: names_a_port(endpoint_spec), read_only: read_only.unwrap_or(false) })
+}
+
 /// Where a terminal is served, and how hard: the endpoint; whether the
 /// port in it was named, since a named port is bound as it stands and an
 /// unnamed one is only where the search for a free display starts; and
@@ -463,6 +507,44 @@ impl TerminalAt {
 /// what the lashup over TCP is, then has a display of its own rather than
 /// the first one's port. `Err` is why there is no terminal, which the
 /// caller makes fatal or not.
+/// The glass TTYs `at` asks for, bound.
+///
+/// A named port is bound as it stands and a run that cannot have it stops:
+/// somebody told a person where to attach. An unnamed one moves up until
+/// it finds a free port, so that `--glass-tty --glass-tty` is two of them
+/// rather than a collision, and so that a second muir on one host has its
+/// own.
+fn bind_glass(at: &[GlassAt]) -> Result<Glass, String> {
+    let mut ttys = Vec::new();
+    for want in at {
+        let mut addr = want.addr;
+        let last = want.addr.port().saturating_add(TERMINAL_DISPLAYS - 1);
+        let tty = loop {
+            match GlassTty::bind(addr) {
+                Ok(t) => break t,
+                Err(e) if want.port_named => return Err(format!("--glass-tty {addr}: {e}")),
+                Err(e) if e.kind() != std::io::ErrorKind::AddrInUse => {
+                    return Err(format!("--glass-tty {addr}: {e}"));
+                }
+                Err(_) if addr.port() < last => addr.set_port(addr.port() + 1),
+                Err(e) => {
+                    return Err(format!(
+                        "--glass-tty {}: no free port in {}-{}: {e}",
+                        addr.ip(),
+                        want.addr.port(),
+                        last
+                    ));
+                }
+            }
+        };
+        let mut tty = tty;
+        tty.trace = true;
+        tty.read_only = want.read_only;
+        ttys.push(tty);
+    }
+    Ok(Glass::new(ttys))
+}
+
 fn bind_terminal(at: TerminalAt) -> Result<Terminal, String> {
     let last = at.addr.port().saturating_add(TERMINAL_DISPLAYS - 1);
     let mut addr = at.addr;
@@ -790,6 +872,7 @@ fn serve_last_screens(screens: &mut [(&mut Terminal, &muir::tv::Tv)], seen: &mut
 fn attend<E: Engine>(
     terminal: Option<&mut Terminal>,
     color: Option<&mut Terminal>,
+    glass: Option<&mut Glass>,
     poll: bool,
     e: &mut E,
     keyboard: &mut Keyboard,
@@ -814,6 +897,14 @@ fn attend<E: Engine>(
         }
         if m.ioboard.take_beep() {
             term.ring();
+        }
+    }
+    // The glass TTYs: the screen as text out, and what was typed in,
+    // which goes to the same keyboard a viewer's keys do --- the machine
+    // has one, on the I/O board, and everything that types shares it.
+    if poll && let Some(glass) = glass {
+        for (keysym, down) in glass.poll(Frame::of(&m.tv)) {
+            keyboard.key(keysym, down);
         }
     }
     let board = &mut m.ioboard;
@@ -884,6 +975,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--debuggee-terminal [<endpoint>]]
             [--disk-controller netlist|model] [--disk-multiplexor]
             [--disk-pack <image>[,<unit>][,ro]]
+            [--glass-tty [<endpoint>][,ro]]
             [--io-board netlist|model] [--keyboard-boot <keys>]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
             [--keyboard-mapping-trace]
@@ -897,7 +989,8 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--timing-model cadr|fpga]
             [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
             [--tv-capture <gif>] [--tv-capture-no-time]
-            [--watch <from>[-<to>]:<net>,<net>,...] [-V|--version]";
+            [--watch <from>[-<to>]:<net>,<net>,...] [-h|--help]
+            [-V|--version]";
 
 /// What `-h` and `--help` print: the usage, then each flag in the order
 /// the usage lists them.
@@ -1106,6 +1199,35 @@ A simulator of the MIT CADR Lisp Machine.
                                pack unless one is named, which is a drive
                                with no pack in it and a boot that waits on
                                it for ever]
+  --glass-tty [<endpoint>][,ro]
+                               a glass TTY: the screen as text over
+                               telnet, and what is typed there back into
+                               the keyboard. **Not a device.** --serial is
+                               a real 2651 the band's own software must
+                               drive; this is neither, and nothing in the
+                               band knows it is there. It reads the frame
+                               buffer through the machine's own character
+                               font and puts what is typed on the I/O
+                               board's keyboard cable, so it works where
+                               the band's software cannot help: on a cold
+                               machine with no drivers, in the boot PROM,
+                               in PRAID and in the MIT diagnostics. A
+                               cell that is not a character of that font
+                               reads as `?`, so under the window system
+                               much of the screen will not read at all.
+                               Nothing, a port, an address or
+                               address:port, and `ro` for a client that
+                               may watch and not type, in either order.
+                               Once for each; a port not named moves up
+                               until it finds one free, so the flag twice
+                               is two of them. Any telnet client will do:
+                               `telnet 127.0.0.1 10023`. [default: off,
+                               and no glass TTY at all; 127.0.0.1:10023
+                               when the flag is given bare, which is
+                               muir's own number and no convention ---
+                               telnet's own port is 23 and a server on it
+                               needs privilege this has no business
+                               asking for]
   --io-board netlist|model     chip: the I/O board. [default: netlist]
   --keyboard-boot <keys>       the keys the boot sequence needs: held
                                with Rubout they cold-boot the machine,
@@ -2016,11 +2138,13 @@ impl Stop {
 /// terminal and the stops, and the debuggee stepped beside it as the cable
 /// allows --- [`Lashup::step`] moves whichever may move, so a microcycle
 /// counted here is one of the debugger's.
+#[allow(clippy::too_many_arguments)]
 fn time_lashup(
     mut lashup: Lashup,
     stop: Stop,
     terminal: Option<&mut Terminal>,
     debuggee_terminal: Option<&mut Terminal>,
+    mut glass: Option<&mut Glass>,
     color: Option<&mut Terminal>,
     capture: Option<(PathBuf, bool)>,
     color_capture: Option<(PathBuf, bool)>,
@@ -2084,13 +2208,22 @@ fn time_lashup(
             attend(
                 terminal.as_deref_mut(),
                 color.as_deref_mut(),
+                glass.as_deref_mut(),
                 poll,
                 e,
                 &mut keyboard,
                 &mut mouse,
             );
             let e = &mut lashup.debuggee;
-            attend(debuggee_terminal.as_deref_mut(), None, poll, e, &mut b_keyboard, &mut b_mouse);
+            attend(
+                debuggee_terminal.as_deref_mut(),
+                None,
+                None,
+                poll,
+                e,
+                &mut b_keyboard,
+                &mut b_mouse,
+            );
             if poll {
                 last_poll = Instant::now();
             }
@@ -2317,6 +2450,7 @@ fn time_fabric(
     stop: Stop,
     terminal: Option<&mut Terminal>,
     color: Option<&mut Terminal>,
+    mut glass: Option<&mut Glass>,
     setup: &str,
 ) {
     let t = Instant::now();
@@ -2368,6 +2502,7 @@ fn time_fabric(
         attend(
             terminal.as_deref_mut(),
             color.as_deref_mut(),
+            glass.as_deref_mut(),
             poll,
             &mut run.debugger,
             &mut keyboard,
@@ -2717,6 +2852,7 @@ fn time_engine<S: Stepper>(
     name: &str,
     mut s: S,
     terminal: Option<&mut Terminal>,
+    mut glass: Option<&mut Glass>,
     serial: Option<&mut Endpoint>,
     run: Run,
 ) {
@@ -2807,6 +2943,14 @@ fn time_engine<S: Stepper>(
                 }
                 if e.machine_mut().ioboard.take_beep() {
                     term.ring();
+                }
+            }
+            // The glass TTYs: the screen as text out, and what was typed
+            // in to the one keyboard a machine has.
+            if let Some(glass) = glass.as_deref_mut() {
+                let keys = glass.poll(Frame::of(&s.engine().machine().tv));
+                for (keysym, down) in keys {
+                    keyboard.key(keysym, down);
                 }
             }
             // The color screen, when the board is fitted: the picture
@@ -3720,6 +3864,7 @@ fn attend_chip(
     far: &mut FarEnd,
     terminal: Option<&mut Terminal>,
     color: Option<&mut Terminal>,
+    glass: Option<&mut Glass>,
     poll: bool,
     keyboard: &mut Keyboard,
     mouse: &mut Mouse,
@@ -3746,6 +3891,13 @@ fn attend_chip(
         // heard by nobody.
         if far.buses.machine.ioboard.take_beep() {
             term.ring();
+        }
+    }
+    // The glass TTYs, as in [`attend`]: the screen as text out, and what
+    // was typed in to the one keyboard.
+    if poll && let Some(glass) = glass {
+        for (keysym, down) in glass.poll(Frame::of(&far.buses.machine.tv)) {
+            keyboard.key(keysym, down);
         }
     }
     match far.unibus.as_mut().and_then(|u| u.mouse()) {
@@ -3820,6 +3972,7 @@ fn time_chip(
     memory_boards: usize,
     chaos: muir::chaos::Config,
     terminal: Option<&mut Terminal>,
+    mut glass: Option<&mut Glass>,
     serial: Option<&mut Endpoint>,
     run: Run,
     resume: Option<(PathBuf, Checkpoint)>,
@@ -4052,6 +4205,7 @@ fn time_chip(
                 &mut m.far,
                 terminal.as_deref_mut(),
                 color.as_deref_mut(),
+                glass.as_deref_mut(),
                 poll,
                 &mut keyboard,
                 &mut mouse,
@@ -4353,6 +4507,9 @@ fn time_chip(
 fn main() {
     let mut which: Option<Which> = None;
     let mut packs: Vec<Pack> = Vec::new();
+    // The glass TTYs asked for, in the order the flags came. Bound after
+    // the flags are read, as the terminal is.
+    let mut glass_at: Vec<GlassAt> = Vec::new();
     let mut chaos = muir::chaos::Config::default();
     // The CHUDP link: where it listens, the peers named for it, and
     // where a frame goes that none of them names. The socket is bound
@@ -4632,6 +4789,15 @@ fn main() {
                         };
                     }
                     None => usage("--terminal wants nothing, a port, an address or address:port"),
+                }
+            }
+            (None, "--glass-tty") => {
+                // The argument is optional: the next word is it unless it
+                // is a flag.
+                let spec = args.next_if(|v| !v.starts_with('-'));
+                match glass_spec(spec.as_deref()) {
+                    Ok(g) => glass_at.push(g),
+                    Err(e) => usage(&format!("--glass-tty: {e}")),
                 }
             }
             (None, "--debug-in-process") => debuggee = true,
@@ -5091,6 +5257,16 @@ fn main() {
         Err(e) if listen.asked => usage(&format!("--terminal {e}")),
         Err(e) => (None, Some(e)),
     };
+    // The glass TTYs, which are asked for or not there at all: an empty
+    // one costs a run nothing, so there is always a `Glass` rather than a
+    // `None` threaded through every loop.  A glass TTY that cannot be
+    // served always stops the run, unlike the display nobody asked for:
+    // this one nobody gets by default, so it is there because somebody
+    // said so.
+    let mut glass = match bind_glass(&glass_at) {
+        Ok(g) => g,
+        Err(e) => usage(&e),
+    };
     // DBGIN's connector: a listener for a debugger's cable on every rtl
     // and chip run, as the bus interface's DBGIN is on every machine ---
     // unless the run said not, or wants a machine on its own: micro has no
@@ -5322,6 +5498,23 @@ fn main() {
             }
         }
         writeln!(s, "terminal: {}", terminal_line(&terminal, &no_terminal, listen.addr)).unwrap();
+        // The glass TTYs, when any were asked for: where each is and
+        // whether it takes typing.  Nobody gets one by default, so a run
+        // without them says nothing rather than saying there are none.
+        if !glass.is_empty() {
+            let each: Vec<String> = glass
+                .addrs()
+                .iter()
+                .map(|(at, ro)| format!("telnet://{at}{}", if *ro { " read-only" } else { "" }))
+                .collect();
+            writeln!(
+                s,
+                "glass tty: {}; the screen as text through {}",
+                each.join(", "),
+                glass.font_in_force()
+            )
+            .unwrap();
+        }
         // The second display board and where its screen is served. Both
         // lines, because they are two things: a board on the backplane,
         // and a monitor on it.
@@ -5505,7 +5698,7 @@ fn main() {
                 clocks: capture_tv_time,
                 color: color_screen.as_mut(),
             };
-            time_engine("micro", Alone(e), terminal.as_mut(), serial.as_mut(), run);
+            time_engine("micro", Alone(e), terminal.as_mut(), Some(&mut glass), serial.as_mut(), run);
         }
         Which::Rtl => {
             let mut m = machine(&prom, packs, boards, tv_board, color_tv);
@@ -5540,6 +5733,7 @@ fn main() {
                     stop,
                     terminal.as_mut(),
                     debuggee_terminal.as_mut(),
+                    Some(&mut glass),
                     color_screen.as_mut(),
                     capture,
                     color_capture,
@@ -5581,6 +5775,7 @@ fn main() {
                     "rtl, debugger",
                     Remote::debugger(e, reader, stream),
                     terminal.as_mut(),
+                    Some(&mut glass),
                     serial.as_mut(),
                     run,
                 );
@@ -5598,6 +5793,7 @@ fn main() {
                     stop,
                     terminal.as_mut(),
                     color_screen.as_mut(),
+                    Some(&mut glass),
                     &setup,
                 );
             } else {
@@ -5621,7 +5817,7 @@ fn main() {
                 // microcycles.
                 let end = Connector::new(e, cable)
                     .unwrap_or_else(|e| fail(&format!("the debug cable's listener: {e}")));
-                time_engine("rtl", end, terminal.as_mut(), serial.as_mut(), run);
+                time_engine("rtl", end, terminal.as_mut(), Some(&mut glass), serial.as_mut(), run);
             }
         }
         Which::Chip => {
@@ -5678,6 +5874,7 @@ fn main() {
                 boards,
                 chaos,
                 terminal.as_mut(),
+                Some(&mut glass),
                 serial.as_mut(),
                 run,
                 resume,
