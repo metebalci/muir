@@ -129,17 +129,6 @@ impl Recorder {
         self.samples
     }
 
-    /// Whether a sample at `ns` of the machine's time and `wall_ns` on the
-    /// wall clock would add a frame: the screen may have changed, or a
-    /// clock has ticked.  Cheap next to a sample, so a caller can skip the
-    /// pixel copy when nothing is due.
-    pub fn due(&self, ns: u64, wall_ns: u64) -> bool {
-        self.prev.is_none()
-            || (self.show_time
-                && (self.shown_second != Some(ns / 1_000_000_000)
-                    || self.shown_wall_second != Some(wall_ns / 1_000_000_000)))
-    }
-
     /// The screen at `ns` of the machine's time, the wall clock reading
     /// `wall_ns` since midnight: a frame if the canvas differs from the
     /// last.

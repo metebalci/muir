@@ -98,13 +98,10 @@ fn each_clock_ticks_a_frame_of_its_own() {
     let tv = Tv::default();
     let mut rec = Recorder::new(true);
     rec.sample(&tv, 0, 0);
-    assert!(!rec.due(S / 2, S / 2));
     rec.sample(&tv, S / 2, S / 2);
     assert_eq!(rec.frames(), 1, "no second ticked");
-    assert!(rec.due(S, S / 2));
     rec.sample(&tv, S, S / 2);
     assert_eq!(rec.frames(), 2, "the machine's second ticked");
-    assert!(rec.due(S, S));
     rec.sample(&tv, S + 1, S);
     assert_eq!(rec.frames(), 3, "the wall second ticked");
     let frames = decode_gif(&rec.gif());
