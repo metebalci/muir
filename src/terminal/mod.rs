@@ -36,6 +36,8 @@
 //! otherwise, out loud.
 
 pub mod cable;
+pub mod font;
+pub mod glass_tty;
 pub mod keyboard;
 pub mod monitor;
 pub mod mouse;

@@ -41,6 +41,7 @@ itself.
 | `lmdoc/` | --- | --- | `cadr.164`: **AI Memo 528**, *CADR*, by Knight, Moon, Holloway and Steele, in the 15 May 1980 printing. The machine described in MIT's own words, and the one place the mask memories' contents are written down |
 | `sys/ucadr/` | --- | --- | `promh.text`, MIT's boot PROM source with their comments |
 | `sys/ubin/` | --- | --- | `promh.mcr`, the boot PROM the engines run, and `promh.sym`, its symbol table; `ucadr.mcr`, microcode 323 itself, which is what `diskpack` puts on a pack |
+| `sys/fonts/` | --- | --- | `cptfont.qfasl` and `cptfon.qfasl`, the two character fonts `--glass-tty` reads a screen back through. Both are bound to `FONTS:CPTFONT` and they are **not** the same bitmap: `cptfon` is the one the cold load brings up, 7 raster columns wide, and `cptfont` the one the full system loads over it, 8 wide |
 
 **The top-level names are MIT's own**, the `AI:` directories these files were
 dumped from --- `AI:CADR;` and its neighbours.
@@ -65,10 +66,13 @@ reason.
 the paths the release uses. `sys/ucadr/promh.text` is MIT's boot PROM source
 and `sys/ubin/promh.mcr` its assembler's output, which is the PROM the engines
 boot; `sys/ubin/ucadr.mcr` is microcode 323, the machine's own microcode, which
-`diskpack` writes into the microload partition of a pack it makes. Each is
+`diskpack` writes into the microload partition of a pack it makes; and
+`sys/fonts/cptfont.qfasl` and `cptfon.qfasl` are the two character fonts
+`--glass-tty` reads a screen back through. Each is
 byte for byte the file in the release. System 100, microcode 323, is what this
 project targets, so these are the target's own files rather than copies of
-them from anywhere else, and `tests/prom.rs` and `tests/mcr.rs` hold each to
+them from anywhere else, and `tests/prom.rs`, `tests/mcr.rs` and
+`tests/font.rs` hold each to
 the release's copy whenever `vendor/` is there to compare against.
 
 Only the CADR's own Chaosnet pages are copied: the CONS's, the CAIOS's and the
@@ -94,7 +98,7 @@ that turns it into a picture without an emulator is what to put beside a
 `page` block when reading one against the other.
 
 The extensions are MIT's own, all of them. **Most of this directory is not
-read by anything here** --- about 380 of the 682 files, two thirds of the
+read by anything here** --- about 380 of the 684 files, two thirds of the
 19 MB --- and is kept because it is the machine's own record and cheap to
 carry. The table says which is which, so you can tell at a glance whether a
 file is load-bearing or reference.
@@ -108,6 +112,7 @@ file is load-bearing or reference.
 | `.stf` | the stuffing list, which slot holds which part | some |
 | `.eco` | the engineering change orders, in order --- how to tell which revision a drawing is | some |
 | `.prom`, `.mcr`, `.31`, `.39` | PROM images and microcode, MIT's own dumps and sources | some |
+| `.qfasl` | the compiled form a Lisp Machine file loads as. The two here are the character fonts, and only their rasters are read: `src/terminal/font.rs` takes the bytes after the operation whose count says 128 characters, so nothing here is a QFASL reader | **yes**, both |
 | `.wd` | per-page wire-wrap data, carrying the same parts and nets as the `.drw` beside it | no |
 | `.wires` | a backplane's wiring, in prose: `cadr1/dubspc.wires`, MIT's list for the double 9-slot SPC backplane --- the Unibus bus strips pin by pin, the grant chains from slot to slot, and the continuity jumpers that device wiring replaces by hand | **yes**: `tests/unibus_backplane_pins.rs` holds the bus interface's and the I/O board's Unibus pins to its bus strips |
 | `.text.3` | `cadr1/xspec.text.3`, MIT's Xbus specification: the signals, and the pinout of every kind of slot in the cage --- the Unibus, "our modified SPC slot", the bus interface's slot 11 with both buses on it, the TV slots, the memory slot. The `.3` is ITS's version number, kept as the tape had it | **yes**: `tests/unibus_backplane_pins.rs` holds its slot 11 to the bus interface's list and its SPC slot to the backplane list |
