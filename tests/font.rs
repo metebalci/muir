@@ -43,6 +43,45 @@ fn the_committed_fonts_are_the_ones_system_100_ships() {
     }
 }
 
+// --- The fonts declare their own shape ---------------------------------------
+
+/// **The grid comes out of MIT's files and not out of muir.**
+///
+/// Every round trip below draws a glyph and reads it back on the same
+/// pitch, so all of them would pass just as well if that pitch were
+/// wrong: they are circular about the one number that decides how a
+/// screen is cut into cells. This is the check that is not. The leader of
+/// each font is read --- `tvdefs.lisp:517`'s fields, which the file
+/// carries --- and held to the constants the readback uses.
+#[test]
+fn the_fonts_declare_the_grid_the_readback_uses() {
+    let fonts = Fonts::new();
+    for (name, raster_width) in [("cptfont", 8usize), ("cptfon", 7)] {
+        let l = fonts.named(name).expect("one of the two fonts").leader;
+        assert_eq!(l.char_height, CHAR_HEIGHT, "{name}: FONT-CHAR-HEIGHT");
+        // The pitch, and so the 96 columns the screen is cut into. The
+        // two fonts differ in raster width and agree here, which is why
+        // a change of font does not change the grid.
+        assert_eq!(l.char_width, CHAR_WIDTH, "{name}: FONT-CHAR-WIDTH");
+        assert_eq!(l.raster_width, raster_width, "{name}: FONT-RASTER-WIDTH");
+        // MIT's own definitions of the two packing fields,
+        // `tvdefs.lisp:531` and `:533`.
+        assert_eq!(l.rasters_per_word, 32 / l.raster_width, "{name}: FLOOR 32 / RASTER-WIDTH");
+        assert_eq!(
+            l.words_per_char,
+            l.char_height.div_ceil(l.rasters_per_word),
+            "{name}: CEILING RASTER-HEIGHT / RASTERS-PER-WORD"
+        );
+        // The rasters have to reach every row of the cell.
+        assert!(
+            l.rasters_per_word * l.words_per_char >= CHAR_HEIGHT,
+            "{name}: {} rows packed for a cell {CHAR_HEIGHT} tall",
+            l.rasters_per_word * l.words_per_char
+        );
+    }
+    assert_eq!(muir::terminal::font::COLS, tv::WIDTH / CHAR_WIDTH, "the columns of the screen");
+}
+
 // --- The two fonts are two ---------------------------------------------------
 
 /// **`FONTS:CPTFONT` names two different fonts.** `cptfon.qfasl` is what
