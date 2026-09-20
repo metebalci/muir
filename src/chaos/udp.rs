@@ -432,6 +432,22 @@ impl Chudp {
     }
 }
 
+impl Chudp {
+    /// A frame off the cable that will not go out, and why.
+    ///
+    /// Under `--chaos-trace` the arriving half names every reason it
+    /// drops a datagram; before this the leaving half named none, so a
+    /// frame that reached the cable and stopped there showed as the
+    /// interface's turn followed by silence --- indistinguishable from a
+    /// link that never sends. One line a frame, and only under the
+    /// trace.
+    fn dropped(&self, now: u64, why: std::fmt::Arguments) {
+        if self.trace {
+            eprintln!("chudp {now:>6}: not sent: {why}");
+        }
+    }
+}
+
 impl Node for Chudp {
     fn address(&self) -> u16 {
         self.source
@@ -449,18 +465,48 @@ impl Node for Chudp {
         // sent to another. Said of the source rather than of the peer
         // table because the default peer relays for addresses no entry
         // names, and those are not to be carried on either.
+        //
+        // **Every way out of here that is not a send says why.** A frame
+        // that reaches the cable and no further leaves `--chaos-trace`
+        // showing the interface's turn and then nothing at all, which
+        // reads exactly like a link that is not sending --- and the
+        // arriving half ([`Chudp::arrived`]) has always named its
+        // reasons. A person looking at a network that carries nothing
+        // needs to know which side gave up on the frame.
         if !self.local.contains(&packet.source) {
+            self.dropped(now, format_args!("{:o} is not a station of this process", packet.source));
             return;
         }
-        let Some(&dest) = packet.buffer.last() else { return };
+        let Some(&dest) = packet.buffer.last() else {
+            self.dropped(now, format_args!("an empty frame carries no destination"));
+            return;
+        };
         let to = self.addressed(dest);
         if to.is_empty() {
+            self.dropped(
+                now,
+                format_args!(
+                    "{dest:o} is on this cable, or no peer names it and there is no default peer"
+                ),
+            );
             return;
         }
         // Only a whole packet goes out: the count must account for the
         // words, or the peer cannot read what it is sent.
-        let Ok((p, _)) = Packet::from_buffer(&packet.buffer) else { return };
-        let Some(datagram) = wrap(&packet.buffer, packet.source) else { return };
+        let p = match Packet::from_buffer(&packet.buffer) {
+            Ok((p, _)) => p,
+            Err(e) => {
+                self.dropped(now, format_args!("to {dest:o}: {e}"));
+                return;
+            }
+        };
+        let Some(datagram) = wrap(&packet.buffer, packet.source) else {
+            self.dropped(
+                now,
+                format_args!("to {dest:o}: {} words will not frame", packet.buffer.len()),
+            );
+            return;
+        };
         for addr in to {
             if self.trace {
                 eprintln!(
