@@ -58,7 +58,12 @@ the hardware uses 18 and 19 (`src/micro.rs`, at the dispatch).
   logic](https://github.com/metebalci/muir-fpga), on a Zynq board with Linux
   on the Arm cores beside it. `--debug-cable-connect 0x<address>` is muir
   debugging that machine over the CADR debug cable, the cable's wires being a
-  window of registers there.
+  window of registers there. Its [CADR
+  page](https://muir-fpga.metebalci.com/cadr.html) is about the machine MIT
+  built rather than about either program that models it: the cage and its two
+  buses, the processor's data paths and its microinstruction, the map, the
+  address space, the disk, the display, the I/O board, the light panel and the
+  debug cable, in ten drawings.
 
 - **cbridge** --- [A Chaosnet
   bridge](https://github.com/bictorv/chaosnet-bridge), for when networking
