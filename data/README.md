@@ -78,7 +78,7 @@ file to what there is instead.
 | `cables.txt` | the five cables between the processor, memory and bus interface, pin by pin, read off the wire lists, with the connector-to-header pairing the boards were cabled with |
 | `busint-connectors.txt` | every bus interface wire with a pin on the Unibus, Xbus or debug cable connectors, read off `mit/cadr1/busint.wlr` |
 | `trident-connectors.txt` | the disk controller's two Trident connectors pin by pin, read off `mit/cadrdc/dc.wlr`: J01 the bus cable every drive on the string sees, J03 one drive's own radial cable. The body named on each board pin says which way the line runs |
-| `trident-bus.txt` | the ten disk bus lines and what each of the three tags puts on them, read off `dcdbus.drw`, with Century Data's own name for the same cable line beside MIT's. The two number the bus in opposite directions --- see discrepancy 41 |
+| `trident-bus.txt` | the ten disk bus lines and what each of the three tags puts on them, read off `dcdbus.drw`, with Century Data's own name for the same cable line beside MIT's. The two number the bus in opposite directions |
 
 ## The netlist format
 

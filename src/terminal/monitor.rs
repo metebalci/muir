@@ -127,8 +127,6 @@ impl Monitor {
     /// Without it they read `Z` between pulses, no edge is a falling edge
     /// from a high, and a monitor watching for flyback waits for ever ---
     /// which is what happened the first time this was run.
-    ///
-    /// Discrepancy 50 has the ECL half.
     pub fn attach(&self, board: &mut Chip, now: u64) {
         board.pull_down(self.nets.video);
         board.pull_down(self.nets.video_bar);

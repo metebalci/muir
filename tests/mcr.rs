@@ -3,9 +3,11 @@
 
 //! Checks the MCR reader against the release's microcode.
 //!
-//! These files are AGPL and large, so they live in `vendor/` and are not part
-//! of the repository.  Run `tools/fetch-system-100.sh` to get them; without
-//! them these tests report that they were skipped.
+//! The boot PROM's and microcode 323's files are committed in `mit/`, and
+//! the tests that parse them read those.  The ones that hold the committed
+//! copies to the release's own need `vendor/`, from
+//! `tools/fetch-system-100.sh`; without it they report that they were
+//! skipped.
 
 use muir::isa::Op;
 use muir::mcr;
@@ -40,12 +42,11 @@ fn the_built_in_microcode_is_323() {
 }
 
 /// The boot PROM as the release ships it, with the section sizes its own
-/// headers give.
+/// headers give.  Read from `mit/`, whose copy `tests/prom.rs` holds to the
+/// release's, so that this never skips.
 #[test]
 fn the_release_prom_parses() {
-    let Some(bytes) = ubin("promh.mcr") else {
-        return;
-    };
+    let bytes = std::fs::read(support::mit(&["sys", "ubin", "promh.mcr"])).unwrap();
     let m = mcr::parse(&bytes).unwrap();
     assert_eq!(m.imem_start, 0);
     assert_eq!(m.imem.len(), 0o706, "control store words");
@@ -89,11 +90,11 @@ fn the_release_prom_parses() {
 }
 
 /// The whole of microcode 323 --- about 12k words --- must parse and decode.
+/// Read from `mit/`, which `the_committed_microcode_is_the_one_the_release_ships`
+/// holds to the release's, so that this never skips.
 #[test]
 fn the_release_microcode_parses() {
-    let Some(bytes) = ubin("ucadr.mcr") else {
-        return;
-    };
+    let bytes = mcr::UCADR_323.to_vec();
     let m = mcr::parse(&bytes).unwrap();
     assert_eq!(m.imem.len(), 0o30241, "control store words");
 

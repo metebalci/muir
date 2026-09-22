@@ -5,9 +5,9 @@
 //!
 //! The format is the one MIT's microassembler writes and the boot PROM
 //! reads, and both are in the System 100 release.  `sys/sys/qwmcr.lisp`
-//! writes it: `WRITE-MCR-FILE` puts out the I memory as section 1, the D
-//! memory as 2, one section 3 for the microcode symbol area and the A
-//! memory as 4 (`WRITE-I-MEM I-MEM 1`, `WRITE-D-MEM D-MEM 2`,
+//! writes it: `WRITE-MCR-FILE` puts out the control store as section 1,
+//! the dispatch memory as 2, one section 3 for the microcode symbol area and
+//! the A memory as 4 (`WRITE-I-MEM I-MEM 1`, `WRITE-D-MEM D-MEM 2`,
 //! `WRITE-MICRO-CODE-SYMBOL-AREA-PART-1`, `WRITE-A-MEM A-MEM 4`), each
 //! section opening with `OUT32` of the code, a start address and a size.
 //! `sys/ucadr/promh.text` reads it, `PROCESS-SECTION`: "Each section starts

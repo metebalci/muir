@@ -101,6 +101,12 @@ pub struct Machine {
     /// `PROG.BOOT` likewise, [`spy::MODE_BOOT`].
     pub prog_boot: bool,
 
+    // The sizes of these five and of the two map levels are MIT's own
+    // `SIZE-OF-HARDWARE-*` constants in System 100's `sys/cold/qcom.lisp`,
+    // in octal: A memory 2000, M memory 40 on the CADR, dispatch memory 4000,
+    // PDL buffer 2000, micro stack 40, level-1 map 4000, level-2 map 2000.
+    // `chip_and_rtl_hold_the_same_memories` in `tests/chip.rs` holds them to
+    // the netlist's RAMs.
     pub amem: [u32; 1024],
     pub mmem: [u32; 32],
     pub dmem: [u32; 2048],
@@ -349,6 +355,19 @@ impl Machine {
     /// is the caller's: `micro` holds the write in `WMAPD` and calls this at
     /// the start of the next microcycle, `rtl` writes the two levels itself
     /// in its write phase, and `chip` has the registers.
+    ///
+    /// **Unverified: a store with both `VMA<26>` and `VMA<25>` up.**  Which
+    /// level-1 entry addresses the level-2 write is not settled.  This
+    /// function takes the new one; `rtl` takes the old, computing both
+    /// addresses before either write; and `chip`, with level 1 as the
+    /// 93425As whose output is off while they are written, put the word at
+    /// level-2 entry `VMA<12:8>` alone, as though level 1 read zero --- a
+    /// third answer, and one that rests on how an undriven `VMAP` settles.
+    /// Microcode 323 writes the two levels in separate stores
+    /// (`LEVEL-1-MAP-MISS` in `uc-page-fault.lisp`), so the band never asks.
+    /// What would settle it is the board: the address inputs of the level-2
+    /// RAMs traced back through the drawings to a pull-up or a driver, or a
+    /// CADR run with the two-instruction store.
     pub fn write_map(&mut self, vma: u32, md: u32) {
         let l1_index = (md >> 13) as usize & 0o3777;
         if vma & (1 << 26) != 0 {

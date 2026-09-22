@@ -83,6 +83,8 @@ impl Insn {
         self.field(10, 2) as u8
     }
 
+    /// The ALU class's fields, as the `ALU` row of `mit/cadr/ir.bits`
+    /// lays them out; each field's `IR<hi:lo>` is on the struct's field.
     pub fn alu(self) -> Alu {
         Alu {
             dest: Dest(self.field(14, 12) as u16),
@@ -93,6 +95,8 @@ impl Insn {
         }
     }
 
+    /// The JUMP class's fields, as the `JUMP` row of `mit/cadr/ir.bits`
+    /// lays them out; each field's `IR<hi:lo>` is on the struct's field.
     pub fn jump(self) -> Jump {
         Jump {
             target: self.field(12, 14) as u16,
@@ -106,6 +110,8 @@ impl Insn {
         }
     }
 
+    /// The DISPATCH class's fields, as the `DISP` row of `mit/cadr/ir.bits`
+    /// lays them out; each field's `IR<hi:lo>` is on the struct's field.
     pub fn dispatch(self) -> Dispatch {
         Dispatch {
             constant: self.field(32, 10) as u16,
@@ -118,6 +124,8 @@ impl Insn {
         }
     }
 
+    /// The BYTE class's fields, as the `BYTE` row of `mit/cadr/ir.bits`
+    /// lays them out; each field's `IR<hi:lo>` is on the struct's field.
     pub fn byte(self) -> Byte {
         Byte {
             dest: Dest(self.field(14, 12) as u16),
@@ -165,6 +173,7 @@ impl Dest {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Alu {
+    /// `IR<25:14>`; see [`Dest`].
     pub dest: Dest,
     /// `IR<13:12>` --- selects ALU output, shifted right, or shifted left.
     pub ob_select: u8,
@@ -201,7 +210,9 @@ pub struct Jump {
     /// condition mux's select, and `IR3` and `IR4` reach no part on the
     /// page; `ir.bits` draws `COND` over all five columns of the rotate.
     pub cond: u8,
-    /// `IR<4:0>` --- M source rotate, when testing a bit.
+    /// `IR<4:0>` --- M source rotate, when testing a bit.  With `IR<11:10>`
+    /// = 3 the location counter's byte select takes the place of `IR<4:3>`,
+    /// as it does for every class (page SMCTL).
     pub rotate: u8,
 }
 
@@ -225,6 +236,7 @@ pub struct Dispatch {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Byte {
+    /// `IR<25:14>`; see [`Dest`].
     pub dest: Dest,
     /// `IR<13:12>` --- 1 = LDB, 2 = selective deposit, 3 = DPB, and 0 a
     /// deposit that does not rotate.  On page SMCTL `IR<13>` is `MR`, which

@@ -603,7 +603,7 @@ pub fn gated_rise_after(period: (u64, u64), enabled_at: u64, t: u64) -> u64 {
 /// debug timeout 11.5 to 12.3 --- the note on `Oscillator` has why each is
 /// a range ---
 /// which the microcode never notices, because nothing it does is timed
-/// against them. Discrepancy 73.
+/// against them.
 ///
 /// **Unverified** to a point: what would settle the period within the band
 /// is a scope on a board built to the December 1980 list, or an LS sheet
@@ -673,8 +673,8 @@ pub const CHAOS_CRYSTAL_PERIOD: (u64, u64) = (125, 4);
 /// simulation can tell the two apart. 64 MHz is kept because it is what
 /// makes the design come out round, `lmtv.order`'s "roughly every 1/2
 /// microsecond" being exactly half a microsecond at 64 and 0.504 at 63.5.
-/// Discrepancy 44 has both sides; if the physically stocked
-/// part is ever what is wanted, it is one edit here.
+/// If the physically stocked part is ever what is wanted, it is one edit
+/// here.
 pub const TV_OSCILLATOR_PERIOD: (u64, u64) = (125, 8);
 
 /// The period of one section of a 74LS124, which is set by a capacitor the
@@ -1169,7 +1169,7 @@ impl Chip {
     /// **The address bus is inverted.** PCTL 1D19 is a 74S04A turning `PC0`
     /// into `-PROMPC0` and so on, so the chip decoding word `k` sees `!k`,
     /// and word `k` of the image has to be burned at `!k`. That is the same
-    /// inversion the burned images carry, where
+    /// inversion the programming images carry, where
     /// the last chip word is the PROM's word 0; the netlist says it directly.
     ///
     /// Only the bank `-PROMCE0` enables is loaded. The second bank is on the
