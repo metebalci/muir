@@ -59,7 +59,9 @@ pub mod bus_error {
 /// Why a microcycle could not complete.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Halt {
-    /// A functional destination we do not implement.
+    /// A functional destination an engine does not implement.  No engine
+    /// raises it now: every code decodes as page SOURCE decodes it, the
+    /// unassigned ones included.
     UnknownDest { pc: u16, dest: u16 },
 }
 

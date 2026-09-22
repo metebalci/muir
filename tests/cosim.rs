@@ -992,3 +992,206 @@ fn a_fetch_armed_before_a_write_i_mem_lands_with_it() {
         assert_eq!(micro, rtl, "instruction {i}: micro {micro:?}, rtl {rtl:?}\nall: {t:#?}");
     }
 }
+
+// --- corners the review of 22 September found micro alone got wrong ---------
+
+use muir::isa::asm::{VMA, m_dest};
+
+/// A functional destination, with the harmless M word 31 every one here
+/// also writes.
+const fn fdest(d: u64) -> u64 {
+    (d << 19) | (0o37 << 14)
+}
+
+/// **The PDL buffer is written a microcycle late, and nothing passes the
+/// word around.** `Rtl::write_phase` writes it under the registered
+/// `PDLWRITED`, in the write phase of the *next* microcycle, after that
+/// microcycle has read the buffer with `CLK` high; the A and M memories have
+/// pass-around paths on pages ACTL and MCTL, and the PDL buffer has none. So
+/// an instruction that reads the buffer right after a push gets the word
+/// that was there. `pdl_read_right_after_a_push_on_the_board` holds `chip`
+/// to the same.
+#[test]
+fn a_pdl_read_right_after_a_push_gets_the_old_word() {
+    let prom = [
+        Insn::new(ALU | SETZ | fdest(0o14)),
+        Insn::new(ALU | SETO | fdest(0o11)),
+        Insn::new(ALU | SETM | src(0o25) | a_dest(0o201)),
+        Insn::new(ALU | SETM | src(0o25) | a_dest(0o202)),
+    ];
+    let (e, r) = both(&prom, &|_| {}, 40);
+    let got = |m: &Machine| (m.amem[0o201], m.amem[0o202]);
+    assert_eq!(got(r.machine()), (0, !0), "rtl");
+    assert_eq!(got(e.machine()), (0, !0), "micro");
+}
+
+/// **The same for the SPC stack's M source.** The pointer moves at the edge
+/// and the word is written in the next write phase; the pass-around,
+/// `SPCWPASS`, feeds the next-address path and not `M`, as the comment in
+/// `Rtl::read_phase` on page SPC says. So the instruction after a push reads
+/// the stale word at the new pointer.
+#[test]
+fn an_spc_read_right_after_a_push_gets_the_old_word() {
+    let prom = [
+        Insn::new(ALU | SETO | fdest(0o15)),
+        Insn::new(ALU | SETM | src(0o14) | m_dest(3)),
+        Insn::new(ALU | SETZ | fdest(0o15)),
+        Insn::new(ALU | SETM | src(0o1) | a_dest(0o201)),
+        Insn::new(ALU | SETM | src(0o1) | a_dest(0o202)),
+    ];
+    let (e, r) = both(&prom, &|_| {}, 40);
+    let got = |m: &Machine| (m.amem[0o201], m.amem[0o202]);
+    let want = ((1 << 24) | 0o1777777, 1 << 24);
+    assert_eq!(got(r.machine()), want, "rtl");
+    assert_eq!(got(e.machine()), want, "micro");
+}
+
+/// **A return right after a push takes the pushed word**: that is what the
+/// pass-around is for, and making the stack's write late must not lose it.
+#[test]
+fn a_return_right_after_a_push_takes_the_pushed_word() {
+    let mut prom = vec![
+        Insn::new(ALU | SETM | m_src(1) | fdest(0o15)),
+        Insn::new(ALU | SETZ | POPJ),
+        filler(),
+        Insn::new(ALU | SETO | a_dest(0o201)),
+    ];
+    prom.resize(0o20, filler());
+    prom[0o10] = Insn::new(ALU | SETO | a_dest(0o202));
+    let (e, r) = both(&prom, &|m| m.mmem[1] = 0o10, 40);
+    let got = |m: &Machine| (m.amem[0o201], m.amem[0o202]);
+    assert_eq!(got(r.machine()), (0, !0), "rtl returns to 10");
+    assert_eq!(got(e.machine()), (0, !0), "micro returns to 10");
+}
+
+/// **While a memory cycle starts, the map is addressed by `VMA`.** `MAPI`
+/// is the 74S258s at VMAS 1C16 and 1C20, whose select is `-MEMSTART`: `VMA`
+/// through the microcycle after a memory operation, `MD` otherwise. So
+/// `MAP(MD)` read right after a start gives `VMA`'s page, and once the
+/// cycle is under way `MD`'s.
+#[test]
+fn map_md_right_after_a_start_reads_the_vma_page() {
+    let prom = [
+        Insn::new(ALU | SETM | m_src(1) | MD),
+        Insn::new(ALU | SETM | m_src(2) | START_READ),
+        Insn::new(ALU | SETM | src(0o11) | a_dest(0o200)),
+    ];
+    let set = |m: &mut Machine| {
+        m.mmem[1] = 1 << 8;
+        m.mmem[2] = 2 << 8;
+        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o100;
+        m.l2_map[2] = (1 << 23) | (1 << 22) | 0o200;
+    };
+    let (e, r) = both(&prom, &set, 40);
+    let page = |m: &Machine| m.amem[0o200] & 0o37777;
+    assert_eq!(page(r.machine()), 0o200, "rtl");
+    assert_eq!(page(e.machine()), 0o200, "micro");
+}
+
+/// **A dispatch on a map bit right after a start takes `VMA`'s bit**, for
+/// the same multiplexer.
+#[test]
+fn a_map_dispatch_right_after_a_start_takes_the_vma_page_bit() {
+    let mut prom = vec![
+        Insn::new(ALU | SETM | m_src(2) | MD),
+        Insn::new(ALU | SETM | m_src(1) | START_READ),
+        Insn::new(DISPATCH | d_addr(0o10) | (1 << 8)),
+        filler(),
+        filler(),
+        filler(),
+    ];
+    prom.resize(0o60, filler());
+    prom[0o50] = Insn::new(ALU | SETO | a_dest(0o210));
+    prom[0o51] = Insn::new(ALU | SETO | a_dest(0o211));
+    let set = |m: &mut Machine| {
+        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o100 | (1 << 18);
+        m.l2_map[2] = 0o200;
+        m.mmem[1] = 1 << 8;
+        m.mmem[2] = 2 << 8;
+        for i in 0o10..0o14 {
+            m.dmem[i] = 0o40 + i as u32;
+        }
+    };
+    let (e, r) = both(&prom, &set, 60);
+    let got = |m: &Machine| (m.amem[0o210], m.amem[0o211]);
+    assert_eq!(got(r.machine()), (0, !0), "rtl goes to 51");
+    assert_eq!(got(e.machine()), (0, !0), "micro goes to 51");
+}
+
+/// **A jump's bit test takes the location counter's byte select** when
+/// `IR<11:10>` is 3. Page SMCTL makes `SH4` and `SH3` for every class, and
+/// the rotate a JUMP tests bit 0 of is the shifter's, `SR` being up
+/// whenever the instruction is not a BYTE.
+#[test]
+fn a_jump_bit_test_takes_the_lc_rotate() {
+    let mut prom = vec![
+        Insn::new(ALU | SETM | m_src(2) | LC),
+        filler(),
+        filler(),
+        Insn::new(JUMP | m_src(1) | (3 << 10) | N | target(0o40)),
+        filler(),
+        Insn::new(ALU | SETO | a_dest(0o201)),
+    ];
+    prom.resize(0o50, filler());
+    prom[0o40] = Insn::new(ALU | SETO | a_dest(0o202));
+    let set = |m: &mut Machine| {
+        m.mmem[1] = 1 << 16;
+        m.mmem[2] = 4;
+    };
+    let (e, r) = both(&prom, &set, 20);
+    let got = |m: &Machine| (m.amem[0o201], m.amem[0o202]);
+    assert_eq!(got(r.machine()), (0, !0), "rtl takes it");
+    assert_eq!(got(e.machine()), (0, !0), "micro takes it");
+}
+
+/// **Functional source 6 is the OPC shift register's last stage**, eight
+/// microcycles behind: page OPCD drives `MF<13:0>` from `OPC<13:0>`.
+#[test]
+fn the_opc_source_is_eight_microcycles_back() {
+    let mut prom = vec![filler(); 10];
+    prom.push(Insn::new(ALU | SETM | src(0o6) | a_dest(0o201)));
+    let (e, r) = both(&prom, &|_| {}, 40);
+    assert_eq!(r.machine().amem[0o201], 3, "rtl");
+    assert_eq!(e.machine().amem[0o201], 3, "micro");
+}
+
+/// **The functional destinations MIT leaves unassigned decode as the
+/// board decodes them.** Page SOURCE: 3 to 7 are the low group with no
+/// decoder output, so only M is written; `IR<21>` is not in the memory
+/// group's decode, so 24 to 27 are 20 to 23 and 34 to 37 are 30 to 33; and
+/// `IR<24>`, "xx" in `ir.bits`, is in no decode at all.
+#[test]
+fn unassigned_destinations_decode_as_the_board_does() {
+    for (d, what) in [
+        (0o3, "nowhere"),
+        (0o7, "nowhere"),
+        (0o24, "VMA"),
+        (0o34, "MD"),
+        (0o20 | 0o40, "VMA, with IR<24>"),
+    ] {
+        let prom = [Insn::new(ALU | SETO | fdest(d)), filler(), filler()];
+        let (e, r) = both(&prom, &|_| {}, 20);
+        let got = |m: &Machine| (m.vma, m.md, m.mmem[0o37]);
+        assert_eq!(got(e.machine()), got(r.machine()), "destination {d:o}, {what}");
+    }
+}
+
+/// `chip`, on the PDL case: the netlist gives the old word too.
+#[test]
+fn pdl_read_right_after_a_push_on_the_board() {
+    use muir::benchmark::{self, Program, Stop};
+    let mut prom = vec![
+        Insn::new(ALU | SETZ | fdest(0o11)),
+        Insn::new(ALU | SETZ | fdest(0o14)),
+        Insn::new(ALU | SETO | fdest(0o11)),
+        Insn::new(ALU | SETM | src(0o25) | VMA),
+        Insn::new(JUMP | target(4) | ALWAYS),
+    ];
+    prom.resize(512, filler());
+    let p = Program { name: "pdl", prom, top: 4, cycles_per_iteration: 1 };
+    let n = support::netlists();
+    let (mut c, mut clk, mut far) = support::chip(&n);
+    benchmark::boot_chip(&mut c, &n.cpu, &mut far, &mut clk, &p);
+    let got = benchmark::run_chip(&mut c, &n.cpu, &mut far, &mut clk, &p, Stop::Cycles(4));
+    assert_eq!(got.iterations, 0);
+}
