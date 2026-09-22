@@ -255,3 +255,38 @@ fn how_far_behind_the_pc_opc_runs() {
     eprintln!("OPC lags PC by {lag:?} microcycles");
     assert_eq!(lag, Some(8), "OPC is the PC of eight microcycles ago");
 }
+
+/// **The trap cycle after a boot is long, and counted, when `IR` asks.**
+/// `-ILONG` is `NAND(IR45, -NOPA)` at FLAG 3E07 and `-STATBIT` the other
+/// half of it with `IR46`; `-NOPA` is `AND(-NOP11, -INOP)` at CONTRL 3E14,
+/// and `NOP` is `NAND(-TRAP, -NOPA)` at 3E23 --- so the trap makes a cycle
+/// nopped without making it `NOPA`, and neither the long cycle nor the
+/// statistics count is suppressed in it. A machine running long, counted
+/// instructions at normal speed is booted; the cycle after is 185 ns, not
+/// 145, and the counter moves.
+#[test]
+fn the_trap_cycle_is_long_and_counted_when_ir_asks() {
+    use muir::engine::Engine;
+    use muir::isa::Insn;
+    use muir::isa::asm::filler;
+    use muir::machine::Machine;
+    use muir::rtl::Rtl;
+    let mut m = Machine::new();
+    let long = Insn::new(filler().raw() | 1 << 45 | 1 << 46);
+    m.load_prom(&vec![long; 512]);
+    let mut r = Rtl::new(m);
+    r.boot();
+    r.machine_mut().mode.speed1 = true;
+    for _ in 0..10 {
+        r.step().unwrap();
+    }
+    let (ns, stat) = (r.ns(), r.stat());
+    r.step().unwrap();
+    assert_eq!((r.ns() - ns, r.stat() - stat), (185, 1), "a running cycle");
+    r.boot();
+    // The boot's reset clears the mode register.
+    r.machine_mut().mode.speed1 = true;
+    let (ns, stat) = (r.ns(), r.stat());
+    r.step().unwrap();
+    assert_eq!((r.ns() - ns, r.stat() - stat), (185, 1), "the trap cycle");
+}

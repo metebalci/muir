@@ -440,9 +440,10 @@ struct Read {
     vmaenb: bool,
     vmo: u32,
 
-    /// `ILONG` is `IR<45>`, suppressed when the cycle is nopped: `-ILONG` is
-    /// `NAND(IR45, -NOPA)` at FLAG 3E07. It stretches the read phase by
-    /// 40 ns and changes nothing else.
+    /// `ILONG` is `IR<45>`, suppressed when the cycle is nopped by a jump or
+    /// the console but not by the trap: `-ILONG` is `NAND(IR45, -NOPA)` at
+    /// FLAG 3E07. It stretches the read phase by 40 ns and changes nothing
+    /// else.
     ilong: bool,
     /// `STATBIT` is `IR<46>` the same way, off the other half of 3E07.
     statbit: bool,
@@ -769,11 +770,15 @@ impl Rtl {
     fn read_phase(&self) -> Read {
         let ir = self.ir;
 
-        // page TRAP, CONTRL.  `-INOP` is the 74S175's own `-Q` at CONTRL
-        // 3D26 wire-ANDed with the open-collector 74S08 at 3E14, `AND(-NOPA,
-        // -NOP11)`: the console's `NOP11` nops every microcycle.
+        // page TRAP, CONTRL.  `-NOPA` is the open-collector 74S08 at CONTRL
+        // 3E14, `AND(-NOP11, -INOP)`, `-INOP` being the 74S175's own `-Q` at
+        // 3D26: the console's `NOP11` nops every microcycle.  `NOP` adds the
+        // trap, `NAND(-TRAP, -NOPA)` at 3E23 --- and `ILONG`, `STATBIT` and
+        // `USE.MD` are gated by `NOPA`, not by `NOP`, so the trap cycle can
+        // be long and counted.
         let trap = self.boot_trap;
-        let nop = trap | self.inop | self.m.clock_control.nop11;
+        let nopa = self.inop | self.m.clock_control.nop11;
+        let nop = trap | nopa;
 
         // page SOURCE
         let (irbyte, irdisp, irjump, iralu) = if nop {
@@ -1173,7 +1178,8 @@ impl Rtl {
             wmap,
             memwr,
             memop,
-            use_md: srcmd && !nop,
+            // `USE.MD` is `NOR(-SRCMD, NOPA)` at VCTL2 3F18.
+            use_md: srcmd && !nopa,
             destmem,
             needfetch,
             lcinc,
@@ -1188,8 +1194,8 @@ impl Rtl {
             vmas,
             vmaenb,
             vmo,
-            ilong: bit(ir, 45) && !nop,
-            statbit: bit(ir, 46) && !nop,
+            ilong: bit(ir, 45) && !nopa,
+            statbit: bit(ir, 46) && !nopa,
             imod: destimod0 || destimod1 || self.iwrited || idebug,
             jcond,
             pcs1,
@@ -1677,10 +1683,56 @@ impl Rtl {
         self.ns += self.timing.cycle_ns(self.speed, r.ilong) as u64;
         self.bus_cycle(self.ns);
         self.after_memack(self.ns);
+        // `MEMSTART`'s D is `MEMPREPARE`, `NOR(CLK2C, -MEMOP)` at VCTL1
+        // 1D27, which is low with the cpu clock held: the edge that starts a
+        // pending cycle also clears it.
+        let memstart = self.memstart;
+        self.start_bus_cycle(r);
+        self.memstart = false;
         self.busint.mclk_edge(self.ns, self.bus_responder);
-        self.mbusy_sync = (self.memstart && r.vmaok) || self.mbusy;
+        self.mbusy_sync = (memstart && r.vmaok) || self.mbusy;
         self.mclk_edge();
         self.ns - before
+    }
+
+    /// `MEMSTART` taken at a master clock edge: the 74S175 at ACTL 1E20
+    /// that holds it, and the 74S74s at 1D21 for `MBUSY` and `READ IN
+    /// PROGRESS`, are all clocked by `MCLK1A`, the master clock, and not by
+    /// the cpu clock.  A cycle started by the last microcycle therefore goes
+    /// out at the next master clock edge whether or not the cpu clock runs
+    /// again, which is what a halted or single-stepped machine sees.
+    fn start_bus_cycle(&mut self, r: &Read) {
+        if self.memstart {
+            self.lvmo = r.vmo;
+            if r.vmaok {
+                self.mbusy = true;
+                // The bus interface holds the address and, on a write, the
+                // word, until the cycle ends: `xspec.text.3` requires the
+                // master to keep them stable from 80 ns before `-XBUS.RQ`
+                // "until the -XBUS.ACK signal drops".  So they are captured
+                // here, at the edge `-MEMRQ` goes out on, not read again when
+                // the answer arrives.
+                self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
+                self.bus_data = self.m.md;
+                self.bus_responder = busint::decode_with(
+                    self.bus_addr,
+                    self.m.main.len(),
+                    self.m.color_tv.is_some(),
+                );
+                self.busint.request(self.wrcyc);
+                self.bus_cycles += 1;
+                self.bus_written = false;
+                self.bus_spy = busint::unibus_address(self.bus_addr).and_then(spy::register);
+                self.bus_sampled = false;
+                self.bus_pulsed = false;
+                // `READ IN PROGRESS` comes up on the same edge, for a read,
+                // and has no falling time until `-MEMACK` gives it one.
+                if self.rdcyc {
+                    self.rd_in_progress = true;
+                    self.rd_finish_at = u64::MAX;
+                }
+            }
+        }
     }
 
     /// The OPCS shift registers' clock, and what a rising edge on it does.
@@ -1708,9 +1760,11 @@ impl Rtl {
     }
 
     /// The time this engine has spent stalled on the bus, waits and hangs
-    /// together: its clock less this is the sum of the microcycles' own
-    /// periods, which is `micro`'s clock, and `tests/cosim.rs` holds the two
-    /// to each other.
+    /// together.  On a machine that runs throughout, its clock less this is
+    /// the sum of the microcycles' own periods, which is `micro`'s clock,
+    /// and `tests/cosim.rs` holds the two to each other; time spent halted
+    /// ([`Rtl::halted_ns`]) or with the clock ring held by the debug cable's
+    /// reset is in neither.
     pub fn stalled_ns(&self) -> u64 {
         self.stalled_ns
     }
@@ -1875,37 +1929,7 @@ impl Rtl {
         // page VCTL1: the memory cycle.  MEMPREPARE is the write phase's
         // level, MEMSTART its registered copy, so a cycle prepared here runs
         // over the next microcycle.
-        if self.memstart {
-            self.lvmo = r.vmo;
-            if r.vmaok {
-                self.mbusy = true;
-                // The bus interface holds the address and, on a write, the
-                // word, until the cycle ends: `xspec.text.3` requires the
-                // master to keep them stable from 80 ns before `-XBUS.RQ`
-                // "until the -XBUS.ACK signal drops".  So they are captured
-                // here, at the edge `-MEMRQ` goes out on, not read again when
-                // the answer arrives.
-                self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
-                self.bus_data = self.m.md;
-                self.bus_responder = busint::decode_with(
-                    self.bus_addr,
-                    self.m.main.len(),
-                    self.m.color_tv.is_some(),
-                );
-                self.busint.request(self.wrcyc);
-                self.bus_cycles += 1;
-                self.bus_written = false;
-                self.bus_spy = busint::unibus_address(self.bus_addr).and_then(spy::register);
-                self.bus_sampled = false;
-                self.bus_pulsed = false;
-                // `READ IN PROGRESS` comes up on the same edge, for a read,
-                // and has no falling time until `-MEMACK` gives it one.
-                if self.rdcyc {
-                    self.rd_in_progress = true;
-                    self.rd_finish_at = u64::MAX;
-                }
-            }
-        }
+        self.start_bus_cycle(r);
         // `WRCYC` and `RDCYC` are one flip-flop: 1C23's 74S175 on `CLK2A`,
         // whose D comes off the 74S51 at 1D16 as
         // `NOT((MEMPREPARE AND -MEMWR) OR (-MEMPREPARE AND RDCYC))`.  With

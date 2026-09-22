@@ -5371,3 +5371,56 @@ fn two_display_boards_answer_at_their_own_straps() {
         color.color_map()[MAP_COLOR as usize][0]
     );
 }
+
+/// **A read started by a single step goes out while the machine is
+/// halted, on the board and on `rtl`.**  `MEMSTART`, `MBUSY` and `READ IN
+/// PROGRESS` are the 74S175 at ACTL 1E20 and the 74S74s at 1D21, all clocked
+/// by `MCLK1A`, the master clock: so a `VMA-START-READ` stepped by the
+/// console starts its cycle at the next master clock edge and the word is in
+/// `MD` before the console steps again, and the instruction after it reads
+/// the new word.  Clocked by the cpu clock instead, the cycle waited for the
+/// next step and that instruction read the old `MD`.  The machine halts
+/// itself, the console steps it up to the read and past it, and the M
+/// memory word the instruction after the read wrote is compared.
+#[test]
+fn chip_and_rtl_start_a_stepped_read_while_halted_alike() {
+    use microcode::*;
+    use muir::engine::Engine;
+    use muir::isa::Insn;
+    use muir::spy;
+    let n = netlist::parse(NETLIST).unwrap();
+    let bus_n = netlist::parse(BUSINT).unwrap();
+    let word = 0o1234567;
+    let mut m = writes_a_diagnostic_register(spy::CLK, 0);
+    // Virtual page 1 on physical page 100, valid and readable; word 5 of it
+    // is the one read.
+    m.l2_map[1] = (1 << 23) | (1 << 22) | 0o100;
+    m.main[(0o100 << 8) | 5] = word;
+    m.mmem[3] = (1 << 8) | 5;
+    let mut prom = m.prom.clone();
+    // Well past where the machine halts, so that the read is the console's
+    // to step and not in flight as the halt lands.
+    prom[0o60] = Insn::new(ALU | SETM | m_src(3) | a_src(3) | START_READ);
+    prom[0o61] = Insn::new(ALU | SETM | SRC_MD | m_dest(4));
+    m.load_prom(&prom);
+    let (mut c, mut clk, mut far, mut r) = same_program(&n, &m);
+    far.xbus.poke((0o100 << 8) | 5, word);
+    let clk0 = cpu_clock(&n);
+    let cable = DebuggerOnCable::new(&bus_n);
+    for _ in 0..60 {
+        generator_cycle(&mut c, &mut far, &mut clk, clk0);
+        r.step().unwrap();
+    }
+    assert_eq!(r.spy_read(spy::FLAG_1) & 0x100, 0, "rtl halted");
+    assert!(r.pc() < 0o60, "halted short of the read");
+    let lock = Lockstep::new(&n, &cable, clk0, Debuggee::Halted, 0);
+    // One step past the reader, whose M write lands in the write phase after it.
+    while r.pc() < 0o64 {
+        lock.spy_write(&mut c, &mut far, &mut clk, &mut r, spy::CLK, 2);
+        lock.spy_write(&mut c, &mut far, &mut clk, &mut r, spy::CLK, 0);
+        assert_eq!(c.bus(&n, "PC", 14) as u16, r.pc(), "the same PC on both");
+    }
+    let mm = Ram::new(&c, &n, &MEMS[1]);
+    assert_eq!(mm.word(&c, 4), word, "the board: the instruction after the read has the word");
+    assert_eq!(r.machine().mmem[4], word, "rtl");
+}
