@@ -142,6 +142,20 @@ pub struct Micro {
     /// 74S133 at 1A02 and the run logic at OLORD1 1A15 do; see
     /// [`crate::rtl::Rtl`], which has the register itself.
     halted: bool,
+    /// `MEMSTART`: a memory operation started in the microcycle before,
+    /// which swings the map's address multiplexer from `MD` to `VMA`.
+    memstart: bool,
+    /// A memory operation started in this microcycle, for `memstart`.
+    memop: bool,
+    /// The PDL buffer write an instruction hands to the next microcycle's
+    /// write phase, `PDLWRITED`: the index and the word.
+    pdl_write: Option<(u16, u32)>,
+    /// The SPC write the same way, `SPUSHD`: the pointer and the word.
+    spc_write: Option<(u8, u32)>,
+    /// The OPC shift register on page OPCS, eight deep, and its clock's
+    /// last level; see [`Micro::opc_clock`].
+    opc: [u16; 8],
+    opc_ck: bool,
 }
 
 impl Micro {
@@ -185,6 +199,12 @@ impl Micro {
             sstep: false,
             ssdone: false,
             halted: false,
+            memstart: false,
+            memop: false,
+            pdl_write: None,
+            spc_write: None,
+            opc: [0; 8],
+            opc_ck: false,
         }
     }
 
@@ -253,6 +273,66 @@ impl Micro {
         self.p1_pc = self.npc;
         self.npc = if self.npc == 0o37777 { 0 } else { self.npc + 1 };
         self.m.opc = self.p0_pc;
+        self.opc_clock(false, self.p0_pc);
+        self.opc_clock(true, self.p0_pc);
+    }
+
+    /// The OPCS shift registers' clock, as `Rtl::opc_clock` has it: the
+    /// 9328s at OPCS 1F06-1F13 clock on `OPCINH OR (CLK5 AND -OPCCLK)`, so
+    /// with both control bits down the history shifts every microcycle,
+    /// `OPCINH` freezes it, and on a halted machine the console steps it by
+    /// lowering `OPCCLK`.  What shifts in is the PC.
+    fn opc_clock(&mut self, clk5: bool, pc: u16) {
+        let o = self.m.opc_control;
+        let ck = o.opcinh || (clk5 && !o.opcclk);
+        if ck && !self.opc_ck {
+            self.opc.copy_within(0..7, 1);
+            self.opc[0] = pc;
+        }
+        self.opc_ck = ck;
+    }
+
+    /// Where the map is looked up for `MAP(MD)` and a dispatch on a map
+    /// bit: `MAPI` is the 74S258s at VMAS 1C16 and 1C20, whose select is
+    /// `-MEMSTART`, so it is `VMA` through the microcycle after a memory
+    /// operation and `MD` otherwise.
+    fn map_address(&self) -> u32 {
+        if self.memstart { self.m.vma } else { self.m.md }
+    }
+
+    /// The write phase of this microcycle, which writes what the one
+    /// before it asked for: the PDL buffer under `PDLWRITED` and the SPC
+    /// stack under `SPUSHD`, both registered, after this microcycle has read
+    /// them with `CLK` high (`Rtl::write_phase`).  There is no pass-around
+    /// into `M` for either, so an instruction that reads one right after a
+    /// write to it gets the word that was there.
+    fn land_writes(&mut self) {
+        if let Some((adr, word)) = self.pdl_write.take() {
+            self.m.pdl[adr as usize] = word;
+        }
+        if let Some((ptr, word)) = self.spc_write.take() {
+            self.m.spc[ptr as usize] = word;
+        }
+    }
+
+    /// A push onto the SPC stack: the pointer moves at the edge and the word
+    /// waits for the next write phase.
+    fn push_spc(&mut self, word: u32) {
+        self.m.spcptr = (self.m.spcptr + 1) & 0o37;
+        self.spc_write = Some((self.m.spcptr, word));
+    }
+
+    /// A pop for the next address.  A word still waiting to be written is
+    /// what the stack gives: `SPCWPASS` at CONTRL 3D21 puts it on the `SPC`
+    /// bus, which feeds the next-address path.
+    fn pop_spc(&mut self) -> u32 {
+        let ptr = self.m.spcptr;
+        let v = match self.spc_write {
+            Some((p, word)) if p == ptr => word,
+            _ => self.m.spc[ptr as usize],
+        };
+        self.m.spcptr = ptr.wrapping_sub(1) & 0o37;
+        v
     }
 
     /// Byte position for the LC byte modes, `IR<11:10> == 3`: `IR<4:3>`
@@ -425,8 +505,9 @@ impl Micro {
             }
             // Pdl Buffer (P) as 25, Pdl Buffer (X) as 5.
             0o5 => self.m.pdl[pdl_at(&self.m)],
-            // OPC, Q
-            0o6 => self.m.opc as u32,
+            // OPC, Q.  Page OPCD drives `MF<13:0>` from the shift register's
+            // last stage, eight microcycles back.
+            0o6 => self.opc[7] as u32,
             0o7 => self.m.q,
             // VMA
             0o10 => self.m.vma,
@@ -440,10 +521,10 @@ impl Micro {
             // only if that cycle was a write. Computing them from `MD` live
             // is the easy misreading; `rtl` and `chip` have the latch, and
             // `TRANS-OLD0`'s `DISPATCH L2-MAP-STATUS-CODE` reads exactly the
-            // bits of the last cycle's page. The rest is live, as the board
-            // addresses the map by `MD` outside a cycle.
+            // bits of the last cycle's page. The rest is live, at whatever
+            // `MAPI` addresses: `VMA` just after a start, `MD` otherwise.
             0o11 => {
-                let t = self.m.translate(self.m.md);
+                let t = self.m.translate(self.map_address());
                 let pfr = (self.lvmo >> 23) & 1 != 0;
                 let pfw = !((self.lvmo >> 22) & 1 == 0 && self.wrcyc);
                 ((!pfw as u32) << 31)
@@ -497,14 +578,15 @@ impl Micro {
     /// `VMA` and `MD` as it leaves them --- which is what the board's own
     /// registers hold for the whole of the next microcycle, `-WP1` firing
     /// before the edge that would change them --- and
-    /// [`Micro::land_map_write`] performs it at the end of that microcycle.
+    /// [`Micro::land_map_write`] performs it at the head of that microcycle.
     /// A memory reference in between reads the old map, as it does on the
     /// board and in `rtl`.
     ///
     /// `MEMSTART` swings the map's address multiplexer from `MD` to `VMA`
     /// through the microcycle after a memory operation, which is what MIT's
-    /// warning is about, and it is not modeled here because it has no
-    /// case to decide.  The one memory operation a `MAP(MD)VMA` store's
+    /// warning is about.  The readers of the map follow it
+    /// ([`Micro::map_address`]); the write has no case to decide.  The one
+    /// memory operation a `MAP(MD)VMA` store's
     /// microcycle can carry is an instruction fetch, and page VCTL1's
     /// `VMAS` multiplexer then loads `VMA` with the fetch address ---
     /// `LC<25:2>`, twenty-four bits, with neither write enable, `VMA<26>`
@@ -542,10 +624,17 @@ impl Micro {
         self.map_write_d = self.map_write.take();
     }
 
-    /// The `(!)` on 31 is MIT's, not ours.  3 to 7 and 24 to 27 are
-    /// unassigned and halt here.
+    /// The `(!)` on 31 is MIT's, not ours.
+    ///
+    /// The codes MIT leaves unassigned decode as page SOURCE decodes them
+    /// (`Rtl::read_phase`): `IR<24>`, "xx" in `ir.bits`, is in no decode;
+    /// 3 to 7 are the low group with no decoder output, so only M is
+    /// written; and the memory group decodes `IR<20:19>` without `IR<21>`,
+    /// so 24 to 27 are 20 to 23 and 34 to 37 are 30 to 33.
     fn write_functional(&mut self, dest: u16, data: u32) -> Result<(), Halt> {
-        match dest >> 5 {
+        let code = (dest >> 5) & 0o37;
+        let code = if code & 0o20 != 0 { code & !0o4 } else { code };
+        match code {
             // Nowhere
             0o0 => {}
             // LOCATION-COUNTER.  Writing it always sets NEED-FETCH.
@@ -570,16 +659,18 @@ impl Micro {
                 }
             }
             // Pdl Buffer Top, Push, (Index), Index, Pointer
-            0o10 => self.m.pdl[self.m.pdl_pointer as usize] = data,
+            // The word is written in the next microcycle's write phase,
+            // [`Micro::land_writes`].
+            0o10 => self.pdl_write = Some((self.m.pdl_pointer, data)),
             0o11 => {
                 self.m.pdl_pointer = (self.m.pdl_pointer + 1) & 0o1777;
-                self.m.pdl[self.m.pdl_pointer as usize] = data;
+                self.pdl_write = Some((self.m.pdl_pointer, data));
             }
-            0o12 => self.m.pdl[self.m.pdl_index as usize] = data,
+            0o12 => self.pdl_write = Some((self.m.pdl_index, data)),
             0o13 => self.m.pdl_index = data as u16 & 0o1777,
             0o14 => self.m.pdl_pointer = data as u16 & 0o1777,
             // SPC, push
-            0o15 => self.m.push_spc(data),
+            0o15 => self.push_spc(data),
             // IMOD<25:0> and IMOD<47:26>: the OA register merge into the
             // next instruction.
             0o16 => {
@@ -622,7 +713,7 @@ impl Micro {
                 self.m.md = data;
                 self.arm_map_write();
             }
-            _ => return Err(Halt::UnknownDest { pc: self.p0_pc, dest }),
+            _ => {}
         }
         Ok(())
     }
@@ -647,6 +738,7 @@ impl Micro {
     /// cycle. The word itself moves at once, as it always has
     /// here: this engine has no bus to wait on, only a clock to keep.
     fn start_cycle(&mut self, write: bool) {
+        self.memop = true;
         self.lvmo = self.m.translate(self.m.vma).l2_data;
         self.wrcyc = write;
         self.m.ns += self.memory_cycle_ns;
@@ -772,8 +864,14 @@ impl Micro {
     /// sign extension, which is what makes the comparisons signed.  Writing
     /// them as signed `i32` comparisons reaches the same answer without the
     /// hardware, and hides where the signedness comes from.
+    ///
+    /// The bit tested is bit 0 of the shifter's rotate, which takes the
+    /// location counter's byte select when `IR<11:10>` is 3: page SMCTL
+    /// makes `SH4` and `SH3` for every class, `SR` being up whenever the
+    /// instruction is not a BYTE.
     fn jump_condition(&mut self) -> bool {
-        let r = rol(self.mdata, self.ir(0, 5));
+        let rotate = if self.ir(10, 2) == 3 { self.lc_byte_mode() } else { self.ir(0, 5) };
+        let r = rol(self.mdata, rotate);
         if self.ir(5, 1) == 0 {
             self.mdata = r;
             return r & 1 != 0;
@@ -842,8 +940,8 @@ impl Micro {
             self.m.imem[target as usize & (crate::machine::IMEM_WORDS - 1)] = Insn::new(self.iwr);
             if !invert && self.jump_condition() {
                 let ret = if n { self.npc.wrapping_sub(1) } else { self.npc } & 0o37777;
-                self.m.push_spc(ret as u32);
-                self.m.pop_spc();
+                self.push_spc(ret as u32);
+                self.pop_spc();
             }
             // The two microcycles the board spends on it, both nopped and
             // so never long, go on the clock at the next step, where the
@@ -857,10 +955,10 @@ impl Micro {
         let cond = self.jump_condition() != invert;
         if p && cond {
             let ret = if n { self.npc.wrapping_sub(1) } else { self.npc } & 0o37777;
-            self.m.push_spc(ret as u32);
+            self.push_spc(ret as u32);
         }
         if r && cond {
-            let mut t = self.m.pop_spc();
+            let mut t = self.pop_spc();
             if (t >> 14) & 1 != 0 {
                 t = self.pop_asks_for_a_fetch(t);
             }
@@ -932,7 +1030,7 @@ impl Micro {
         // field's is the easy misreading of that NAND-OR; the bit takes
         // the place, as `rtl` and `chip` show.
         if map != 0 {
-            let bits = self.m.translate(self.m.md).l2_data;
+            let bits = self.m.translate(self.map_address()).l2_data;
             let b18 = (bits >> 18) & 1;
             let b19 = (bits >> 19) & 1;
             addr |= (m & mask & !1)
@@ -974,10 +1072,10 @@ impl Micro {
             return Ok(());
         }
         if p {
-            self.m.push_spc(ret as u32);
+            self.push_spc(ret as u32);
         }
         if r {
-            let mut t = self.m.pop_spc();
+            let mut t = self.pop_spc();
             if (t >> 14) & 1 != 0 {
                 t = self.pop_asks_for_a_fetch(t);
             }
@@ -1067,6 +1165,12 @@ impl Engine for Micro {
             sstep,
             ssdone,
             halted,
+            memstart,
+            memop,
+            pdl_write,
+            spc_write,
+            opc,
+            opc_ck,
         } = self;
         m.save(w);
         w.u64(p0.raw());
@@ -1110,6 +1214,18 @@ impl Engine for Micro {
         w.bool(*sstep);
         w.bool(*ssdone);
         w.bool(*halted);
+        w.bool(*memstart);
+        w.bool(*memop);
+        w.opt(*pdl_write, |w, (adr, word)| {
+            w.u16(adr);
+            w.u32(word);
+        });
+        w.opt(*spc_write, |w, (ptr, word)| {
+            w.u8(ptr);
+            w.u32(word);
+        });
+        w.u16s(opc);
+        w.bool(*opc_ck);
     }
 
     fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
@@ -1151,6 +1267,12 @@ impl Engine for Micro {
         self.sstep = r.bool()?;
         self.ssdone = r.bool()?;
         self.halted = r.bool()?;
+        self.memstart = r.bool()?;
+        self.memop = r.bool()?;
+        self.pdl_write = r.opt(|r| Ok((r.u16()?, r.u32()?)))?;
+        self.spc_write = r.opt(|r| Ok((r.u8()?, r.u32()?)))?;
+        r.u16s_into(&mut self.opc)?;
+        self.opc_ck = r.bool()?;
         Ok(())
     }
 
@@ -1166,6 +1288,7 @@ impl Engine for Micro {
             self.speedclk();
             self.m.ns += self.speed.cycle_ns(false) as u64;
             self.mclk_edge();
+            self.opc_clock(true, self.p1_pc);
             return Ok(());
         }
         // No clock phases here, but the machine's periods: each microcycle
@@ -1188,6 +1311,7 @@ impl Engine for Micro {
         self.m.ns += self.speed.cycle_ns(ilong) as u64;
         self.mclk_edge();
         self.advance_pipeline();
+        self.memstart = std::mem::take(&mut self.memop);
         self.land_map_write();
 
         if self.new_md_delay > 0 {
@@ -1203,6 +1327,7 @@ impl Engine for Micro {
             self.inhibit = false;
             // Nopped, the instruction's misc field decodes to nothing.
             self.halted = false;
+            self.land_writes();
             // But an armed fetch still happens in it. `IFETCH` is
             // `NEEDFETCH AND LCINC` on page VCTL1 and `LCINC` is `NEXT
             // INSTRD` --- a register, not anything decoded from `IR` ---
@@ -1235,6 +1360,7 @@ impl Engine for Micro {
             self.m.mmem[self.maddr as usize]
         };
         self.adata = self.m.amem[self.aaddr as usize];
+        self.land_writes();
         self.iwr = ((self.adata as u64 & 0o177777) << 32) | self.mdata as u64;
 
         match self.p0.op() {
@@ -1249,7 +1375,7 @@ impl Engine for Micro {
         self.halted = self.ir(10, 2) == 1;
 
         if self.popj {
-            let mut t = self.m.pop_spc();
+            let mut t = self.pop_spc();
             if (t >> 14) & 1 != 0 {
                 t = self.pop_asks_for_a_fetch(t);
             }
@@ -1267,7 +1393,6 @@ impl Engine for Micro {
     /// What this engine can answer of the sixteen, which is less than
     /// `rtl`: it has no read phase apart from execution, so `OB`, `A` and
     /// `M` are the last microcycle's and not the standing instruction's;
-    /// `OPC` is one register deep, the PC of the instruction just executed;
     /// there is no statistics counter, no write pipeline behind the six
     /// registered flags, and no `JCOND` or `PCS` outside a jump.  `IR` and
     /// `PC` are the instruction waiting to execute and the address after
@@ -1276,7 +1401,7 @@ impl Engine for Micro {
         let half = |v: u64, k: u8| (v >> (16 * k as u32)) as u16;
         match eadr {
             spy::IR_LOW | spy::IR_MED | spy::IR_HIGH => half(self.p1.raw(), eadr),
-            spy::OPC => self.m.opc & 0x3fff,
+            spy::OPC => self.opc[7] & 0x3fff,
             spy::PC => self.npc & 0x3fff,
             spy::OB_LOW => self.out as u16,
             spy::OB_HIGH => (self.out >> 16) as u16,

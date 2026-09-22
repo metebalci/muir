@@ -54,10 +54,9 @@ impl Insn {
         }
     }
 
-    /// `IR<42>` --- pop the microcode stack after this instruction.
-    ///
-    /// The DISPATCH field diagram in `ir.bits` labels this bit `P`, but the
-    /// hardware treats it as POPJ for every class.
+    /// `IR<42>` --- pop the microcode stack after this instruction, in
+    /// every class.  `mit/cadr/ir.bits` spells `POPJ` down the column for
+    /// bit 42, one letter in each of the ALU, JUMP, DISP and BYTE rows.
     pub fn popj(self) -> bool {
         self.field(42, 1) != 0
     }
@@ -326,8 +325,8 @@ pub mod asm {
     pub const Q_LOAD: u64 = 3;
 
     /// `IR<42>` --- pop the microcode stack after this instruction, whatever
-    /// its class.  `ir.bits` labels the bit `P` in the DISPATCH diagram
-    /// alone; the hardware pops on it for every class.
+    /// its class: `mit/cadr/ir.bits` spells `POPJ` down the column for bit
+    /// 42, one letter in each class's row.
     pub const POPJ: u64 = 1 << 42;
 
     /// `IR<44:43>` = 2 and = 3 --- the DISPATCH and BYTE classes.

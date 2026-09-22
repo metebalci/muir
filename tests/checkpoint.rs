@@ -134,10 +134,14 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// display was holding when its sync program last started, which are what
 /// its mode register reads until that program's first instruction lands,
 /// and version 27 whose time an `rtl` run keeps, `--timing-model`, which
-/// `tests/timing_model.rs` and `tests/muir_checkpoint.rs` hold.
+/// `tests/timing_model.rs` and `tests/muir_checkpoint.rs` hold, and
+/// version 28 what `micro` carries across a microcycle edge besides:
+/// `MEMSTART`, the PDL and SPC writes still to land, and the OPC shift
+/// register, which `micro_carries_its_late_writes_across_a_checkpoint`
+/// holds.
 #[test]
-fn the_format_is_version_27_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 27, "a new version needs its own tests");
+fn the_format_is_version_28_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 28, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -145,14 +149,14 @@ fn the_format_is_version_27_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 27u32.to_le_bytes());
+    assert_eq!(&good[at..at + 4], 28u32.to_le_bytes());
     for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 27"), "{err}");
+        assert!(err.contains("reads 28"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -643,4 +647,56 @@ fn chip_checkpoints_a_busy_machine() {
          memory request"
     );
     assert!(with_taps > 0, "no boundary here had a tap in flight, so this proved nothing");
+}
+
+/// **A `micro` checkpoint taken between a write and the write phase that
+/// lands it keeps the write.** A push to the PDL buffer and one to the SPC
+/// stack, checkpointed in the microcycle after each, before either lands;
+/// the resumed engine lands them, reads the stale words the board reads,
+/// and ends where an engine run straight through ends.
+#[test]
+fn micro_carries_its_late_writes_across_a_checkpoint() {
+    use muir::isa::Insn;
+    use muir::isa::asm::{ALU, SETM, SETO, a_dest, filler, src};
+    let fdest = |d: u64| (d << 19) | (0o37 << 14);
+    let mut prom = vec![filler(); 10];
+    prom.extend([
+        Insn::new(ALU | SETO | fdest(0o15)),
+        Insn::new(ALU | SETO | fdest(0o11)),
+        Insn::new(ALU | SETM | src(0o25) | a_dest(0o201)),
+        Insn::new(ALU | SETM | src(0o1) | a_dest(0o202)),
+        Insn::new(ALU | SETM | src(0o25) | a_dest(0o203)),
+        Insn::new(ALU | SETM | src(0o6) | a_dest(0o204)),
+    ]);
+    prom.resize(512, filler());
+    let make = || {
+        let mut m = Machine::new();
+        m.load_prom(&prom);
+        let mut e = Micro::new(m);
+        e.boot();
+        e
+    };
+    let mut straight = make();
+    // Up to the microcycle that has just executed the PDL push.
+    while straight.executed() != Some(11) {
+        straight.step().unwrap();
+    }
+    let mut w = Writer::new();
+    straight.save(&mut w);
+    let body = w.finish();
+    let mut resumed = make();
+    let mut r = Reader::new(&body);
+    resumed.load(&mut r).unwrap();
+    r.done().unwrap();
+    for _ in 0..20 {
+        straight.step().unwrap();
+        resumed.step().unwrap();
+    }
+    let got = |e: &Micro| {
+        let m = e.machine();
+        (m.amem[0o201], m.amem[0o202], m.amem[0o203], m.amem[0o204])
+    };
+    assert_eq!(got(&resumed), got(&straight));
+    assert_eq!(got(&straight).0, 0, "the stale PDL word");
+    assert_eq!(got(&straight).2, !0, "the PDL word once landed");
 }
