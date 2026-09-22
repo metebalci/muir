@@ -45,7 +45,7 @@
 //! drawings, and this engine is the wrong place to settle them: `rtl` and
 //! `chip` compute them from the wiring, and `tests/cosim.rs` holds the
 //! engines to each other.  The multiply and divide steps are not exercised by
-//! the boot PROM, so nothing yet checks them.
+//! the boot PROM; `tests/muldiv.rs` holds them to `rtl` and the netlist.
 
 use crate::busint;
 use crate::clock::Speed;
