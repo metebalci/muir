@@ -615,7 +615,7 @@ fn a_mode_register_write_with_bit_6_or_7_is_a_reset_or_a_boot() {
 fn a_write_is_decoded_from_three_address_bits() {
     let mut m = Machine::new();
     assert_eq!(spy::write_strobe(spy::MODE), spy::MODE);
-    assert_eq!(spy::write_strobe(spy::MODE + 8), spy::MODE, "0o766052 loads the mode register too");
+    assert_eq!(spy::write_strobe(spy::MODE + 8), spy::MODE, "0o766032 loads the mode register too");
     m.spy_write(spy::MODE + 8, 0o44);
     assert_eq!(m.mode, Mode { errstop: true, prom_disable: true, ..Default::default() });
 

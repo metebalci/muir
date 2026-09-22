@@ -304,9 +304,8 @@ use muir::terminal::{Frame, Terminal};
 // name.
 use muir::tv::Board as TvBoard;
 
-/// 145 ns per microcycle at normal speed: `Speed::cycle_ns`, and what
-/// `tests/clock.rs` pins.
-const HARDWARE_CYCLES_PER_S: f64 = 1e9 / 145.0;
+/// 145 ns per microcycle at normal speed, [`muir::ioboard::CYCLE_NS`].
+const HARDWARE_CYCLES_PER_S: f64 = 1e9 / muir::ioboard::CYCLE_NS as f64;
 
 /// How often the terminal is given a turn: about thirty times a second.
 /// The machine's own raster is 64.7 Hz, so a viewer sees every other frame

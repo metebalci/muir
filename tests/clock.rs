@@ -131,3 +131,12 @@ fn hang_stalls_at_the_start_of_a_cycle() {
     let (dt, _) = c.advance(free);
     assert!(dt > 0, "time should advance once the cycle is running");
 }
+
+/// **The I/O board's nominal microcycle is the normal-speed period.**
+/// `ioboard::CYCLE_NS` is a constant for the clocks that need one, and it
+/// must be the period `Speed::Normal` gives, not a second copy of it.
+#[test]
+fn the_io_boards_nominal_microcycle_is_normal_speed() {
+    use muir::clock::Speed;
+    assert_eq!(muir::ioboard::CYCLE_NS, Speed::Normal.cycle_ns(false) as u64);
+}
