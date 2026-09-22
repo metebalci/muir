@@ -947,6 +947,7 @@ impl Pack {
         };
         f.seek(SeekFrom::Start(start as u64 * BLOCK_BYTES))
             .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        let version = microcode.as_ref().and_then(|m| m.version());
         let mut said = match microcode {
             Some(m) => {
                 let mut swapped = vec![0u8; room as usize];
@@ -954,12 +955,6 @@ impl Pack {
                     swapped[i * 4..i * 4 + 4].copy_from_slice(&[w[2], w[3], w[0], w[1]]);
                 }
                 f.write_all(&swapped).map_err(|e| format!("{}: {e}", self.path.display()))?;
-                // The partition's comment is left alone: a microcode file
-                // does not say which version it is --- `WRITE-MCR-FILE`
-                // writes one only when it is given a base version, and the
-                // release's file has none --- and MIT's own "UCADR 323" is
-                // something the person making the pack knows and the file
-                // does not.
                 format!(
                     "{name}: {} control store words, {} blocks of {blocks}, the rest zeroed\n",
                     m.imem.len(),
@@ -978,6 +973,18 @@ impl Pack {
         // What went in, said in the label: a partition's comment is the only
         // place a pack says what is in a partition.  Written after the
         // blocks, so that it never describes a write that did not happen.
+        //
+        // A microcode file's is what MIT's `LOAD-MCR-FILE` writes, the name
+        // and the version, `(FORMAT NIL "~A ~D" ...)` in System 100's
+        // `sys/io/disk.lisp`: the form `GET-UCODE-VERSION-FROM-COMMENT` reads
+        // back, wanting "UCADR " and a decimal number, when it matches a band
+        // to its microcode.  MIT took the version from the file's name;
+        // here it is the file's own, `A-VERSION` ([`mcr::Mcr::version`]),
+        // which the assembler set from the same name.
+        let comment = match version {
+            Some(v) => format!("UCADR {v}"),
+            _ => comment,
+        };
         said.push_str(&self.describe(&name, &comment)?);
         Ok(said)
     }

@@ -929,7 +929,22 @@ fn what_was_loaded_is_in_the_comment() {
     assert!(said.contains("MCR1 is now \"UCADR 323\""), "{said}");
     assert_eq!(Label::open(&path).unwrap().partition("MCR1").unwrap().comment, "UCADR 323");
 
-    // A file writes its own name, and its name only: the directory it was in
+    // A microcode file writes what MIT's `LOAD-MCR-FILE` writes, "UCADR"
+    // and the version (`io/disk.lisp`), which is the form Lisp reads back
+    // in `GET-UCODE-VERSION-FROM-COMMENT` to match a band to its microcode.
+    // The version is the file's own, A memory's word 40: here one made 324.
+    let mut ucode = muir::mcr::UCADR_323.to_vec();
+    let m = muir::mcr::parse(&ucode).unwrap();
+    let end = ucode.len() - m.trailing_bytes;
+    let at = end - 4 * (m.amem.len() - 0o40);
+    assert_eq!(&ucode[at..at + 4], &[0, 0o12, 0o103, 1], "A-VERSION, 323, as a fixnum");
+    ucode[at + 2] = 0o104;
+    let file = dir.join("some-name-of-mine.mcr");
+    std::fs::write(&file, &ucode).unwrap();
+    let said = pack.run(Command::Load { partition: "MCR2".to_string(), file: Some(file) }).unwrap();
+    assert!(said.contains("MCR2 is now \"UCADR 324\""), "{said}");
+
+    // Any other file writes its own name, and its name only: the directory it was in
     // is not something the pack can hold or a later reader can use.
     let band = dir.join("a-band-with-a-very-long-name.dump");
     std::fs::write(&band, [0u8; 1024]).unwrap();

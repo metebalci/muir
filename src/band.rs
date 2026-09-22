@@ -258,9 +258,12 @@ pub struct Label {
     /// Word 6: the partition the PROM loads microcode from.
     pub microload_partition: String,
     /// Word 7, which MIT's label editor prints as "current virtual memory
-    /// load (band)" (`io/dledit.lisp:238`).  Nothing in muir reads it: the
-    /// PROM is told which band to load by the console switches, and this is
-    /// what the software offers as the default.
+    /// load (band)" (`io/dledit.lisp:238`).  It is the band a cold boot
+    /// loads: the PROM loads microcode and no band, and microcode 323's
+    /// `COLD-BOOT` passes 0, ";0 => use current band.", to `DISK-RESTORE`,
+    /// whose `COLD-READ-LABEL` then reads label word 7, ";Current Band"
+    /// (System 100's `sys/ucadr/uc-cold-disk.lisp`).  Nothing in muir
+    /// reads it: the microcode does.
     pub current_band: String,
     /// "Brand name of drive", 32 characters at word 0o10
     /// (`io/dledit.lisp:379`).

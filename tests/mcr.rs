@@ -120,3 +120,41 @@ fn the_release_microcode_parses() {
     );
     assert!(classes.iter().all(|&n| n > 0), "every class should occur: {classes:?}");
 }
+
+/// **A microcode file says which version it is**: A memory's word 40 is
+/// `%MICROCODE-VERSION-NUMBER`, the first of the locations System 100's
+/// `sys/cold/qcom.lisp` lists "IN ORDER OF CONTENTS OF A-MEMORY STARTING AT
+/// 40", and `uc-parameters.lisp` assembles it as `A-VERSION`, a fixnum of
+/// the "VERSION NUMBER FROM SECOND FILE NAME OF SOURCE".
+#[test]
+fn the_built_in_microcode_says_it_is_323() {
+    let m = mcr::parse(mcr::UCADR_323).unwrap();
+    assert_eq!(m.version(), Some(323));
+    assert_eq!(mcr::parse(&support::mcr(&[0; 4])).unwrap().version(), None, "no A memory");
+}
+
+/// **A control store section that runs past the control store is
+/// refused**, as the boot PROM refuses it: `PROCESS-I-MEM-SECTION` in
+/// `mit/sys/ucadr/promh.text` takes `(BYTE-FIELD 18. 14.)` of every
+/// address and jumps to `ERROR-BAD-ADDRESS` if it is not zero.
+#[test]
+fn a_control_store_section_past_16k_words_is_refused() {
+    assert!(mcr::parse(&support::mcr(&vec![0; 0o40000])).is_ok(), "16K words fit");
+    let err = mcr::parse(&support::mcr(&vec![0; 0o40001])).unwrap_err();
+    assert!(err.contains("control store"), "{err}");
+}
+
+/// **An A memory section that starts past A memory is refused**:
+/// `PROCESS-A-MEM-SECTION` checks `(BYTE-FIELD 22. 10.)` of its start the
+/// same way. It checks the start and nothing after it, so a section that
+/// starts inside A memory is the PROM's to load however long it is.
+#[test]
+fn an_a_memory_section_starting_past_1k_words_is_refused() {
+    let mut b = support::mcr(&[0; 4]);
+    // The last word of the file is the A section's size and the one before
+    // it the start, in PDP-11 order: the high half first, low byte first.
+    let at = b.len() - 8;
+    b[at..at + 4].copy_from_slice(&[0, 0, 0, 4]);
+    let err = mcr::parse(&b).unwrap_err();
+    assert!(err.contains("A memory"), "{err}");
+}

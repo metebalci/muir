@@ -31,10 +31,12 @@
 //! watching. A word whose page is not resident is reported as `-` and
 //! never as a value.
 //!
-//!     cargo run --release --example macrotrace -- <pack> [count] [limit]
+//!     cargo run --release --example macrotrace -- <pack> [count] [limit] [sym]
 //!
 //! `count` is how many to print, 20 by default; `limit` bounds the
-//! microcycles spent looking for them.
+//! microcycles spent looking for them. `sym` is the symbol table of the
+//! microcode on the pack, for a pack whose microcode is not 323: `QMLP` is
+//! looked up in it rather than taken as 164.
 
 use std::path::PathBuf;
 
@@ -43,17 +45,26 @@ use muir::engine::Engine;
 use muir::machine::{LC_COUNTER, Machine};
 use muir::micro::Micro;
 
-/// The macrocode main loop, `sys/ubin/ucadr.sym`: `QMLP I-MEM 164`.
-const QMLP: u16 = 0o164;
+/// The macrocode main loop in microcode 323, `sys/ubin/ucadr.sym`: `QMLP
+/// I-MEM 164`.
+const QMLP_323: u16 = 0o164;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(pack) = args.first() else {
-        eprintln!("usage: macrotrace <pack> [count] [limit]");
+        eprintln!("usage: macrotrace <pack> [count] [limit] [sym]");
         std::process::exit(2);
     };
     let count: usize = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(20);
     let limit: u64 = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(4_000_000_000);
+    let qmlp = match args.get(3) {
+        None => QMLP_323,
+        Some(file) => {
+            let text = std::fs::read_to_string(file).expect("the symbol table reads");
+            let syms = muir::sym::parse(&text).expect("the symbol table parses");
+            syms.address(muir::sym::Space::IMem, "QMLP").expect("QMLP is in it") as u16
+        }
+    };
 
     let mut m = Machine::new();
     m.load_prom(&muir::prom::boot_prom());
@@ -73,7 +84,7 @@ fn main() {
         cycles += 1;
         // The loop is arrived at, not sat in: one report each time the PC
         // reaches it, and not one for every microcycle it spends there.
-        let at = e.pc() == QMLP;
+        let at = e.pc() == qmlp;
         if !at || was_at {
             was_at = at;
             continue;
