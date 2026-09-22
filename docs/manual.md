@@ -576,8 +576,8 @@ it has no room for is refused whole, leaving nothing down. A shifted
 character is the most exposed, a tap needing three words where a letter
 needs one, which is how `(` and `)` go missing on a machine slow to read its
 keyboard. The key's own line says so --- `( refused: the queue is full, 256
-words the machine has not read` --- where it used to say the key had gone;
-and a run says the first refusal without the flag.
+words the machine has not read` --- and a run says the first refusal
+without the flag.
 
 The pointer's queue loses its oldest the same way and nothing is printed for
 it. A viewer sends where the pointer is rather than how far it moved and the

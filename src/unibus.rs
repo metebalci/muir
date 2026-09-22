@@ -31,7 +31,8 @@ use crate::part::Level;
 /// BOOT` on `CR1` and passes it, with no part on it and so no net (see
 /// `Cables::new`), to the processor's `-BOOT1`. That `CP1` and `CR1` are
 /// one backplane wire is **unverified** --- every other shared wire is on
-/// the same pin in both lists, and no file describes the cage ---
+/// the same pin in both lists, and no file describes the cage; a wire list
+/// or drawing of the backplane would settle it ---
 /// `tests/unibus_backplane_pins.rs` holds what the lists say, and
 /// `docs/keyboard-boot.md` the rest. The far end carries it from the
 /// board's `-BOOT*` ([`Unibus::boot_low`]) straight to the processor's

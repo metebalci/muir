@@ -227,7 +227,7 @@ fn a_listing_addressing_past_the_part_is_refused() {
 
 /// A word setting the statistics bit is refused on every engine.
 ///
-/// `IR<46>` has nowhere to live in the burned image --- bit 47 is parity
+/// `IR<46>` has nowhere to live in the programming image --- bit 47 is parity
 /// and bit 46 is `IR<47>`, as [`prom::programming`] says --- so `chip`,
 /// which runs what the 74S472s hold, would drop it while `micro` and
 /// `rtl`, which fetch the microinstruction, would keep it. That is one

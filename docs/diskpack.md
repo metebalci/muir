@@ -20,11 +20,11 @@ what makes the file, a T-300 being 257 MiB and sparse, so it costs what is
 written into it rather than what it spans. A command whose table could not be
 written is refused whole and changes nothing.
 
-    $ diskpack mete.img
-    mete.img is not there: initialize makes one
+    $ diskpack pack.img
+    pack.img is not there: initialize makes one
     diskpack: initialize
     ...
-    mete.img: 263245 blocks, 257 MiB
+    pack.img: 263245 blocks, 257 MiB
     diskpack: name MIT-LISPM-2
     diskpack: load MCR1
     MCR1: 12449 control store words, 114 blocks of 148, the rest zeroed

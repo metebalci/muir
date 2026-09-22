@@ -696,7 +696,7 @@ fn a_prom_and_a_checkpoint_to_resume_do_not_go_together() {
 /// **The PROM the machine runs is the file `--prom` names**, on all three
 /// engines. One file has to reach all three, and they take it by two
 /// different routes: `micro` and `rtl` fetch the microinstruction, `chip`
-/// fetches what the 74S472s hold, which is the burned image derived from
+/// fetches what the 74S472s hold, which is the programming image derived from
 /// it.
 ///
 /// The file is MIT's own PROM with word 0 --- the reset vector, a jump to

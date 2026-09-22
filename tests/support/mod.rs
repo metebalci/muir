@@ -284,7 +284,8 @@ pub struct Body {
     /// this is that number, 0 for a body written without one.
     ///
     /// What the number itself means is **unverified**: no MIT file found so
-    /// far defines it, and nothing here needs it to. All that is used is
+    /// far defines it, and nothing here needs it to. The SUDS documentation
+    /// of the wire-list format would settle it. All that is used is
     /// that bodies sharing a location carry different ones, which
     /// `parts_mounted.rs` asserts over every body in every list it reads.
     /// It is not read as a pin offset or a device number, and must not be

@@ -83,8 +83,7 @@ through the I/O half --- and the clock the I/O half counts microseconds on
 is the Chaosnet half's own 32 MHz crystal. The serial port is on that half
 too --- the Signetics 2651 at IOBSER 0A12, its 5.0688 MHz baud-rate can
 beside it, and the MC1488 and MC1489 out to the RS-232 connector at J9 ---
-and until recently it was the one thing on the board with no far end outside
-muir. `--serial` gives it one: a TCP endpoint, off unless asked for, which
+and `--serial` gives it a far end outside muir: a TCP endpoint, off unless asked for, which
 plugs the cable when something connects --- DSR, DCD and CTS asserted as a
 device on a null-modem does with its DTR and RTS, because the 2651 is
 conditioned to transmit on `-CTS` low and receive on `-DCD` low, so carrying

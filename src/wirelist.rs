@@ -51,7 +51,9 @@ pub struct Pin {
     /// and `B03`/`B03@03`, two devices apiece in one footprint --- and MIT
     /// gives both bodies of a pair the same pin numbers, so nothing but the
     /// `@nn` tells them apart. What the number itself means is
-    /// **unverified**; no MIT file found so far defines it.
+    /// **unverified**; no MIT file found so far defines it. The SUDS
+    /// documentation of the wire-list format, or an MIT list that uses the
+    /// number for anything but telling bodies apart, would settle it.
     pub location: String,
     pub number: u8,
     /// The drawing, from the `FILE` column; empty when it was cut off or
