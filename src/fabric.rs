@@ -7,7 +7,7 @@
 //! The other two carry the cable between two simulated machines, in one
 //! process ([`crate::lashup::Lashup`]) or over a byte stream
 //! ([`crate::lashup::Remote`]).  This one carries it to a CADR that is not
-//! simulated at all: the machine is in the programmable logic of a Zynq
+//! simulated at all: the machine is on the FPGA of a Zynq
 //! board, Linux runs on the Arm cores beside it, muir runs under that
 //! Linux and is the debugger, and the cable's 21 wires are a handful of
 //! 32-bit registers muir reaches with ordinary loads and stores.  A CADR

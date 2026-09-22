@@ -4,7 +4,7 @@
 //! The debug cable to a debuggee in FPGA fabric, checked with no fabric
 //! and no board.
 //!
-//! Nothing exists in the programmable logic yet, so the register window
+//! Nothing exists on the FPGA yet, so the register window
 //! [`muir::fabric`] proposes is modeled here in two ways.  [`Adapter`] is
 //! the window with **the netlist's own DBGIN connector behind it** ---
 //! [`muir::cable::DebugIn`], the interface board and a processor, MIT's

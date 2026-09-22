@@ -54,8 +54,8 @@ the hardware uses 18 and 19 (`src/micro.rs`, at the dispatch).
   and time host a band calls, which muir is not --- a CADR had no such server
   in it. One host serves however many machines are on the cable.
 
-- **muir-fpga** --- [The CADR in programmable
-  logic](https://github.com/metebalci/muir-fpga), on a Zynq board with Linux
+- **muir-fpga** --- [The CADR on an
+  FPGA](https://github.com/metebalci/muir-fpga), on a Zynq board with Linux
   on the Arm cores beside it. `--debug-cable-connect 0x<address>` is muir
   debugging that machine over the CADR debug cable, the cable's wires being a
   window of registers there. Its [CADR

@@ -1269,8 +1269,8 @@ it, since a halted debuggee is what CC reads through the cable.
 
 There is a third transport, where the debuggee is not a program at all:
 `--debug-cable-connect 0x<address>` is the CADR of the
-[muir-fpga](https://github.com/metebalci/muir-fpga) project, in the
-programmable logic of a Zynq board with Linux on the Arm cores beside it,
+[muir-fpga](https://github.com/metebalci/muir-fpga) project, on the
+FPGA of a Zynq board with Linux on the Arm cores beside it,
 which is where muir runs to be its debugger. The cable's 21 wires are a
 window of memory-mapped registers muir reaches with ordinary loads and
 stores, and it is that project's window and no other: muir refuses one that
