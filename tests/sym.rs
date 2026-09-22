@@ -165,3 +165,12 @@ fn the_constants_are_signed_and_are_not_addresses() {
     // against, two instructions after its conditional return.
     assert!(s.constant("COPY-BUFFER-CCW-BLOCK-LENGTH").is_some());
 }
+
+/// **`QMLP` is at 164 in microcode 323**, the address
+/// `examples/macrotrace.rs` takes when it is given no symbol table and looks
+/// up by name when it is.
+#[test]
+fn the_main_loop_is_at_164() {
+    let Some(s) = symbols("ucadr.sym") else { return };
+    assert_eq!(s.address(Space::IMem, "QMLP"), Some(0o164));
+}

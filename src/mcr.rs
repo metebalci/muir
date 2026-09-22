@@ -60,6 +60,21 @@ pub struct Mcr {
     pub amem: Vec<u32>,
 }
 
+impl Mcr {
+    /// The version this microcode says it is: A memory's word 40,
+    /// `A-VERSION`, a fixnum whose value is the "VERSION NUMBER FROM SECOND
+    /// FILE NAME OF SOURCE" (`mit/sys/ucadr/uc-parameters.lisp`, where
+    /// "A-VERSION MUST BE FIRST"); System 100's `sys/cold/qcom.lisp` names
+    /// it `%MICROCODE-VERSION-NUMBER`, first of the locations "IN ORDER OF
+    /// CONTENTS OF A-MEMORY STARTING AT 40".  The value is the fixnum's
+    /// 24-bit pointer field.  `None` if the file's A memory does not reach
+    /// word 40.
+    pub fn version(&self) -> Option<u32> {
+        let i = 0o40usize.checked_sub(self.amem_start as usize)?;
+        self.amem.get(i).map(|w| w & 0o77777777)
+    }
+}
+
 struct Reader<'a> {
     b: &'a [u8],
     at: usize,
@@ -125,7 +140,16 @@ pub fn parse(bytes: &[u8]) -> Result<Mcr, String> {
         let start = r.u32_pdp()?;
         let size = r.u32_pdp()? as usize;
         match code {
+            // The boot PROM's `PROCESS-I-MEM-SECTION` takes `(BYTE-FIELD 18.
+            // 14.)` of every address and stops at `ERROR-BAD-ADDRESS` if it
+            // is not zero: the control store is 16K words.
             1 => {
+                if start as usize + size > 0o40000 {
+                    return Err(format!(
+                        "the control store section runs from {start:o} for {size:o} words, \
+                         past the control store's 40000"
+                    ));
+                }
                 mcr.imem_start = start;
                 mcr.imem = (0..size).map(|_| r.insn()).collect::<Result<_, _>>()?;
             }
@@ -141,7 +165,14 @@ pub fn parse(bytes: &[u8]) -> Result<Mcr, String> {
             3 => {
                 r.u32_pdp()?;
             }
+            // `PROCESS-A-MEM-SECTION` checks `(BYTE-FIELD 22. 10.)` of the
+            // start alone, and then pushes every word through the PDL buffer
+            // from there: a start past A memory's 2000 words stops the PROM,
+            // and a long section is the PROM's to load.
             4 => {
+                if start >= 0o2000 {
+                    return Err(format!("the A memory section starts at {start:o}, past A memory"));
+                }
                 mcr.amem_start = start;
                 mcr.amem = (0..size).map(|_| r.u32_pdp()).collect::<Result<_, _>>()?;
                 break;
