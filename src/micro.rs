@@ -156,6 +156,10 @@ pub struct Micro {
     /// last level; see [`Micro::opc_clock`].
     opc: [u16; 8],
     opc_ck: bool,
+    /// The inhibit standing is the boot's trap and not a jump's `N`: the
+    /// trap is in `NOP` but not in `NOPA` (CONTRL 3E14, 3E23), so the
+    /// cycle it kills can still be long.
+    trap: bool,
 }
 
 impl Micro {
@@ -205,6 +209,7 @@ impl Micro {
             spc_write: None,
             opc: [0; 8],
             opc_ck: false,
+            trap: false,
         }
     }
 
@@ -241,6 +246,7 @@ impl Micro {
             self.m.clock_control.run = true;
             self.npc = 0;
             self.inhibit = true;
+            self.trap = true;
         }
         self.ssdone = self.sstep;
         self.sstep = self.m.clock_control.step;
@@ -1124,6 +1130,7 @@ impl Engine for Micro {
         self.srun = true;
         self.npc = 0;
         self.inhibit = true;
+        self.trap = true;
     }
     fn save(&self, w: &mut crate::checkpoint::Writer) {
         let Micro {
@@ -1171,6 +1178,7 @@ impl Engine for Micro {
             spc_write,
             opc,
             opc_ck,
+            trap,
         } = self;
         m.save(w);
         w.u64(p0.raw());
@@ -1226,6 +1234,7 @@ impl Engine for Micro {
         });
         w.u16s(opc);
         w.bool(*opc_ck);
+        w.bool(*trap);
     }
 
     fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
@@ -1273,6 +1282,7 @@ impl Engine for Micro {
         self.spc_write = r.opt(|r| Ok((r.u8()?, r.u32()?)))?;
         r.u16s_into(&mut self.opc)?;
         self.opc_ck = r.bool()?;
+        self.trap = r.bool()?;
         Ok(())
     }
 
@@ -1304,10 +1314,12 @@ impl Engine for Micro {
             self.mclk_edge();
         }
         self.speedclk();
-        // `ILONG` is `IR<45> AND -NOP` on page CLOCK1, and `NOP` is the
-        // inhibit or the console's `NOP11`.
-        let nop = self.inhibit || self.m.clock_control.nop11;
-        let ilong = !nop && self.p1.raw() >> 45 & 1 != 0;
+        // `-ILONG` is `NAND(IR45, -NOPA)` at FLAG 3E07, and `NOPA` is a
+        // jump's inhibit or the console's `NOP11` (CONTRL 3E14) --- not the
+        // boot's trap, which is in `NOP` alone.
+        let nopa = (self.inhibit && !self.trap) || self.m.clock_control.nop11;
+        let ilong = !nopa && self.p1.raw() >> 45 & 1 != 0;
+        self.trap = false;
         self.m.ns += self.speed.cycle_ns(ilong) as u64;
         self.mclk_edge();
         self.advance_pipeline();

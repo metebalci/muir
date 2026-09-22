@@ -136,9 +136,10 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// and version 27 whose time an `rtl` run keeps, `--timing-model`, which
 /// `tests/timing_model.rs` and `tests/muir_checkpoint.rs` hold, and
 /// version 28 what `micro` carries across a microcycle edge besides:
-/// `MEMSTART`, the PDL and SPC writes still to land, and the OPC shift
-/// register, which `micro_carries_its_late_writes_across_a_checkpoint`
-/// holds.
+/// `MEMSTART`, the PDL and SPC writes still to land, the OPC shift
+/// register and whether the standing inhibit is the boot's trap, which
+/// `micro_carries_its_late_writes_across_a_checkpoint` and
+/// `micro_picks_up_where_the_checkpoint_left_off` hold.
 #[test]
 fn the_format_is_version_28_and_another_version_is_refused() {
     assert_eq!(checkpoint::VERSION, 28, "a new version needs its own tests");
