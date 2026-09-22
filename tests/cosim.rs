@@ -1195,3 +1195,28 @@ fn pdl_read_right_after_a_push_on_the_board() {
     let got = benchmark::run_chip(&mut c, &n.cpu, &mut far, &mut clk, &p, Stop::Cycles(4));
     assert_eq!(got.iterations, 0);
 }
+
+/// **The trap cycle after a boot is long when `IR` asks, on both.**
+/// `-ILONG` is `NAND(IR45, -NOPA)` at FLAG 3E07, and the trap is in `NOP`
+/// but not in `NOPA` (CONTRL 3E14, 3E23): the cycle is nopped and still
+/// long. `the_trap_cycle_is_long_and_counted_when_ir_asks` in
+/// `tests/rtl.rs` has `rtl`'s half; this holds `micro`'s clock to it.
+#[test]
+fn the_trap_cycle_is_long_on_both() {
+    let long = Insn::new(filler().raw() | 1 << 45);
+    let prom = vec![long; 512];
+    let (mut e, mut r) = both(&prom, &|_| {}, 10);
+    for (name, eng) in [("micro", &mut e as &mut dyn Engine), ("rtl", &mut r as &mut dyn Engine)] {
+        // Normal speed, through the two synchronizer stages, and then the
+        // boot, whose reset clears the mode register but not the stages.
+        eng.machine_mut().mode.speed1 = true;
+        for _ in 0..4 {
+            eng.step().unwrap();
+        }
+        eng.boot();
+        eng.machine_mut().mode.speed1 = true;
+        let ns = eng.machine().ns;
+        eng.step().unwrap();
+        assert_eq!(eng.machine().ns - ns, 185, "{name}: the trap cycle");
+    }
+}
