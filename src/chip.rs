@@ -667,8 +667,8 @@ pub const CHAOS_CRYSTAL_PERIOD: (u64, u64) = (125, 4);
 /// K1114A, in five files under `cadrpt`. This constant is the design number
 /// rather than the stocked one, and the choice costs nothing: the raster is
 /// a pure division of this clock --- 1024 dots a line, 966 lines a frame ---
-/// so either figure gives the same 768 by 896 picture and only scales the
-/// whole of it by 0.78%. The CPT locks to the sync the board hands it and
+/// so either figure gives the same picture, dot for dot and line for line,
+/// and only scales the whole of it by 0.78%. The CPT locks to the sync the board hands it and
 /// there is no broadcast standard for the timing to miss, which is why no
 /// simulation can tell the two apart. 64 MHz is kept because it is what
 /// makes the design come out round, `lmtv.order`'s "roughly every 1/2

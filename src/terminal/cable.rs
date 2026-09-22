@@ -76,8 +76,14 @@ enum Sending {
 }
 
 /// How long the keyboard waits for another clock edge in a word before
-/// taking the clock to have stopped: three of the board's 8 us periods.
-const CLOCK_GONE_NS: u64 = 24_000;
+/// taking the clock to have stopped: three of the board's periods,
+/// [`crate::ioboard::KB_CLK_NS`].  The three is this model's choice, not a
+/// figure of the keyboard's.  The firmware's one wait on the board is
+/// `AWAIT-DONE` in System 100's `sys/io1/ukbd.lisp`, which polls `DONE`
+/// and gives up after "1 second"; it does not time the clock's edges within
+/// a word.  Any wait longer than one period and shorter than the gap between
+/// words behaves the same here.
+const CLOCK_GONE_NS: u64 = 3 * crate::ioboard::KB_CLK_NS;
 
 /// The keyboard on the cable.
 pub struct OnCable {

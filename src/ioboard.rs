@@ -404,8 +404,10 @@ pub mod csr {
     pub const WRITABLE: u16 = 0o217;
 }
 
-/// The nominal microcycle: 145 ns, the period at normal speed, which
-/// `tests/clock.rs` pins.  `micro`, the engine with no clock, multiplies its
+/// The nominal microcycle: 145 ns, the period at normal speed.
+/// `the_io_boards_nominal_microcycle_is_normal_speed` in `tests/clock.rs`
+/// holds it to `Speed::Normal`'s period, which the same file pins to the
+/// delay-line taps.  `micro`, the engine with no clock, multiplies its
 /// microcycles by this to give the clocks here a time, and keeps worse time
 /// than the board would at any other speed or stalled on memory; `rtl` and
 /// `chip` give them their own nanoseconds.

@@ -117,7 +117,7 @@ pub const OPC_CONTROL: u8 = 4;
 ///
 /// Y5 of the 74S138 at SPY0 1F03, whose address is `EADR<2:0>` and whose
 /// enables are `-DBWRITE`, `GND` and `HI1`.  **`EADR3` does not reach that
-/// decoder**, so a write to `0o766052` loads the mode register too; the
+/// decoder**, so a write to `0o766032` loads the mode register too; the
 /// read decoders are the ones split by `EADR3`.  [`write_strobe`] has the
 /// aliasing.
 pub const MODE: u8 = 5;
