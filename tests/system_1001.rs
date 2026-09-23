@@ -18,7 +18,7 @@ use muir::micro::Micro;
 use muir::rtl::Rtl;
 
 mod support;
-use support::{boot_to_the_prompt, machine_with_pack};
+use support::{boot_to_the_prompt, boot_to_the_prompt_within, machine_with_pack};
 
 /// LISPM-1 and OZ, as `site/hosts.text` gives them.
 const CHAOS_1001: (u16, u16) = (0o177201, 0o177200);
@@ -37,6 +37,45 @@ fn release_1001(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     std::os::unix::fs::symlink(sources.join("sys"), root.join("sys")).unwrap();
     std::os::unix::fs::symlink(sources.join("site"), root.join("site")).unwrap();
     Some((dir, copy, root))
+}
+
+/// The same, with the served `sys/ubin/ucadr.tbl` replaced by `table`: the
+/// band asks for its running microcode's error table as `SYS: UBIN; UCADR
+/// TBL <version>`, and its translations send that to `/sys/ubin/ucadr.tbl`
+/// with no version in the name, so a served tree holds one microcode's
+/// table.
+fn serving_table(root: &std::path::Path, table: &std::path::Path) {
+    let sources = support::vendor(&["system-1001"]).unwrap();
+    std::fs::remove_file(root.join("sys")).unwrap();
+    std::fs::create_dir_all(root.join("sys/ubin")).unwrap();
+    for entry in std::fs::read_dir(sources.join("sys")).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() != "ubin" {
+            std::os::unix::fs::symlink(entry.path(), root.join("sys").join(entry.file_name()))
+                .unwrap();
+        }
+    }
+    for entry in std::fs::read_dir(sources.join("sys/ubin")).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() != "ucadr.tbl" {
+            std::os::unix::fs::symlink(entry.path(), root.join("sys/ubin").join(entry.file_name()))
+                .unwrap();
+        }
+    }
+    std::fs::copy(table, root.join("sys/ubin/ucadr.tbl")).unwrap();
+}
+
+/// A microcode rebuilt from the release's sources by muir-sys and handed
+/// over into the gitignored `ref/`, with its README saying from what; or
+/// `None` with the skip line.
+fn rebuilt_microcode(dir: &str) -> Option<PathBuf> {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref").join(dir);
+    if p.join("ucadr.mcr").exists() {
+        Some(p)
+    } else {
+        eprintln!("skipped: {} is not present", p.display());
+        None
+    }
 }
 
 /// `%MICROCODE-VERSION-NUMBER`, A memory's word 40 (`mcr::Mcr::version`
@@ -68,4 +107,54 @@ fn system_1001_reaches_the_listener_on_rtl() {
     let ran = boot_to_the_prompt(&mut e, CHAOS_1001, root);
     eprintln!("listener after {ran} microcycles");
     assert_eq!(microcode_version(&e), 323);
+}
+
+/// **Step 0: System 1001 runs on a microcode rebuilt with a new version
+/// number, and no rebuilt band.** muir-sys's reassembly of the release's
+/// sources, which differs from 323 in its version alone (`ref/ucode-324`),
+/// loaded into MCR2 and made current with `diskpack`, which writes the
+/// partition's comment as MIT's `LOAD-MCR-FILE` does; the band's error table
+/// served for that version. The band reaches its listener on `micro` and
+/// `rtl` with the new version in A memory.
+#[test]
+fn system_1001_runs_on_a_rebuilt_microcode() {
+    use muir::diskpack::{Command, Pack};
+    let Some(ucode) = rebuilt_microcode("ucode-324") else { return };
+    let want = muir::mcr::parse(&std::fs::read(ucode.join("ucadr.mcr")).unwrap())
+        .unwrap()
+        .version()
+        .expect("the microcode says its version");
+    assert_ne!(want, 323, "a rebuilt version, not the release's");
+    for engine in ["micro", "rtl"] {
+        let Some((_dir, pack, root)) = release_1001(&format!("system-1001-rebuilt-{engine}"))
+        else {
+            return;
+        };
+        serving_table(&root, &ucode.join("ucadr.tbl"));
+        let (mut p, _) = Pack::open(&pack);
+        p.run(Command::Load { partition: "MCR2".to_string(), file: Some(ucode.join("ucadr.mcr")) })
+            .unwrap();
+        p.run(Command::Microload("MCR2".to_string())).unwrap();
+        let label = muir::band::Label::open(&pack).unwrap();
+        assert_eq!(label.microload_partition, "MCR2");
+        assert_eq!(label.partition("MCR2").unwrap().comment, format!("UCADR {want}"));
+        let m = machine_with_pack(&pack);
+        let ran = match engine {
+            "micro" => {
+                let mut e = Micro::new(m);
+                e.boot();
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                assert_eq!(microcode_version(&e), want, "micro");
+                ran
+            }
+            _ => {
+                let mut e = Rtl::new(m);
+                e.boot();
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                assert_eq!(microcode_version(&e), want, "rtl");
+                ran
+            }
+        };
+        eprintln!("{engine}: listener on microcode {want} after {ran} microcycles");
+    }
 }

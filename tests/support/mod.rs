@@ -475,16 +475,33 @@ pub fn quiet() -> Vec<(&'static str, Level)> {
 /// every engine keeps the machine's clock, which is what the interface
 /// runs on.
 pub fn boot_to_the_prompt<E: Engine>(e: &mut E, chaos: (u16, u16), file_root: PathBuf) -> u64 {
+    boot_to_the_prompt_within(e, chaos, file_root, 100_000_000)
+}
+
+/// [`boot_to_the_prompt`], giving up after `limit` microcycles rather than
+/// a hundred million: a band that loads its error table as it boots, which
+/// one on a microcode it was not saved with does, takes longer.
+pub fn boot_to_the_prompt_within<E: Engine>(
+    e: &mut E,
+    chaos: (u16, u16),
+    file_root: PathBuf,
+    limit: u64,
+) -> u64 {
     let m = e.machine_mut();
     m.chaos.address = chaos.0;
     ChaosServer::new(chaos.1).serving(file_root).at_time(time::TEST_UNIVERSAL).plug(m, 0);
-    wait_for_the_prompt(e)
+    wait_for_the_prompt_within(e, limit)
 }
 
 /// The wait itself, for a machine whose Chaosnet is already plugged: a
 /// test that wants the ether's log on has to turn it on after the plug,
 /// so it does that and comes here.
 pub fn wait_for_the_prompt<E: Engine>(e: &mut E) -> u64 {
+    wait_for_the_prompt_within(e, 100_000_000)
+}
+
+/// [`wait_for_the_prompt`], giving up after `limit` microcycles.
+pub fn wait_for_the_prompt_within<E: Engine>(e: &mut E, limit: u64) -> u64 {
     // The `;Reading at top level` line, which is the prompt appearing.
     // Where it lands depends on how tall the herald above it is --- five
     // lines on System 100's band --- so the rows watched are a band the
@@ -504,7 +521,7 @@ pub fn wait_for_the_prompt<E: Engine>(e: &mut E) -> u64 {
             e.step().expect("the boot halted");
         }
         ran += 500_000;
-        assert!(ran < 100_000_000, "the listener never began reading");
+        assert!(ran < limit, "the listener never began reading");
     }
     // And a moment for the prompt to settle.
     for _ in 0..2_000_000 {
