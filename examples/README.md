@@ -26,7 +26,7 @@ material it reads changes, and a test will tell you when you have not.
 | `cc` | the acceptance test by hand: two `rtl` machines on the debug cable, CC loaded into one from the Chaosnet server, debugging the other. `tests/cc_lashup.rs` is the same thing as a test |
 | `coverage` | how much of microcode 323 the `chip`-against-`rtl` comparison has actually covered, counted as distinct control-store words rather than microcycles |
 
-## It measures
+## They measure
 
 `benchmark` runs the two programs in `src/benchmark.rs` on all three engines
 and prints a rate for each of the six runs. `datapath` is every one of the
@@ -56,9 +56,22 @@ there the drive takes its own time --- about 3% on a run that touches no
 pack, and days on one that reads a band. See the note on `report` in
 `benchmark.rs`.
 
+`profile` is where a band's microcycles go. It boots System 1001's pack with
+the test harness's Chaosnet server, logs in, and types thirteen workloads at
+the listener --- the empty form, compiling, two kinds of recursion, consing,
+fixnum multiply and remainder, flonum arithmetic, `aset` and `aref`, sorting,
+bignums, `intern`, printing, and compiling again --- each ending by writing a
+marker file through the FILE service. For each it prints the microcycles and
+macroinstructions, where the microinstructions went by the category and
+source file of the nearest microcode label, the hottest labels, and the
+microcode's own meters; on `rtl`, the time stalled on the bus. `MUIR_UCODE`
+runs it on another microcode. About a minute on `micro`.
+
 ## What needs fetching
 
 `dcmicro`, `reconcile`, `trident-tables` and `benchmark` read only what is
-committed. The other four need the System 100 release in `vendor/` --- `cc`
+committed. `screen`, `band`, `cc` and `coverage` need the System 100 release in `vendor/` --- `cc`
 needs the system sources too, since the Chaosnet server serves them to the
 machine as `SYS:`. `tools/fetch-system-100.sh` puts both in place.
+`profile` needs System 1001's pack and sources instead, from
+`tools/fetch-system-1001.sh`.
