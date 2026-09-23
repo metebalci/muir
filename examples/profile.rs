@@ -10,9 +10,11 @@
 //! file through the FILE service, which is how the run knows it is over:
 //! nothing here reads the screen.
 //!
-//!     cargo run --release --example profile -- [micro|rtl] [cadr|quux] [workload ...]
+//!     cargo run --release --example profile -- [micro|rtl] [cadr|quux|quux-4k|quux-16k] [workload ...]
 //!
 //! The machine is the CADR unless `quux` is named: QUUX, `--machine quux`.
+//! `quux-4k` and `quux-16k` are QUUX with a PDL buffer of 4K or 16K words,
+//! the sizes being measured for its next revision.
 //! With no workloads named, all of them run, in the order below. For each,
 //! it prints the microcycles, the macroinstructions --- executions of
 //! `QMLP+2`, the dispatch on `M-INST-OP` (`uc-macrocode.lisp`) --- and their
@@ -341,14 +343,20 @@ fn main() {
     } else {
         "micro".into()
     };
-    let geometry = if args.first().is_some_and(|a| a == "quux" || a == "cadr") {
-        if args.remove(0) == "quux" {
-            muir::machine::Geometry::QUUX
-        } else {
-            muir::machine::Geometry::CADR
+    use muir::machine::Geometry;
+    let geometry = match args.first().map(String::as_str) {
+        Some("cadr") => Some(Geometry::CADR),
+        Some("quux") => Some(Geometry::QUUX),
+        Some("quux-4k") => Some(Geometry { pdl_bits: 12, ..Geometry::QUUX }),
+        Some("quux-16k") => Some(Geometry { pdl_bits: 14, ..Geometry::QUUX }),
+        _ => None,
+    };
+    let geometry = match geometry {
+        Some(g) => {
+            args.remove(0);
+            g
         }
-    } else {
-        muir::machine::Geometry::CADR
+        None => Geometry::CADR,
     };
     let wanted: Vec<&(&str, &str)> = if args.is_empty() {
         WORKLOADS.iter().collect()
