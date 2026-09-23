@@ -210,6 +210,31 @@ fn a_resume_has_the_checkpoint_s_timing_model() {
     assert!(t.contains("written under --timing-model fpga, and this run is under cadr"), "{t}");
 }
 
+/// **A checkpoint carries its machine**, and a resume under `--machine`
+/// naming the other is refused by the flag's name: the map in it is that
+/// machine's. Resumed under its own, it runs on, on both engines.
+#[test]
+fn a_resume_has_the_checkpoint_s_machine() {
+    let dir = scratch("checkpoint-machine");
+    for engine in ["--micro", "--rtl"] {
+        let chk = dir.join(format!("{}.chk", &engine[2..]));
+        let out = muir()
+            .args([engine, "--machine", "quux", "--stop-after", "100", "--checkpoint"])
+            .arg(&chk)
+            .run();
+        assert!(out.status.success(), "{engine}: the first run failed:\n{}", text(&out));
+        let out = muir()
+            .args([engine, "--machine", "quux", "--stop-after", "10", "--resume"])
+            .arg(&chk)
+            .run();
+        assert!(out.status.success(), "{engine}: the resumed run failed:\n{}", text(&out));
+        let out = muir().args([engine, "--stop-after", "10", "--resume"]).arg(&chk).run();
+        let t = text(&out);
+        assert_eq!(out.status.code(), Some(2), "{engine}: not a usage error:\n{t}");
+        assert!(t.contains("written of --machine quux, and this run is --machine cadr"), "{t}");
+    }
+}
+
 /// **An engine's checkpoint carries the display board too**, and a resume
 /// onto the other board is refused by the flag's name, as a `chip`
 /// checkpoint's header refuses one.  The board is not in the header here

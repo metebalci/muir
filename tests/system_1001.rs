@@ -158,3 +158,34 @@ fn system_1001_runs_on_a_rebuilt_microcode() {
         eprintln!("{engine}: listener on microcode {want} after {ran} microcycles");
     }
 }
+
+/// **System 1001 on microcode 323 runs on QUUX as on the CADR.** The
+/// microcode knows only the CADR's map and never uses QUUX's extra blocks:
+/// the band reaches its listener on both engines, and no level-1 entry the
+/// microcode wrote names a block above 37.
+#[test]
+fn system_1001_runs_on_quux_as_on_the_cadr() {
+    for engine in ["micro", "rtl"] {
+        let Some((_dir, pack, root)) = release_1001(&format!("system-1001-quux-{engine}")) else {
+            return;
+        };
+        let mut m = machine_with_pack(&pack);
+        m.geometry = muir::machine::Geometry::QUUX;
+        let (ran, above) = match engine {
+            "micro" => {
+                let mut e = Micro::new(m);
+                e.boot();
+                let ran = boot_to_the_prompt(&mut e, CHAOS_1001, root);
+                (ran, e.machine().l1_map.iter().filter(|&&x| x > 0o37).count())
+            }
+            _ => {
+                let mut e = Rtl::new(m);
+                e.boot();
+                let ran = boot_to_the_prompt(&mut e, CHAOS_1001, root);
+                (ran, e.machine().l1_map.iter().filter(|&&x| x > 0o37).count())
+            }
+        };
+        eprintln!("{engine}: listener on QUUX after {ran} microcycles");
+        assert_eq!(above, 0, "{engine}: level-1 entries above block 37");
+    }
+}
