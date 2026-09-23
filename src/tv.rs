@@ -587,6 +587,18 @@ impl Tv {
         }
     }
 
+    /// Which of the eight control registers answer, a bit each: all of them
+    /// on the CADR's boards; on MONO TV the mode register, 0, and the color
+    /// map's write, 4, kept for a color display to come and taking no
+    /// writes yet. The CADR's sync program, 1 to 3, and the three that did
+    /// nothing, 5 to 7, are not there, and an access times out.
+    pub fn control_registers(&self) -> u8 {
+        match self.board {
+            Board::MonoTv => 0b0001_0001,
+            _ => 0xff,
+        }
+    }
+
     /// Words of its frame buffer: the CADR boards' 32K, or MONO TV's screen.
     pub fn buffer_words(&self) -> u32 {
         match self.board {
@@ -834,7 +846,8 @@ impl Tv {
     /// `SETUP-CPT` reads the sync program back through register 1.
     pub fn read_control(&self, register: u32, ns: u64) -> u32 {
         if self.board == Board::MonoTv {
-            // Black-on-white and nothing else; registers 1 to 7 answer 0.
+            // Black-on-white and nothing else; register 4 reads 0, and the
+            // others do not answer ([`Tv::control_registers`]).
             return if register == 0 { self.mode & mode::BOW } else { 0 };
         }
         match register {

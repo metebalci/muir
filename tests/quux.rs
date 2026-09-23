@@ -244,3 +244,59 @@ fn quux_s_boot_prom_is_mits_up_to_its_changes() {
     assert_eq!(first, Some(0o223), "MIT's word for word up to the first change");
     assert_eq!(quux_boot_prom()[..0o223], boot_prom()[..0o223]);
 }
+
+/// **QUUX has no speed bits.** On the CADR the mode register's bits 1:0
+/// choose the delay-line tap that ends the read phase, extra slow to fast
+/// (`mit/cadr/ir.bits`), and reset leaves them at extra slow. QUUX runs at
+/// one rate: the bits are not in its mode register, a write of them goes
+/// nowhere, and every microcycle is the same length from the boot on,
+/// whatever is written there, on both engines --- for now the CADR's
+/// normal, 145 ns.
+#[test]
+fn quux_has_no_speed_bits() {
+    use muir::spy;
+    // The time of eight microcycles after `bits` is written, from the boot.
+    fn eight<E: Engine>(mut e: E, bits: Option<u16>, ns: fn(&E) -> u64) -> (u64, u64) {
+        e.boot();
+        let t0 = ns(&e);
+        for _ in 0..8 {
+            e.step().unwrap();
+        }
+        let at_boot = ns(&e) - t0;
+        if let Some(b) = bits {
+            e.spy_write(spy::MODE, b);
+        }
+        for _ in 0..4 {
+            e.step().unwrap();
+        }
+        let t1 = ns(&e);
+        for _ in 0..8 {
+            e.step().unwrap();
+        }
+        (at_boot, ns(&e) - t1)
+    }
+    let prom = vec![muir::isa::asm::filler(); 512];
+    let make = |geometry: Geometry| {
+        let mut m = Machine::new();
+        m.load_prom(&prom);
+        m.geometry = geometry;
+        m
+    };
+    let micro_ns = |e: &Micro| e.machine().ns;
+    for bits in [0, 1, 2, 3] {
+        for (name, (boot, after)) in [
+            ("micro", eight(Micro::new(make(Geometry::QUUX)), Some(bits), micro_ns)),
+            ("rtl", eight(Rtl::new(make(Geometry::QUUX)), Some(bits), Rtl::ns)),
+        ] {
+            assert_eq!(boot, after, "{name}, speed bits {bits}: the same rate");
+            // The CADR's normal rate, 145 ns, until QUUX's own timing.
+            assert_eq!(boot, 8 * 145, "{name}, speed bits {bits}: the rate");
+        }
+        let mut m = make(Geometry::QUUX);
+        m.spy_write(spy::MODE, bits);
+        assert!(!m.mode.speed0 && !m.mode.speed1, "speed bits {bits} went nowhere");
+    }
+    // The CADR boots extra slow and runs at what is written.
+    let (boot, after) = eight(Rtl::new(make(Geometry::CADR)), Some(3), Rtl::ns);
+    assert!(boot > after, "the CADR: {boot} at boot, {after} fast");
+}

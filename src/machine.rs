@@ -83,12 +83,22 @@ pub struct Geometry {
     /// Whether the processor has QUUX's tick ([`Tick`]): functional
     /// destinations 3 and 4, source 17.
     pub tick: bool,
+    /// Whether the mode register has `SPEED1` and `SPEED0`, which choose the
+    /// delay-line tap that ends the read phase (`mit/cadr/ir.bits`). The
+    /// CADR's do; QUUX runs at one rate and has no such bits.
+    pub speed_bits: bool,
 }
 
 impl Geometry {
     /// The CADR's.
-    pub const CADR: Geometry =
-        Geometry { l1_bits: 5, pdl_bits: 10, machine_id: None, muldiv: false, tick: false };
+    pub const CADR: Geometry = Geometry {
+        l1_bits: 5,
+        pdl_bits: 10,
+        machine_id: None,
+        muldiv: false,
+        tick: false,
+        speed_bits: true,
+    };
 
     /// QUUX's, revision 4: a tick in the processor ([`Tick`]); `MUL` and
     /// `DIV` in one instruction each, ALU
@@ -112,6 +122,7 @@ impl Geometry {
         machine_id: Some((0x5155 << 16) | (4 << 4) | 4),
         muldiv: true,
         tick: true,
+        speed_bits: false,
     };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
@@ -655,6 +666,7 @@ impl Machine {
             self.main.len(),
             self.color_tv.is_some(),
             self.tv.buffer_words(),
+            self.tv.control_registers(),
         ) {
             busint::Responder::Memory(_) => Some(phys as usize),
             busint::Responder::Device
@@ -950,6 +962,11 @@ impl Machine {
             spy::OPC_CONTROL => self.opc_control.write(v),
             spy::MODE => {
                 self.mode.write(v);
+                // QUUX's mode register has no speed bits: they go nowhere.
+                if !self.geometry.speed_bits {
+                    self.mode.speed0 = false;
+                    self.mode.speed1 = false;
+                }
                 self.prog_reset |= v & spy::MODE_RESET != 0;
                 self.prog_boot |= v & spy::MODE_BOOT != 0;
             }
@@ -1035,7 +1052,7 @@ impl Machine {
         if let Some(off) = self.tv.buffer_offset(phys) {
             return self.tv.read_buffer(off);
         }
-        if let Some(r) = tv::control_register(phys) {
+        if let Some(r) = self.tv_register(phys) {
             return self.tv.read_control(r, self.ns);
         }
         // The color TV, when one is fitted: the same board at the other
@@ -1061,6 +1078,12 @@ impl Machine {
         }
     }
 
+    /// Which of the main display's control registers a physical address
+    /// names, if it is one the board has.
+    fn tv_register(&self, phys: u32) -> Option<u32> {
+        tv::control_register(phys).filter(|&r| self.tv.control_registers() >> r & 1 != 0)
+    }
+
     pub fn bus_write(&mut self, phys: u32, value: u32) {
         if let Some(r) = disk_controller::register(phys) {
             // A transfer is a bus master reading and writing physical memory
@@ -1073,7 +1096,7 @@ impl Machine {
             self.tv.write_buffer(off, value);
             return;
         }
-        if let Some(r) = tv::control_register(phys) {
+        if let Some(r) = self.tv_register(phys) {
             self.tv.write_control(r, value, self.ns);
             return;
         }

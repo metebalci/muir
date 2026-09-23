@@ -259,6 +259,12 @@ impl Micro {
     /// The speed select, two stages behind the mode register, as `rtl` has
     /// it off OLORD1 1A01.
     fn speedclk(&mut self) {
+        // QUUX runs at one rate, the CADR's normal until its own timing
+        // model says otherwise; it has no speed bits to synchronize.
+        if !self.m.geometry.speed_bits {
+            (self.speed, self.speed_a) = (Speed::Normal, Speed::Normal);
+            return;
+        }
         self.speed = self.speed_a;
         self.speed_a = match (self.m.mode.speed1, self.m.mode.speed0) {
             (false, false) => Speed::ExtraSlow,

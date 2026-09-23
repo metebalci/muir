@@ -1777,6 +1777,7 @@ impl Rtl {
                         self.m.main.len(),
                         self.m.color_tv.is_some(),
                         self.m.tv.buffer_words(),
+                        self.m.tv.control_registers(),
                     )
                 };
                 self.busint.request(self.wrcyc);
@@ -2050,6 +2051,12 @@ impl Rtl {
     /// acknowledgement lands no earlier than 80 ns in and a mode register it
     /// loads is seen by the next cycle's edge and not this one's.
     fn speedclk(&mut self) {
+        // QUUX runs at one rate, the CADR's normal until its own timing
+        // model says otherwise; it has no speed bits to synchronize.
+        if !self.m.geometry.speed_bits {
+            (self.speed, self.speed_a) = (Speed::Normal, Speed::Normal);
+            return;
+        }
         self.speed = self.speed_a;
         self.speed_a = match (self.m.mode.speed1, self.m.mode.speed0) {
             (false, false) => Speed::ExtraSlow,

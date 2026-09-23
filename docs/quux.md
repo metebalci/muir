@@ -22,7 +22,8 @@ differences, what it needed:
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The processor tick | nothing | none enables it yet: the clock handler is still entered from the display's interrupt | nothing | nothing |
-| MONO TV, the display | nothing | the clock from the tick, not the TV's interrupt; the run light's address in the buffer | the main screen's size from the feature page, not `shwarm.lisp`'s constants | the terminal, screenshots and captures show whichever screen is fitted |
+| No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
+| MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
 
 ## The map
 
@@ -162,8 +163,7 @@ while a `DIV` stands in `IR`, not nopped, and 330 ns (`muldiv::DIV_NS`, 32
 quotient bits and a load at 10 ns each) have not passed since the clock edge
 that loaded `IR`. The master clock runs on, so the bus interface carries on,
 and the microcycle starts at the first master clock edge after that: the
-fewest whole generator cycles covering 330 ns: two at the boot's 220 ns, three
-at the normal 145 and the fast 135. The time does not depend on the operands. A halt during the
+fewest whole generator cycles covering 330 ns: three of QUUX's 145 ns. The time does not depend on the operands. A halt during the
 hold stops the machine with the `DIV` still in `IR`. The hold does not stop a
 single step, as `-WAIT` does not; by then the divider is done.
 
@@ -208,6 +208,19 @@ the 60 Hz start, the interrupt condition taken with the tick on and not with
 it off, the CADR's all ones, and a checkpoint taken in the middle of a
 period, on `micro` and `rtl`.
 
+## One rate
+
+**QUUX has no speed bits.** On the CADR the mode register's `SPEED1` and
+`SPEED0` choose the delay-line tap that ends the read phase, from extra slow
+to fast (`mit/cadr/ir.bits`: "00 Extra slow, 01 Slow, 10 Normal, 11 Fast"),
+and reset leaves them at extra slow, so the CADR boots at 220 ns a
+microcycle until its microcode asks for normal. QUUX's mode register has no
+such bits: a write of bits 1 and 0 goes nowhere, and every microcycle is the
+same length from the boot on --- for now the CADR's normal, 145 ns, a
+normal read tap and the 60 ns restart. The register's other bits are
+unchanged. `quux_has_no_speed_bits` in `tests/quux.rs` holds it on both
+engines.
+
 ## MONO TV, the display
 
 **QUUX's display is MONO TV**, a monochrome frame buffer: 1920 by 1080 unless
@@ -221,7 +234,8 @@ board is named; refused on the CADR.
 | Buffer | 64,800 words, physical `17000000`-`17176437`: 60 words a line, 1,080 lines |
 | Pixel | pixel `x` of line `y` is bit `x mod 32` of word `60 y + x / 32`, the low bit leftmost, as on the CADR's TV |
 | Mode register, `17377760` | bit 2, black-on-white, reads back; every other bit reads 0 and a write of it is dropped |
-| Registers 1 to 7, `17377761`-`17377767` | answer, read 0, and take writes to no effect |
+| Register 4, `17377764` | the color map's write, kept for a color display to come: answers, reads 0, and takes no writes yet |
+| Registers 1 to 3 and 5 to 7 | not there: the CADR's sync program and three that did nothing. An access times out and sets the Xbus NXM bit |
 | Interrupt | none |
 
 **Its size is muir's to choose**, `--mono-tv-size <width>x<height>`: the width
@@ -241,13 +255,19 @@ main screen 768 by 963 at 24 words a line, and MONO TV scans 60, so each of
 its lines is spread over parts of several. On QUUX's microcode 1000 with the
 tick (`ref/ucode-1000-quux4`) the band reaches its listener on `micro` in
 136 M microcycles, as on the CADR's board, measured by reading the rows the
-listener draws in at 24 words a line. A band that sizes the main screen from
-the feature page is what makes the picture right.
+listener draws in at 24 words a line; its writes of the sync program's
+registers time out and leave the Xbus NXM bit set, and nothing stops over
+it. System 1002 sizes the main screen from the feature page's words 11 to 13,
+and draws it right: muir-sys's development band (`ref/band-1002-dev`,
+muir-sys `6704553`, microcode 1000 for revision 4) reaches its listener in
+11 M microcycles on both engines, its herald, listener and who line drawn at
+60 words a line across 1920 by 1080 (`system_1002_runs_on_mono_tv` in
+`tests/system_1002.rs`).
 
 `tests/mono_tv.rs` holds the buffer's first and last words and the NXM past
 it on both engines, the bus interface's decode of the whole buffer, the
-pixel order and the terminal's frame, the register, the absence of an
-interrupt over a second, and the feature page's three words.
+pixel order and the terminal's frame, the registers there and not there,
+the absence of an interrupt over a second, and the feature page's three words.
 
 ## Its boot PROM
 
