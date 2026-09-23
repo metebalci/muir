@@ -52,6 +52,7 @@ use crate::clock::Speed;
 use crate::engine::Engine;
 use crate::isa::{Insn, Op};
 use crate::machine::{Halt, LVMO_AT_POWER_ON, Machine};
+use crate::muldiv;
 use crate::spy;
 use crate::ttl;
 
@@ -817,9 +818,18 @@ impl Micro {
         );
         let alu = ttl::alu(self.mdata, self.adata, ctl.aluf, ctl.alumode, ctl.cin);
         self.alu_out = alu.f as u32;
+        self.old_q = self.m.q;
+
+        // QUUX's multiply and divide drive the output bus and load Q
+        // whatever IR<13:12> and IR<1:0> say.
+        if let Some(op) = self.muldiv() {
+            let (out, q) = muldiv::run(op, self.mdata, self.adata, self.m.q);
+            self.m.q = q;
+            self.out = out;
+            return self.write_dest(dest);
+        }
 
         // Q control, IR<1:0>.
-        self.old_q = self.m.q;
         match self.ir(0, 2) {
             1 => {
                 self.m.q <<= 1;
@@ -865,6 +875,15 @@ impl Micro {
         };
 
         self.write_dest(dest)
+    }
+
+    /// Which of QUUX's multiply and divide the ALU-class instruction in `IR`
+    /// is, on a machine that has them.
+    fn muldiv(&self) -> Option<muldiv::Op> {
+        if !self.m.geometry.muldiv {
+            return None;
+        }
+        muldiv::decode(self.p0.raw())
     }
 
     /// Page FLAG's condition mux: `IR<5>` chooses between a bit of the
@@ -1329,6 +1348,25 @@ impl Engine for Micro {
         let nopa = (self.inhibit && !self.trap) || self.m.clock_control.nop11;
         let ilong = !nopa && self.p1.raw() >> 45 & 1 != 0;
         self.trap = false;
+        // QUUX's divider holds the microcycle off until `DIV_NS` after the
+        // `DIV` entered `IR`, a generator cycle at a time, as `rtl` does;
+        // not a nopped one, and not a single step, which `-WAIT` does not
+        // stop either.
+        let stepping = self.sstep && !self.ssdone;
+        if self.m.geometry.muldiv
+            && !nopa
+            && !stepping
+            && muldiv::decode(self.p1.raw()) == Some(muldiv::Op::Div)
+        {
+            let mut held = 0;
+            while held < muldiv::DIV_NS {
+                self.speedclk();
+                let cycle = self.speed.cycle_ns(ilong) as u64;
+                self.m.ns += cycle;
+                held += cycle;
+                self.mclk_edge();
+            }
+        }
         self.m.ns += self.speed.cycle_ns(ilong) as u64;
         self.mclk_edge();
         self.advance_pipeline();

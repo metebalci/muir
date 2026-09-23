@@ -77,14 +77,19 @@ pub struct Geometry {
     /// What the machine answers in functional source 16, if anything: QUUX's
     /// MACHINE-ID. The CADR drives nothing there and reads all ones.
     pub machine_id: Option<u32>,
+    /// Whether ALU functions 42 and 43 are QUUX's one-instruction multiply
+    /// and divide ([`crate::muldiv`]) rather than the CADR's.
+    pub muldiv: bool,
 }
 
 impl Geometry {
     /// The CADR's.
-    pub const CADR: Geometry = Geometry { l1_bits: 5, pdl_bits: 10, machine_id: None };
+    pub const CADR: Geometry =
+        Geometry { l1_bits: 5, pdl_bits: 10, machine_id: None, muldiv: false };
 
-    /// QUUX's, revision 2: a PDL buffer of 16K words, its pointer and index
-    /// 14 bits; and a level-1 entry of six bits, 64 blocks of level 2 and so 63
+    /// QUUX's, revision 3: `MUL` and `DIV` in one instruction each, ALU
+    /// functions 42 and 43 ([`crate::muldiv`]); a PDL buffer of 16K words,
+    /// its pointer and index 14 bits; and a level-1 entry of six bits, 64 blocks of level 2 and so 63
     /// regions of 8K words mapped at once against the CADR's 31, the last
     /// block being the invalid one. The sixth bit is carried by the two the
     /// CADR leaves spare: `MAP(MD)<29>`, which the CADR drives low (VMEMDR
@@ -93,12 +98,16 @@ impl Geometry {
     ///
     /// It says so in functional source 16, its MACHINE-ID, which no microcode of MIT's
     /// reads and nothing on the CADR drives: the signature `0x5155` in bits
-    /// 31:16, the hardware revision in 15:4 --- 2: the six-bit map, then the
-    /// 16K PDL buffer --- and
+    /// 31:16, the hardware revision in 15:4 --- 3: the six-bit map, then the
+    /// 16K PDL buffer, then the multiply and divide --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
-    pub const QUUX: Geometry =
-        Geometry { l1_bits: 6, pdl_bits: 14, machine_id: Some((0x5155 << 16) | (2 << 4) | 4) };
+    pub const QUUX: Geometry = Geometry {
+        l1_bits: 6,
+        pdl_bits: 14,
+        machine_id: Some((0x5155 << 16) | (3 << 4) | 4),
+        muldiv: true,
+    };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
     /// (`mit/cadr/ir.bits`, "VMA<26>=1 writes the level 1 map from
@@ -133,8 +142,9 @@ impl Geometry {
     /// The word of the feature page at physical address `phys`, if this
     /// machine has one and `phys` is on it: the MACHINE-ID, then the
     /// level-1 entry's bits, the level-2 map's entries, the PDL buffer's
-    /// words, and the control store's, A memory's and dispatch memory's;
-    /// every other word 0. Read-only.
+    /// words, the control store's, A memory's and dispatch memory's, and
+    /// which of `MUL` (bit 0) and `DIV` (bit 1) it has; every other word 0.
+    /// Read-only.
     pub fn feature_word(self, phys: u32) -> Option<u32> {
         let id = self.machine_id?;
         if (phys >> 8) & 0o37777 != Self::FEATURE_PAGE {
@@ -148,6 +158,7 @@ impl Geometry {
             4 => IMEM_WORDS as u32,
             5 => 1024,
             6 => 2048,
+            7 => (self.muldiv as u32) * 3,
             _ => 0,
         })
     }
@@ -1094,6 +1105,7 @@ impl Machine {
         w.u32s(l1_map);
         w.u8(geometry.l1_bits as u8);
         w.u8(geometry.pdl_bits as u8);
+        w.bool(geometry.muldiv);
         w.u32s(l2_map);
         w.u32(self.memory_boards() as u32);
         w.u32s(main);
@@ -1168,14 +1180,15 @@ impl Machine {
         self.interrupt_control = r.u32()?;
         self.dispatch_constant = r.u16()?;
         r.u32s_into(&mut self.l1_map)?;
-        let (l1_bits, pdl_bits) = (r.u8()? as u32, r.u8()? as u32);
+        let (l1_bits, pdl_bits, muldiv) = (r.u8()? as u32, r.u8()? as u32, r.bool()?);
         // The CADR, or a QUUX with a PDL buffer of 1K to 16K words.
-        self.geometry = match (l1_bits, pdl_bits) {
-            (5, 10) => Geometry::CADR,
-            (6, 10..=14) => Geometry { pdl_bits, ..Geometry::QUUX },
+        self.geometry = match (l1_bits, pdl_bits, muldiv) {
+            (5, 10, false) => Geometry::CADR,
+            (6, 10..=14, true) => Geometry { pdl_bits, ..Geometry::QUUX },
             _ => {
                 return Err(crate::checkpoint::bad(format!(
-                    "a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer is no machine's"
+                    "a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer, {} multiply and divide, is no machine's",
+                    if muldiv { "with" } else { "without" }
                 )));
             }
         };

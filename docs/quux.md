@@ -20,6 +20,7 @@ differences, what it needed:
 | Six-bit level-1 map entry | nothing: MIT's PROM boots it; version 1000 also clears QUUX's 64 blocks | 1000: the six-bit read, the two-deposit write, invalid block 77, the reverse first-level map moved to system communication area 640-737 and the swap-out CCWs to 440-457 | nothing: System 1001 runs unchanged | CC's remote debugger (`CADR-DEBUGGER`) still assumes the CADR's map |
 | MACHINE-ID in functional source 16 | nothing | 1000 reads it at boot and runs as either machine | `PROCESSOR-TYPE-CODE` is 4 | nothing |
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
+| `MUL` and `DIV` in one instruction | nothing | none uses them yet; the microassembler needs names for ALU functions 42 and 43 | nothing | nothing |
 
 ## The map
 
@@ -58,7 +59,7 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 2 --- 1 the six-bit map, 2 the 16K PDL buffer | |
+| 15:4 | hardware revision: 3 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
@@ -97,7 +98,7 @@ to `17377377` (page 36776), just below the page the display's control
 registers and the disk controller share. It is read-only and read like any
 device register, through the map:
 
-| Word | QUUX, revision 2 |
+| Word | QUUX, revision 3 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -106,7 +107,8 @@ device register, through the map:
 | 4 | control store: 16,384 words |
 | 5 | A memory: 1,024 words |
 | 6 | dispatch memory: 2,048 words |
-| 7-377 | 0 |
+| 7 | multiply and divide: 3, bit 0 `MUL` and bit 1 `DIV` |
+| 10-377 | 0 |
 
 Nothing answers at that page on the CADR --- in muir's model of it the
 display answers pages 36000-36177, 36400-36577 and 36777, the disk controller
@@ -115,6 +117,51 @@ sets the Xbus NXM bit, as a read of any empty I/O address does. Software
 reads source 16 first and the page only on QUUX, and so never waits for the
 timeout. `quux_lists_its_sizes_in_its_feature_page` in `tests/quux.rs` holds
 the page on QUUX and the timeout on the CADR, on both engines.
+
+## Multiply and divide
+
+**QUUX multiplies in one instruction and divides in one**, ALU functions 42
+and 43 (revision 3). The CADR takes a step per bit: `MUS`, `DVS1`, `DVS` and
+`DVREM` are ALU functions 40, 51, 41 and 45 (`mit/cadr/ir.bits`, ALU
+FUNCTIONS), and microcode 323's `MPY` runs 32 multiply steps, its `DIV` a
+first step, 31 steps, a last step and the remainder correction (System 1001's
+`sys/ucadr/uc-arith.lisp`). On the CADR, 42 and 43 are no multiply or divide:
+the 74S139 at SOURCE 3D04 that makes `-MUL` and `-DIV` from `IR<4:3>` has
+outputs 2 and 3 unconnected, so they are the 74S181 functions their bits
+select.
+
+| | `MUL`, 42 | `DIV`, 43 |
+|---|---|---|
+| Is | 32 `MULTIPLY-STEP`s | `DIVIDE-FIRST-STEP`, then 31 `DIVIDE-STEP`s |
+| M source | the high word to add into, usually 0 | the high dividend |
+| A source | the multiplicand | the divisor |
+| `Q` before | the multiplier | the low dividend |
+| Output bus | the product's high word | the partial remainder |
+| `Q` after | the product's low word | the quotient; `Q<31>` the first step's bit, set on overflow or a zero divisor |
+| Time | one ordinary microcycle | held until 330 ns after it entered `IR` |
+
+Each step's M operand is the output bus of the step before, as when the
+microcode writes the step's result back to the same M location. Both
+instructions decode on `IR<8>` and `IR<4:3>` only, as the '139 does, and
+drive the output bus and load `Q` whatever the output selector `IR<13:12>` and
+the Q control `IR<1:0>` say. `DIVIDE-LAST-STEP` and `DVREM` stay the CADR's
+separate instructions.
+
+**The divider's hold** is a `-WAIT` term of QUUX's own: the divider is busy
+while a `DIV` stands in `IR`, not nopped, and 330 ns (`muldiv::DIV_NS`, 32
+quotient bits and a load at 10 ns each) have not passed since the clock edge
+that loaded `IR`. The master clock runs on, so the bus interface carries on,
+and the microcycle starts at the first master clock edge after that: the
+fewest whole generator cycles covering 330 ns: two at the boot's 220 ns, three
+at the normal 145 and the fast 135. The time does not depend on the operands. A halt during the
+hold stops the machine with the `DIV` still in `IR`. The hold does not stop a
+single step, as `-WAIT` does not; by then the divider is done.
+
+`tests/muldiv.rs` holds each against the step sequence on the CADR, for many
+operands and every output selector and Q control, on `micro` and `rtl`, with
+the step sequence itself held to the netlist; the CADR's 42 and 43 to the
+netlist; the hold's length on both engines; a halted and single-stepped `DIV`;
+and a checkpoint taken during one.
 
 ## Its boot PROM
 

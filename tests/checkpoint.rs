@@ -145,10 +145,13 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// `tests/muir_checkpoint.rs` holds, and version 30 a PDL buffer with room
 /// for a 16K-word QUUX's, the pointer and index checked against the
 /// geometry's width, which `a_pointer_wider_than_its_register_is_refused`
+/// holds, and version 31 whether the machine has QUUX's multiply and
+/// divide, and when `rtl` loaded `IR`, from which QUUX's divider is timed,
+/// which `a_checkpoint_keeps_the_divider_s_time` in `tests/muldiv.rs`
 /// holds.
 #[test]
-fn the_format_is_version_30_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 30, "a new version needs its own tests");
+fn the_format_is_version_31_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 31, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -156,14 +159,14 @@ fn the_format_is_version_30_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 30u32.to_le_bytes());
+    assert_eq!(&good[at..at + 4], 31u32.to_le_bytes());
     for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 30"), "{err}");
+        assert!(err.contains("reads 31"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

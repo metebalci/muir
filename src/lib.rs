@@ -33,6 +33,7 @@ pub mod lashup;
 pub mod machine;
 pub mod mcr;
 pub mod micro;
+pub mod muldiv;
 pub mod netlist;
 pub mod part;
 pub mod prom;
