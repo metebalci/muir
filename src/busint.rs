@@ -682,7 +682,7 @@ impl IoBoardTiming {
     fn fclk_edge_at_or_after(&self, t: u64) -> u64 {
         let from = match self.timing {
             TimingModel::Cadr => t,
-            TimingModel::Fpga => t.saturating_sub(GRID_NS - 1),
+            TimingModel::Fpga | TimingModel::Sync { .. } => t.saturating_sub(GRID_NS - 1),
         };
         from.div_ceil(IOB_FCLK_NS) * IOB_FCLK_NS
     }
@@ -1081,8 +1081,8 @@ pub fn decode_with(phys: u32, memory_words: usize, color_tv: bool) -> Responder 
 }
 
 /// [`decode_with`] with the main display's buffer `tv_words` long: QUUX's
-/// MONO TV has one of its own size from the same start, 64,800 words at
-/// 1920 by 1080, which the CADR's two boards' 32K words do not reach the
+/// MONO TV has one of its own size from the same start, 40,960 words at
+/// 1280 by 1024, which the CADR's two boards' 32K words do not reach the
 /// end of; and `tv_regs` its control registers that answer, a bit each
 /// (`Tv::control_registers`).
 pub fn decode_for(

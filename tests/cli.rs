@@ -415,9 +415,9 @@ fn the_display_board_is_named_on_every_engine() {
     assert!(t.contains("TV model lispm-tv"), "chip with the model board:\n{t}");
 }
 
-/// **MONO TV is QUUX's**: `--tv-board mono-tv` runs on QUUX and says so,
-/// is QUUX's display when none is named, and is refused on the CADR, which
-/// has no such board.
+/// **MONO TV is QUUX's, and QUUX's only**: `--tv-board mono-tv` runs on
+/// QUUX and says so, is QUUX's display when none is named, and is refused
+/// on the CADR; the CADR's boards are refused on QUUX.
 #[test]
 fn mono_tv_is_quux_s() {
     refused_saying(&["--rtl", "--tv-board", "mono-tv"], "--tv-board mono-tv is QUUX's");
@@ -429,14 +429,15 @@ fn mono_tv_is_quux_s() {
         assert!(out.status.success(), "{engine}:\n{t}");
         assert!(t.contains("tv: model mono-tv"), "{engine}: the start says the board:\n{t}");
     }
-    // It is QUUX's display unless another is named; the CADR's boards
-    // still run on QUUX when named.
+    // It is QUUX's display, and the CADR's boards are refused on QUUX.
     let out = muir().args(["--rtl", "--machine", "quux", "--stop-after", "1"]).run();
     assert!(text(&out).contains("tv: model mono-tv"), "QUUX's default:\n{}", text(&out));
-    let out = muir()
-        .args(["--rtl", "--machine", "quux", "--tv-board", "simple-tv", "--stop-after", "1"])
-        .run();
-    assert!(text(&out).contains("tv: model simple-tv"), "named:\n{}", text(&out));
+    for board in ["simple-tv", "lispm-tv"] {
+        refused_saying(
+            &["--rtl", "--machine", "quux", "--tv-board", board],
+            &format!("--tv-board {board} is the CADR's"),
+        );
+    }
     // Its size is a flag of its own, and says so.
     let out = muir()
         .args(["--rtl", "--machine", "quux", "--mono-tv-size", "2560x1440", "--stop-after", "1"])
@@ -450,6 +451,28 @@ fn mono_tv_is_quux_s() {
     );
     refused_saying(&["--machine", "quux", "--mono-tv-size", "wide"], "--mono-tv-size wants");
     refused_saying(&["--mono-tv-size", "1920x1080"], "--mono-tv-size is MONO TV's");
+}
+
+/// **`--timing-model sync` is QUUX's and `rtl`'s, and its ticks are its
+/// own**: it runs on QUUX and says so, and is refused on the CADR, on
+/// `micro`, and `--sync-cycle-ticks` without it or of no ticks.
+#[test]
+fn sync_is_quux_s_and_rtl_s() {
+    let out = muir()
+        .args(["--rtl", "--machine", "quux", "--timing-model", "sync", "--sync-cycle-ticks", "3"])
+        .args(["--stop-after", "1"])
+        .run();
+    assert!(out.status.success(), "{}", text(&out));
+    refused_saying(&["--rtl", "--timing-model", "sync"], "--timing-model sync is QUUX's");
+    refused_saying(&["--micro", "--machine", "quux", "--timing-model", "sync"], "is rtl's");
+    refused_saying(
+        &["--rtl", "--machine", "quux", "--sync-cycle-ticks", "3"],
+        "--sync-cycle-ticks is",
+    );
+    refused_saying(
+        &["--rtl", "--machine", "quux", "--timing-model", "sync", "--sync-cycle-ticks", "0"],
+        "--sync-cycle-ticks wants",
+    );
 }
 
 /// **`--timing-model` is `cadr` or `fpga`, and `fpga` is `rtl`'s.** The

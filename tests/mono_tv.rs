@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! MONO TV, QUUX's display: a monochrome 1920 by 1080 frame buffer, one bit
-//! a pixel, 60 words a line, 64,800 words from Xbus `17000000`, where the
+//! MONO TV, QUUX's display: a monochrome 1280 by 1024 frame buffer by
+//! default, one bit a pixel, 40 words a line, 40,960 words from Xbus
+//! `17000000`, where the
 //! CADR's TV buffer starts. Its mode register at `17377760` keeps
 //! black-on-white, bit 2, and nothing else; registers 1 to 7 read 0 and
 //! take writes to no effect; and it raises no interrupt, the clock being
@@ -24,14 +25,20 @@ fn quux_with_mono_tv() -> Machine {
     m
 }
 
-/// **The buffer is 64,800 words from `17000000`**: its first and last words
+/// **The buffer is 40,960 words from `17000000`**: its first and last words
 /// keep what is written, and the word after the last is nobody's, a read of
-/// it timing out with the Xbus NXM bit, on both engines. Virtual page 1 is
-/// mapped onto the buffer's first page and pages 2 and 3 onto its last.
+/// it timing out with the Xbus NXM bit, on both engines.
 #[test]
-fn the_buffer_is_64800_words() {
+fn the_buffer_is_40960_words() {
     // (virtual address, value): written through MD, read back into A.
-    let cases = [(0o400u32, 0o1234567u32), (0o1000 + 0o37, 0o7654321), (0o1400 + 0o40, 0)];
+    let last = 0o17000000 + tv::MONO_TV_WORDS - 1;
+    // Page 1 onto the buffer's first page, 2 onto its last word's, 3 onto
+    // the page of the word after it.
+    let cases = [
+        (0o400u32, 0o1234567u32),
+        (0o1000 + (last & 0o377), 0o7654321),
+        (0o1400 + ((last + 1) & 0o377), 0),
+    ];
     let mut prom = Vec::new();
     for (k, &(va, _)) in cases.iter().enumerate() {
         let k = k as u64;
@@ -43,7 +50,6 @@ fn the_buffer_is_64800_words() {
         prom.push(Insn::new(ALU | SETM | SRC_MD | a_dest(0o200 + k)));
         let _ = va;
     }
-    let last = 0o17000000 + tv::MONO_TV_WORDS - 1;
     let make = |prom: &[Insn]| {
         let mut m = quux_with_mono_tv();
         let mut words = vec![filler(); 512];
@@ -59,9 +65,6 @@ fn the_buffer_is_64800_words() {
         }
         m
     };
-    // The buffer ends mid-page: its last word is word 37 of a page and the
-    // word after it, 40 of the same page, is nobody's.
-    assert_eq!(last & 0o377, 0o37, "the last word is word 37 of its page");
     // Each case is 28 instructions: the first two alone, then all three.
     for (cases_run, nxm) in [(2, false), (3, true)] {
         let mut e = Micro::new(make(&prom[..28 * cases_run]));
@@ -82,18 +85,18 @@ fn the_buffer_is_64800_words() {
     }
 }
 
-/// **Pixel `x` of line `y` is bit `x mod 32` of word `60 y + x / 32`**, the
+/// **Pixel `x` of line `y` is bit `x mod 32` of word `40 y + x / 32`**, the
 /// low bit leftmost as on the CADR's TV, and the frame the terminal draws
-/// is 1920 by 1080.
+/// is 1280 by 1024.
 #[test]
-fn a_pixel_is_where_the_cadr_would_put_it_at_60_words_a_line() {
+fn a_pixel_is_where_the_cadr_would_put_it_at_40_words_a_line() {
     let mut m = quux_with_mono_tv();
-    let (x, y) = (1919usize, 1079usize);
-    m.bus_write(0o17000000 + (y * 60 + x / 32) as u32, 1 << (x % 32));
+    let (x, y) = (1279usize, 1023usize);
+    m.bus_write(0o17000000 + (y * 40 + x / 32) as u32, 1 << (x % 32));
     assert!(m.tv.pixel(x, y));
     assert!(!m.tv.pixel(x - 1, y));
     let f = Frame::of(&m.tv);
-    assert_eq!((f.width, f.height, f.words_per_line), (1920, 1080, 60));
+    assert_eq!((f.width, f.height, f.words_per_line), (1280, 1024, 40));
     assert_eq!(f.visible(), tv::MONO_TV_WORDS as usize);
     assert!(f.shows_white(x, y), "a one shows white while black-on-white is off");
     m.bus_write(tv::CONTROL, tv::mode::BOW);
@@ -137,7 +140,7 @@ fn the_feature_page_describes_the_main_screen() {
     let page = 0o17377000;
     let words = |m: &mut Machine| [0o11, 0o12, 0o13, 0o14].map(|w| m.bus_read(page + w));
     let packed = |hi: u32, lo: u32| hi << 16 | lo;
-    assert_eq!(words(&mut quux_with_mono_tv()), [packed(1920, 1080), packed(1, 60), 0o17000000, 0]);
+    assert_eq!(words(&mut quux_with_mono_tv()), [packed(1280, 1024), packed(1, 40), 0o17000000, 0]);
     let mut m = Machine::new();
     m.geometry = Geometry::QUUX;
     assert_eq!(words(&mut m), [packed(768, 963), packed(1, 24), 0o17000000, 0]);
@@ -203,6 +206,8 @@ fn another_size_is_followed_everywhere() {
 #[test]
 fn a_size_is_checked() {
     use tv::check_mono_tv_size as check;
+    assert!(check(1280, 1024, false).is_ok());
+    assert!(check(1280, 1024, true).is_ok());
     assert!(check(1920, 1080, false).is_ok());
     assert!(check(1920, 1080, true).is_ok());
     assert!(check(2560, 1440, false).is_ok());

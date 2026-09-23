@@ -27,7 +27,7 @@
 //!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
 //!          [--stop-after <microcycles>]
 //!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
-//!          [--timing-model cadr|fpga]
+//!          [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>]
 //!          [--tv netlist|model] [--tv-board simple-tv|lispm-tv|mono-tv]
 //!          [--tv-capture <gif>] [--tv-capture-no-time]
 //!
@@ -990,7 +990,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--resume <file>] [--serial <endpoint>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
-            [--timing-model cadr|fpga]
+            [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>]
             [--tv netlist|model] [--tv-board simple-tv|lispm-tv|mono-tv]
             [--tv-capture <gif>] [--tv-capture-no-time]
             [--watch <from>[-<to>]:<net>,<net>,...] [-h|--help]
@@ -1390,12 +1390,18 @@ A simulator of the MIT CADR Lisp Machine.
                                offered. [default: 127.0.0.1:5900, VNC's
                                display :0, or the first free display above
                                it]
-  --timing-model cadr|fpga     rtl: whose time the processor keeps: the
+  --timing-model cadr|fpga|sync
+                               rtl: whose time the processor keeps: the
                                CADR's own, or the 10 ns grid muir-fpga's
                                fabric runs on, where a delay rounds up to
                                the next tick and a free-running clock's
                                edge is taken at the first tick at or after
-                               it. [default: cadr]
+                               it; or sync, QUUX's: the grid with a
+                               microcycle of --sync-cycle-ticks ticks.
+                               [default: cadr]
+  --sync-cycle-ticks <k>       sync: a microcycle's 10 ns ticks, the
+                               board's: its fit proves its longest path
+                               settles in them. [default: 4]
   --tv netlist|model           chip: the display. [default: netlist]
   --tv-board simple-tv|lispm-tv|mono-tv
                                which display board, on every engine: the
@@ -1404,13 +1410,14 @@ A simulator of the MIT CADR Lisp Machine.
                                program alike but for mode bit 7, which
                                reads the sync enable back on the LISPM TV
                                and zero on the SIMPLE TV. mono-tv is QUUX's:
-                               1920 by 1080, one bit a pixel, no
-                               interrupt; refused on the CADR. [default:
+                               1280 by 1024, one bit a pixel, no
+                               interrupt; refused on the CADR, and the
+                               CADR's boards refused on QUUX. [default:
                                simple-tv on the CADR, mono-tv on QUUX]
-  --mono-tv-size <w>x<h>        MONO TV's size: the width a multiple of 32,
+  --mono-tv-size <w>x<h>       MONO TV's size: the width a multiple of 32,
                                the buffer at most 130,560 words, and 65,536
                                with --color-tv. The feature page gives it
-                               to the software. [default: 1920x1080]
+                               to the software. [default: 1280x1024]
   --tv-capture <gif>           record the display to <gif> as the run goes,
                                an animated GIF timed by the machine's own
                                clock so that it plays at the machine's
@@ -3687,12 +3694,16 @@ fn refuse_machine(
 /// refused by the flag's name: every instant in it is on the time it was
 /// run on.
 fn refuse_timing_model((path, _): &(PathBuf, Checkpoint), saved: TimingModel, flag: TimingModel) {
+    let said = |m: TimingModel| match m {
+        TimingModel::Sync { cycle_ticks, .. } => format!("sync of {cycle_ticks} ticks"),
+        _ => m.name().to_string(),
+    };
     if saved != flag {
         usage(&format!(
             "--resume {}: written under --timing-model {}, and this run is under {}",
             path.display(),
-            saved.name(),
-            flag.name()
+            said(saved),
+            said(flag)
         ));
     }
 }
@@ -4605,6 +4616,7 @@ fn main() {
     let mut tv_board: Option<TvBoard> = None;
     let mut mono_tv_size: Option<(usize, usize)> = None;
     let mut timing_model = TimingModel::Cadr;
+    let mut sync_cycle_ticks: Option<u8> = None;
     let mut geometry = muir::machine::Geometry::CADR;
     // The color TV, the second display board: off unless `--color-tv`
     // fits it, because a CADR has one screen unless somebody plugged a
@@ -4809,8 +4821,14 @@ fn main() {
             },
             (None, "--timing-model") => match args.next().as_deref().and_then(TimingModel::parse) {
                 Some(model) => timing_model = model,
-                None => usage("--timing-model wants cadr or fpga"),
+                None => usage("--timing-model wants cadr, fpga or sync"),
             },
+            (None, "--sync-cycle-ticks") => {
+                match args.next().as_deref().and_then(|v| v.parse::<u8>().ok()).filter(|&k| k > 0) {
+                    Some(k) => sync_cycle_ticks = Some(k),
+                    None => usage("--sync-cycle-ticks wants a count of 10 ns ticks, 1 to 255"),
+                }
+            }
             (None, "--tv-board") => match args.next().as_deref() {
                 Some("simple-tv") => tv_board = Some(TvBoard::SimpleTv),
                 Some("lispm-tv") => tv_board = Some(TvBoard::LispmTv),
@@ -4823,7 +4841,7 @@ fn main() {
                     v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
                 match size {
                     Some(size) => mono_tv_size = Some(size),
-                    None => usage("--mono-tv-size wants <width>x<height>, such as 1920x1080"),
+                    None => usage("--mono-tv-size wants <width>x<height>, such as 1280x1024"),
                 }
             }
             (None, "--color-tv") => {
@@ -5032,11 +5050,31 @@ fn main() {
     } else {
         TvBoard::MonoTv
     });
+    // And the CADR's boards have none on QUUX's.
+    if tv_board != TvBoard::MonoTv && geometry != muir::machine::Geometry::CADR {
+        usage(&format!(
+            "--tv-board {} is the CADR's, and this run is QUUX, whose display is mono-tv",
+            tv_board.name()
+        ));
+    }
     if tv_board == TvBoard::MonoTv && geometry == muir::machine::Geometry::CADR {
         usage("--tv-board mono-tv is QUUX's, and this run is the CADR: --machine quux");
     }
     // The grid is muir-fpga's, and it is `rtl`'s references its fabric is
     // held to; `micro` and `chip` keep the board's time.
+    // `sync` is QUUX's microcycle, and its ticks are `sync`'s.
+    if let TimingModel::Sync { ilong_ticks, .. } = timing_model {
+        if geometry == muir::machine::Geometry::CADR {
+            usage("--timing-model sync is QUUX's, and this run is the CADR: --machine quux");
+        }
+        let cycle_ticks = sync_cycle_ticks.unwrap_or(muir::clock::SYNC_CYCLE_TICKS);
+        timing_model = TimingModel::Sync { cycle_ticks, ilong_ticks };
+    } else if sync_cycle_ticks.is_some() {
+        usage(&format!(
+            "--sync-cycle-ticks is --timing-model sync's, and this run is {}",
+            timing_model.name()
+        ));
+    }
     if timing_model != TimingModel::Cadr && which != Which::Rtl {
         usage(&format!(
             "--timing-model {} is rtl's, and this run is {}",

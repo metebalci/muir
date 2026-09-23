@@ -148,10 +148,24 @@ impl Speed {
 pub enum TimingModel {
     /// The board's own nanoseconds.
     #[default]
-    Cadr = 0,
+    Cadr,
     /// muir-fpga's grid: every instant on a [`GRID_NS`] tick.
-    Fpga = 1,
+    Fpga,
+    /// QUUX's synchronous microcycle, H1a: the grid, with a microcycle of
+    /// `cycle_ticks` ticks and `ilong_ticks` more for an `ILONG`
+    /// instruction, in place of the CADR's delay-line taps. Every register
+    /// is still clocked at the one edge, the late writes one edge later,
+    /// and the bus keeps its own time on the grid, so only the length of a
+    /// microcycle changes. The ticks are a board's: the fit that proves its
+    /// longest path settles in them. QUUX's, having no speed bits; `rtl`'s.
+    Sync { cycle_ticks: u8, ilong_ticks: u8 },
 }
+
+/// `sync`'s microcycle when `--sync-cycle-ticks` does not say: 4 ticks,
+/// 40 ns, the Arty Z7-20's longest measured path of 37.35 ns rounded up
+/// (muir-fpga's routed fit). **Unverified** until a fit at that deadline
+/// meets it.
+pub const SYNC_CYCLE_TICKS: u8 = 4;
 
 /// The tick of muir-fpga's grid.
 pub const GRID_NS: u64 = 10;
@@ -162,6 +176,7 @@ impl TimingModel {
         match self {
             TimingModel::Cadr => "cadr",
             TimingModel::Fpga => "fpga",
+            TimingModel::Sync { .. } => "sync",
         }
     }
 
@@ -170,6 +185,7 @@ impl TimingModel {
         match word {
             "cadr" => Some(TimingModel::Cadr),
             "fpga" => Some(TimingModel::Fpga),
+            "sync" => Some(TimingModel::Sync { cycle_ticks: SYNC_CYCLE_TICKS, ilong_ticks: 0 }),
             _ => None,
         }
     }
@@ -191,13 +207,17 @@ impl TimingModel {
     fn tick(self, ns: u64) -> u64 {
         match self {
             TimingModel::Cadr => ns,
-            TimingModel::Fpga => ns.div_ceil(GRID_NS) * GRID_NS,
+            TimingModel::Fpga | TimingModel::Sync { .. } => ns.div_ceil(GRID_NS) * GRID_NS,
         }
     }
 
     /// The whole microcycle: [`Speed::cycle_ns`] on the board; on the grid,
     /// the tap rounded up and the restart rounded up after it.
     pub fn cycle_ns(self, speed: Speed, ilong: bool) -> u32 {
+        if let TimingModel::Sync { cycle_ticks, ilong_ticks } = self {
+            let ticks = cycle_ticks as u32 + if ilong { ilong_ticks as u32 } else { 0 };
+            return ticks * GRID_NS as u32;
+        }
         let read = self.triggered(speed.read_phase_ns(ilong) as u64);
         let restart = self.triggered(RESTART_AFTER_READ_NS as u64);
         (read + restart) as u32

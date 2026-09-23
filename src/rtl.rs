@@ -185,6 +185,9 @@ pub struct Rtl {
     /// When the instruction standing in `IR` was clocked into it: QUUX's
     /// divider starts then, [`Rtl::stall`].
     ir_loaded_ns: u64,
+    /// This microcycle's write pulse has fired already: a `-HANG` holding
+    /// it fires the pulse before the hold ([`Rtl::step`]).
+    pulsed: bool,
     /// `STATSTOP`, the 74S374 at OLORD2 1A05 on `CLK5A`: the statistics
     /// counter's carry out, `STAT.OVF`, registered.  Under `STATHENB` it is
     /// `STATHALT`.
@@ -521,6 +524,7 @@ impl Rtl {
             sstep: false,
             ssdone: false,
             ir_loaded_ns: 0,
+            pulsed: false,
             statstop: false,
             halted: false,
             opc_ck: false,
@@ -1709,7 +1713,10 @@ impl Rtl {
     /// in `IR` asks: `-ILONG` is `NAND(IR45, -NOPA)`.
     fn master_clock_cycle(&mut self, r: &Read) -> u64 {
         let before = self.ns;
-        self.land_write(self.ns + SPEEDCLK_NS);
+        let speedclk = self.speedclk_at();
+        if let Some(at) = speedclk {
+            self.land_write(at);
+        }
         // The debug master's write of the mode register is carried to
         // `SPEEDCLK` too, not only to the edge.  The processor's own write
         // is, on the line above, for the reason [`Rtl::land_write`] gives:
@@ -1730,8 +1737,11 @@ impl Rtl {
         // Only when there is a debug write still to land: this runs every
         // microcycle, and a machine with nothing on the cable answers
         // `None` here without touching the state machine.
-        if !self.debug_written && self.busint.debug_answered_at().is_some() {
-            self.debug_cycle(self.ns + SPEEDCLK_NS);
+        if let Some(at) = speedclk
+            && !self.debug_written
+            && self.busint.debug_answered_at().is_some()
+        {
+            self.debug_cycle(at);
         }
         self.speedclk();
         self.ns += self.timing.cycle_ns(self.speed, r.ilong) as u64;
@@ -2050,6 +2060,18 @@ impl Rtl {
     /// cycle, waited or not, and before the bus is carried forward, since an
     /// acknowledgement lands no earlier than 80 ns in and a mode register it
     /// loads is seen by the next cycle's edge and not this one's.
+    /// `SPEEDCLK`'s instant in this generator cycle, which writes are
+    /// carried to so that the speed synchronizer sees a new mode: none
+    /// under `sync`, whose microcycle is shorter than the 60 ns it comes at
+    /// and which has no synchronizer, QUUX having no speed bits. A write
+    /// lands at the edge instead, as every write does.
+    fn speedclk_at(&self) -> Option<u64> {
+        match self.timing {
+            TimingModel::Sync { .. } => None,
+            _ => Some(self.ns + SPEEDCLK_NS),
+        }
+    }
+
     fn speedclk(&mut self) {
         // QUUX runs at one rate, the CADR's normal until its own timing
         // model says otherwise; it has no speed bits to synchronize.
@@ -2435,6 +2457,28 @@ impl Rtl {
             if let Some(stall) = self.stall(&r)
                 && !(stall == Stall::Wait && r.stepping)
             {
+                // `-HANG` holds off the start of the next cycle and not this
+                // one's write pulse: `-TPR0` is `NAND(-HANG, -CLOCK RESET B,
+                // CYCLECOMPLETED)` at CLOCK1 1C08, and the pulse runs its
+                // course inside the hung cycle. What it writes is what its
+                // address and data are as it ends, which the clock cuts at
+                // the cycle's boundary (`clock.rs`, `WP_OFF_NS`): MD as the
+                // bus has left it then --- the word read if it has landed,
+                // the old one if not. So the pending late writes and a
+                // dispatch write land then, once. A `-WAIT` writes nothing:
+                // `TPWP` is `NOR(latch, -MACHRUNA)` at CLOCK2 1C10, and
+                // `-WAIT` drops `MACHRUN`. `tests/dispatch_write_order.rs`
+                // holds both on the netlist, the hang at four distances
+                // from the read, two landing before the pulse ends and two
+                // after.
+                if stall == Stall::Hang && !self.pulsed {
+                    let at = self.ns + self.timing.cycle_ns(self.speed, r.ilong) as u64;
+                    self.bus_cycle(at);
+                    self.after_memack(at);
+                    let now = self.read_phase();
+                    self.write_phase(&now);
+                    self.pulsed = true;
+                }
                 let open = self.stall_for(stall, &r);
                 // A cycle with no acknowledgement due --- its timeout
                 // inhibited from the debug cable, or the other machine's
@@ -2460,12 +2504,16 @@ impl Rtl {
             if !r.nop {
                 self.executed = Some(self.m.opc);
             }
-            self.write_phase(&r);
-            self.land_write(self.ns + SPEEDCLK_NS);
+            if !std::mem::take(&mut self.pulsed) {
+                self.write_phase(&r);
+            }
             // The debug master's mode-register write reaches `SPEEDCLK`
             // here as the processor's does; see [`Rtl::master_clock_cycle`].
-            if !self.debug_written && self.busint.debug_answered_at().is_some() {
-                self.debug_cycle(self.ns + SPEEDCLK_NS);
+            if let Some(at) = self.speedclk_at() {
+                self.land_write(at);
+                if !self.debug_written && self.busint.debug_answered_at().is_some() {
+                    self.debug_cycle(at);
+                }
             }
             self.speedclk();
             // "Note that the bus interface interface must work whether the
@@ -2556,6 +2604,7 @@ impl Engine for Rtl {
             sstep,
             ssdone,
             ir_loaded_ns,
+            pulsed,
             statstop,
             halted,
             opc_ck,
@@ -2642,6 +2691,7 @@ impl Engine for Rtl {
         }
         w.u64(*halted_ns);
         w.u64(*ir_loaded_ns);
+        w.bool(*pulsed);
         w.bool(*memstart);
         w.bool(*mbusy);
         w.bool(*rdcyc);
@@ -2684,7 +2734,15 @@ impl Engine for Rtl {
         w.u32(*stat);
         w.speed(*speed);
         w.speed(*speed_a);
-        w.u8(*timing as u8);
+        match *timing {
+            TimingModel::Cadr => w.u8(0),
+            TimingModel::Fpga => w.u8(1),
+            TimingModel::Sync { cycle_ticks, ilong_ticks } => {
+                w.u8(2);
+                w.u8(cycle_ticks);
+                w.u8(ilong_ticks);
+            }
+        }
         w.u64(*ns);
         w.u32(*busint_bus);
         w.u64(*loadmd_at);
@@ -2730,6 +2788,7 @@ impl Engine for Rtl {
         }
         self.halted_ns = r.u64()?;
         self.ir_loaded_ns = r.u64()?;
+        self.pulsed = r.bool()?;
         self.memstart = r.bool()?;
         self.mbusy = r.bool()?;
         self.rdcyc = r.bool()?;
@@ -2772,6 +2831,7 @@ impl Engine for Rtl {
         self.timing = match r.u8()? {
             0 => TimingModel::Cadr,
             1 => TimingModel::Fpga,
+            2 => TimingModel::Sync { cycle_ticks: r.u8()?, ilong_ticks: r.u8()? },
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,

@@ -790,7 +790,7 @@ needs no password. [The terminal](#the-terminal) has the rest.
 Default: `127.0.0.1:5900`, VNC's display :0, or the first free display above
 it.
 
-### `--timing-model cadr|fpga`
+### `--timing-model cadr|fpga|sync`
 
 **rtl:** whose time the processor and its boards keep. `cadr` is the board's
 own nanoseconds. `fpga` is the 10 ns grid muir-fpga's fabric runs on, so that
@@ -801,10 +801,24 @@ the first tick at or after it. A microcycle at normal speed is 150 ns there
 rather than 145. [What each engine models](engines.md#what-each-engine-models)
 says which delays and clocks those are.
 
+`sync` is QUUX's synchronous microcycle: the same grid, with every
+microcycle `--sync-cycle-ticks` ticks long in place of the CADR's delay-line
+taps. Registers are still clocked at the one edge, and the bus keeps its own
+time, so only the length of a microcycle changes. Refused on the CADR.
+[QUUX](quux.md) has it.
+
 Refused on `micro` and `chip`, which keep the board's time. A checkpoint
-carries it, and a resume under the other is refused.
+carries it, and a resume under another is refused.
 
 Default: `cadr`.
+
+### `--sync-cycle-ticks <k>`
+
+**rtl, `--timing-model sync`:** a microcycle's length in 10 ns ticks, 1 to
+255. It is a board's: the number its fit proves its longest path settles
+in. Refused without `sync`.
+
+Default: 4, the Arty Z7-20's.
 
 ### `--tv netlist|model`
 
@@ -825,10 +839,11 @@ and a checkpoint carries it.
 The two program alike but for mode bit 7, which reads the sync enable back
 on the LISPM TV and zero on the SIMPLE TV, where an ECO grounds it.
 
-`mono-tv` is QUUX's display, [MONO TV](quux.md): 1920 by 1080, one bit a
-pixel, with no sync program and no interrupt. It is refused on the CADR.
+`mono-tv` is QUUX's display, [MONO TV](quux.md): 1280 by 1024, one bit a
+pixel, with no sync program and no interrupt. It is refused on the CADR, and
+the CADR's two boards are refused on QUUX.
 
-Default: `simple-tv` on the CADR, `mono-tv` on QUUX.
+Default: `simple-tv` on the CADR, `mono-tv` on QUUX, its only one.
 
 ### `--mono-tv-size <width>x<height>`
 
@@ -837,7 +852,7 @@ buffer at most 130,560 words, and at most 65,536 words with `--color-tv`.
 The start says it, the feature page gives it to the software, and a
 checkpoint carries it; a resume at another size is refused.
 
-Default: `1920x1080`.
+Default: `1280x1024`, the HDMI mode muir-fpga's QUUX boards drive.
 
 ### `--tv-capture <gif>`
 

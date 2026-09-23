@@ -4,9 +4,9 @@
 //! System 1002 on QUUX with MONO TV: muir-sys's development band, which
 //! sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-1002-dev` (muir-sys `6704553`), a pack
-//! with microcode 1000 for QUUX revision 4 and the band, and the tree it was
-//! built from. Without it the tests skip and say so.
+//! It is in the gitignored `ref/band-1002-dev2` (muir-sys `5427570`), a
+//! pack with microcode 1000 for QUUX revision 4 and the band, and the tree
+//! it was built from: no TV sync program and no speed bits. Without it the tests skip and say so.
 
 use std::path::PathBuf;
 
@@ -23,17 +23,17 @@ const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
 /// A copy of the pack and the served tree, in a scratch directory.
 fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev");
-    if !from.join("pack-1002-dev.img").exists() {
+    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev2");
+    if !from.join("pack-1002-dev2.img").exists() {
         eprintln!("skipped: {} is not present", from.display());
         return None;
     }
     let dir = support::scratch(name);
     let pack = dir.join("pack.img");
-    std::fs::copy(from.join("pack-1002-dev.img"), &pack).unwrap();
+    std::fs::copy(from.join("pack-1002-dev2.img"), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev.tar.gz"))
+        .arg(from.join("tree-1002-dev2.tar.gz"))
         .arg("-C")
         .arg(dir.path())
         .status()
@@ -63,9 +63,10 @@ fn lit(e: &impl Engine, rows: std::ops::Range<usize>, words_per_line: usize) -> 
         .sum()
 }
 
-/// **System 1002 reaches its listener on QUUX with MONO TV, drawn at 60
-/// words a line**, on both engines. Its listener comes up where the harness
-/// looks for it with the screen read at MONO TV's 60 words a line; read at
+/// **System 1002 reaches its listener on QUUX with MONO TV, drawn at the
+/// screen's words a line**, on both engines: 40 at the default 1280 by
+/// 1024. Its listener comes up where the harness looks for it with the
+/// screen read at MONO TV's words a line; read at
 /// the CADR's 24, the same rows hold far less, which is the band drawing
 /// for the screen it was given and not for the CADR's.
 #[test]
@@ -75,21 +76,51 @@ fn system_1002_runs_on_mono_tv() {
             return;
         };
         let m = quux(&pack);
-        let (ran, at_60, at_24) = match engine {
+        let (ran, at_screen, at_24) = match engine {
             "micro" => {
                 let mut e = Micro::new(m);
                 e.boot();
                 let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-                (ran, lit(&e, 84..130, 60), lit(&e, 84..130, 24))
+                (ran, lit(&e, 84..130, e.machine().tv.screen().2), lit(&e, 84..130, 24))
             }
             _ => {
                 let mut e = Rtl::new(m);
                 e.boot();
                 let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-                (ran, lit(&e, 84..130, 60), lit(&e, 84..130, 24))
+                (ran, lit(&e, 84..130, e.machine().tv.screen().2), lit(&e, 84..130, 24))
             }
         };
-        eprintln!("{engine}: listener after {ran} microcycles; lit {at_60} at 60, {at_24} at 24");
-        assert!(at_60 > 2 * at_24, "{engine}: drawn at 60 words a line");
+        eprintln!(
+            "{engine}: listener after {ran} microcycles; lit {at_screen} at its own, {at_24} at 24"
+        );
+        assert!(at_screen > 2 * at_24, "{engine}: drawn at the screen's words a line");
     }
+}
+
+/// **System 1002 runs under `sync`**, QUUX's 40 ns microcycle: the same
+/// microcode and band reach the same listener, and the time to it is
+/// shorter than at QUUX's one rate of 145 ns by less than the microcycle
+/// ratio, the bus keeping its own time.
+#[test]
+fn system_1002_runs_under_sync() {
+    use muir::clock::TimingModel;
+    let mut times = Vec::new();
+    for model in [TimingModel::Cadr, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
+        let Some((_dir, pack, root)) = band_1002(&format!("system-1002-{}", model.name())) else {
+            return;
+        };
+        let mut e = Rtl::new(quux(&pack));
+        e.set_timing_model(model);
+        e.boot();
+        let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
+        let wpl = e.machine().tv.screen().2;
+        assert!(
+            lit(&e, 84..130, wpl) > 2 * lit(&e, 84..130, 24),
+            "{model:?}: at the screen's words a line"
+        );
+        eprintln!("{}: listener after {ran} microcycles, {} ns", model.name(), e.ns());
+        times.push(e.ns());
+    }
+    let ratio = times[0] as f64 / times[1] as f64;
+    assert!(ratio > 1.5 && ratio < 145.0 / 40.0, "{ratio:.2} times faster");
 }

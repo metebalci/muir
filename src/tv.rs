@@ -107,21 +107,22 @@ pub const HEIGHT: usize = 963;
 /// --- 24 words of 32 bits is the 768 pixels of a line, one bit each.
 pub const WORDS_PER_LINE: usize = 24;
 
-/// MONO TV, QUUX's display: 1920 by 1080 unless `--mono-tv-size` says
+/// MONO TV, QUUX's display: 1280 by 1024 unless `--mono-tv-size` says
 /// otherwise ([`check_mono_tv_size`]), one bit a pixel. Not the CADR's:
 /// a board of QUUX's own (`--tv-board mono-tv`), a frame buffer and a mode
 /// register with black-on-white in it, and nothing else --- no sync
 /// program, no color map and no interrupt, the machine's clock being the
 /// processor's tick (`machine::Tick`).
-pub const MONO_TV_WIDTH: usize = 1920;
+pub const MONO_TV_WIDTH: usize = 1280;
 /// Lines of MONO TV, at its default size.
-pub const MONO_TV_HEIGHT: usize = 1080;
-/// 1920 pixels of one bit each are 60 words of 32, a whole number, which
+pub const MONO_TV_HEIGHT: usize = 1024;
+/// 1280 pixels of one bit each are 40 words of 32, a whole number, which
 /// `BITBLT` needs of an array's first dimension (`sys/ucadr/uc-tv.lisp`,
 /// `BITBLT-DECODE-ARRAY`).
-pub const MONO_TV_WORDS_PER_LINE: usize = 60;
-/// MONO TV's buffer at its default size, 64,800 words from [`BUFFER`]: it
-/// ends at `17176437`, below the color TV's strap at `17200000`.
+pub const MONO_TV_WORDS_PER_LINE: usize = 40;
+/// MONO TV's buffer at its default size, 40,960 words from [`BUFFER`]: it
+/// ends at `17117777`, below the color TV's strap at `17200000`. The size
+/// is the HDMI mode muir-fpga's two QUUX boards drive.
 pub const MONO_TV_WORDS: u32 = (MONO_TV_HEIGHT * MONO_TV_WORDS_PER_LINE) as u32;
 
 /// The most a MONO TV buffer can be: Xbus I/O space from [`BUFFER`] up to

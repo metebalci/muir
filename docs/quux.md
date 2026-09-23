@@ -22,6 +22,7 @@ differences, what it needed:
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The processor tick | nothing | none enables it yet: the clock handler is still entered from the display's interrupt | nothing | nothing |
+| The synchronous microcycle (`sync`) | nothing | nothing | nothing | `--timing-model sync`, `--sync-cycle-ticks` |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
 | MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
 
@@ -117,8 +118,8 @@ device register, through the map:
 | 13 | the main screen: its buffer's first physical address |
 | 14-377 | 0 |
 
-Words 11 to 13 describe whichever display is fitted: MONO TV's 1920 by 1080,
-one bit a pixel, 60 words a line at `17000000`, or, on a QUUX run with a CADR
+Words 11 to 13 describe whichever display is fitted: MONO TV's 1280 by 1024,
+one bit a pixel, 40 words a line at `17000000`, or, on a QUUX run with a CADR
 board, that board's 768 by 963, one bit, 24 words a line at the same address.
 
 Nothing answers at that page on the CADR --- in muir's model of it the
@@ -221,18 +222,45 @@ normal read tap and the 60 ns restart. The register's other bits are
 unchanged. `quux_has_no_speed_bits` in `tests/quux.rs` holds it on both
 engines.
 
+## The synchronous microcycle
+
+**Under `--timing-model sync`, a QUUX microcycle is a fixed number of 10 ns
+ticks**, `--sync-cycle-ticks`, in place of the CADR's delay-line taps. On
+the CADR a microcycle is the read tap and a 60 ns restart, 145 ns at normal
+speed, which muir-fpga's fabric replays as 15 ticks. The ticks are a
+board's: the number its fit proves its longest path settles in. muir-fpga's
+routed fits put that path, from MD or `MEMSTART` through the map and the M
+bus to the dispatch address and the next PC, at 37.35 ns on the Arty Z7-20
+and 20.2 ns on the DE25-Nano; the default, 4 ticks, is the Arty's.
+**Unverified** until a fit at that deadline meets it.
+
+Only the length of a microcycle changes. Every register is clocked at the
+one edge and the late writes land one edge later, as before; the bus keeps
+its own time on the grid; a held cycle is one microcycle long; and the
+divider's 330 ns hold is the fewest microcycles that cover it. The speed
+synchronizer's instant 60 ns into a cycle goes: QUUX has no speed bits, and
+a write lands at the edge. An `ILONG` instruction takes `ilong_ticks` more,
+0 unless the library says otherwise.
+
+System 1002 reaches its listener in the same 10.5 M microcycles under
+`sync` of 4 ticks as at QUUX's one rate, in 1.30 s of the machine's time
+against 2.32 s: 1.8 times faster, the bus keeping its own time
+(`system_1002_runs_under_sync` in `tests/system_1002.rs`).
+`tests/sync_timing.rs` holds the microcycle's length, `ILONG`'s ticks, the
+grid, the divider's hold and a checkpoint.
+
 ## MONO TV, the display
 
-**QUUX's display is MONO TV**, a monochrome frame buffer: 1920 by 1080 unless
+**QUUX's display is MONO TV**, a monochrome frame buffer: 1280 by 1024 unless
 `--mono-tv-size` gives another size, one bit a pixel. It is the frame buffer and one register, and nothing else: no sync
 program, no color map, and no interrupt, the machine's clock being the
-processor's tick. `--tv-board mono-tv`, which is QUUX's display unless another
-board is named; refused on the CADR.
+processor's tick. `--tv-board mono-tv`: QUUX's only display, the CADR's two
+boards being refused on QUUX, and refused on the CADR.
 
 | | |
 |---|---|
-| Buffer | 64,800 words, physical `17000000`-`17176437`: 60 words a line, 1,080 lines |
-| Pixel | pixel `x` of line `y` is bit `x mod 32` of word `60 y + x / 32`, the low bit leftmost, as on the CADR's TV |
+| Buffer | 40,960 words, physical `17000000`-`17117777`: 40 words a line, 1,024 lines |
+| Pixel | pixel `x` of line `y` is bit `x mod 32` of word `40 y + x / 32` (at the default size), the low bit leftmost, as on the CADR's TV |
 | Mode register, `17377760` | bit 2, black-on-white, reads back; every other bit reads 0 and a write of it is dropped |
 | Register 4, `17377764` | the color map's write, kept for a color display to come: answers, reads 0, and takes no writes yet |
 | Registers 1 to 3 and 5 to 7 | not there: the CADR's sync program and three that did nothing. An access times out and sets the Xbus NXM bit |
@@ -245,23 +273,24 @@ at `17200000`. 2560 by 1440 fits; 3840 by 2160 does not. The feature page's
 words 11 to 13 give the size to the software. The table above is the default
 size.
 
-1920 bits a line is 60 whole words, which `BITBLT` needs of a screen array's
+1280 bits a line is 40 whole words, which `BITBLT` needs of a screen array's
 first dimension (`BITBLT-DECODE-ARRAY` in `sys/ucadr/uc-tv.lisp`). The buffer
 starts where the CADR's does, so the band's `IO-SPACE-VIRTUAL-ADDRESS`
 reaches it unchanged, and ends below the color TV's strap at `17200000`.
 
 System 1001 runs on it but draws its screen wrong: `shwarm.lisp` makes the
-main screen 768 by 963 at 24 words a line, and MONO TV scans 60, so each of
+main screen 768 by 963 at 24 words a line, and MONO TV scans 40, so each of
 its lines is spread over parts of several. On QUUX's microcode 1000 with the
 tick (`ref/ucode-1000-quux4`) the band reaches its listener on `micro` in
 136 M microcycles, as on the CADR's board, measured by reading the rows the
 listener draws in at 24 words a line; its writes of the sync program's
 registers time out and leave the Xbus NXM bit set, and nothing stops over
 it. System 1002 sizes the main screen from the feature page's words 11 to 13,
-and draws it right: muir-sys's development band (`ref/band-1002-dev`,
-muir-sys `6704553`, microcode 1000 for revision 4) reaches its listener in
-11 M microcycles on both engines, its herald, listener and who line drawn at
-60 words a line across 1920 by 1080 (`system_1002_runs_on_mono_tv` in
+and draws it right: muir-sys's development band (`ref/band-1002-dev2`,
+muir-sys `5427570`, microcode 1000 for revision 4, no sync program and no
+speed bits) reaches its listener in
+10.5 M microcycles on both engines, its herald, listener and who line drawn at
+the screen's own words a line (`system_1002_runs_on_mono_tv` in
 `tests/system_1002.rs`).
 
 `tests/mono_tv.rs` holds the buffer's first and last words and the NXM past
