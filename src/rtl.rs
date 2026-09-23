@@ -1281,11 +1281,12 @@ impl Rtl {
             //
             // Written together, level 1's 93425As hold their outputs in high
             // impedance for the pulse and `-VMAP` floats high: level 2 is
-            // then addressed with its top five bits zero
-            // (`Machine::write_map` has the whole account).
+            // then addressed with its top bits zero (`Machine::write_map`
+            // has the whole account); its low five, `MAPI<12:8>`, come
+            // through the same 74S258s either way.
             let (adr0, adr1) = self.map_address();
             let both = bit(self.m.vma as u64, 26) && bit(self.m.vma as u64, 25);
-            let adr1 = if both { self.m.geometry.l2_index(0, self.m.md) as u16 } else { adr1 };
+            let adr1 = if both { adr1 & 0o37 } else { adr1 };
             if bit(self.m.vma as u64, 26) {
                 self.m.l1_map[adr0 as usize] = self.m.geometry.l1_from_vma(self.m.vma);
             }
