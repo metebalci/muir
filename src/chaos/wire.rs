@@ -50,7 +50,13 @@ pub const SAMPLE_NS: u64 = 175;
 /// them as 100 ns, 60 ns and 10 ns. `src/chip.rs` lists the four straps and
 /// how their post numbers map onto pins.
 pub const LOCKOUT_NS: u64 = 170;
-/// A line quiet this long is idle: "more than about two bit cells".
+/// A line quiet this long is idle: "more than about two bit cells"
+/// (AIM-628 §2.5), where a decoder on the cable ends the packet.  Two and a
+/// half cells is this model's choice within that.  The netlist board's own
+/// busy one-shot lifts `-CBLBSY` 500 ns after the last edge, exactly two
+/// cells (`the_models_instants_are_the_boards` measures it), and the board's
+/// receiver is held to that by [`crate::chaos::board::CBLBSY_OFF_NS`]; this
+/// is the cable's decoders, which no board sets.
 pub const IDLE_NS: u64 = 2 * CELL_NS + CELL_NS / 2;
 
 /// The level changes that put `bits` on a line that is idle low, as

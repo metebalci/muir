@@ -470,3 +470,44 @@ fn the_edge_that_takes_a_waiting_cycle() {
     // behind every read.
     assert_eq!(refresh, e2 + 13);
 }
+
+/// **A refresh the reset stuck ends ten oscillator stages after the first
+/// edge past the release**, [`muir::busint::MEMORY_RELEASE_STAGES`], which
+/// is the arithmetic `MemoryBoard::unibus_reset` runs `rtl` on. The board
+/// is held in reset over `-XBUS.INIT` across a refresh request, so the
+/// chain shifts through once and sticks with `-BUSY` down; released at
+/// several phases of the oscillator, `-BUSY` must come up where the
+/// constant says.
+#[test]
+fn a_refresh_stuck_by_a_reset_ends_where_the_model_says() {
+    use muir::busint::MEMORY_RELEASE_STAGES;
+    let n = cadrm();
+    for phase in [0u64, 10, 20, 30] {
+        let mut b = board(&n);
+        let init = b.net("-XBUS.INIT");
+        // Past the first refresh, then held in reset for more than a
+        // refresh period.
+        while b.level("-BUSY") != Level::Low {
+            b.run(b.now + 5);
+        }
+        while b.level("-BUSY") != Level::High {
+            b.run(b.now + 5);
+        }
+        b.chip.drive(init, Level::Low);
+        b.chip.transition(b.now);
+        b.run(b.now + 15_000);
+        let release = rising_edge(rising_edge_after(b.now) + 3) + phase;
+        b.run(release);
+        b.chip.pull_up(init);
+        b.chip.transition(b.now);
+        // Down as the release lets the stuck chain go, then up.
+        while b.level("-BUSY") != Level::Low {
+            b.run(b.now + 1);
+        }
+        while b.level("-BUSY") != Level::High {
+            b.run(b.now + 1);
+        }
+        let want = rising_edge(rising_edge_after(release) + MEMORY_RELEASE_STAGES);
+        assert_eq!(b.now, want, "released {phase} ns past an edge");
+    }
+}

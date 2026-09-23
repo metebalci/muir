@@ -397,7 +397,15 @@ pub struct XbusMaster<'a> {
 }
 
 impl<'a> XbusMaster<'a> {
-    /// Half of the 220 ns master clock the machine boots at.
+    /// Half of the 220 ns master clock the machine boots at: `-XBUS SYNC`
+    /// is driven as a square wave of that period.  On the machine it is
+    /// not square.  The interface's 26S10 at XA 0F21 drives it from `CLK0`,
+    /// which is `-MCLK7` inverted at CLM 0B07, and `MCLK7` is `TPCLK` through
+    /// CLOCK2 1D10 and 1C01: the generator's read phase.  So the line is low
+    /// for the read phase, 160 ns at extra slow, and high for the 60 ns
+    /// restart ([`crate::clock::Speed::cycle_ns`]).  This master keeps the
+    /// period, which is what the memory board's synchronizer counts on, and
+    /// not the duty.
     pub const SYNC_HALF_NS: u64 = 110;
 
     /// Brings a board up as [`Xbus::new`] does, switched to `switches`,

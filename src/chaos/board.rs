@@ -66,23 +66,29 @@ pub const TURN_FIRST_TC_NS: u64 = 4_250;
 pub const TURN_LOAD_NS: u64 = 33 * wire::CELL_NS;
 
 /// From the count that raises bit 7 to the frame's first edge on the
-/// cable, `TSTART` through the transmit clock.  Measured, 470.
-pub const TURN_START_NS: u64 = 470;
+/// cable, `TSTART` through the transmit clock.  Measured on the netlist
+/// board, 468; `the_models_instants_are_the_boards` in
+/// `tests/chaos_netlist.rs` holds this and the next three.
+pub const TURN_START_NS: u64 = 468;
 
-/// From a frame's nominal end --- its first edge plus a cell a bit --- to
-/// `-CBLBSY` lifting: the last edge 120 on, the busy one-shot 500 more.
-/// Measured.  `RDONE` rises with it.
-pub const CBLBSY_OFF_NS: u64 = 620;
+/// From a frame's nominal end --- its first edge plus a cell for each bit
+/// of [`crate::chaos::packet::frame`], the zero appended at the end
+/// included --- to `-CBLBSY` lifting: the last edge 125 before that end,
+/// the busy one-shot 500 after the last edge.  Measured.  `RDONE` rises
+/// with it.
+pub const CBLBSY_OFF_NS: u64 = 375;
 
-/// Transmit Done comes this much before the frame's nominal end: `-TDONE`
-/// 370 ns before the last edge, which is 120 after the nominal end.
-/// Measured.
-pub const TDONE_BEFORE_END_NS: u64 = 250;
+/// Transmit Done comes this much before the frame's nominal end, as
+/// [`CBLBSY_OFF_NS`] reckons it: `-TDONE` 375 ns before the last edge,
+/// which is 125 before that end.  Measured.
+pub const TDONE_BEFORE_END_NS: u64 = 500;
 
-/// From the read of START to `TSREMPTY`, the source and check words
-/// shifted into the buffer behind the packet.  Measured, 6,350, for
-/// packets of one to thirty words alike.
-pub const TSR_READY_NS: u64 = 6_350;
+/// From the read of START answered, `-SSYN`, to `TSREMPTY`: the source
+/// and check words shifted into the buffer behind the packet.  Measured on
+/// the netlist board, 4,150 at every phase of its clocks, where the answer
+/// itself comes 350 to 2,100 ns after `-MSYN`.  `rtl` hands the read to
+/// this model at the answer.
+pub const TSR_READY_NS: u64 = 4_150;
 
 /// From `ABORT` at LMMODU 0A09 setting --- the transmitter's next clock
 /// edge after its transceiver's interference, `TABORTED` with it --- to

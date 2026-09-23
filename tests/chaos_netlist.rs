@@ -1588,3 +1588,100 @@ fn two_packets_back_to_back_wait_a_whole_round() {
     assert!(ready > runs[0].1 + muir::chaos::ether::SLOT_NS, "the first turn was missed");
     assert_eq!(gap / muir::chaos::ether::SLOT_NS, 257, "a missed turn and a whole round: {gap} ns");
 }
+
+/// **The instants the behavioral interface keeps are the netlist board's.**
+/// `chaos::board` times a frame from its constants rather than its
+/// counters; here the board runs a looped-back frame and each instant is
+/// measured on its nets and held to the constant that stands for it:
+///
+/// - `TSREMPTY` [`TSR_READY_NS`] after the START read is answered, at
+///   whatever phase of the board's clocks the read comes --- the answer
+///   itself takes 350 to 2,100 ns, and `rtl` hands the read to the model at
+///   the answer;
+/// - the frame's first edge on `-TTL.D.OUT` [`TURN_START_NS`] after
+///   `MY.TURN^` rises;
+/// - `-TDONE` [`TDONE_BEFORE_END_NS`] before the frame's nominal end, its
+///   first edge plus a cell for each of its bits, and `-CBLBSY` lifting,
+///   `RDONE` with it, [`CBLBSY_OFF_NS`] after;
+/// - `MY.TURN CLK^` rising [`TURN_FIRST_TC_NS`] after power-on and every
+///   two terminal counts from there.
+#[test]
+fn the_models_instants_are_the_boards() {
+    use muir::chaos::board::{
+        CBLBSY_OFF_NS, TDONE_BEFORE_END_NS, TSR_READY_NS, TURN_FIRST_TC_NS, TURN_START_NS,
+        TURN_TC_NS,
+    };
+    use muir::chaos::packet::frame;
+    use muir::chaos::wire::CELL_NS;
+    let n = cadrio();
+    let words = rfc_time(MY_ADDRESS, MY_ADDRESS);
+    let tap = |b: &mut UnibusMaster| {
+        let next = b.chip.next_tap().map_or(b.now + 50, |t| t.max(b.now + 1)).min(b.now + 500);
+        b.run(next);
+    };
+    for delay in [0, 375, 750, 1125, 1500] {
+        let mut b = board(&n);
+        b.cycle(chaos::CSR, Some(csr::RESET));
+        b.run(b.now + 2_000);
+        b.cycle(chaos::CSR, Some(csr::LOOP_BACK | csr::CLEAR_RECEIVER));
+        for &w in &words {
+            b.cycle(chaos::WRITE_BUFFER, Some(w));
+        }
+        b.run(b.now + delay);
+        let begin = b.now;
+        let (took, _) = b.cycle(chaos::START, None);
+        let answered = begin + muir::busint::UNIBUS_ADDRESS_NS + took;
+        while b.level("TSREMPTY") != Level::High {
+            tap(&mut b);
+        }
+        assert_eq!(b.now - answered, TSR_READY_NS, "TSREMPTY after START, {delay} ns later");
+        if delay != 0 {
+            continue;
+        }
+        // The rest of the frame, on the one run.
+        let (mut turn, mut first, mut last, mut tdone, mut off) = (None, None, None, None, None);
+        let mut clk_rises = Vec::new();
+        let mut was = [
+            b.level("MY.TURN^"),
+            b.level("-TTL.D.OUT"),
+            b.level("-TDONE"),
+            b.level("-CBLBSY"),
+            b.level("'MY.TURN CLK^'"),
+        ];
+        while off.is_none() {
+            tap(&mut b);
+            let now = [
+                b.level("MY.TURN^"),
+                b.level("-TTL.D.OUT"),
+                b.level("-TDONE"),
+                b.level("-CBLBSY"),
+                b.level("'MY.TURN CLK^'"),
+            ];
+            if now[0] == Level::High && was[0] != Level::High && first.is_none() {
+                turn = Some(b.now);
+            }
+            if now[1] != was[1] {
+                first.get_or_insert(b.now);
+                last = Some(b.now);
+            }
+            if now[2] == Level::Low && was[2] != Level::Low {
+                tdone = Some(b.now);
+            }
+            if now[3] == Level::High && was[3] != Level::High && first.is_some() {
+                off = Some(b.now);
+            }
+            if now[4] == Level::High && was[4] != Level::High {
+                clk_rises.push(b.now);
+            }
+            was = now;
+        }
+        let (turn, first, _last) = (turn.unwrap(), first.unwrap(), last.unwrap());
+        let end = first + frame(&words, MY_ADDRESS).len() as u64 * CELL_NS;
+        assert_eq!(first - turn, TURN_START_NS, "the first edge after the turn");
+        assert_eq!(end - tdone.unwrap(), TDONE_BEFORE_END_NS, "-TDONE before the nominal end");
+        assert_eq!(off.unwrap() - end, CBLBSY_OFF_NS, "-CBLBSY lifting after the nominal end");
+        for r in clk_rises {
+            assert_eq!((r - TURN_FIRST_TC_NS) % (2 * TURN_TC_NS), 0, "MY.TURN CLK^ at {r}");
+        }
+    }
+}
