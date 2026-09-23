@@ -8,6 +8,19 @@ the CADR as MIT built it. Back to [the manual](manual.md).
 This page says where QUUX differs from the CADR. Everything it does not
 mention is the CADR's.
 
+## What each difference reaches
+
+A change to the hardware reaches further than the board: the boot PROM,
+the microcode, the Lisp system in the band, and the tools that read a
+machine's state can all depend on what changed. For each of QUUX's
+differences, what it needed:
+
+| Difference | Boot PROM | Microcode | Lisp system | Tools |
+|---|---|---|---|---|
+| Six-bit level-1 map entry | nothing: MIT's PROM boots it | 1000: the six-bit read, the two-deposit write, invalid block 77, the reverse first-level map moved to system communication area 640-737 and the swap-out CCWs to 440-457 | nothing: System 1001 runs unchanged | CC's remote debugger (`CADR-DEBUGGER`) still assumes the CADR's map |
+| MACHINE-ID in functional source 16 | nothing | 1000 reads it at boot and runs as either machine | `PROCESSOR-TYPE-CODE` is 4 | nothing |
+| The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
+
 ## The map
 
 **A level-1 entry is six bits, not five.** The level-1 map names, for each
