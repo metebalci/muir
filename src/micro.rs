@@ -110,6 +110,9 @@ pub struct Micro {
     /// later, which is what gates the two write pulses.
     /// [`Micro::land_map_write`] is that write phase.
     map_write_d: Option<(u32, u32)>,
+    /// The map as this microcycle's instruction reads it, when a map write
+    /// landed at its start: the word from before the write.
+    map_seen: Option<crate::machine::Translation>,
     /// The map word of the last memory cycle, as the 74S373 at VMEMDR 1D14
     /// holds it: what `MAP(MD)`'s permission bits are read from.
     lvmo: u32,
@@ -194,6 +197,7 @@ impl Micro {
             executed: None,
             map_write: None,
             map_write_d: None,
+            map_seen: None,
             lvmo: LVMO_AT_POWER_ON,
             wrcyc: false,
             speed: Speed::ExtraSlow,
@@ -540,7 +544,7 @@ impl Micro {
             // bits of the last cycle's page. The rest is live, at whatever
             // `MAPI` addresses: `VMA` just after a start, `MD` otherwise.
             0o11 => {
-                let t = self.m.translate(self.map_address());
+                let t = self.map_seen.unwrap_or_else(|| self.m.translate(self.map_address()));
                 let pfr = (self.lvmo >> 23) & 1 != 0;
                 let pfw = !((self.lvmo >> 22) & 1 == 0 && self.wrcyc);
                 ((!pfw as u32) << 31)
@@ -1055,10 +1059,7 @@ impl Micro {
         // out of `SPY-FLAG-2`, and `DPC` from `CC-READ-PC`. The one thing
         // that observes the stored bit is `-DPE`, and that can only differ
         // from correct if a chip has failed.
-        if self.ir(10, 2) == 2 {
-            self.m.dmem[addr as usize] = self.adata & 0o377777;
-            return Ok(());
-        }
+        let write = self.ir(10, 2) == 2;
         if self.ir(10, 2) == 3 {
             pos = self.lc_byte_mode();
         }
@@ -1077,7 +1078,8 @@ impl Micro {
         // field's is the easy misreading of that NAND-OR; the bit takes
         // the place, as `rtl` and `chip` show.
         if map != 0 {
-            let bits = self.m.translate(self.map_address()).l2_data;
+            let bits =
+                self.map_seen.unwrap_or_else(|| self.m.translate(self.map_address())).l2_data;
             let b18 = (bits >> 18) & 1;
             let b19 = (bits >> 19) & 1;
             addr |= (m & mask & !1)
@@ -1091,6 +1093,24 @@ impl Micro {
         }
 
         let entry = self.m.dmem[(addr & 0o3777) as usize];
+        if write {
+            // The write goes to the address the dispatch would have read:
+            // `DADR` takes the field and the M-source bits whatever the
+            // function (page DSPCTL), and `-DWEA` is `NAND(WP2, DISPWR)`.
+            // `DISPENB` is `DISPATCH AND NOT DISPWR`, so nothing is
+            // dispatched; but a POPJ in the same instruction is still
+            // `IGNPOPJ`'s, which reads R: with R clear the POPJ is a jump to
+            // the word's DPC and pops nothing (`Rtl::read_phase`'s `pcs`).
+            // The word is the one standing before the write --- which of
+            // the two the CADR's RAM gives there is a race, and QUUX defines
+            // it as the old one (`tests/dispatch_write_order.rs`).
+            self.m.dmem[(addr & 0o3777) as usize] = self.adata & 0o377777;
+            if self.popj && (entry >> 16) & 1 == 0 {
+                self.npc = (entry & 0o37777) as u16;
+                self.popj = false;
+            }
+            return Ok(());
+        }
         self.m.dispatch_constant = self.ir(32, 10) as u16;
 
         let mut target = entry & 0o37777;
@@ -1203,6 +1223,8 @@ impl Engine for Micro {
             executed,
             map_write,
             map_write_d,
+            // Set and used within one step.
+            map_seen: _,
             lvmo,
             wrcyc,
             speed,
@@ -1385,6 +1407,15 @@ impl Engine for Micro {
         self.mclk_edge();
         self.advance_pipeline();
         self.memstart = std::mem::take(&mut self.memop);
+        // A map store's write lands here, before the instruction runs, so
+        // that its memory access translates through the new map as `rtl`'s
+        // does. But what the instruction reads of the map itself ---
+        // `MAP(MD)` and a dispatch on its bits --- is the word from before
+        // the write: on the CADR the RAM's output is high impedance while
+        // written and which word the edge sees is a race, and QUUX defines
+        // it as the old one, as `rtl`'s read phase has it
+        // (`tests/dispatch_write_order.rs`).
+        self.map_seen = self.map_write_d.is_some().then(|| self.m.translate(self.map_address()));
         self.land_map_write();
 
         if self.new_md_delay > 0 {
@@ -1442,6 +1473,7 @@ impl Engine for Micro {
             Op::Dispatch => self.dispatch()?,
             Op::Byte => self.byte()?,
         }
+
         // `IR<11:10>` = 1 on any class is misc function 1, `HALT-CONS`:
         // `-FUNCT1` off the 74S139 at SOURCE 3D05, which the 74S374 at
         // OLORD2 1A05 registers as `HALTED` at the next edge.

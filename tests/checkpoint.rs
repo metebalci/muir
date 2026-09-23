@@ -150,10 +150,14 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// which `a_checkpoint_keeps_the_divider_s_time` in `tests/muldiv.rs`
 /// holds, and version 32 QUUX's tick, which `a_checkpoint_keeps_the_tick`
 /// in `tests/tick.rs` holds, and version 33 MONO TV's size, which
-/// `another_size_is_followed_everywhere` in `tests/mono_tv.rs` holds.
+/// `another_size_is_followed_everywhere` in `tests/mono_tv.rs` holds, and
+/// version 34 `sync`'s ticks with the timing model, which
+/// `a_checkpoint_keeps_the_ticks` in `tests/sync_timing.rs` holds, and
+/// version 35 whether `rtl`'s write pulse has fired in a microcycle a
+/// `-HANG` holds (`tests/dispatch_write_order.rs`).
 #[test]
-fn the_format_is_version_33_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 33, "a new version needs its own tests");
+fn the_format_is_version_35_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 35, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -161,14 +165,14 @@ fn the_format_is_version_33_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 33u32.to_le_bytes());
+    assert_eq!(&good[at..at + 4], 35u32.to_le_bytes());
     for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 33"), "{err}");
+        assert!(err.contains("reads 35"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }
