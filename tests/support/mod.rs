@@ -824,7 +824,14 @@ pub fn muir() -> std::process::Command {
 /// `muir` as a person runs it: [`muir`] without the flag that leaves the
 /// debug cable connector empty, for the tests of that default.
 pub fn muir_default() -> std::process::Command {
-    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_muir"));
+    // At run time, so that an example that takes this module in (as
+    // `examples/profile.rs` does) builds: Cargo gives the binary's path to
+    // test targets alone.
+    let muir = match option_env!("CARGO_BIN_EXE_muir") {
+        Some(path) => path,
+        None => panic!("only a test binary is told where muir is"),
+    };
+    let mut c = std::process::Command::new(muir);
     c.stdin(std::process::Stdio::null());
     c.env("MUIR_RC", "/dev/null");
     c
