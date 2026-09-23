@@ -131,3 +131,46 @@ fn quux_answers_its_id_in_source_16() {
     assert_eq!(Geometry::QUUX.id, Some(id));
     assert_eq!(Geometry::CADR.id, None);
 }
+
+/// **QUUX lists its sizes in its feature page**, the Xbus I/O page at
+/// physical `17377000`, just below the page the display and the disk
+/// controller share: word 0 the identity word again, then the level-1
+/// entry's bits, the level-2 map's entries, the PDL buffer's words, and the
+/// control store's, A memory's and dispatch memory's; the rest reads 0. On
+/// the CADR nothing answers there, and a read times out as any read of an
+/// empty I/O address does, the Xbus NXM bit set.
+#[test]
+fn quux_lists_its_sizes_in_its_feature_page() {
+    use muir::isa::asm::{SRC_MD, START_READ, filler};
+    use muir::machine::bus_error;
+    // Virtual page 1 on the feature page; M 1 to M 8 the addresses of words
+    // 0 to 6 and 100 of it, each read into A 200 up.
+    let words = [0u32, 1, 2, 3, 4, 5, 6, 0o100];
+    let mut prom = Vec::new();
+    for (k, _) in words.iter().enumerate() {
+        prom.push(Insn::new(ALU | SETM | m_src(1 + k as u64) | START_READ));
+        prom.extend([filler(); 12].map(|f| f));
+        prom.push(Insn::new(ALU | SETM | SRC_MD | a_dest(0o200 + k as u64)));
+    }
+    let set = |geometry: Geometry| {
+        move |m: &mut Machine| {
+            m.geometry = geometry;
+            m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+            for (k, &w) in words.iter().enumerate() {
+                m.mmem[1 + k] = (1 << 8) | w;
+            }
+        }
+    };
+    let id = Geometry::QUUX.id.unwrap();
+    let want = [id, 6, 2048, 1024, 16384, 1024, 2048, 0];
+    let (e, r) = both(&prom, &set(Geometry::QUUX), 400);
+    for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
+        let got: Vec<u32> = (0..words.len()).map(|k| m.amem[0o200 + k]).collect();
+        assert_eq!(got, want, "QUUX, {name}");
+        assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0, "QUUX, {name}: no NXM");
+    }
+    let (e, r) = both(&prom[..14], &set(Geometry::CADR), 400);
+    for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
+        assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "CADR, {name}: the read timed out");
+    }
+}

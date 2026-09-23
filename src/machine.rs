@@ -121,6 +121,34 @@ impl Geometry {
     pub fn pdl_mask(self) -> u16 {
         (1 << self.pdl_bits) - 1
     }
+
+    /// The Xbus I/O page a machine with an identity word lists its sizes
+    /// in: physical `17377000`, just below the page the display's control
+    /// registers and the disk controller share. Nothing answers there on
+    /// the CADR.
+    pub const FEATURE_PAGE: u32 = 0o36776;
+
+    /// The word of the feature page at physical address `phys`, if this
+    /// machine has one and `phys` is on it: the identity word, then the
+    /// level-1 entry's bits, the level-2 map's entries, the PDL buffer's
+    /// words, and the control store's, A memory's and dispatch memory's;
+    /// every other word 0. Read-only.
+    pub fn feature_word(self, phys: u32) -> Option<u32> {
+        let id = self.id?;
+        if (phys >> 8) & 0o37777 != Self::FEATURE_PAGE {
+            return None;
+        }
+        Some(match phys & 0o377 {
+            0 => id,
+            1 => self.l1_bits,
+            2 => 32 << self.l1_bits,
+            3 => 1 << self.pdl_bits,
+            4 => IMEM_WORDS as u32,
+            5 => 1024,
+            6 => 2048,
+            _ => 0,
+        })
+    }
 }
 
 /// The level-2 map's words on the largest machine, QUUX: 64 blocks of 32.
@@ -501,6 +529,10 @@ impl Machine {
     /// interface's own registers and the I/O board on the Unibus. Every
     /// other I/O address times out.
     fn device(&mut self, phys: u32) -> Option<usize> {
+        // QUUX's feature page, a device of its own ([`Geometry::feature_word`]).
+        if self.geometry.feature_word(phys).is_some() {
+            return None;
+        }
         match busint::decode_with(phys, self.main.len(), self.color_tv.is_some()) {
             busint::Responder::Memory(_) => Some(phys as usize),
             busint::Responder::Device
@@ -858,6 +890,9 @@ impl Machine {
     /// A read of a diagnostic register through this alone reads the open
     /// bus; the engines answer them.  See [`crate::spy`].
     pub fn bus_read(&mut self, phys: u32) -> u32 {
+        if let Some(w) = self.geometry.feature_word(phys) {
+            return w;
+        }
         if let Some(r) = disk_controller::register(phys) {
             self.disk.advance(self.ns);
             return self.disk.read(r);

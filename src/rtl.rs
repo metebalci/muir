@@ -1727,11 +1727,12 @@ impl Rtl {
                 // the answer arrives.
                 self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
                 self.bus_data = self.m.md;
-                self.bus_responder = busint::decode_with(
-                    self.bus_addr,
-                    self.m.main.len(),
-                    self.m.color_tv.is_some(),
-                );
+                self.bus_responder = if self.m.geometry.feature_word(self.bus_addr).is_some() {
+                    // QUUX's feature page answers as an Xbus device.
+                    busint::Responder::Device
+                } else {
+                    busint::decode_with(self.bus_addr, self.m.main.len(), self.m.color_tv.is_some())
+                };
                 self.busint.request(self.wrcyc);
                 self.bus_cycles += 1;
                 self.bus_written = false;
