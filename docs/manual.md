@@ -812,7 +812,7 @@ Default: `cadr`.
 
 Default: `netlist`.
 
-### `--tv-board simple-tv|lispm-tv`
+### `--tv-board simple-tv|lispm-tv|mono-tv`
 
 Which display board, **on every engine**: the SIMPLE TV that System 100
 drives, or the LISPM TV that replaced it in December 1980. One model serves
@@ -825,7 +825,19 @@ and a checkpoint carries it.
 The two program alike but for mode bit 7, which reads the sync enable back
 on the LISPM TV and zero on the SIMPLE TV, where an ECO grounds it.
 
-Default: `simple-tv`.
+`mono-tv` is QUUX's display, [MONO TV](quux.md): 1920 by 1080, one bit a
+pixel, with no sync program and no interrupt. It is refused on the CADR.
+
+Default: `simple-tv` on the CADR, `mono-tv` on QUUX.
+
+### `--mono-tv-size <width>x<height>`
+
+MONO TV's size, for `--tv-board mono-tv`: the width a multiple of 32, the
+buffer at most 130,560 words, and at most 65,536 words with `--color-tv`.
+The start says it, the feature page gives it to the software, and a
+checkpoint carries it; a resume at another size is refused.
+
+Default: `1920x1080`.
 
 ### `--tv-capture <gif>`
 
