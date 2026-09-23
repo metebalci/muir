@@ -36,7 +36,26 @@ back in `MAP(MD)<29:24>`, and a translation through a block above 37, on
 `micro` and `rtl`; the same store on the CADR keeps five bits and reads bit
 29 as 0.
 
-## What the microcode must do differently
+## Its microcode
+
+**Microcode 1000 is QUUX's**, muir-sys's first change to MIT's 323, made from
+System 1001's sources. It reads the six-bit entry at `MAP(MD)<29:24>`, writes
+it in two deposits, `VMA<31:27>` and `VMA<24>`, keeps block 77 as the invalid
+one with the reuse pointer wrapping before it, and moves the reverse
+first-level map to system communication area words 640 to 737. It sets
+`A-PROCESSOR-TYPE-CODE` to **4**, QUUX's (1 is the CADR's; 2 and 3 were the
+Lambda's and the Explorer's, which System 1001 no longer carries). At boot it
+writes a level-1 entry of 77 and reads it back, and on a machine where the
+sixth bit is not there it stops at `QUUX-MAP-MISSING`.
+
+`tests/system_1001.rs` holds it, with the microcode's files in the gitignored
+`ref/ucode-1000`: System 1001, the band as released, reaches its listener on
+QUUX on both engines with version 1000 and type 4 in A memory; on a CADR the
+microcode stops at `QUUX-MAP-MISSING` and stays there. The band reads the
+error table for the running version at boot, `SYS: UBIN; UCADR TBL 1000`, so
+the served `sys/ubin/ucadr.tbl` must be microcode 1000's.
+
+## What the microcode had to do differently
 
 Microcode 323 knows the CADR's map, and runs on QUUX as on a CADR: System
 1001 on it reaches its listener on both engines with no level-1 entry naming

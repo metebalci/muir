@@ -10,8 +10,9 @@
 //! file through the FILE service, which is how the run knows it is over:
 //! nothing here reads the screen.
 //!
-//!     cargo run --release --example profile -- [micro|rtl] [workload ...]
+//!     cargo run --release --example profile -- [micro|rtl] [cadr|quux] [workload ...]
 //!
+//! The machine is the CADR unless `quux` is named: QUUX, `--machine quux`.
 //! With no workloads named, all of them run, in the order below. For each,
 //! it prints the microcycles, the macroinstructions --- executions of
 //! `QMLP+2`, the dispatch on `M-INST-OP` (`uc-macrocode.lisp`) --- and their
@@ -340,6 +341,15 @@ fn main() {
     } else {
         "micro".into()
     };
+    let geometry = if args.first().is_some_and(|a| a == "quux" || a == "cadr") {
+        if args.remove(0) == "quux" {
+            muir::machine::Geometry::QUUX
+        } else {
+            muir::machine::Geometry::CADR
+        }
+    } else {
+        muir::machine::Geometry::CADR
+    };
     let wanted: Vec<&(&str, &str)> = if args.is_empty() {
         WORKLOADS.iter().collect()
     } else {
@@ -350,12 +360,16 @@ fn main() {
             .collect()
     };
     match engine.as_str() {
-        "rtl" => profile(Rtl::new, &wanted),
-        _ => profile(Micro::new, &wanted),
+        "rtl" => profile(Rtl::new, geometry, &wanted),
+        _ => profile(Micro::new, geometry, &wanted),
     }
 }
 
-fn profile<E: Profiled>(make: impl Fn(muir::machine::Machine) -> E, wanted: &[&(&str, &str)]) {
+fn profile<E: Profiled>(
+    make: impl Fn(muir::machine::Machine) -> E,
+    geometry: muir::machine::Geometry,
+    wanted: &[&(&str, &str)],
+) {
     let (Some(pack), Some(sources)) =
         (support::vendor(&["run", "release-1001-pack.img"]), support::vendor(&["system-1001"]))
     else {
@@ -408,7 +422,9 @@ fn profile<E: Profiled>(make: impl Fn(muir::machine::Machine) -> E, wanted: &[&(
     let qmlp = syms.address(Space::IMem, "QMLP").expect("QMLP in the symbol table");
     let files = label_files(&sources.join("sys/ucadr"));
 
-    let mut e = make(support::machine_with_pack(&copy));
+    let mut m = support::machine_with_pack(&copy);
+    m.geometry = geometry;
+    let mut e = make(m);
     e.boot();
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS_1001, root.clone(), 400_000_000);
     eprintln!("listener after {ran} microcycles");

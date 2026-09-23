@@ -189,3 +189,85 @@ fn system_1001_runs_on_quux_as_on_the_cadr() {
         assert_eq!(above, 0, "{engine}: level-1 entries above block 37");
     }
 }
+
+/// A copy of the release's pack with the microcode in `ucode` loaded into
+/// MCR2 and made current, and the served tree holding its error table.
+fn with_microcode(pack: &std::path::Path, root: &std::path::Path, ucode: &std::path::Path) {
+    use muir::diskpack::{Command, Pack};
+    serving_table(root, &ucode.join("ucadr.tbl"));
+    let (mut p, _) = Pack::open(pack);
+    p.run(Command::Load { partition: "MCR2".to_string(), file: Some(ucode.join("ucadr.mcr")) })
+        .unwrap();
+    p.run(Command::Microload("MCR2".to_string())).unwrap();
+}
+
+/// An A-memory location of the microcode in `ucode`, by its symbol.
+fn a_mem(ucode: &std::path::Path, name: &str) -> usize {
+    let syms =
+        muir::sym::parse(&std::fs::read_to_string(ucode.join("ucadr.sym")).unwrap()).unwrap();
+    syms.address(muir::sym::Space::AMem, name).unwrap_or_else(|| panic!("no {name}")) as usize
+}
+
+/// **System 1001 runs on QUUX's own microcode, 1000.** muir-sys's first
+/// microcode for QUUX (`ref/ucode-1000`): the six-bit level-1 entry, 63
+/// level-2 blocks, and `A-PROCESSOR-TYPE-CODE` 4. On QUUX the band reaches its
+/// listener on both engines with version 1000 and type 4 in A memory, on the
+/// band as released: no rebuild.
+#[test]
+fn system_1001_runs_on_quux_microcode_1000() {
+    let Some(ucode) = rebuilt_microcode("ucode-1000") else { return };
+    let type_code = a_mem(&ucode, "A-PROCESSOR-TYPE-CODE");
+    for engine in ["micro", "rtl"] {
+        let Some((_dir, pack, root)) = release_1001(&format!("system-1001-1000-{engine}")) else {
+            return;
+        };
+        with_microcode(&pack, &root, &ucode);
+        let mut m = machine_with_pack(&pack);
+        m.geometry = muir::machine::Geometry::QUUX;
+        let (ran, version, code) = match engine {
+            "micro" => {
+                let mut e = Micro::new(m);
+                e.boot();
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                (ran, microcode_version(&e), e.machine().amem[type_code] & 0o77777777)
+            }
+            _ => {
+                let mut e = Rtl::new(m);
+                e.boot();
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                (ran, microcode_version(&e), e.machine().amem[type_code] & 0o77777777)
+            }
+        };
+        eprintln!("{engine}: QUUX's listener on microcode 1000 after {ran} microcycles");
+        assert_eq!((version, code), (1000, 4), "{engine}: version and processor type");
+    }
+}
+
+/// **Microcode 1000 will not run on a CADR.** It writes a level-1 entry of
+/// 77 at boot and reads it back; on a CADR the sixth bit is not there, and it
+/// stops at `QUUX-MAP-MISSING` rather than going on to mistranslate.
+#[test]
+fn microcode_1000_stops_on_a_cadr() {
+    let Some(ucode) = rebuilt_microcode("ucode-1000") else { return };
+    let Some((_dir, pack, root)) = release_1001("system-1001-1000-on-cadr") else { return };
+    with_microcode(&pack, &root, &ucode);
+    let syms =
+        muir::sym::parse(&std::fs::read_to_string(ucode.join("ucadr.sym")).unwrap()).unwrap();
+    let missing = syms.address(muir::sym::Space::IMem, "QUUX-MAP-MISSING").unwrap() as u16;
+    let mut e = Micro::new(machine_with_pack(&pack));
+    e.boot();
+    let mut reached = false;
+    for _ in 0..20_000_000 {
+        e.step().unwrap();
+        if e.executed().is_some_and(|pc| pc == missing) {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "the CADR never reached QUUX-MAP-MISSING at {missing:o}");
+    // And stays there: nothing past it runs.
+    for _ in 0..1_000_000 {
+        e.step().unwrap();
+    }
+    assert!((missing..=missing + 1).contains(&e.pc()), "PC {:o}", e.pc());
+}
