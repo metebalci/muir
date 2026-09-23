@@ -2284,13 +2284,28 @@ fn prom(i: &[bool], s: &State, width: usize, n: u32) -> Level {
     cell(s, addr(i, 1, width), n)
 }
 
-const RAM32_IN: &[u8] = &[5, 6, 13, 12, 11, 10, 4];
-const RAM4K_ADDR: &[u8] = &[1, 2, 3, 4, 5, 6, 17, 16, 15, 14, 13, 12];
-const RAM4K_IN: &[u8] = &[10, 8, 1, 2, 3, 4, 5, 6, 17, 16, 15, 14, 13, 12];
-const RAM1K_ADDR: &[u8] = &[2, 3, 4, 5, 6, 9, 10, 11, 12, 13];
-const RAM1K_IN: &[u8] = &[1, 14, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13];
-const PROM512_IN: &[u8] = &[15, 1, 2, 3, 4, 5, 16, 17, 18, 19];
-const PROM32_IN: &[u8] = &[15, 10, 11, 12, 13, 14];
+// The pin tables below are MIT's own pinouts: the wire lists name every
+// pin of every body they wire, and `tests/part_pinouts.rs` holds each table
+// to those names --- `cadrwd/cadr4.wlr` for the 93425A, 82S21, 74S283
+// and 25S10, `cadrwd/icmem3.wlr` for the 2147 and the 74S472, and
+// `cadr1/busint.wlr` for the 74S288 and the Am29701.
+
+/// The 82S21: `CE` (5), `-LATCH` (6), then `A0`..`A4` (13, 12, 11, 10, 4).
+pub const RAM32_IN: &[u8] = &[5, 6, 13, 12, 11, 10, 4];
+/// The 2147's `A0`..`A11`.
+pub const RAM4K_ADDR: &[u8] = &[1, 2, 3, 4, 5, 6, 17, 16, 15, 14, 13, 12];
+/// The 2147: `-CE` (10), `-WE` (8), then [`RAM4K_ADDR`].
+pub const RAM4K_IN: &[u8] = &[10, 8, 1, 2, 3, 4, 5, 6, 17, 16, 15, 14, 13, 12];
+/// The 93425A's `A0`..`A9`.
+pub const RAM1K_ADDR: &[u8] = &[2, 3, 4, 5, 6, 9, 10, 11, 12, 13];
+/// The 93425A: `-CE` (1), `-WE` (14), then [`RAM1K_ADDR`].
+pub const RAM1K_IN: &[u8] = &[1, 14, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13];
+/// The 74S472: `-CE` (15), then `A0`..`A8`.
+pub const PROM512_IN: &[u8] = &[15, 1, 2, 3, 4, 5, 16, 17, 18, 19];
+/// The 74S288: `-SEL` (15), then `ADA`..`ADE`.  MIT's letters do not say
+/// which is the low bit; `ADA` is taken as it, which is what the PROM's
+/// listing `cadr1/reqtim.prom` needs.
+pub const PROM32_IN: &[u8] = &[15, 10, 11, 12, 13, 14];
 /// The 74S287's chip select and its eight address pins, `A0` first: 5, 6,
 /// 7, 4, 3, 2, 1, 15. `sn74s287.pdf` letters them `AD C`, `AD B`, `AD A`,
 /// `AD D`.. `AD H` and never says which is the low bit; MIT's own table
@@ -2300,8 +2315,12 @@ const PROM32_IN: &[u8] = &[15, 10, 11, 12, 13, 14];
 /// `the_address_prom_is_its_table` in `tests/chaos.rs`. That is also the
 /// 256 x 4 PROM family's pinout, the 82S129's among them.
 const PROM256_IN: &[u8] = &[13, 5, 6, 7, 4, 3, 2, 1, 15];
-const RAM16X4_ADDR: &[u8] = &[13, 14, 15, 1];
-const RAM16X4_IN: &[u8] = &[2, 3, 13, 14, 15, 1];
+/// The Am29701's address, `A3`..`A0` by MIT's names: taken low bit first
+/// the other way round, which a RAM cannot show --- every word is written
+/// and read through the same order, and nothing loads one from outside.
+pub const RAM16X4_ADDR: &[u8] = &[13, 14, 15, 1];
+/// The Am29701: `-CS` (2), `-WE` (3), then [`RAM16X4_ADDR`].
+pub const RAM16X4_IN: &[u8] = &[2, 3, 13, 14, 15, 1];
 
 /// How many words a part's memory array holds, if it has one.
 ///
@@ -4452,8 +4471,11 @@ const BUF_N: GateFn = |i, _| if i[0] { Level::Z } else { lv(!i[1]) };
 /// Buffer with an active-high enable; only the 74S241's second half has one.
 const BUF_HI: GateFn = |i, _| if i[0] { lv(i[1]) } else { Level::Z };
 
-const ADD_IN: &[u8] = &[5, 3, 14, 12, 6, 2, 15, 11, 7];
-const SHIFT_IN: &[u8] = &[13, 9, 10, 1, 2, 3, 4, 5, 6, 7];
+/// The 74S283: `A0`..`A3`, `B0`..`B3`, `CIN`, MIT's names.
+pub const ADD_IN: &[u8] = &[5, 3, 14, 12, 6, 2, 15, 11, 7];
+/// The Am25S10: `-OE` (13), `S1` (9), `S0` (10), then `I-3`..`I3` (1 to 7),
+/// MIT's names.
+pub const SHIFT_IN: &[u8] = &[13, 9, 10, 1, 2, 3, 4, 5, 6, 7];
 
 fn alu_f(i: &[bool]) -> u8 {
     s181(nib(i, 0), nib(i, 4), nib(i, 8), i[12], i[13]).0

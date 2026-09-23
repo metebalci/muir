@@ -56,12 +56,13 @@ use crate::spy;
 use crate::ttl;
 
 /// What this engine charges its clock per memory cycle: the machine's mean
-/// wait on the bus in the band, rounded. `rtl` measured 469,431,577 ns
-/// stalled over 1,028,921 memory cycles from executed instruction 1,300,000
-/// to 15,000,000 on the System 100 pack, 456 ns a cycle;
-/// `micro_keeps_the_machines_periods` prints the figure of the run it
-/// makes. The boot PROM's own mean is 545, over a run too short to matter.
-pub const MEMORY_ACCESS_NS: u64 = 460;
+/// wait on the bus in the band, rounded to ten nanoseconds. `rtl` measures
+/// 471,007,483 ns stalled over 910,304 memory cycles from executed
+/// instruction 1,300,000 to 15,000,000 on the System 100 pack, 517 ns a
+/// cycle, and `micro_keeps_the_machines_periods` in `tests/cosim.rs` holds
+/// this to that measurement. The boot PROM's own mean is 545, over a run
+/// too short to matter.
+pub const MEMORY_ACCESS_NS: u64 = 520;
 
 pub struct Micro {
     pub m: Machine,
@@ -891,6 +892,9 @@ impl Micro {
         );
         let alu = ttl::alu(self.mdata, self.adata, ctl.aluf, ctl.alumode, ctl.cin);
         let alu32 = alu.f >> 32 & 1 != 0;
+        // `INT.ENABLE` and `SEQUENCE.BREAK` are bits 27 and 26 of
+        // INTERRUPT-CONTROL, the 25LS2519 at FLAG 3E08 (`Machine::byte_mode`
+        // has the four).
         let int_enabled = self.m.interrupt_control & (1 << 27) != 0;
         let pending = int_enabled && self.m.interrupt();
         match self.ir(0, 3) {

@@ -5479,3 +5479,132 @@ fn chip_rtl_and_micro_write_both_map_levels_alike() {
         assert_eq!(got, board, "level 2 on {name}");
     }
 }
+
+/// **The interface's idle promise holds on the board.**
+/// [`muir::busint::IDLE_OUT_PROMISE_NS`] is what an interface with nothing in
+/// its arbitration tells the machine at the other end of the debug cable
+/// about its next request: nothing sooner. What the board takes is
+/// `MEMRQ` sampled at an edge, the request synchronizer at the next, then
+/// the grant, `SACK`, mastery and `-UB MSYN`. The processor here runs a
+/// Unibus read every seven microcycles, at the boot's extra-slow speed,
+/// at normal and at fast, and the shortest time from `MEMRQ` rising on the
+/// processor to `-UB MSYN` falling on the interface must be no less than
+/// the promise.
+#[test]
+fn the_interfaces_idle_promise_is_kept_on_the_board() {
+    use microcode::*;
+    use muir::isa::Insn;
+    use muir::part::Level;
+    let n = netlist::parse(NETLIST).unwrap();
+    let bus_n = netlist::parse(BUSINT).unwrap();
+    let memrq = n.by_name_id("MEMRQ").unwrap();
+    let msyn = bus_n.by_name_id("'-UB MSYN'").unwrap();
+    for (speed, mode) in [("extra slow", 0), ("normal", 2), ("fast", 3)] {
+        let mut m = page_zero_on_the_diagnostic_block();
+        // The error status register at virtual 22, and the mode register at 5.
+        m.mmem[1] = muir::busint::unibus_physical(0o766044) & 0xff;
+        m.mmem[2] = 0;
+        m.mmem[4] = 5;
+        m.mmem[5] = mode;
+        let mut prom = vec![filler(); 512];
+        prom[1] = Insn::new(ALU | SETM | m_src(2) | a_src(3) | MD);
+        prom[2] = Insn::new(ALU | SETM | m_src(1) | a_src(3) | START_WRITE);
+        prom[6] = Insn::new(ALU | SETM | m_src(5) | a_src(3) | MD);
+        prom[7] = Insn::new(ALU | SETM | m_src(4) | a_src(3) | START_WRITE);
+        for k in 0..40 {
+            prom[12 + 7 * k] = Insn::new(ALU | SETM | m_src(1) | a_src(3) | START_READ);
+        }
+        m.load_prom(&prom);
+        let (mut c, mut clk, mut far, _r) = same_program(&n, &m);
+        use muir::clock::Clock;
+        let (mut rq_at, mut shortest) = (None, u64::MAX);
+        let (mut was_rq, mut was_msyn) = (c.net(memrq), far.board.net(msyn));
+        let mut seen = 0;
+        let t0 = clk.time_ns();
+        while clk.time_ns() < t0 + 60_000 {
+            far.tick_with(&mut c, &mut clk);
+            let (rq, ms) = (c.net(memrq), far.board.net(msyn));
+            if rq == Level::High && was_rq != Level::High {
+                rq_at = Some(clk.time_ns());
+            }
+            if ms == Level::Low
+                && was_msyn != Level::Low
+                && let Some(at) = rq_at.take()
+            {
+                shortest = shortest.min(clk.time_ns() - at);
+                seen += 1;
+            }
+            (was_rq, was_msyn) = (rq, ms);
+        }
+        eprintln!("{speed}: {seen} cycles, MEMRQ to -UB MSYN at the least {shortest} ns");
+        assert!(seen > 10, "the processor's cycles went out");
+        assert!(shortest >= muir::busint::IDLE_OUT_PROMISE_NS, "{shortest} ns");
+    }
+}
+
+/// **The interface lets `-XBUS RQ` go 90 ns after `-XBUS ACK`**, on its
+/// own nets and on the memory board's alike. The processor here reads main
+/// memory every seven microcycles at the boot's speed, and every
+/// acknowledgement's release is timed. The Xbus master the boards' own
+/// tests run under lets go sooner, [`muir::xbus::XbusMaster::RELEASE_NS`],
+/// and says so.
+#[test]
+fn the_interface_lets_its_xbus_request_go_90_ns_after_the_ack() {
+    use microcode::*;
+    use muir::isa::Insn;
+    use muir::part::Level;
+    let n = netlist::parse(NETLIST).unwrap();
+    let bus_n = netlist::parse(BUSINT).unwrap();
+    let rq = bus_n.by_name_id("'-XBUS RQ'").unwrap();
+    let ack = bus_n.by_name_id("'-XBUS ACK'").unwrap();
+    let mem_n = netlist::parse(CADRM).unwrap();
+    let mrq = mem_n.by_name_id("-XBUS.RQ").unwrap();
+    let mack = mem_n.by_name_id("-XBUS.ACK").unwrap();
+    let mut m = muir::machine::Machine::new();
+    // Virtual page 1 on physical page 1 of main memory.
+    m.l2_map[1] = (1 << 23) | (1 << 22) | 1;
+    m.mmem[1] = (1 << 8) | 5;
+    let mut prom = vec![filler(); 512];
+    for k in 0..40 {
+        prom[4 + 7 * k] = Insn::new(ALU | SETM | m_src(1) | START_READ);
+    }
+    m.load_prom(&prom);
+    let (mut c, mut clk, mut far, _r) = same_program(&n, &m);
+    use muir::clock::Clock;
+    let (mut acked_at, mut releases) = (None, Vec::new());
+    let (mut was_rq, mut was_ack) = (far.board.net(rq), far.board.net(ack));
+    let (mut macked_at, mut mreleases) = (None, Vec::new());
+    let mem = |far: &FarEnd, id| far.xbus.boards.first().map_or(Level::X, |b| b.net(id));
+    let (mut was_mrq, mut was_mack) = (mem(&far, mrq), mem(&far, mack));
+    let t0 = clk.time_ns();
+    while clk.time_ns() < t0 + 50_000 {
+        far.tick_with(&mut c, &mut clk);
+        let (r, a) = (far.board.net(rq), far.board.net(ack));
+        if a == Level::Low && was_ack != Level::Low {
+            acked_at = Some(clk.time_ns());
+        }
+        if r == Level::High
+            && was_rq != Level::High
+            && let Some(at) = acked_at.take()
+        {
+            releases.push(clk.time_ns() - at);
+        }
+        (was_rq, was_ack) = (r, a);
+        let (r, a) = (mem(&far, mrq), mem(&far, mack));
+        if a == Level::Low && was_mack != Level::Low {
+            macked_at = Some(clk.time_ns());
+        }
+        if r == Level::High
+            && was_mrq != Level::High
+            && let Some(at) = macked_at.take()
+        {
+            mreleases.push(clk.time_ns() - at);
+        }
+        (was_mrq, was_mack) = (r, a);
+    }
+    eprintln!("-XBUS ACK to -XBUS RQ up: {releases:?}");
+    eprintln!("on the memory board: {mreleases:?}");
+    assert!(releases.len() > 10, "the processor's cycles went out");
+    assert!(releases.iter().all(|&d| d == 90), "on the interface: {releases:?}");
+    assert!(mreleases.iter().all(|&d| d == 90), "on the memory board: {mreleases:?}");
+}

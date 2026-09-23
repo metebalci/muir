@@ -535,10 +535,15 @@ impl<'a> XbusMaster<'a> {
         self.chip.transition(self.now);
     }
 
-    /// How long after `-XBUS ACK` the interface lifts `-XBUS RQ`: its
-    /// deskew and `-LMACK` back to the processor, 30 ns as measured on the
-    /// two netlists in the boot. A master that lets go in the same
-    /// instant as the acknowledgement is one the board never meets.
+    /// How long after `-XBUS ACK` this master lifts `-XBUS RQ`.  The
+    /// harness's choice, and not the machine's: the interface lets go 90 ns
+    /// after the acknowledgement, its deskew and `-LMACK` back to the
+    /// processor, on its own nets and on the memory board's alike
+    /// (`the_interface_lets_its_xbus_request_go_90_ns_after_the_ack` in
+    /// `tests/chip.rs`).  The boards' own tests were worked out with this
+    /// value, and what they time moves with it by the phase it leaves the
+    /// next cycle at.  A master that lets go in the same instant as the
+    /// acknowledgement is one the board never meets.
     pub const RELEASE_NS: u64 = 30;
 
     /// One whole cycle from `now`, watched every 5 ns: how long the board
