@@ -2077,14 +2077,20 @@ fn machine(
     m
 }
 
-/// The boot PROM this run loads: MIT's own, built in, unless `--prom`
-/// names an MCR microcode file of one's own.
+/// The boot PROM this run loads: MIT's own, built in, or QUUX's on
+/// `--machine quux`, unless `--prom` names an MCR microcode file of one's own.
 ///
 /// A file muir cannot read stops the run before it starts. It is the
 /// program the machine is about to execute, so there is nothing to fall
 /// back on: 512 zero words are not a boot PROM.
-fn boot_prom(file: Option<&Path>) -> Vec<Insn> {
-    let Some(path) = file else { return muir::prom::boot_prom() };
+fn boot_prom(file: Option<&Path>, geometry: muir::machine::Geometry) -> Vec<Insn> {
+    let Some(path) = file else {
+        return if geometry == muir::machine::Geometry::CADR {
+            muir::prom::boot_prom()
+        } else {
+            muir::prom::quux_boot_prom()
+        };
+    };
     let bytes =
         std::fs::read(path).unwrap_or_else(|e| usage(&format!("--prom {}: {e}", shown(path))));
     muir::prom::parse_mcr(&bytes).unwrap_or_else(|e| usage(&format!("--prom {}: {e}", shown(path))))
@@ -2098,9 +2104,13 @@ fn boot_prom(file: Option<&Path>) -> Vec<Insn> {
 /// nothing about a copy announces which it is --- so a run on a file of
 /// one's own says how the file stands to MIT's: word for word, or how
 /// many words apart.
-fn prom_shown(file: Option<&Path>, prom: &[Insn]) -> String {
+fn prom_shown(file: Option<&Path>, prom: &[Insn], geometry: muir::machine::Geometry) -> String {
     let Some(path) = file else {
-        return "built in, System 100's own sys/ubin/promh.mcr, version 9".to_string();
+        return if geometry == muir::machine::Geometry::CADR {
+            "built in, System 100's own sys/ubin/promh.mcr, version 9".to_string()
+        } else {
+            "built in, QUUX's data/quux-promh.mcr, version 1000".to_string()
+        };
     };
     let mits = muir::prom::boot_prom();
     match prom.iter().zip(&mits).filter(|(a, b)| a != b).count() {
@@ -5419,7 +5429,7 @@ fn main() {
     };
 
     // The boot PROM, before the setup: the setup says which one it is.
-    let prom = boot_prom(prom_file.as_deref());
+    let prom = boot_prom(prom_file.as_deref(), geometry);
     // What a viewer's keysyms mean on the Lisp Machine keyboard, which is
     // the one part of it that is muir's own and so the user's to change.
     let (keyboard_map, keyboard_said) = keyboard_mapping(keyboard_file.as_deref());
@@ -5460,7 +5470,7 @@ fn main() {
             }
         }
         writeln!(s, "engine: {engine}").unwrap();
-        writeln!(s, "prom: {}", prom_shown(prom_file.as_deref(), &prom)).unwrap();
+        writeln!(s, "prom: {}", prom_shown(prom_file.as_deref(), &prom, geometry)).unwrap();
         let memory_kind = match which {
             Which::Chip if main_memory_model => ", model",
             Which::Chip => ", netlist boards on the Xbus",
