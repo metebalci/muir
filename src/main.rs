@@ -1277,10 +1277,10 @@ A simulator of the MIT CADR Lisp Machine.
                                A run says the first of either without this
                                flag. [default: off]
   --machine cadr|quux          which machine: the CADR, or QUUX, the CADR
-                               evolved, whose level-1 map entry is six
-                               bits and so maps 63 regions at once to the
-                               CADR's 31. Not on chip, which is the CADR's
-                               boards. [default: cadr]
+                               evolved: a six-bit level-1 map entry, 63
+                               regions mapped at once to the CADR's 31, and
+                               a 16K-word PDL buffer. Not on chip, which is
+                               the CADR's boards. [default: cadr]
   --main-memory netlist|model  chip: main memory as MIT's board or as rtl's
                                model of it. model takes the disk controller
                                down with it, the netlist controller being a
@@ -5502,7 +5502,11 @@ fn main() {
             writeln!(s, "tv: model {}", tv_board.name()).unwrap();
         }
         if geometry == muir::machine::Geometry::QUUX {
-            writeln!(s, "machine: quux, a six-bit level-1 map: 63 regions mapped at once").unwrap();
+            writeln!(
+                s,
+                "machine: quux, revision 2: a six-bit level-1 map, 63 regions mapped at once, and a 16K-word PDL buffer"
+            )
+            .unwrap();
         }
         let chosen = pack_choice(packs);
         if chosen.is_empty() {
