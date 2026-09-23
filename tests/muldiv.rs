@@ -24,8 +24,9 @@ use muir::isa::asm::{
     ALU, ALWAYS, CARRY_IN, JUMP, M_PLUS_M, OB_LEFT, OB_RIGHT, Q_LEFT, Q_LOAD, Q_RIGHT, SETM, SETZ,
     SRC_Q, VMA, a_dest, a_src, filler, m_dest, m_src, target,
 };
-use muir::machine::Machine;
+use muir::machine::{Geometry, Machine};
 use muir::micro::Micro;
+use muir::muldiv;
 use muir::rtl::Rtl;
 
 mod support;
@@ -118,4 +119,292 @@ fn the_multiply_and_divide_steps_agree_on_all_three_engines() {
         assert_eq!(on_engine(Rtl::new, Rtl::boot, &p), board, "rtl: {name}");
         assert_eq!(on_engine(Micro::new, Micro::boot, &p), board, "micro: {name}");
     }
+}
+
+// --- QUUX's one-instruction multiply and divide, ALU functions 42 and 43 ---
+
+const MUL: u64 = 0o42 << 3;
+const DIV: u64 = 0o43 << 3;
+
+/// Operands: the corners, then a spread from a fixed linear congruential
+/// generator.
+fn operands(n: usize) -> Vec<u32> {
+    let mut v = vec![0, 1, 2, 3, 7, !0, !0 - 1, 0x8000_0000, 0x7fff_ffff, 0x8000_0001, 0xffff];
+    let mut x: u32 = 0x1234_5678;
+    while v.len() < n {
+        x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        v.push(x);
+    }
+    v
+}
+
+/// `multiply`'s setup, then one `MUL` with `extra` in its other fields.
+fn one_multiply(x: u32, y: u32, extra: u64) -> Vec<Insn> {
+    let mut b = multiply(x, y);
+    b.truncate(b.len() - 32);
+    b.push(Insn::new(extra | MUL | m_src(5) | a_src(0o100) | m_dest(5)));
+    b
+}
+
+/// `divide`'s setup and its first `steps` steps: `DVS1`, then `DVS`.
+fn divide_steps(hi: u32, lo: u32, d: u32, steps: usize) -> Vec<Insn> {
+    let mut b = divide(hi, lo, d);
+    b.truncate(b.len() - 33 + steps);
+    b
+}
+
+/// `divide`'s setup, then one `DIV` with `extra` in its other fields.
+fn one_divide(hi: u32, lo: u32, d: u32, extra: u64) -> Vec<Insn> {
+    let mut b = divide_steps(hi, lo, d, 0);
+    b.push(Insn::new(extra | DIV | m_src(5) | a_src(0o100) | m_dest(5)));
+    b
+}
+
+fn on_machine<E: Engine>(
+    geometry: Geometry,
+    new: fn(Machine) -> E,
+    boot: fn(&mut E),
+    body: &[Insn],
+    q: bool,
+) -> u32 {
+    let p = program(body.to_vec(), q);
+    let mut m = Machine::new();
+    m.geometry = geometry;
+    m.load_prom(&p.prom);
+    let mut e = new(m);
+    boot(&mut e);
+    benchmark::run_engine(&mut e, &p, Stop::Cycles(4)).iterations as u32
+}
+
+/// The high word and `Q` a body leaves, on both engines as `geometry`: the
+/// two must agree.
+fn words(geometry: Geometry, body: &[Insn], name: &str) -> (u32, u32) {
+    let r = |q| on_machine(geometry, Rtl::new, Rtl::boot, body, q);
+    let e = |q| on_machine(geometry, Micro::new, Micro::boot, body, q);
+    let (rm, rq) = (r(false), r(true));
+    assert_eq!((e(false), e(true)), (rm, rq), "micro against rtl: {name}");
+    (rm, rq)
+}
+
+/// **On QUUX, `MUL` leaves what 32 multiply steps leave**: the same high
+/// word on the output bus and the same low word in `Q`, whatever the output
+/// selector and Q control say. The steps are run on the CADR, where the
+/// test above holds them to the netlist.
+#[test]
+fn quux_s_mul_is_32_multiply_steps() {
+    let ops = operands(24);
+    for (k, &x) in ops.iter().enumerate() {
+        let y = ops[(k * 7 + 3) % ops.len()];
+        let name = format!("{x:x} * {y:x}");
+        let steps = words(Geometry::CADR, &multiply(x, y), &name);
+        assert_eq!(muldiv::run(muldiv::Op::Mul, 0, y, x), steps, "muldiv::run: {name}");
+        for extra in [ALU, OB_RIGHT | Q_RIGHT, OB_LEFT | Q_LOAD] {
+            assert_eq!(words(Geometry::QUUX, &one_multiply(x, y, extra), &name), steps, "{name}");
+        }
+    }
+}
+
+/// **On QUUX, `DIV` leaves what a first divide step and 31 divide steps
+/// leave**, whatever the output selector and Q control say; and the first
+/// step's quotient bit, the one `uc-arith.lisp`'s `DIV` tests for overflow
+/// straight after `DVS1`, is in `Q<31>`.
+#[test]
+fn quux_s_div_is_the_first_and_31_divide_steps() {
+    let ops = operands(24);
+    let mut cases: Vec<(u32, u32, u32)> = (0..ops.len())
+        .map(|k| (ops[k] >> 3, ops[(k * 5 + 1) % ops.len()], ops[(k * 11 + 2) % ops.len()]))
+        .collect();
+    // Overflow: a divisor of 0, and a high word not below the divisor.
+    cases.extend([(0, 100, 0), (5, 0, 3), (7, !0, 7), (0, 100_000, 7)]);
+    for (hi, lo, d) in cases {
+        let name = format!("{hi:x}:{lo:x} / {d:x}");
+        let steps = words(Geometry::CADR, &divide_steps(hi, lo, d, 32), &name);
+        assert_eq!(muldiv::run(muldiv::Op::Div, hi, d, lo), steps, "muldiv::run: {name}");
+        for extra in [ALU, OB_LEFT | Q_LEFT, OB_RIGHT | Q_RIGHT] {
+            assert_eq!(
+                words(Geometry::QUUX, &one_divide(hi, lo, d, extra), &name),
+                steps,
+                "{name}"
+            );
+        }
+        let first = words(Geometry::CADR, &divide_steps(hi, lo, d, 1), &name).1 & 1;
+        assert_eq!(steps.1 >> 31, first, "the first quotient bit in Q<31>: {name}");
+    }
+}
+
+/// **On the CADR, functions 42 and 43 are what the board makes of them**:
+/// the 74S139's outputs 2 and 3 are unconnected, so neither multiplies nor
+/// divides. `micro` and `rtl` as the CADR agree with the netlist, and QUUX
+/// does something else.
+#[test]
+fn on_the_cadr_42_and_43_are_the_board_s() {
+    let n = support::netlists();
+    for (name, body, quux) in [
+        (
+            "42",
+            one_multiply(0x1234_5678, 0x9abc, OB_RIGHT | Q_RIGHT),
+            one_multiply(0x1234_5678, 0x9abc, ALU),
+        ),
+        (
+            "43",
+            one_divide(3, 0x8765_4321, 0x1234, OB_LEFT | Q_LEFT),
+            one_divide(3, 0x8765_4321, 0x1234, ALU),
+        ),
+    ] {
+        let mut board = [0; 2];
+        for (i, q) in [false, true].into_iter().enumerate() {
+            let p = program(body.clone(), q);
+            let (mut c, mut clk, mut far) = support::chip(&n);
+            benchmark::boot_chip(&mut c, &n.cpu, &mut far, &mut clk, &p);
+            board[i] = benchmark::run_chip(&mut c, &n.cpu, &mut far, &mut clk, &p, Stop::Cycles(4))
+                .iterations as u32;
+        }
+        let cadr = words(Geometry::CADR, &body, name);
+        assert_eq!([cadr.0, cadr.1], board, "{name}");
+        assert_ne!(words(Geometry::QUUX, &quux, name), cadr, "{name}: QUUX's differs");
+    }
+}
+
+/// When an engine first reaches the program's loop.
+fn ns_to_top<E: Engine>(mut e: E, top: u16, ns: fn(&E) -> u64) -> u64 {
+    while e.pc() != top {
+        e.step().unwrap();
+    }
+    ns(&e)
+}
+
+/// The time to reach the loop, the mode register's speed bits set to
+/// `speed` at the start if given.
+fn time_on<E: Engine>(
+    new: fn(Machine) -> E,
+    boot: fn(&mut E),
+    ns: fn(&E) -> u64,
+    speed: Option<u16>,
+    body: &[Insn],
+) -> u64 {
+    let p = program(body.to_vec(), false);
+    let mut m = Machine::new();
+    m.geometry = Geometry::QUUX;
+    m.load_prom(&p.prom);
+    let mut e = new(m);
+    boot(&mut e);
+    if let Some(bits) = speed {
+        e.spy_write(muir::spy::MODE, bits);
+    }
+    ns_to_top(e, p.top, ns)
+}
+
+/// **A `DIV` holds its microcycle until `DIV_NS` after it entered `IR`, and
+/// a `MUL` holds nothing.** The hold is whole generator cycles, so it is the
+/// fewest that cover `DIV_NS`, at the boot's speed, normal and fast.
+/// Measured as the time the program takes to reach its loop, against the
+/// same program with the one instruction replaced, on both engines.
+#[test]
+fn a_div_is_held_for_div_ns_and_a_mul_is_not() {
+    fn check<E: Engine>(name: &str, new: fn(Machine) -> E, boot: fn(&mut E), ns: fn(&E) -> u64) {
+        // The boot's extra slow, then normal and fast.
+        for (speed, want) in [(None, 220), (Some(2), 145), (Some(3), 135)] {
+            check_at(name, new, boot, ns, speed, want);
+        }
+    }
+    fn check_at<E: Engine>(
+        name: &str,
+        new: fn(Machine) -> E,
+        boot: fn(&mut E),
+        ns: fn(&E) -> u64,
+        speed: Option<u16>,
+        want_cycle: u64,
+    ) {
+        let t = |b: &[Insn]| time_on(new, boot, ns, speed, b);
+        // `body` with its last instruction an ordinary one.
+        let ordinary = |body: &[Insn]| {
+            let mut b = body.to_vec();
+            *b.last_mut().unwrap() = Insn::new(ALU | SETZ | m_dest(5));
+            b
+        };
+        let mul = one_multiply(5, 7, ALU);
+        let mut longer = ordinary(&mul);
+        longer.push(Insn::new(ALU | SETZ | m_dest(6)));
+        let cycle = t(&longer) - t(&ordinary(&mul));
+        assert_eq!(cycle, want_cycle, "{name}: speed {speed:?}");
+        assert_eq!(t(&mul), t(&ordinary(&mul)), "{name}: MUL is one ordinary microcycle");
+        let div = one_divide(0, 100, 7, ALU);
+        let held = t(&div) - t(&ordinary(&div));
+        assert_eq!(held, muldiv::DIV_NS.div_ceil(cycle) * cycle, "{name}: a cycle {cycle} ns");
+    }
+    check("rtl", Rtl::new, Rtl::boot, Rtl::ns);
+    check("micro", Micro::new, Micro::boot, |e: &Micro| e.machine().ns);
+}
+
+/// **A `DIV` the console stops and then steps finishes right.** The halt
+/// comes while the `DIV` stands in `IR`; every microcycle after it is a
+/// single step, which the hold does not stop, as it does not stop `-WAIT`:
+/// by then the divider has been done for longer than `DIV_NS`.
+#[test]
+fn a_div_stopped_and_stepped_finishes_right() {
+    use muir::spy;
+    let (hi, lo, d) = (0x12, 0x3456_789a, 0x9876);
+    let want = muldiv::run(muldiv::Op::Div, hi, d, lo);
+    for q in [false, true] {
+        let body = one_divide(hi, lo, d, ALU);
+        let at = body.len() as u16 - 1;
+        let p = program(body, q);
+        let mut m = Machine::new();
+        m.geometry = Geometry::QUUX;
+        m.load_prom(&p.prom);
+        let mut e = Rtl::new(m);
+        e.boot();
+        while e.pc() != at + 1 {
+            e.step().unwrap();
+        }
+        e.spy_write(spy::CLK, 0);
+        for _ in 0..8 {
+            e.step().unwrap();
+        }
+        assert_eq!(e.pc(), at + 1, "halted with the DIV in IR");
+        // CC-CLOCK, 2 then 0, until the loop's jump has run.
+        let mut ran = Vec::new();
+        while !ran.contains(&p.top) {
+            for clk in [2, 0] {
+                e.spy_write(spy::CLK, clk);
+                for _ in 0..2 {
+                    e.step().unwrap();
+                    ran.extend(e.executed());
+                }
+            }
+            assert!(ran.len() < 20, "the steps never reached the loop: {ran:?}");
+        }
+        assert_eq!(ran[0], at, "the first step runs the DIV");
+        let got = e.machine().vma;
+        assert_eq!(got, if q { want.1 } else { want.0 }, "Q: {q}");
+    }
+}
+
+/// **A checkpoint taken with a `DIV` in `IR` resumes with the same hold**:
+/// `rtl` keeps when `IR` was loaded, which is what the divider's time runs
+/// from, checkpoint format 31.
+#[test]
+fn a_checkpoint_keeps_the_divider_s_time() {
+    use muir::checkpoint::{Reader, Writer};
+    let body = one_divide(0, 100, 7, ALU);
+    let at = body.len() as u16 - 1;
+    let p = program(body, false);
+    let make = || {
+        let mut m = Machine::new();
+        m.geometry = Geometry::QUUX;
+        m.load_prom(&p.prom);
+        let mut e = Rtl::new(m);
+        e.boot();
+        e
+    };
+    let mut e = make();
+    while e.pc() != at + 1 {
+        e.step().unwrap();
+    }
+    let mut w = Writer::new();
+    e.save(&mut w);
+    let body = w.finish();
+    let mut resumed = make();
+    resumed.load(&mut Reader::new(&body)).unwrap();
+    assert_eq!(ns_to_top(resumed, p.top, Rtl::ns), ns_to_top(e, p.top, Rtl::ns));
 }

@@ -1278,9 +1278,10 @@ A simulator of the MIT CADR Lisp Machine.
                                flag. [default: off]
   --machine cadr|quux          which machine: the CADR, or QUUX, the CADR
                                evolved: a six-bit level-1 map entry, 63
-                               regions mapped at once to the CADR's 31, and
-                               a 16K-word PDL buffer. Not on chip, which is
-                               the CADR's boards. [default: cadr]
+                               regions mapped at once to the CADR's 31, a
+                               16K-word PDL buffer, and MUL and DIV in one
+                               instruction each. Not on chip, which is the
+                               CADR's boards. [default: cadr]
   --main-memory netlist|model  chip: main memory as MIT's board or as rtl's
                                model of it. model takes the disk controller
                                down with it, the netlist controller being a
@@ -5504,7 +5505,7 @@ fn main() {
         if geometry == muir::machine::Geometry::QUUX {
             writeln!(
                 s,
-                "machine: quux, revision 2: a six-bit level-1 map, 63 regions mapped at once, and a 16K-word PDL buffer"
+                "machine: quux, revision 3: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, and MUL and DIV in one instruction each"
             )
             .unwrap();
         }

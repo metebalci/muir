@@ -107,6 +107,7 @@ enum Stall {
 use crate::clock::{Speed, TimingModel};
 use crate::engine::Engine;
 use crate::machine::{Halt, IMEM_WORDS, Machine};
+use crate::muldiv;
 use crate::spy;
 use crate::ttl;
 
@@ -181,6 +182,9 @@ pub struct Rtl {
     srun: bool,
     sstep: bool,
     ssdone: bool,
+    /// When the instruction standing in `IR` was clocked into it: QUUX's
+    /// divider starts then, [`Rtl::stall`].
+    ir_loaded_ns: u64,
     /// `STATSTOP`, the 74S374 at OLORD2 1A05 on `CLK5A`: the statistics
     /// counter's carry out, `STAT.OVF`, registered.  Under `STATHENB` it is
     /// `STATHALT`.
@@ -462,6 +466,10 @@ struct Read {
     newlc_in: bool,
     qs1: bool,
     qs0: bool,
+    /// QUUX's multiply and divide: the ALU-class instruction is one of
+    /// them, and what it leaves in `Q`, whatever `IR<1:0>` says.
+    muldiv: Option<muldiv::Op>,
+    muldiv_q: u32,
     iwrite: bool,
     vmaok: bool,
     machrun: bool,
@@ -510,6 +518,7 @@ impl Rtl {
             srun: false,
             sstep: false,
             ssdone: false,
+            ir_loaded_ns: 0,
             statstop: false,
             halted: false,
             opc_ck: false,
@@ -1000,10 +1009,16 @@ impl Rtl {
         let alu = alu_out.f;
         let aeqm = alu_out.aeqm;
 
+        // QUUX's multiply and divide, [`muldiv`]: they drive the output bus
+        // and load `Q` whatever `IR<13:12>` and `IR<1:0>` say.
+        let op = if iralu && self.m.geometry.muldiv { muldiv::decode(ir) } else { None };
+        let (muldiv_ob, muldiv_q) = op.map_or((0, 0), |op| muldiv::run(op, m, a, self.m.q));
+
         // page MO
         let mo = (msk & r) | (!msk & a);
         let osel = (bit(ir, 13) && iralu) as u32 * 2 + (bit(ir, 12) && iralu) as u32;
         let ob = match osel {
+            _ if op.is_some() => muldiv_ob,
             0 => mo,
             1 => alu as u32,
             2 => (alu >> 1) as u32,
@@ -1210,6 +1225,8 @@ impl Rtl {
             newlc_in,
             qs1: bit(ir, 1) && iralu,
             qs0: bit(ir, 0) && iralu,
+            muldiv: op,
+            muldiv_q,
             iwrite,
             vmaok,
             machrun,
@@ -1569,7 +1586,8 @@ impl Rtl {
     fn stall(&self, r: &Read) -> Option<Stall> {
         let wait = (r.destmem && self.mbusy_sync)
             || (r.use_md && self.mbusy && !self.busint.granted())
-            || (r.lcinc && r.needfetch && self.mbusy_sync);
+            || (r.lcinc && r.needfetch && self.mbusy_sync)
+            || self.dividing(r);
         if wait {
             return Some(Stall::Wait);
         }
@@ -1577,6 +1595,15 @@ impl Rtl {
             return Some(Stall::Hang);
         }
         None
+    }
+
+    /// QUUX's divider is busy: a `DIV` stands in `IR`, not nopped, and
+    /// [`muldiv::DIV_NS`] has not passed since it was clocked in. It is a
+    /// `-WAIT` term of QUUX's own, so the master clock runs on, the
+    /// microcycle starts at the first master clock edge after the divider
+    /// is done, and a single step does not wait for it.
+    fn dividing(&self, r: &Read) -> bool {
+        r.muldiv == Some(muldiv::Op::Div) && self.ns < self.ir_loaded_ns + muldiv::DIV_NS
     }
 
     /// Holds the microcycle off until the bus has moved on.
@@ -1871,6 +1898,7 @@ impl Rtl {
         // which tap ends the read phase --- so it is a number and not a
         // mechanism.
         self.ns += self.timing.cycle_ns(self.speed, r.ilong) as u64;
+        self.ir_loaded_ns = self.ns;
 
         // page LC
         if r.destlc {
@@ -1899,7 +1927,9 @@ impl Rtl {
         }
 
         // page Q
-        if r.qs1 || r.qs0 {
+        if r.muldiv.is_some() {
+            self.m.q = r.muldiv_q;
+        } else if r.qs1 || r.qs0 {
             self.m.q = match (r.qs1 as u8) * 2 + r.qs0 as u8 {
                 1 => (self.m.q << 1) | (!bit(r.alu, 31)) as u32,
                 2 => ((r.alu as u32 & 1) << 31) | (self.m.q >> 1),
@@ -2493,6 +2523,7 @@ impl Engine for Rtl {
             srun,
             sstep,
             ssdone,
+            ir_loaded_ns,
             statstop,
             halted,
             opc_ck,
@@ -2578,6 +2609,7 @@ impl Engine for Rtl {
             w.bool(*bit);
         }
         w.u64(*halted_ns);
+        w.u64(*ir_loaded_ns);
         w.bool(*memstart);
         w.bool(*mbusy);
         w.bool(*rdcyc);
@@ -2665,6 +2697,7 @@ impl Engine for Rtl {
             *bit = r.bool()?;
         }
         self.halted_ns = r.u64()?;
+        self.ir_loaded_ns = r.u64()?;
         self.memstart = r.bool()?;
         self.mbusy = r.bool()?;
         self.rdcyc = r.bool()?;

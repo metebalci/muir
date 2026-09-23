@@ -590,8 +590,9 @@ Default: off --- and the first loss is said anyway.
 
 Which machine: the CADR, or QUUX, the CADR evolved. QUUX's level-1 map entry
 is six bits where the CADR's is five, so it maps 63 regions of 8K words at
-once to the CADR's 31, and its PDL buffer is 16K words to the CADR's 1K; the
-rest of it is the CADR's. It boots from its own PROM and needs microcode that
+once to the CADR's 31; its PDL buffer is 16K words to the CADR's 1K; and ALU
+functions 42 and 43 multiply and divide in one instruction each, where the
+CADR takes a step per bit. The rest of it is the CADR's. It boots from its own PROM and needs microcode that
 knows it. [QUUX](quux.md) has the
 whole of the difference. The same flag chooses the machine in muir-fpga and
 muir-sys.
