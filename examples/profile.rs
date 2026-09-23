@@ -70,7 +70,15 @@ const WORKLOADS: &[(&str, &str)] = &[
     ("intern", "(w-intern)"),
     ("print-scroll", "(w-print)"),
     ("compile-again", "(mapc #'compile '(w-ack w-fib w-cons w-muldiv))"),
+    // Not run unless named: the cost of switching stack groups, from the
+    // listener's own shallow stack and from 500 frames deep, where every
+    // switch has the PDL buffer's resident words to write out.
+    ("switch-shallow", "(w-switch 0)"),
+    ("switch-deep", "(w-switch 500)"),
 ];
+
+/// The workloads run when none is named: all but the switching ones.
+const DEFAULT_WORKLOADS: usize = 13;
 
 /// The definitions, typed once after login. `w-done` writes the marker.
 const DEFINITIONS: &[&str] = &[
@@ -85,6 +93,7 @@ const DEFINITIONS: &[&str] = &[
     "(defun w-bignum () (dotimes (i 21) (print (expt 3 300))))",
     "(defun w-intern () (dotimes (i 1500) (intern (format nil \"W-SYM-~D\" i))))",
     "(defun w-print () (dotimes (i 1000) (print i)))",
+    "(defun w-switch (n) (if (zerop n) (progn (dotimes (i 2000) (process-allow-schedule)) 0) (1+ (w-switch (1- n)))))",
 ];
 
 /// The microcode's meters, by their `A-MEM` names in the symbol table.
@@ -359,7 +368,7 @@ fn main() {
         None => Geometry::CADR,
     };
     let wanted: Vec<&(&str, &str)> = if args.is_empty() {
-        WORKLOADS.iter().collect()
+        WORKLOADS[..DEFAULT_WORKLOADS].iter().collect()
     } else {
         args.iter()
             .map(|a| {
@@ -432,6 +441,10 @@ fn profile<E: Profiled>(
 
     let mut m = support::machine_with_pack(&copy);
     m.geometry = geometry;
+    // QUUX boots from its own PROM, which a PDL buffer wider than 1K needs.
+    if geometry != muir::machine::Geometry::CADR {
+        m.load_prom(&muir::prom::quux_boot_prom());
+    }
     let mut e = make(m);
     e.boot();
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS_1001, root.clone(), 400_000_000);
@@ -453,16 +466,19 @@ fn profile<E: Profiled>(
     type_echoed(
         &mut e,
         &mut k,
-        "(mapc #'compile '(w-done w-ack w-fib w-cons w-muldiv w-float w-array w-sort w-bignum w-intern w-print))",
+        "(mapc #'compile '(w-done w-ack w-fib w-cons w-muldiv w-float w-array w-sort w-bignum w-intern w-print w-switch))",
         &mut plain,
     );
     let ready = home.join("ready.done");
     let p = run(&mut e, &mut k, "(w-done \"ready\")", &ready, &syms);
     eprintln!("defined and logged in, {} microcycles", p.cycles);
 
-    for (name, form) in wanted {
-        let marker = home.join(format!("{name}.done"));
-        let p = run(&mut e, &mut k, &format!("(progn {form} (w-done \"{name}\"))"), &marker, &syms);
+    // A marker of its own for every run, so that a workload named twice is
+    // run twice.
+    for (n, (name, form)) in wanted.iter().enumerate() {
+        let marker = home.join(format!("{name}-{n}.done"));
+        let p =
+            run(&mut e, &mut k, &format!("(progn {form} (w-done \"{name}-{n}\"))"), &marker, &syms);
         report(name, &p, &syms, &files, qmlp);
     }
 }
