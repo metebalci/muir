@@ -586,6 +586,20 @@ newest event is the one that matters and that one is always kept.
 
 Default: off --- and the first loss is said anyway.
 
+### `--machine cadr|quux`
+
+Which machine: the CADR, or QUUX, the CADR evolved. QUUX's level-1 map entry
+is six bits where the CADR's is five, so it maps 63 regions of 8K words at
+once to the CADR's 31; the rest of it is the CADR's. [QUUX](quux.md) has the
+whole of the difference. The same flag chooses the machine in muir-fpga and
+muir-sys.
+
+Refused on `chip`, which is the CADR's boards as MIT drew them. A checkpoint
+carries the machine, and a resume under the other is refused. The start block
+says `machine: quux` when it is QUUX.
+
+Default: `cadr`.
+
 ### `--main-memory netlist|model`
 
 **chip:** main memory as MIT's board or as `rtl`'s model of it.

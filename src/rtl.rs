@@ -1254,7 +1254,7 @@ impl Rtl {
             let both = bit(self.m.vma as u64, 26) && bit(self.m.vma as u64, 25);
             let adr1 = if both { self.m.geometry.l2_index(0, self.m.md) as u16 } else { adr1 };
             if bit(self.m.vma as u64, 26) {
-                self.m.l1_map[adr0 as usize] = (self.m.vma >> 27) & self.m.geometry.l1_mask();
+                self.m.l1_map[adr0 as usize] = self.m.geometry.l1_from_vma(self.m.vma);
             }
             if bit(self.m.vma as u64, 25) {
                 self.m.l2_map[adr1 as usize] = self.m.vma & 0o77777777;

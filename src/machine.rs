@@ -60,7 +60,7 @@ pub mod bus_error {
 }
 
 /// The widths of the map and the PDL buffer: what differs between the
-/// machines `--machine` chooses.
+/// machines `--machine` chooses, `cadr` and `quux`.
 ///
 /// The CADR's are MIT's (`SIZE-OF-HARDWARE-LEVEL-1-MAP`, `-LEVEL-2-MAP` and
 /// `-PDL-BUFFER` in System 100's `sys/cold/qcom.lisp`; the netlist's RAMs,
@@ -80,6 +80,22 @@ impl Geometry {
     /// The CADR's.
     pub const CADR: Geometry = Geometry { l1_bits: 5, pdl_bits: 10 };
 
+    /// QUUX's: a level-1 entry of six bits, 64 blocks of level 2 and so 63
+    /// regions of 8K words mapped at once against the CADR's 31, the last
+    /// block being the invalid one. The sixth bit is carried by the two the
+    /// CADR leaves spare: `MAP(MD)<29>`, which the CADR drives low (VMEMDR
+    /// 1A01, `HI12` through a 74S240), and `VMA<24>`, which no map write
+    /// takes. The rest of the machine is the CADR's.
+    pub const QUUX: Geometry = Geometry { l1_bits: 6, pdl_bits: 10 };
+
+    /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
+    /// (`mit/cadr/ir.bits`, "VMA<26>=1 writes the level 1 map from
+    /// VMA<31-27>"), and on QUUX `VMA<24>` as its sixth bit.
+    pub fn l1_from_vma(self, vma: u32) -> u32 {
+        let low = (vma >> 27) & 0o37;
+        if self.l1_bits > 5 { low | ((vma >> 24) & 1) << 5 } else { low }
+    }
+
     /// A level-1 entry's bits.
     pub fn l1_mask(self) -> u32 {
         (1 << self.l1_bits) - 1
@@ -96,6 +112,9 @@ impl Geometry {
         (1 << self.pdl_bits) - 1
     }
 }
+
+/// The level-2 map's words on the largest machine, QUUX: 64 blocks of 32.
+pub const L2_MAP_WORDS: usize = 2048;
 
 /// Why a microcycle could not complete.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -178,8 +197,9 @@ pub struct Machine {
     pub geometry: Geometry,
     /// 2048 five-bit entries, addressed by `VMA<23:13>`.
     pub l1_map: [u32; 2048],
-    /// 1024 24-bit entries, addressed by the level-1 output and `VMA<12:8>`.
-    pub l2_map: [u32; 1024],
+    /// 24-bit entries, addressed by the level-1 output and `VMA<12:8>`:
+    /// 1024 on the CADR, and room for the largest machine's, QUUX's 2048.
+    pub l2_map: [u32; L2_MAP_WORDS],
     pub main: Vec<u32>,
     /// What the last bus cycles left in the error register; see
     /// [`bus_error`]. A write of the error status register clears it,
@@ -289,7 +309,7 @@ impl Machine {
             dispatch_constant: 0,
             geometry: Geometry::CADR,
             l1_map: [0; 2048],
-            l2_map: [0; 1024],
+            l2_map: [0; L2_MAP_WORDS],
             main: vec![0; boards << 16],
             bus_error: 0,
             interrupt_status: busint::interrupt_status::LOCAL_ENABLE,
@@ -424,7 +444,7 @@ impl Machine {
     pub fn write_map(&mut self, vma: u32, md: u32) {
         let l1_index = (md >> 13) as usize & 0o3777;
         if vma & (1 << 26) != 0 {
-            self.l1_map[l1_index] = (vma >> 27) & self.geometry.l1_mask();
+            self.l1_map[l1_index] = self.geometry.l1_from_vma(vma);
         }
         if vma & (1 << 25) != 0 {
             let l1_data = if vma & (1 << 26) != 0 { 0 } else { self.l1_map[l1_index] };
@@ -975,9 +995,7 @@ impl Machine {
             md,
             interrupt_control,
             dispatch_constant,
-            // Always the CADR's until a run can choose another machine;
-            // saved from then.
-            geometry: _,
+            geometry,
             l1_map,
             l2_map,
             main,
@@ -1020,6 +1038,8 @@ impl Machine {
         w.u32(*interrupt_control);
         w.u16(*dispatch_constant);
         w.u32s(l1_map);
+        w.u8(geometry.l1_bits as u8);
+        w.u8(geometry.pdl_bits as u8);
         w.u32s(l2_map);
         w.u32(self.memory_boards() as u32);
         w.u32s(main);
@@ -1100,6 +1120,15 @@ impl Machine {
         self.interrupt_control = r.u32()?;
         self.dispatch_constant = r.u16()?;
         r.u32s_into(&mut self.l1_map)?;
+        let (l1_bits, pdl_bits) = (r.u8()? as u32, r.u8()? as u32);
+        self.geometry = [Geometry::CADR, Geometry::QUUX]
+            .into_iter()
+            .find(|g| (g.l1_bits, g.pdl_bits) == (l1_bits, pdl_bits))
+            .ok_or_else(|| {
+                crate::checkpoint::bad(format!(
+                    "a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer is no machine's"
+                ))
+            })?;
         r.u32s_into(&mut self.l2_map)?;
         let boards = r.u32()? as usize;
         if boards != self.memory_boards() {

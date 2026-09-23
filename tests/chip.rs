@@ -1951,7 +1951,8 @@ fn chip_and_rtl_hold_the_same_memories() {
             r.m.spc.iter().map(|&v| v & 0o1777777).collect(),
             r.m.dmem.iter().map(|&v| v & 0o377777).collect(),
             r.m.l1_map.iter().map(|&v| v & 0o37).collect(),
-            r.m.l2_map.iter().map(|&v| v & 0o77777777).collect(),
+            // The CADR's 1,024: the rest of the array is room for QUUX's.
+            r.m.l2_map[..1024].iter().map(|&v| v & 0o77777777).collect(),
         ]
     };
     let limit: usize =
@@ -2063,7 +2064,8 @@ fn same_program_on(
     for (k, &v) in m.l1_map.iter().enumerate() {
         l1.store(&mut c, k, v & 0o37);
     }
-    for (k, &v) in m.l2_map.iter().enumerate() {
+    // The CADR's 1,024, the board's RAM: the rest is room for QUUX's.
+    for (k, &v) in m.l2_map[..l2.len()].iter().enumerate() {
         l2.store(&mut c, k, v & 0o77777777);
     }
     c.settle();

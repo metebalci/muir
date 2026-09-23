@@ -428,6 +428,24 @@ fn the_timing_model_is_cadr_or_fpga_and_fpga_is_rtls() {
     }
 }
 
+/// **`--machine` is `cadr` or `quux`, and QUUX has no netlist.** The flag
+/// chooses which machine is modeled, the same flag in muir-fpga and
+/// muir-sys: the CADR by default, or QUUX, the evolved one, whose map
+/// differs. `chip` is the CADR's boards as MIT drew them, so QUUX on it is
+/// refused; on the other two it runs and says so.
+#[test]
+fn the_machine_is_cadr_or_quux_and_quux_has_no_netlist() {
+    refused(&["--machine", "cons"], "--machine");
+    refused(&["--machine"], "--machine");
+    refused_saying(&["--chip", "--machine", "quux"], "--machine quux has no netlist");
+    for engine in ["--micro", "--rtl"] {
+        let out = muir().args([engine, "--machine", "quux", "--stop-after", "1"]).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}: {t}");
+        assert!(t.contains("machine: quux"), "{engine} says which machine:\n{t}");
+    }
+}
+
 /// **`--color-tv` takes a word, and the bare flag is the netlist on `chip`
 /// and the model everywhere else.** The second display board is a board
 /// like the others: a netlist on `chip`'s backplane unless a flag says

@@ -21,6 +21,7 @@
 //!          [--disk-controller netlist|model]
 //!          [--disk-pack <image>[,<unit>][,ro]] [--glass-tty [<endpoint>][,ro]]
 //!          [--io-board netlist|model]
+//!          [--machine cadr|quux]
 //!          [--main-memory netlist|model] [--main-memory-boards <n>]
 //!          [--no-debug-cable-listen] [--no-pace] [--pace]
 //!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
@@ -982,7 +983,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--io-board netlist|model] [--keyboard-boot <keys>]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
             [--keyboard-mapping-trace]
-            [--main-memory netlist|model]
+            [--machine cadr|quux] [--main-memory netlist|model]
             [--main-memory-boards <n>] [--no-auto-boot]
             [--no-debug-cable-listen] [--no-pace] [--pace]
             [--prom <file>]
@@ -1275,6 +1276,11 @@ A simulator of the MIT CADR Lisp Machine.
                                lost there never became a keysym line at all.
                                A run says the first of either without this
                                flag. [default: off]
+  --machine cadr|quux          which machine: the CADR, or QUUX, the CADR
+                               evolved, whose level-1 map entry is six
+                               bits and so maps 63 regions at once to the
+                               CADR's 31. Not on chip, which is the CADR's
+                               boards. [default: cadr]
   --main-memory netlist|model  chip: main memory as MIT's board or as rtl's
                                model of it. model takes the disk controller
                                down with it, the netlist controller being a
@@ -2058,8 +2064,10 @@ fn machine(
     memory_boards: usize,
     tv_board: TvBoard,
     color_tv: ColorTv,
+    geometry: muir::machine::Geometry,
 ) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
+    m.geometry = geometry;
     m.load_prom(prom);
     m.tv.set_board(tv_board);
     if color_tv.fitted() {
@@ -3638,6 +3646,24 @@ fn chip_busy_with(cpu: &Chip, far: &FarEnd, memrq: netlist::NetId) -> Option<&'s
 /// built before the file is opened. So the file is read, and a board apart
 /// from the flag's ends the run then --- by the flag's name, as the other
 /// refusal does.
+/// A checkpoint written of one machine resumed under `--machine` naming
+/// another is refused by the flag's name: the map in it is that machine's.
+fn refuse_machine(
+    (path, _): &(PathBuf, Checkpoint),
+    saved: muir::machine::Geometry,
+    flag: muir::machine::Geometry,
+) {
+    let name = |g| if g == muir::machine::Geometry::QUUX { "quux" } else { "cadr" };
+    if saved != flag {
+        usage(&format!(
+            "--resume {}: written of --machine {}, and this run is --machine {}",
+            path.display(),
+            name(saved),
+            name(flag)
+        ));
+    }
+}
+
 /// A checkpoint `rtl` wrote on one timing model resumed under another is
 /// refused by the flag's name: every instant in it is on the time it was
 /// run on.
@@ -4543,6 +4569,7 @@ fn main() {
     let mut tv = true;
     let mut tv_board = TvBoard::SimpleTv;
     let mut timing_model = TimingModel::Cadr;
+    let mut geometry = muir::machine::Geometry::CADR;
     // The color TV, the second display board: off unless `--color-tv`
     // fits it, because a CADR has one screen unless somebody plugged a
     // second board in, and `COLOR-EXISTS-P` is System 100 asking which
@@ -4738,6 +4765,11 @@ fn main() {
                 Some("netlist") => tv = true,
                 Some("model") => tv = false,
                 _ => usage("--tv wants netlist or model"),
+            },
+            (None, "--machine") => match args.next().as_deref() {
+                Some("cadr") => geometry = muir::machine::Geometry::CADR,
+                Some("quux") => geometry = muir::machine::Geometry::QUUX,
+                _ => usage("--machine wants cadr or quux"),
             },
             (None, "--timing-model") => match args.next().as_deref().and_then(TimingModel::parse) {
                 Some(model) => timing_model = model,
@@ -4944,6 +4976,10 @@ fn main() {
     }
 
     let which = which.unwrap_or(Which::Rtl);
+    // `chip` is the CADR's boards, netlist for netlist: QUUX has none.
+    if geometry != muir::machine::Geometry::CADR && which == Which::Chip {
+        usage("--machine quux has no netlist, and this run is chip");
+    }
     // The grid is muir-fpga's, and it is `rtl`'s references its fabric is
     // held to; `micro` and `chip` keep the board's time.
     if timing_model != TimingModel::Cadr && which != Which::Rtl {
@@ -5455,6 +5491,9 @@ fn main() {
             // whether the board itself or its model is on the backplane.
             writeln!(s, "tv: model {}", tv_board.name()).unwrap();
         }
+        if geometry == muir::machine::Geometry::QUUX {
+            writeln!(s, "machine: quux, a six-bit level-1 map: 63 regions mapped at once").unwrap();
+        }
         let chosen = pack_choice(packs);
         if chosen.is_empty() {
             writeln!(s, "pack: none; the boot waits on a drive that never answers").unwrap();
@@ -5680,7 +5719,7 @@ fn main() {
             // from an engine is a clock, and this one has the machine's
             // periods; `tests/micro_chaos.rs` holds the two engines to
             // the same conversation with the server.
-            let mut m = machine(&prom, packs, boards, tv_board, color_tv);
+            let mut m = machine(&prom, packs, boards, tv_board, color_tv, geometry);
             m.chaos = chaos.clone();
             m.plug_chaos(0);
             let mut e = Micro::new(m);
@@ -5689,6 +5728,7 @@ fn main() {
             }
             if let Some(p) = &resume {
                 resume_engine("micro", &mut e, tv_board, color_tv, p);
+                refuse_machine(p, e.machine().geometry, geometry);
             }
             let run = Run {
                 stop,
@@ -5711,7 +5751,7 @@ fn main() {
             );
         }
         Which::Rtl => {
-            let mut m = machine(&prom, packs, boards, tv_board, color_tv);
+            let mut m = machine(&prom, packs, boards, tv_board, color_tv, geometry);
             // The Chaosnet, as under chip: the interface on the I/O board
             // and, if a link was bound, the network on its cable.
             m.chaos = chaos.clone();
@@ -5725,6 +5765,7 @@ fn main() {
                 // The other machine's pack is only the one named: CC's
                 // debuggee usually has none --- CC loads it over the cable.
                 let mut mb = Machine::with_memory_boards(boards);
+                mb.geometry = geometry;
                 mb.load_prom(&prom);
                 mb.tv.set_board(tv_board);
                 if let Some(p) = debuggee_pack.as_ref() {
@@ -5769,6 +5810,7 @@ fn main() {
                 if let Some(p) = &resume {
                     resume_engine("rtl", &mut e, tv_board, color_tv, p);
                     refuse_timing_model(p, e.timing_model(), timing_model);
+                    refuse_machine(p, e.machine().geometry, geometry);
                 }
                 let run = Run {
                     stop,
@@ -5810,6 +5852,7 @@ fn main() {
                 if let Some(p) = &resume {
                     resume_engine("rtl", &mut e, tv_board, color_tv, p);
                     refuse_timing_model(p, e.timing_model(), timing_model);
+                    refuse_machine(p, e.machine().geometry, geometry);
                 }
                 let run = Run {
                     stop,
