@@ -105,3 +105,29 @@ fn a_translation_goes_through_a_block_above_37() {
     assert_eq!(e.machine().mmem[3], 0o1234567, "micro");
     assert_eq!(r.machine().mmem[3], 0o1234567, "rtl");
 }
+
+/// **QUUX says what it is in functional source 16.** The word is the
+/// signature `0x5155` in bits 31:16, the hardware revision in 15:4 and the
+/// processor type, 4, in 3:0. On the CADR no part drives the M bus for
+/// source 16 and it reads all ones, as `chip` shows
+/// (`tests/output_bus.rs`), which can never carry the signature. Source 36
+/// is 16, `IR<30>` being in no source decode, and source 17 is left open on
+/// both machines.
+#[test]
+fn quux_answers_its_id_in_source_16() {
+    let prom = [
+        Insn::new(ALU | SETM | src(0o16) | a_dest(0o201)),
+        Insn::new(ALU | SETM | src(0o36) | a_dest(0o202)),
+        Insn::new(ALU | SETM | src(0o17) | a_dest(0o203)),
+    ];
+    let id = (0x5155 << 16) | (1 << 4) | 4;
+    for (geometry, want) in [(Geometry::QUUX, [id, id, !0]), (Geometry::CADR, [!0, !0, !0])] {
+        let (e, r) = both(&prom, &|m: &mut Machine| m.geometry = geometry, 30);
+        for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
+            let got = [m.amem[0o201], m.amem[0o202], m.amem[0o203]];
+            assert_eq!(got, want, "{geometry:?}, {name}");
+        }
+    }
+    assert_eq!(Geometry::QUUX.id, Some(id));
+    assert_eq!(Geometry::CADR.id, None);
+}
