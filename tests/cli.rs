@@ -443,6 +443,10 @@ fn the_machine_is_cadr_or_quux_and_quux_has_no_netlist() {
         let t = text(&out);
         assert!(out.status.success(), "{engine}: {t}");
         assert!(t.contains("machine: quux"), "{engine} says which machine:\n{t}");
+        assert!(
+            t.contains("QUUX's data/quux-promh.mcr, version 1000"),
+            "{engine}: QUUX's PROM:\n{t}"
+        );
     }
 }
 

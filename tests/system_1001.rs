@@ -293,3 +293,63 @@ fn microcode_1000_runs_on_a_cadr_as_a_cadr() {
         );
     }
 }
+
+/// **QUUX boots with a PDL buffer of 4K or 16K words on its own boot PROM.**
+/// MIT's PROM copies the PDL buffer into A memory until the index wraps to
+/// 0, which on a wider index overwrites A memory; QUUX's, version 1000
+/// (`data/quux-promh.mcr`), stops after 2000 words. With muir-sys's two
+/// builds of microcode 1000 for those sizes (`ref/ucode-1000-pdl4k`,
+/// `-pdl16k`), System 1001 reaches its listener on both engines.
+#[test]
+fn system_1001_runs_on_quux_with_a_4k_or_16k_pdl_buffer() {
+    for (dir, bits) in [("ucode-1000-pdl4k", 12u32), ("ucode-1000-pdl16k", 14)] {
+        let Some(ucode) = rebuilt_microcode(dir) else { return };
+        for engine in ["micro", "rtl"] {
+            let Some((_d, pack, root)) = release_1001(&format!("system-1001-{dir}-{engine}"))
+            else {
+                return;
+            };
+            with_microcode(&pack, &root, &ucode);
+            let mut m = machine_with_pack(&pack);
+            m.load_prom(&muir::prom::quux_boot_prom());
+            m.geometry =
+                muir::machine::Geometry { pdl_bits: bits, ..muir::machine::Geometry::QUUX };
+            let ran = match engine {
+                "micro" => {
+                    let mut e = Micro::new(m);
+                    e.boot();
+                    let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                    assert_eq!(microcode_version(&e), 1000);
+                    ran
+                }
+                _ => {
+                    let mut e = Rtl::new(m);
+                    e.boot();
+                    let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                    assert_eq!(microcode_version(&e), 1000);
+                    ran
+                }
+            };
+            eprintln!(
+                "{engine}: QUUX with a {}K PDL buffer, listener after {ran} microcycles",
+                1 << (bits - 10)
+            );
+        }
+    }
+}
+
+/// **QUUX's boot PROM boots the CADR too**, as MIT's does: System 1001 on
+/// microcode 1000 reaches its listener on a CADR booted by it.
+#[test]
+fn quux_s_boot_prom_boots_the_cadr() {
+    let Some(ucode) = rebuilt_microcode("ucode-1000") else { return };
+    let Some((_d, pack, root)) = release_1001("system-1001-quux-prom-on-cadr") else { return };
+    with_microcode(&pack, &root, &ucode);
+    let mut m = machine_with_pack(&pack);
+    m.load_prom(&muir::prom::quux_boot_prom());
+    let mut e = Micro::new(m);
+    e.boot();
+    let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+    eprintln!("the CADR on QUUX's PROM, listener after {ran} microcycles");
+    assert_eq!(microcode_version(&e), 1000);
+}

@@ -17,7 +17,7 @@ differences, what it needed:
 
 | Difference | Boot PROM | Microcode | Lisp system | Tools |
 |---|---|---|---|---|
-| Six-bit level-1 map entry | nothing: MIT's PROM boots it | 1000: the six-bit read, the two-deposit write, invalid block 77, the reverse first-level map moved to system communication area 640-737 and the swap-out CCWs to 440-457 | nothing: System 1001 runs unchanged | CC's remote debugger (`CADR-DEBUGGER`) still assumes the CADR's map |
+| Six-bit level-1 map entry | nothing: MIT's PROM boots it; version 1000 also clears QUUX's 64 blocks | 1000: the six-bit read, the two-deposit write, invalid block 77, the reverse first-level map moved to system communication area 640-737 and the swap-out CCWs to 440-457 | nothing: System 1001 runs unchanged | CC's remote debugger (`CADR-DEBUGGER`) still assumes the CADR's map |
 | MACHINE-ID in functional source 16 | nothing | 1000 reads it at boot and runs as either machine | `PROCESSOR-TYPE-CODE` is 4 | nothing |
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 
@@ -104,6 +104,17 @@ sets the Xbus NXM bit, as a read of any empty I/O address does. Software
 reads source 16 first and the page only on QUUX, and so never waits for the
 timeout. `quux_lists_its_sizes_in_its_feature_page` in `tests/quux.rs` holds
 the page on QUUX and the timeout on the CADR, on both engines.
+
+## Its boot PROM
+
+**QUUX boots from its own PROM, version 1000** (`data/quux-promh.mcr`),
+MIT's version 9 changed so that a PDL buffer of any width from 1K up boots.
+MIT's PROM loads A memory through the PDL buffer and stops copying it out
+when the PDL index wraps to 0 (`FILL-A-LOOP` in `mit/sys/ucadr/promh.text`),
+which on the CADR's 10-bit index is after 2000 words; on a wider index the
+copy runs on and overwrites A memory with what lies above. Version 1000 stops
+after 2000 words by count. The same PROM boots the CADR, whose index never
+passes 1777. `--machine quux` loads it; the CADR keeps MIT's.
 
 ## Its microcode
 

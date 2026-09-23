@@ -58,6 +58,20 @@ pub fn boot_prom() -> Vec<Insn> {
     parse_mcr(PROMH_9MCR).expect("mit/sys/ubin/promh.mcr")
 }
 
+/// QUUX's boot PROM, version 1000: MIT's `promh.text` changed by muir-sys so
+/// that it boots a PDL buffer wider than the CADR's --- `FILL-A-LOOP` stops
+/// after 2000 words rather than on the index wrapping to 0,
+/// `CLEAR-PDL-BUFFER` starts from a pointer of all ones, `CLEAR-LEVEL-2-MAP`
+/// clears all 64 of QUUX's blocks --- and boots the CADR as MIT's does.
+/// `data/README.md` has where it came from; `tests/quux.rs` holds it to MIT's
+/// version 9 up to the first change.
+const QUUX_PROMH: &[u8] = include_bytes!("../data/quux-promh.mcr");
+
+/// QUUX's boot PROM's microinstructions, [`PROM_WORDS`] of them.
+pub fn quux_boot_prom() -> Vec<Insn> {
+    parse_mcr(QUUX_PROMH).expect("data/quux-promh.mcr")
+}
+
 /// A boot PROM of one's own, out of an MCR microcode file: what `muir
 /// --prom` reads, and the same reader [`boot_prom`] comes through, so
 /// naming MIT's own file is the default run and not a second path to it.
