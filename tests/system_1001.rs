@@ -243,31 +243,53 @@ fn system_1001_runs_on_quux_microcode_1000() {
     }
 }
 
-/// **Microcode 1000 will not run on a CADR.** It writes a level-1 entry of
-/// 77 at boot and reads it back; on a CADR the sixth bit is not there, and it
-/// stops at `QUUX-MAP-MISSING` rather than going on to mistranslate.
+/// **Microcode 1000 runs on the CADR too, as a CADR.** It reads functional
+/// source 16 at boot; on the CADR there is no QUUX signature there, so it
+/// takes the CADR's map --- five-bit level-1 entries, invalid block 37 ---
+/// and processor type 1. The band reaches its listener on both engines with
+/// version 1000 and type 1, and no level-1 entry names a block above 37.
 #[test]
-fn microcode_1000_stops_on_a_cadr() {
+fn microcode_1000_runs_on_a_cadr_as_a_cadr() {
     let Some(ucode) = rebuilt_microcode("ucode-1000") else { return };
-    let Some((_dir, pack, root)) = release_1001("system-1001-1000-on-cadr") else { return };
-    with_microcode(&pack, &root, &ucode);
-    let syms =
-        muir::sym::parse(&std::fs::read_to_string(ucode.join("ucadr.sym")).unwrap()).unwrap();
-    let missing = syms.address(muir::sym::Space::IMem, "QUUX-MAP-MISSING").unwrap() as u16;
-    let mut e = Micro::new(machine_with_pack(&pack));
-    e.boot();
-    let mut reached = false;
-    for _ in 0..20_000_000 {
-        e.step().unwrap();
-        if e.executed().is_some_and(|pc| pc == missing) {
-            reached = true;
-            break;
-        }
+    let type_code = a_mem(&ucode, "A-PROCESSOR-TYPE-CODE");
+    for engine in ["micro", "rtl"] {
+        let Some((_dir, pack, root)) = release_1001(&format!("system-1001-1000-cadr-{engine}"))
+        else {
+            return;
+        };
+        with_microcode(&pack, &root, &ucode);
+        let m = machine_with_pack(&pack);
+        let (ran, version, code, above) = match engine {
+            "micro" => {
+                let mut e = Micro::new(m);
+                e.boot();
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                let m = e.machine();
+                (
+                    ran,
+                    microcode_version(&e),
+                    m.amem[type_code] & 0o77777777,
+                    m.l1_map.iter().filter(|&&x| x > 0o37).count(),
+                )
+            }
+            _ => {
+                let mut e = Rtl::new(m);
+                e.boot();
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                let m = e.machine();
+                (
+                    ran,
+                    microcode_version(&e),
+                    m.amem[type_code] & 0o77777777,
+                    m.l1_map.iter().filter(|&&x| x > 0o37).count(),
+                )
+            }
+        };
+        eprintln!("{engine}: the CADR's listener on microcode 1000 after {ran} microcycles");
+        assert_eq!(
+            (version, code, above),
+            (1000, 1, 0),
+            "{engine}: version, type, blocks above 37"
+        );
     }
-    assert!(reached, "the CADR never reached QUUX-MAP-MISSING at {missing:o}");
-    // And stays there: nothing past it runs.
-    for _ in 0..1_000_000 {
-        e.step().unwrap();
-    }
-    assert!((missing..=missing + 1).contains(&e.pc()), "PC {:o}", e.pc());
 }
