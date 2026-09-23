@@ -197,15 +197,15 @@ fn a_mem(ucode: &std::path::Path, name: &str) -> usize {
     syms.address(muir::sym::Space::AMem, name).unwrap_or_else(|| panic!("no {name}")) as usize
 }
 
-/// **System 1001 runs on QUUX's own microcode, 1000.** muir-sys's build of
-/// it for QUUX revision 2 (`ref/ucode-1000-pdl16k`): the six-bit level-1
-/// entry, 63 level-2 blocks, the 16K PDL buffer, and `A-PROCESSOR-TYPE-CODE`
-/// 4. On QUUX the band reaches its
-/// listener on both engines with version 1000 and type 4 in A memory, on the
-/// band as released: no rebuild.
+/// **System 1001 runs on QUUX's own microcode, 1000.** muir-sys's QUUX-only
+/// build of it (`ref/ucode-1000-quux2`, from muir-sys `0e73ff5`): the
+/// six-bit level-1 entry, 63 level-2 blocks, the 16K PDL buffer, and
+/// `A-PROCESSOR-TYPE-CODE` 4. On QUUX the band reaches its listener on both
+/// engines with version 1000 and type 4 in A memory, on the band as
+/// released: no rebuild.
 #[test]
 fn system_1001_runs_on_quux_microcode_1000() {
-    let Some(ucode) = rebuilt_microcode("ucode-1000-pdl16k") else { return };
+    let Some(ucode) = rebuilt_microcode("ucode-1000-quux2") else { return };
     let type_code = a_mem(&ucode, "A-PROCESSOR-TYPE-CODE");
     for engine in ["micro", "rtl"] {
         let Some((_dir, pack, root)) = release_1001(&format!("system-1001-1000-{engine}")) else {
@@ -231,6 +231,42 @@ fn system_1001_runs_on_quux_microcode_1000() {
         };
         eprintln!("{engine}: QUUX's listener on microcode 1000 after {ran} microcycles");
         assert_eq!((version, code), (1000, 4), "{engine}: version and processor type");
+    }
+}
+
+/// **QUUX's microcode 1000 stops on a CADR.** It reads the MACHINE-ID at
+/// boot and, without QUUX's signature and a revision of 2 or more, halts at
+/// `MACHINE-NOT-QUUX-2`, I-memory 26751, so that the PC shows 26752. On a CADR
+/// booted by QUUX's PROM it gets there and stays, on both engines.
+#[test]
+fn quux_s_microcode_1000_halts_on_a_cadr() {
+    let Some(ucode) = rebuilt_microcode("ucode-1000-quux2") else { return };
+    // The PROM passes through PC 26752 while it writes the control store
+    // there, so it is the PC staying there that is the halt.
+    fn stops<E: Engine>(mut e: E, name: &str) {
+        e.boot();
+        let mut still = 0;
+        for _ in 0..50_000_000u64 {
+            e.step().unwrap();
+            still = if e.pc() == 0o26752 { still + 1 } else { 0 };
+            if still == 10_000 {
+                return;
+            }
+        }
+        panic!("{name}: never halted at MACHINE-NOT-QUUX-2; PC {:o}", e.pc());
+    }
+    for engine in ["micro", "rtl"] {
+        let Some((_d, pack, root)) = release_1001(&format!("system-1001-quux2-on-cadr-{engine}"))
+        else {
+            return;
+        };
+        with_microcode(&pack, &root, &ucode);
+        let mut m = machine_with_pack(&pack);
+        m.load_prom(&muir::prom::quux_boot_prom());
+        match engine {
+            "micro" => stops(Micro::new(m), engine),
+            _ => stops(Rtl::new(m), engine),
+        }
     }
 }
 
