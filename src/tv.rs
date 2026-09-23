@@ -107,6 +107,54 @@ pub const HEIGHT: usize = 963;
 /// --- 24 words of 32 bits is the 768 pixels of a line, one bit each.
 pub const WORDS_PER_LINE: usize = 24;
 
+/// MONO TV, QUUX's display: 1920 by 1080 unless `--mono-tv-size` says
+/// otherwise ([`check_mono_tv_size`]), one bit a pixel. Not the CADR's:
+/// a board of QUUX's own (`--tv-board mono-tv`), a frame buffer and a mode
+/// register with black-on-white in it, and nothing else --- no sync
+/// program, no color map and no interrupt, the machine's clock being the
+/// processor's tick (`machine::Tick`).
+pub const MONO_TV_WIDTH: usize = 1920;
+/// Lines of MONO TV, at its default size.
+pub const MONO_TV_HEIGHT: usize = 1080;
+/// 1920 pixels of one bit each are 60 words of 32, a whole number, which
+/// `BITBLT` needs of an array's first dimension (`sys/ucadr/uc-tv.lisp`,
+/// `BITBLT-DECODE-ARRAY`).
+pub const MONO_TV_WORDS_PER_LINE: usize = 60;
+/// MONO TV's buffer at its default size, 64,800 words from [`BUFFER`]: it
+/// ends at `17176437`, below the color TV's strap at `17200000`.
+pub const MONO_TV_WORDS: u32 = (MONO_TV_HEIGHT * MONO_TV_WORDS_PER_LINE) as u32;
+
+/// The most a MONO TV buffer can be: Xbus I/O space from [`BUFFER`] up to
+/// QUUX's feature page at `17377000`, 130,560 words.
+pub const MONO_TV_MAX_WORDS: u32 = 0o17377000 - BUFFER;
+
+/// Whether MONO TV can be `width` by `height`: a line a whole number of
+/// words, which `BITBLT` needs of a screen array's first dimension
+/// (`BITBLT-DECODE-ARRAY` in `sys/ucadr/uc-tv.lisp`); both at most 16 bits,
+/// as the feature page gives them; the buffer inside [`MONO_TV_MAX_WORDS`];
+/// and, with the color TV fitted, below its strap at `17200000`.
+pub fn check_mono_tv_size(width: usize, height: usize, color_tv: bool) -> Result<(), String> {
+    if width == 0 || height == 0 || !width.is_multiple_of(32) {
+        return Err(format!("a width of {width} is not a whole number of 32-bit words"));
+    }
+    if width > 0xffff || height > 0xffff {
+        return Err(format!("{width} by {height} does not fit the feature page's 16-bit fields"));
+    }
+    let words = (width / 32 * height) as u64;
+    if words > MONO_TV_MAX_WORDS as u64 {
+        return Err(format!(
+            "{width} by {height} is {words} words, past the {MONO_TV_MAX_WORDS} below the feature page"
+        ));
+    }
+    let color_words = (COLOR_TV.buffer - BUFFER) as u64;
+    if color_tv && words > color_words {
+        return Err(format!(
+            "{width} by {height} is {words} words, over the color TV's buffer at 17200000"
+        ));
+    }
+    Ok(())
+}
+
 /// Where a board is strapped on the Xbus: `lmtv.order`'s x, which the two
 /// boards of a two-screen machine are wired to two values of.
 ///
@@ -206,6 +254,10 @@ pub enum Board {
     /// The four- and eight-bit board that replaced it in December 1980,
     /// `data/LISPMTV.netlist`.
     LispmTv,
+    /// QUUX's display, [`MONO_TV_WIDTH`] by [`MONO_TV_HEIGHT`] unless
+    /// [`Tv::set_mono_tv_size`] says otherwise: not the CADR's, and not on
+    /// its backplane.
+    MonoTv,
 }
 
 impl Board {
@@ -215,6 +267,7 @@ impl Board {
         match self {
             Board::SimpleTv => "simple-tv",
             Board::LispmTv => "lispm-tv",
+            Board::MonoTv => "mono-tv",
         }
     }
 }
@@ -401,6 +454,8 @@ impl SyncRam {
 pub struct Tv {
     /// Which of the two boards this is: what mode bit 7 reads.
     board: Board,
+    /// MONO TV's width and height, when that is the board.
+    mono_tv_size: (usize, usize),
     /// Where on the Xbus it is strapped, and so which screen it is: the
     /// normal TV or the color TV.  The backplane's, not the software's:
     /// it does not change under a running machine.
@@ -447,6 +502,7 @@ impl Default for Tv {
         let timeline = Timeline::of(sync.program(), 0);
         Tv {
             board: Board::default(),
+            mono_tv_size: (MONO_TV_WIDTH, MONO_TV_HEIGHT),
             strap: NORMAL_TV,
             buffer: vec![0; BUFFER_WORDS as usize],
             mode: 0,
@@ -496,6 +552,57 @@ impl Tv {
     /// does not change under a running machine.
     pub fn set_board(&mut self, board: Board) {
         self.board = board;
+        self.buffer = vec![0; self.buffer_words() as usize];
+        if board == Board::MonoTv {
+            // No sync program: nothing presets a vertical flag.
+            self.timeline = None;
+            self.next_clr = u64::MAX;
+        } else {
+            self.timeline = Timeline::of(self.sync.program(), self.mode & mode::CLOCK);
+            let (flag, at) = (self.flag_written, self.written_at);
+            self.flag_written_at(flag, at);
+        }
+    }
+
+    /// MONO TV's size, `--mono-tv-size`: [`check_mono_tv_size`] is the
+    /// caller's. The buffer is made again, so this is for building a
+    /// machine and not for a running one.
+    pub fn set_mono_tv_size(&mut self, width: usize, height: usize) {
+        self.mono_tv_size = (width, height);
+        if self.board == Board::MonoTv {
+            self.buffer = vec![0; self.buffer_words() as usize];
+        }
+    }
+
+    /// The main screen it shows: width, height and words a line. The
+    /// CADR's two boards show what System 100 hardwires, [`WIDTH`] by
+    /// [`HEIGHT`]; MONO TV its size.
+    pub fn screen(&self) -> (usize, usize, usize) {
+        match self.board {
+            Board::MonoTv => {
+                let (w, h) = self.mono_tv_size;
+                (w, h, w / 32)
+            }
+            _ => (WIDTH, HEIGHT, WORDS_PER_LINE),
+        }
+    }
+
+    /// Words of its frame buffer: the CADR boards' 32K, or MONO TV's screen.
+    pub fn buffer_words(&self) -> u32 {
+        match self.board {
+            Board::MonoTv => {
+                let (_, h, wpl) = self.screen();
+                (h * wpl) as u32
+            }
+            _ => BUFFER_WORDS,
+        }
+    }
+
+    /// The word offset into this board's frame buffer a physical address
+    /// names, if it is in it: the strap's start and the board's size.
+    pub fn buffer_offset(&self, phys: u32) -> Option<u32> {
+        let off = phys.wrapping_sub(self.strap.buffer);
+        (off < self.buffer_words()).then_some(off)
     }
 
     /// The color map as the software has written it, `[color][channel]`:
@@ -597,7 +704,7 @@ impl Tv {
     /// Whether the pixel at `x`, `y` is lit, ignoring which way round the
     /// screen is showing them.
     pub fn pixel(&self, x: usize, y: usize) -> bool {
-        let bit = y * WORDS_PER_LINE * 32 + x;
+        let bit = y * self.screen().2 * 32 + x;
         self.buffer[bit / 32] >> (bit % 32) & 1 != 0
     }
 
@@ -659,10 +766,11 @@ impl Tv {
     /// The encoder is here rather than a crate: a 1-bit grayscale PNG is a
     /// header, the rows behind stored deflate blocks, and two checksums.
     pub fn png(&self) -> Vec<u8> {
-        let mut raw = Vec::with_capacity(HEIGHT * (WIDTH / 8 + 1));
-        for y in 0..HEIGHT {
+        let (width, height, _) = self.screen();
+        let mut raw = Vec::with_capacity(height * (width / 8 + 1));
+        for y in 0..height {
             raw.push(0); // filter: none
-            for x in (0..WIDTH).step_by(8) {
+            for x in (0..width).step_by(8) {
                 let mut byte = 0u8;
                 for b in 0..8 {
                     if self.shows_white(x + b, y) {
@@ -684,8 +792,8 @@ impl Tv {
 
         let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
         let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&(WIDTH as u32).to_be_bytes());
-        ihdr.extend_from_slice(&(HEIGHT as u32).to_be_bytes());
+        ihdr.extend_from_slice(&(width as u32).to_be_bytes());
+        ihdr.extend_from_slice(&(height as u32).to_be_bytes());
         ihdr.extend_from_slice(&[1, 0, 0, 0, 0]); // 1 bit, grayscale, deflate, none, no interlace
         chunk(&mut out, b"IHDR", &ihdr);
         chunk(&mut out, b"IDAT", &z);
@@ -695,7 +803,8 @@ impl Tv {
 
     /// How many pixels are lit.
     pub fn lit(&self) -> usize {
-        self.buffer[..HEIGHT * WORDS_PER_LINE].iter().map(|w| w.count_ones() as usize).sum()
+        let (_, height, words_per_line) = self.screen();
+        self.buffer[..height * words_per_line].iter().map(|w| w.count_ones() as usize).sum()
     }
 
     pub fn read_buffer(&self, offset: u32) -> u32 {
@@ -710,7 +819,7 @@ impl Tv {
     /// set, if a frame has started since --- `-TVMA CLR` presets it once
     /// every [`FRAME_NS`], the frames counted from power-on.
     pub fn vert_flag(&self, ns: u64) -> bool {
-        self.flag_written || ns >= self.next_clr
+        self.board != Board::MonoTv && (self.flag_written || ns >= self.next_clr)
     }
 
     /// `SEND INTR`: the vertical flag with [`mode::INTERRUPT_ENABLE`] up,
@@ -724,6 +833,10 @@ impl Tv {
     /// has to read back; `INTRX0` reads it to find the vertical flag; and
     /// `SETUP-CPT` reads the sync program back through register 1.
     pub fn read_control(&self, register: u32, ns: u64) -> u32 {
+        if self.board == Board::MonoTv {
+            // Black-on-white and nothing else; registers 1 to 7 answer 0.
+            return if register == 0 { self.mode & mode::BOW } else { 0 };
+        }
         match register {
             0 => {
                 let (hsync, vsync) = self.sync_at(ns);
@@ -756,6 +869,13 @@ impl Tv {
     /// RAM's selection, or a word of the RAM while it is selected --- runs
     /// it afresh ([`Tv::restart`]).
     pub fn write_control(&mut self, register: u32, v: u32, ns: u64) {
+        if self.board == Board::MonoTv {
+            // Only black-on-white is kept; the rest has nowhere to go.
+            if register == 0 {
+                self.mode = v & mode::BOW;
+            }
+            return;
+        }
         match register {
             0 => {
                 let clock_changed = (v ^ self.mode) & mode::CLOCK != 0;
@@ -916,6 +1036,7 @@ impl Tv {
         // against the checkpoint by name, as `--tv-board` is.
         let Tv {
             board,
+            mono_tv_size,
             strap: _,
             buffer,
             mode,
@@ -932,7 +1053,10 @@ impl Tv {
         w.u8(match board {
             Board::SimpleTv => 0,
             Board::LispmTv => 1,
+            Board::MonoTv => 2,
         });
+        w.u16(mono_tv_size.0 as u16);
+        w.u16(mono_tv_size.1 as u16);
         w.u32s(buffer);
         w.u32(*mode);
         sync.save(w);
@@ -953,11 +1077,17 @@ impl Tv {
     pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
         // The board the machine was built with, so that a resume onto the
         // other one is refused rather than run: `--tv-board`.
-        self.board = match r.u8()? {
+        let board = match r.u8()? {
             0 => Board::SimpleTv,
             1 => Board::LispmTv,
+            2 => Board::MonoTv,
             other => return Err(crate::checkpoint::bad(format!("display board {other}"))),
         };
+        let size = (r.u16()? as usize, r.u16()? as usize);
+        if board != self.board || size != self.mono_tv_size {
+            self.mono_tv_size = size;
+            self.set_board(board);
+        }
         r.u32s_into(&mut self.buffer)?;
         self.mode = r.u32()?;
         self.sync.load(r)?;

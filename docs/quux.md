@@ -22,6 +22,7 @@ differences, what it needed:
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The processor tick | nothing | none enables it yet: the clock handler is still entered from the display's interrupt | nothing | nothing |
+| MONO TV, the display | nothing | the clock from the tick, not the TV's interrupt; the run light's address in the buffer | the main screen's size from the feature page, not `shwarm.lisp`'s constants | the terminal, screenshots and captures show whichever screen is fitted |
 
 ## The map
 
@@ -110,7 +111,14 @@ device register, through the map:
 | 6 | dispatch memory: 2,048 words |
 | 7 | multiply and divide: 3, bit 0 `MUL` and bit 1 `DIV` |
 | 10 | the processor tick: 1 |
-| 11-377 | 0 |
+| 11 | the main screen: width in 31:16, height in 15:0 |
+| 12 | the main screen: bits a pixel in 31:16, words a line in 15:0 |
+| 13 | the main screen: its buffer's first physical address |
+| 14-377 | 0 |
+
+Words 11 to 13 describe whichever display is fitted: MONO TV's 1920 by 1080,
+one bit a pixel, 60 words a line at `17000000`, or, on a QUUX run with a CADR
+board, that board's 768 by 963, one bit, 24 words a line at the same address.
 
 Nothing answers at that page on the CADR --- in muir's model of it the
 display answers pages 36000-36177, 36400-36577 and 36777, the disk controller
@@ -199,6 +207,47 @@ tick decode trapping would settle it.
 the 60 Hz start, the interrupt condition taken with the tick on and not with
 it off, the CADR's all ones, and a checkpoint taken in the middle of a
 period, on `micro` and `rtl`.
+
+## MONO TV, the display
+
+**QUUX's display is MONO TV**, a monochrome frame buffer: 1920 by 1080 unless
+`--mono-tv-size` gives another size, one bit a pixel. It is the frame buffer and one register, and nothing else: no sync
+program, no color map, and no interrupt, the machine's clock being the
+processor's tick. `--tv-board mono-tv`, which is QUUX's display unless another
+board is named; refused on the CADR.
+
+| | |
+|---|---|
+| Buffer | 64,800 words, physical `17000000`-`17176437`: 60 words a line, 1,080 lines |
+| Pixel | pixel `x` of line `y` is bit `x mod 32` of word `60 y + x / 32`, the low bit leftmost, as on the CADR's TV |
+| Mode register, `17377760` | bit 2, black-on-white, reads back; every other bit reads 0 and a write of it is dropped |
+| Registers 1 to 7, `17377761`-`17377767` | answer, read 0, and take writes to no effect |
+| Interrupt | none |
+
+**Its size is muir's to choose**, `--mono-tv-size <width>x<height>`: the width
+a multiple of 32, the buffer at most 130,560 words (up to the feature page at
+`17377000`), and at most 65,536 with the color TV fitted, whose buffer starts
+at `17200000`. 2560 by 1440 fits; 3840 by 2160 does not. The feature page's
+words 11 to 13 give the size to the software. The table above is the default
+size.
+
+1920 bits a line is 60 whole words, which `BITBLT` needs of a screen array's
+first dimension (`BITBLT-DECODE-ARRAY` in `sys/ucadr/uc-tv.lisp`). The buffer
+starts where the CADR's does, so the band's `IO-SPACE-VIRTUAL-ADDRESS`
+reaches it unchanged, and ends below the color TV's strap at `17200000`.
+
+System 1001 runs on it but draws its screen wrong: `shwarm.lisp` makes the
+main screen 768 by 963 at 24 words a line, and MONO TV scans 60, so each of
+its lines is spread over parts of several. On QUUX's microcode 1000 with the
+tick (`ref/ucode-1000-quux4`) the band reaches its listener on `micro` in
+136 M microcycles, as on the CADR's board, measured by reading the rows the
+listener draws in at 24 words a line. A band that sizes the main screen from
+the feature page is what makes the picture right.
+
+`tests/mono_tv.rs` holds the buffer's first and last words and the NXM past
+it on both engines, the bus interface's decode of the whole buffer, the
+pixel order and the terminal's frame, the register, the absence of an
+interrupt over a second, and the feature page's three words.
 
 ## Its boot PROM
 

@@ -1772,7 +1772,12 @@ impl Rtl {
                     // QUUX's feature page answers as an Xbus device.
                     busint::Responder::Device
                 } else {
-                    busint::decode_with(self.bus_addr, self.m.main.len(), self.m.color_tv.is_some())
+                    busint::decode_for(
+                        self.bus_addr,
+                        self.m.main.len(),
+                        self.m.color_tv.is_some(),
+                        self.m.tv.buffer_words(),
+                    )
                 };
                 self.busint.request(self.wrcyc);
                 self.bus_cycles += 1;

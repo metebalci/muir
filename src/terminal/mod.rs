@@ -115,11 +115,12 @@ impl<'a> Frame<'a> {
                 colors: Some(colors),
             };
         }
+        let (width, height, words_per_line) = tv.screen();
         Frame {
             words: tv.buffer(),
-            width: tv::WIDTH,
-            height: tv::HEIGHT,
-            words_per_line: tv::WORDS_PER_LINE,
+            width,
+            height,
+            words_per_line,
             black_on_white: tv.black_on_white(),
             colors: None,
         }

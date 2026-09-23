@@ -1077,6 +1077,14 @@ pub fn decode(phys: u32, memory_words: usize) -> Responder {
 /// the error stop off and reads it back, and a machine with no board there
 /// has to give it the NXM.
 pub fn decode_with(phys: u32, memory_words: usize, color_tv: bool) -> Responder {
+    decode_for(phys, memory_words, color_tv, tv::BUFFER_WORDS)
+}
+
+/// [`decode_with`] with the main display's buffer `tv_words` long: QUUX's
+/// MONO TV has one of its own size from the same start, 64,800 words at
+/// 1920 by 1080, which the CADR's two boards' 32K words do not reach the
+/// end of.
+pub fn decode_for(phys: u32, memory_words: usize, color_tv: bool, tv_words: u32) -> Responder {
     let page = (phys >> 8) & 0o37777;
     if page >= 0o37000 {
         // On the Unibus: the diagnostic bus's sixteen registers, of which
@@ -1095,7 +1103,9 @@ pub fn decode_with(phys: u32, memory_words: usize, color_tv: bool) -> Responder 
     } else if page >= 0o36000 {
         // The frame buffer is the bottom of Xbus I/O space; the display's
         // mode register and the disk's four share the top page with it.
-        let built = tv::NORMAL_TV.answers(phys)
+        let main_tv = phys.wrapping_sub(tv::BUFFER) < tv_words
+            || tv::NORMAL_TV.control_register(phys).is_some();
+        let built = main_tv
             || (color_tv && tv::COLOR_TV.answers(phys))
             || disk_controller::register(phys).is_some();
         if built { Responder::Device } else { Responder::NoXbus }

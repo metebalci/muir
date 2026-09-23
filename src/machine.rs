@@ -149,7 +149,8 @@ impl Geometry {
     /// level-1 entry's bits, the level-2 map's entries, the PDL buffer's
     /// words, the control store's, A memory's and dispatch memory's, and
     /// which of `MUL` (bit 0) and `DIV` (bit 1) it has, and whether it has
-    /// the tick (1); every other word 0.
+    /// the tick (1); words 11 to 13, the main screen, are the display's
+    /// ([`Machine::bus_read`]); every other word 0.
     /// Read-only.
     pub fn feature_word(self, phys: u32) -> Option<u32> {
         let id = self.machine_id?;
@@ -649,7 +650,12 @@ impl Machine {
         if self.geometry.feature_word(phys).is_some() {
             return None;
         }
-        match busint::decode_with(phys, self.main.len(), self.color_tv.is_some()) {
+        match busint::decode_for(
+            phys,
+            self.main.len(),
+            self.color_tv.is_some(),
+            self.tv.buffer_words(),
+        ) {
             busint::Responder::Memory(_) => Some(phys as usize),
             busint::Responder::Device
             | busint::Responder::Interface
@@ -1011,13 +1017,22 @@ impl Machine {
     /// bus; the engines answer them.  See [`crate::spy`].
     pub fn bus_read(&mut self, phys: u32) -> u32 {
         if let Some(w) = self.geometry.feature_word(phys) {
-            return w;
+            // Words 11 to 13 are the main screen, from the board fitted:
+            // width in 31:16 and height in 15:0; bits a pixel in 31:16 and
+            // words a line in 15:0; and the buffer's first physical address.
+            let (width, height, words_per_line) = self.tv.screen();
+            return match phys & 0o377 {
+                0o11 => (width as u32) << 16 | height as u32,
+                0o12 => 1 << 16 | words_per_line as u32,
+                0o13 => tv::NORMAL_TV.buffer,
+                _ => w,
+            };
         }
         if let Some(r) = disk_controller::register(phys) {
             self.disk.advance(self.ns);
             return self.disk.read(r);
         }
-        if let Some(off) = tv::buffer_offset(phys) {
+        if let Some(off) = self.tv.buffer_offset(phys) {
             return self.tv.read_buffer(off);
         }
         if let Some(r) = tv::control_register(phys) {
@@ -1054,7 +1069,7 @@ impl Machine {
             self.disk.write(r, value, &mut self.main);
             return;
         }
-        if let Some(off) = tv::buffer_offset(phys) {
+        if let Some(off) = self.tv.buffer_offset(phys) {
             self.tv.write_buffer(off, value);
             return;
         }

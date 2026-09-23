@@ -415,6 +415,43 @@ fn the_display_board_is_named_on_every_engine() {
     assert!(t.contains("TV model lispm-tv"), "chip with the model board:\n{t}");
 }
 
+/// **MONO TV is QUUX's**: `--tv-board mono-tv` runs on QUUX and says so,
+/// is QUUX's display when none is named, and is refused on the CADR, which
+/// has no such board.
+#[test]
+fn mono_tv_is_quux_s() {
+    refused_saying(&["--rtl", "--tv-board", "mono-tv"], "--tv-board mono-tv is QUUX's");
+    for engine in ["--micro", "--rtl"] {
+        let out = muir()
+            .args([engine, "--machine", "quux", "--tv-board", "mono-tv", "--stop-after", "1"])
+            .run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}:\n{t}");
+        assert!(t.contains("tv: model mono-tv"), "{engine}: the start says the board:\n{t}");
+    }
+    // It is QUUX's display unless another is named; the CADR's boards
+    // still run on QUUX when named.
+    let out = muir().args(["--rtl", "--machine", "quux", "--stop-after", "1"]).run();
+    assert!(text(&out).contains("tv: model mono-tv"), "QUUX's default:\n{}", text(&out));
+    let out = muir()
+        .args(["--rtl", "--machine", "quux", "--tv-board", "simple-tv", "--stop-after", "1"])
+        .run();
+    assert!(text(&out).contains("tv: model simple-tv"), "named:\n{}", text(&out));
+    // Its size is a flag of its own, and says so.
+    let out = muir()
+        .args(["--rtl", "--machine", "quux", "--mono-tv-size", "2560x1440", "--stop-after", "1"])
+        .run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("tv: model mono-tv, 2560x1440"), "the start says the size:\n{t}");
+    refused_saying(
+        &["--machine", "quux", "--mono-tv-size", "1921x1080"],
+        "--mono-tv-size: a width of 1921",
+    );
+    refused_saying(&["--machine", "quux", "--mono-tv-size", "wide"], "--mono-tv-size wants");
+    refused_saying(&["--mono-tv-size", "1920x1080"], "--mono-tv-size is MONO TV's");
+}
+
 /// **`--timing-model` is `cadr` or `fpga`, and `fpga` is `rtl`'s.** The
 /// grid is what muir-fpga's fabric runs on, and it is `rtl`'s references
 /// that fabric is held to; `chip` and `micro` keep the board's time, so a

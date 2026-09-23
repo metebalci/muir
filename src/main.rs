@@ -28,7 +28,7 @@
 //!          [--stop-after <microcycles>]
 //!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
 //!          [--timing-model cadr|fpga]
-//!          [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
+//!          [--tv netlist|model] [--tv-board simple-tv|lispm-tv|mono-tv]
 //!          [--tv-capture <gif>] [--tv-capture-no-time]
 //!
 //! `cargo build --release` leaves it at `target/release/muir`, and `cargo
@@ -991,7 +991,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
             [--timing-model cadr|fpga]
-            [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
+            [--tv netlist|model] [--tv-board simple-tv|lispm-tv|mono-tv]
             [--tv-capture <gif>] [--tv-capture-no-time]
             [--watch <from>[-<to>]:<net>,<net>,...] [-h|--help]
             [-V|--version]";
@@ -1397,14 +1397,20 @@ A simulator of the MIT CADR Lisp Machine.
                                edge is taken at the first tick at or after
                                it. [default: cadr]
   --tv netlist|model           chip: the display. [default: netlist]
-  --tv-board simple-tv|lispm-tv
+  --tv-board simple-tv|lispm-tv|mono-tv
                                which display board, on every engine: the
                                SIMPLE TV that System 100 drives, or the
                                LISPM TV that replaced it in 1980. The two
                                program alike but for mode bit 7, which
                                reads the sync enable back on the LISPM TV
-                               and zero on the SIMPLE TV. [default:
-                               simple-tv]
+                               and zero on the SIMPLE TV. mono-tv is QUUX's:
+                               1920 by 1080, one bit a pixel, no
+                               interrupt; refused on the CADR. [default:
+                               simple-tv on the CADR, mono-tv on QUUX]
+  --mono-tv-size <w>x<h>        MONO TV's size: the width a multiple of 32,
+                               the buffer at most 130,560 words, and 65,536
+                               with --color-tv. The feature page gives it
+                               to the software. [default: 1920x1080]
   --tv-capture <gif>           record the display to <gif> as the run goes,
                                an animated GIF timed by the machine's own
                                clock so that it plays at the machine's
@@ -2064,13 +2070,14 @@ fn machine(
     prom: &[Insn],
     packs: &[Pack],
     memory_boards: usize,
-    tv_board: TvBoard,
+    (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
     geometry: muir::machine::Geometry,
 ) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
     m.geometry = geometry;
     m.load_prom(prom);
+    m.tv.set_mono_tv_size(mono_tv_size.0, mono_tv_size.1);
     m.tv.set_board(tv_board);
     if color_tv.fitted() {
         m.fit_color_tv();
@@ -3693,10 +3700,12 @@ fn refuse_timing_model((path, _): &(PathBuf, Checkpoint), saved: TimingModel, fl
 fn resume_engine<E: Engine>(
     name: &str,
     e: &mut E,
-    tv_board: TvBoard,
+    (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
-    (path, c): &(PathBuf, Checkpoint),
+    geometry: muir::machine::Geometry,
+    resume: &(PathBuf, Checkpoint),
 ) {
+    let (path, c) = resume;
     if c.engine != name {
         usage(&format!(
             "--resume {}: a {} checkpoint, and this is {name}",
@@ -3706,12 +3715,24 @@ fn resume_engine<E: Engine>(
     }
     let mut r = muir::checkpoint::Reader::new(&c.body);
     e.load(&mut r).and_then(|()| r.done()).unwrap_or_else(|err| stale_checkpoint(path, &err, None));
+    // The machine first: a board refused on another machine's checkpoint
+    // is only the machine's default board.
+    refuse_machine(resume, e.machine().geometry, geometry);
     if e.machine().tv.board() != tv_board {
         usage(&format!(
             "--resume {}: a {} checkpoint, and --tv-board is {}",
             path.display(),
             e.machine().tv.board().name(),
             tv_board.name()
+        ));
+    }
+    let (w, h, _) = e.machine().tv.screen();
+    if tv_board == TvBoard::MonoTv && (w, h) != mono_tv_size {
+        usage(&format!(
+            "--resume {}: a MONO TV of {w}x{h}, and --mono-tv-size is {}x{}",
+            path.display(),
+            mono_tv_size.0,
+            mono_tv_size.1
         ));
     }
     refuse_color_tv(path, e.machine().color_tv.is_some(), color_tv.fitted());
@@ -4579,7 +4600,10 @@ fn main() {
     let mut main_memory_model = false;
     let mut io = true;
     let mut tv = true;
-    let mut tv_board = TvBoard::SimpleTv;
+    // `None` until `--tv-board` names one: the machine's own display, the
+    // SIMPLE TV on the CADR and MONO TV on QUUX.
+    let mut tv_board: Option<TvBoard> = None;
+    let mut mono_tv_size: Option<(usize, usize)> = None;
     let mut timing_model = TimingModel::Cadr;
     let mut geometry = muir::machine::Geometry::CADR;
     // The color TV, the second display board: off unless `--color-tv`
@@ -4788,10 +4812,20 @@ fn main() {
                 None => usage("--timing-model wants cadr or fpga"),
             },
             (None, "--tv-board") => match args.next().as_deref() {
-                Some("simple-tv") => tv_board = TvBoard::SimpleTv,
-                Some("lispm-tv") => tv_board = TvBoard::LispmTv,
-                _ => usage("--tv-board wants simple-tv or lispm-tv"),
+                Some("simple-tv") => tv_board = Some(TvBoard::SimpleTv),
+                Some("lispm-tv") => tv_board = Some(TvBoard::LispmTv),
+                Some("mono-tv") => tv_board = Some(TvBoard::MonoTv),
+                _ => usage("--tv-board wants simple-tv, lispm-tv or mono-tv"),
             },
+            (None, "--mono-tv-size") => {
+                let v = args.next().unwrap_or_default();
+                let size =
+                    v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+                match size {
+                    Some(size) => mono_tv_size = Some(size),
+                    None => usage("--mono-tv-size wants <width>x<height>, such as 1920x1080"),
+                }
+            }
             (None, "--color-tv") => {
                 color_tv = true;
                 // The word is optional, as `--color-terminal`'s endpoint
@@ -4992,6 +5026,15 @@ fn main() {
     if geometry != muir::machine::Geometry::CADR && which == Which::Chip {
         usage("--machine quux has no netlist, and this run is chip");
     }
+    // MONO TV is QUUX's display and has no place on a CADR's backplane.
+    let tv_board = tv_board.unwrap_or(if geometry == muir::machine::Geometry::CADR {
+        TvBoard::SimpleTv
+    } else {
+        TvBoard::MonoTv
+    });
+    if tv_board == TvBoard::MonoTv && geometry == muir::machine::Geometry::CADR {
+        usage("--tv-board mono-tv is QUUX's, and this run is the CADR: --machine quux");
+    }
     // The grid is muir-fpga's, and it is `rtl`'s references its fabric is
     // held to; `micro` and `chip` keep the board's time.
     if timing_model != TimingModel::Cadr && which != Which::Rtl {
@@ -5025,6 +5068,15 @@ fn main() {
             ColorTv::Model
         }
     };
+    // MONO TV's size is the board's, and checked against the color TV's strap.
+    if mono_tv_size.is_some() && tv_board != TvBoard::MonoTv {
+        usage(&format!("--mono-tv-size is MONO TV's, and this run's board is {}", tv_board.name()));
+    }
+    let mono_tv_size = mono_tv_size.unwrap_or((muir::tv::MONO_TV_WIDTH, muir::tv::MONO_TV_HEIGHT));
+    if let Err(e) = muir::tv::check_mono_tv_size(mono_tv_size.0, mono_tv_size.1, color_tv.fitted())
+    {
+        usage(&format!("--mono-tv-size: {e}"));
+    }
     // The lashups asked for in as many words; the connector nobody placed
     // is not one, being there on every rtl and chip run.
     let cabled = debuggee as u8 + cable_listen.asked as u8 + cable_connect.is_some() as u8;
@@ -5501,7 +5553,12 @@ fn main() {
             // The board `--tv-board` chose, which the other engines run as
             // the model of; `chip` says it in the line above, beside
             // whether the board itself or its model is on the backplane.
-            writeln!(s, "tv: model {}", tv_board.name()).unwrap();
+            if tv_board == TvBoard::MonoTv {
+                let (w, h) = mono_tv_size;
+                writeln!(s, "tv: model mono-tv, {w}x{h}").unwrap();
+            } else {
+                writeln!(s, "tv: model {}", tv_board.name()).unwrap();
+            }
         }
         if geometry == muir::machine::Geometry::QUUX {
             writeln!(
@@ -5735,7 +5792,7 @@ fn main() {
             // from an engine is a clock, and this one has the machine's
             // periods; `tests/micro_chaos.rs` holds the two engines to
             // the same conversation with the server.
-            let mut m = machine(&prom, packs, boards, tv_board, color_tv, geometry);
+            let mut m = machine(&prom, packs, boards, (tv_board, mono_tv_size), color_tv, geometry);
             m.chaos = chaos.clone();
             m.plug_chaos(0);
             let mut e = Micro::new(m);
@@ -5743,8 +5800,7 @@ fn main() {
                 e.boot();
             }
             if let Some(p) = &resume {
-                resume_engine("micro", &mut e, tv_board, color_tv, p);
-                refuse_machine(p, e.machine().geometry, geometry);
+                resume_engine("micro", &mut e, (tv_board, mono_tv_size), color_tv, geometry, p);
             }
             let run = Run {
                 stop,
@@ -5767,7 +5823,7 @@ fn main() {
             );
         }
         Which::Rtl => {
-            let mut m = machine(&prom, packs, boards, tv_board, color_tv, geometry);
+            let mut m = machine(&prom, packs, boards, (tv_board, mono_tv_size), color_tv, geometry);
             // The Chaosnet, as under chip: the interface on the I/O board
             // and, if a link was bound, the network on its cable.
             m.chaos = chaos.clone();
@@ -5783,6 +5839,7 @@ fn main() {
                 let mut mb = Machine::with_memory_boards(boards);
                 mb.geometry = geometry;
                 mb.load_prom(&prom);
+                mb.tv.set_mono_tv_size(mono_tv_size.0, mono_tv_size.1);
                 mb.tv.set_board(tv_board);
                 if let Some(p) = debuggee_pack.as_ref() {
                     attach(&mut mb, std::slice::from_ref(p));
@@ -5824,9 +5881,8 @@ fn main() {
                 eprintln!("debug cable: DBGOUT connected to the debuggee at {addr}");
                 let reader = stream.try_clone().expect("a second handle on the cable");
                 if let Some(p) = &resume {
-                    resume_engine("rtl", &mut e, tv_board, color_tv, p);
+                    resume_engine("rtl", &mut e, (tv_board, mono_tv_size), color_tv, geometry, p);
                     refuse_timing_model(p, e.timing_model(), timing_model);
-                    refuse_machine(p, e.machine().geometry, geometry);
                 }
                 let run = Run {
                     stop,
@@ -5866,9 +5922,8 @@ fn main() {
                 );
             } else {
                 if let Some(p) = &resume {
-                    resume_engine("rtl", &mut e, tv_board, color_tv, p);
+                    resume_engine("rtl", &mut e, (tv_board, mono_tv_size), color_tv, geometry, p);
                     refuse_timing_model(p, e.timing_model(), timing_model);
-                    refuse_machine(p, e.machine().geometry, geometry);
                 }
                 let run = Run {
                     stop,
@@ -5896,6 +5951,8 @@ fn main() {
                 netlist::parse(match tv_board {
                     TvBoard::SimpleTv => SIMPLETV,
                     TvBoard::LispmTv => LISPMTV,
+                    // Refused with `chip` above: QUUX has no netlist.
+                    TvBoard::MonoTv => unreachable!("MONO TV on chip"),
                 })
                 .unwrap()
             });

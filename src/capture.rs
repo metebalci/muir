@@ -91,8 +91,10 @@ impl Frame {
 }
 
 impl Recorder {
-    /// A recorder for a screen `WIDTH` by `HEIGHT`, with the machine's
-    /// clock and the wall clock on a line below it if `show_time`.
+    /// A recorder for the main screen, with the machine's clock and the
+    /// wall clock on a line below it if `show_time`. The canvas is the
+    /// CADR's screen until the first sample, which sizes it to the screen
+    /// sampled: MONO TV's is its own.
     pub fn new(show_time: bool) -> Recorder {
         Recorder::of(WIDTH, show_time)
     }
@@ -147,9 +149,15 @@ impl Recorder {
     /// The canvas as `screens` shows it, left to right: a frame if it
     /// differs from the last.
     fn screens(&mut self, screens: &[&Tv], ns: u64, wall_ns: u64) {
+        let (sw, sh, _) = screens[0].screen();
+        assert!(screens.iter().all(|t| t.screen() == screens[0].screen()), "screens of two sizes");
+        if self.samples == 0 {
+            self.width = screens.len() * sw + (screens.len() - 1) * PAIR_RULE;
+            self.height = sh + if self.show_time { TIME_H } else { 0 };
+        }
         assert_eq!(
             self.width,
-            screens.len() * WIDTH + (screens.len() - 1) * PAIR_RULE,
+            screens.len() * sw + (screens.len() - 1) * PAIR_RULE,
             "{} screens on a canvas {} wide",
             screens.len(),
             self.width
@@ -157,9 +165,9 @@ impl Recorder {
         self.samples += 1;
         let mut cur = vec![0u8; self.width * self.height];
         for (k, tv) in screens.iter().enumerate() {
-            let at = k * (WIDTH + PAIR_RULE);
-            for y in 0..HEIGHT {
-                for x in 0..WIDTH {
+            let at = k * (sw + PAIR_RULE);
+            for y in 0..sh {
+                for x in 0..sw {
                     cur[y * self.width + at + x] = tv.shows_white(x, y) as u8;
                 }
             }
@@ -167,17 +175,17 @@ impl Recorder {
         // The rule between one screen and the next, down the screens and
         // not through the clock line.
         for k in 1..screens.len() {
-            for y in 0..HEIGHT {
+            for y in 0..sh {
                 for x in 0..PAIR_RULE {
-                    cur[y * self.width + k * (WIDTH + PAIR_RULE) - PAIR_RULE + x] = 1;
+                    cur[y * self.width + k * (sw + PAIR_RULE) - PAIR_RULE + x] = 1;
                 }
             }
         }
         if self.show_time {
             self.shown_second = Some(ns / 1_000_000_000);
             self.shown_wall_second = Some(wall_ns / 1_000_000_000);
-            draw_time(&mut cur, self.width, HEIGHT, ns, TIME_MARGIN, 1);
-            draw_time(&mut cur, self.width, HEIGHT, wall_ns, self.width - TIME_MARGIN - TIME_W, 1);
+            draw_time(&mut cur, self.width, sh, ns, TIME_MARGIN, 1);
+            draw_time(&mut cur, self.width, sh, wall_ns, self.width - TIME_MARGIN - TIME_W, 1);
         }
         let width = self.width;
         let rect = match &self.prev {
