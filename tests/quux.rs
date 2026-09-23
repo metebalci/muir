@@ -106,7 +106,8 @@ fn a_translation_goes_through_a_block_above_37() {
     assert_eq!(r.machine().mmem[3], 0o1234567, "rtl");
 }
 
-/// **QUUX says what it is in functional source 16.** The word is the
+/// **QUUX says what it is in functional source 16, its MACHINE-ID.** The
+/// word is the
 /// signature `0x5155` in bits 31:16, the hardware revision in 15:4 and the
 /// processor type, 4, in 3:0. On the CADR no part drives the M bus for
 /// source 16 and it reads all ones, as `chip` shows
@@ -128,13 +129,13 @@ fn quux_answers_its_id_in_source_16() {
             assert_eq!(got, want, "{geometry:?}, {name}");
         }
     }
-    assert_eq!(Geometry::QUUX.id, Some(id));
-    assert_eq!(Geometry::CADR.id, None);
+    assert_eq!(Geometry::QUUX.machine_id, Some(id));
+    assert_eq!(Geometry::CADR.machine_id, None);
 }
 
 /// **QUUX lists its sizes in its feature page**, the Xbus I/O page at
 /// physical `17377000`, just below the page the display and the disk
-/// controller share: word 0 the identity word again, then the level-1
+/// controller share: word 0 the MACHINE-ID again, then the level-1
 /// entry's bits, the level-2 map's entries, the PDL buffer's words, and the
 /// control store's, A memory's and dispatch memory's; the rest reads 0. On
 /// the CADR nothing answers there, and a read times out as any read of an
@@ -161,7 +162,7 @@ fn quux_lists_its_sizes_in_its_feature_page() {
             }
         }
     };
-    let id = Geometry::QUUX.id.unwrap();
+    let id = Geometry::QUUX.machine_id.unwrap();
     let want = [id, 6, 2048, 1024, 16384, 1024, 2048, 0];
     let (e, r) = both(&prom, &set(Geometry::QUUX), 400);
     for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {

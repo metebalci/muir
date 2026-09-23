@@ -38,7 +38,8 @@ back in `MAP(MD)<29:24>`, and a translation through a block above 37, on
 
 ## How software tells the two apart
 
-**QUUX answers who it is in functional source 16**, one microinstruction,
+**QUUX answers who it is in functional source 16, its MACHINE-ID**, one
+microinstruction,
 no bus cycle:
 
 | Bits | QUUX | CADR |
@@ -74,7 +75,7 @@ device register, through the map:
 
 | Word | QUUX, revision 1 |
 |---|---|
-| 0 | the identity word, as source 16 gives it |
+| 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
 | 2 | level-2 map: 2,048 entries |
 | 3 | PDL buffer: 1,024 words |
@@ -102,7 +103,7 @@ in two deposits, `VMA<31:27>` and `VMA<24>`, and keeps block 77 as the
 invalid one. On both it keeps the reverse first-level map in system
 communication area words 640 to 737 and the swap-out CCWs at 440 to 457. It
 checks at boot that block 0's level-1 entry reads back as the invalid entry
-the identity word promised, and stops at `MAP-WIDTH-MISMATCH` if it does not.
+the MACHINE-ID promised, and stops at `MAP-WIDTH-MISMATCH` if it does not.
 
 `tests/system_1001.rs` holds it, with the microcode's files in the gitignored
 `ref/ucode-1000`: System 1001, the band as released, reaches its listener on

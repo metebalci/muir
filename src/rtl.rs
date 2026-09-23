@@ -924,8 +924,8 @@ impl Rtl {
                 | (!pfr as u32) << 30
                 | (vmap & self.m.geometry.l1_mask()) << 24
                 | (vmo & 0o77777777)
-        } else if let (true, 6, Some(id)) = (group_b, src, self.m.geometry.id) {
-            // QUUX's identity word in source 16 (`Geometry::QUUX`).
+        } else if let (true, 6, Some(id)) = (group_b, src, self.m.geometry.machine_id) {
+            // QUUX's MACHINE-ID in source 16 (`Geometry::QUUX`).
             id
         } else {
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 that decodes
