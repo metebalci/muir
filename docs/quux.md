@@ -20,7 +20,8 @@ differences, what it needed:
 | Six-bit level-1 map entry | nothing: MIT's PROM boots it; version 1000 also clears QUUX's 64 blocks | 1000: the six-bit read, the two-deposit write, invalid block 77, the reverse first-level map moved to system communication area 640-737 and the swap-out CCWs to 440-457 | nothing: System 1001 runs unchanged | CC's remote debugger (`CADR-DEBUGGER`) still assumes the CADR's map |
 | MACHINE-ID in functional source 16 | nothing | 1000 reads it at boot and runs as either machine | `PROCESSOR-TYPE-CODE` is 4 | nothing |
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
-| `MUL` and `DIV` in one instruction | nothing | none uses them yet; the microassembler needs names for ALU functions 42 and 43 | nothing | nothing |
+| `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
+| The processor tick | nothing | none enables it yet: the clock handler is still entered from the display's interrupt | nothing | nothing |
 
 ## The map
 
@@ -59,13 +60,13 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 3 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide | |
+| 15:4 | hardware revision: 4 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
 decodes it has that output unconnected, and neither microcode 323 nor
 microcode 1000 reads it. `IR<30>` is in no source decode, so source 36 is the
-same. Source 17 is left open on both machines. A machine is QUUX only if bits
+same. Source 17 is QUUX's tick (below), and open on the CADR. A machine is QUUX only if bits
 31:16 hold the signature; the revision says which QUUX, each one containing
 the last.
 
@@ -98,7 +99,7 @@ to `17377377` (page 36776), just below the page the display's control
 registers and the disk controller share. It is read-only and read like any
 device register, through the map:
 
-| Word | QUUX, revision 3 |
+| Word | QUUX, revision 4 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -108,7 +109,8 @@ device register, through the map:
 | 5 | A memory: 1,024 words |
 | 6 | dispatch memory: 2,048 words |
 | 7 | multiply and divide: 3, bit 0 `MUL` and bit 1 `DIV` |
-| 10-377 | 0 |
+| 10 | the processor tick: 1 |
+| 11-377 | 0 |
 
 Nothing answers at that page on the CADR --- in muir's model of it the
 display answers pages 36000-36177, 36400-36577 and 36777, the disk controller
@@ -162,6 +164,41 @@ operands and every output selector and Q control, on `micro` and `rtl`, with
 the step sequence itself held to the netlist; the CADR's 42 and 43 to the
 netlist; the hold's length on both engines; a halted and single-stepped `DIV`;
 and a checkpoint taken during one.
+
+## The tick
+
+**QUUX's processor has a tick of its own** (revision 4): a flag that rises
+every period, part of the interrupt the microcode already tests. The CADR has
+no clock in the processor. Its clock is the display board's vertical
+interrupt: microcode 323's `INTRX0` (`sys/ucadr/uc-interrupt.lisp`) reads the
+TV's mode register, clears its vertical flag, and runs the "roughly-60-cycle
+clock" handler --- the mouse, the disk's idle time, the Chaosnet's
+transmit-abort wakeup, and the sequence-break counter the scheduler runs
+on.
+
+| | |
+|---|---|
+| Functional destination 3 | control: `<0>` enable; a write with `<1>` set clears the flag |
+| Functional destination 4 | the period in microseconds, `<23:0>`, 0 taken as 1; a write starts a period from then |
+| Functional source 17 | `<0>` the flag, `<1>` the enable |
+| Period at reset | 16,667 µs, 60 Hz |
+| Interrupt | while enabled, the flag is ORed into the interrupt pending that jump conditions 5 and 6 test, so it costs nothing until it rises |
+
+The flag rises a period after the tick is enabled or its period written, then
+every period after, whether or not it was cleared between; a clear takes it
+down until the next. `-RESET` turns the tick off and puts the period back.
+
+On the CADR, destinations 3 to 7 have no output on the 74S138 that decodes
+them and write only M, and source 17 has none either and reads all ones.
+Neither microcode 323 nor QUUX's 1000 writes destinations 3 to 7 or reads
+source 17, by a scan of every control-store word. **Unverified:** that no
+instruction made at run time through `IMOD` does; running the band with the
+tick decode trapping would settle it.
+
+`tests/tick.rs` holds the period against a 100 and a 300 µs one, the clear,
+the 60 Hz start, the interrupt condition taken with the tick on and not with
+it off, the CADR's all ones, and a checkpoint taken in the middle of a
+period, on `micro` and `rtl`.
 
 ## Its boot PROM
 
