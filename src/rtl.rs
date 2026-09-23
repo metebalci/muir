@@ -761,7 +761,7 @@ impl Rtl {
         let mapi =
             if self.memstart { (self.m.vma >> 8) & 0xffff } else { (self.m.md >> 8) & 0xffff };
         let adr0 = ((mapi >> 5) & 0o3777) as u16;
-        let adr1 = ((self.m.l1_map[adr0 as usize] & 0o37) << 5 | (mapi & 0o37)) as u16;
+        let adr1 = self.m.geometry.l2_index(self.m.l1_map[adr0 as usize], mapi << 8) as u16;
         (adr0, adr1)
     }
 
@@ -920,7 +920,10 @@ impl Rtl {
             // which *inverts*, and a pull-up on the input of an inverting
             // buffer is a hard zero on its output.  A one there would be
             // right for a '241, which is what this is easy to mistake it for.
-            (!pfw as u32) << 31 | (!pfr as u32) << 30 | (vmap & 0o37) << 24 | (vmo & 0o77777777)
+            (!pfw as u32) << 31
+                | (!pfr as u32) << 30
+                | (vmap & self.m.geometry.l1_mask()) << 24
+                | (vmo & 0o77777777)
         } else {
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 that decodes
             // `IR<28:26>` under `IR<31>` and `IR<29>` has those three outputs
@@ -1249,9 +1252,9 @@ impl Rtl {
             // (`Machine::write_map` has the whole account).
             let (adr0, adr1) = self.map_address();
             let both = bit(self.m.vma as u64, 26) && bit(self.m.vma as u64, 25);
-            let adr1 = if both { adr1 & 0o37 } else { adr1 };
+            let adr1 = if both { self.m.geometry.l2_index(0, self.m.md) as u16 } else { adr1 };
             if bit(self.m.vma as u64, 26) {
-                self.m.l1_map[adr0 as usize] = (self.m.vma >> 27) & 0o37;
+                self.m.l1_map[adr0 as usize] = (self.m.vma >> 27) & self.m.geometry.l1_mask();
             }
             if bit(self.m.vma as u64, 25) {
                 self.m.l2_map[adr1 as usize] = self.m.vma & 0o77777777;
@@ -1911,15 +1914,15 @@ impl Rtl {
 
         // page PDLPTR
         if r.destpdlx {
-            self.m.pdl_index = (r.ob & 0o1777) as u16;
+            self.m.pdl_index = r.ob as u16 & self.m.geometry.pdl_mask();
         }
         if r.destpdlp {
-            self.m.pdl_pointer = (r.ob & 0o1777) as u16;
+            self.m.pdl_pointer = r.ob as u16 & self.m.geometry.pdl_mask();
         } else if r.pdlcnt {
             self.m.pdl_pointer = if r.srcpdlpop {
-                self.m.pdl_pointer.wrapping_sub(1) & 0o1777
+                self.m.pdl_pointer.wrapping_sub(1) & self.m.geometry.pdl_mask()
             } else {
-                (self.m.pdl_pointer + 1) & 0o1777
+                (self.m.pdl_pointer + 1) & self.m.geometry.pdl_mask()
             };
         }
 
