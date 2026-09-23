@@ -356,25 +356,30 @@ impl Machine {
     /// the start of the next microcycle, `rtl` writes the two levels itself
     /// in its write phase, and `chip` has the registers.
     ///
-    /// **Unverified: a store with both `VMA<26>` and `VMA<25>` up.**  Which
-    /// level-1 entry addresses the level-2 write is not settled.  This
-    /// function takes the new one; `rtl` takes the old, computing both
-    /// addresses before either write; and `chip`, with level 1 as the
-    /// 93425As whose output is off while they are written, put the word at
-    /// level-2 entry `VMA<12:8>` alone, as though level 1 read zero --- a
-    /// third answer, and one that rests on how an undriven `VMAP` settles.
-    /// Microcode 323 writes the two levels in separate stores
+    /// **A store with both `VMA<26>` and `VMA<25>` up writes level 2 with
+    /// the level-1 bits of its address zero.**  The two write pulses are one,
+    /// `-WP1` through the 74S37 at VCTL2 1D07 (`-VM0WPA/B` and `-VM1WPA/B`).
+    /// Level 1 is 93425As, and "During writing, the output is held in the
+    /// high impedance state" (Fairchild, 1977 Bipolar Memory Data Book,
+    /// 93425/93425A, page 7-120, within 20 ns of `WE` falling); `-VMAP<4:0>`
+    /// has no other driver and no pull-up, so the TTL inputs of the 74S240s
+    /// at VMEM1 1D08 and VMEM2 1C10 read it high and their outputs, level
+    /// 2's top five address bits, go low.  The new level-1 entry never
+    /// reaches that address during the 40 ns pulse, and the old one is there
+    /// for less than the part's guaranteed write, 20 ns.  `chip`, which has
+    /// the RAMs and the buffers, gives the same, and
+    /// `chip_rtl_and_micro_write_both_map_levels_alike` holds the three.
+    /// **Unverified:** whether the old entry takes a partial write in its
+    /// first nanoseconds; a CADR running the two-instruction store would
+    /// settle it.  Microcode 323 writes the levels in separate stores
     /// (`LEVEL-1-MAP-MISS` in `uc-page-fault.lisp`), so the band never asks.
-    /// What would settle it is the board: the address inputs of the level-2
-    /// RAMs traced back through the drawings to a pull-up or a driver, or a
-    /// CADR run with the two-instruction store.
     pub fn write_map(&mut self, vma: u32, md: u32) {
         let l1_index = (md >> 13) as usize & 0o3777;
         if vma & (1 << 26) != 0 {
             self.l1_map[l1_index] = (vma >> 27) & 0o37;
         }
         if vma & (1 << 25) != 0 {
-            let l1_data = self.l1_map[l1_index] & 0o37;
+            let l1_data = if vma & (1 << 26) != 0 { 0 } else { self.l1_map[l1_index] & 0o37 };
             let l2_index = (l1_data << 5) | ((md >> 8) & 0o37);
             self.l2_map[l2_index as usize] = vma & 0o77777777;
         }
