@@ -1947,7 +1947,8 @@ fn chip_and_rtl_hold_the_same_memories() {
         vec![
             r.m.amem.to_vec(),
             r.m.mmem.to_vec(),
-            r.m.pdl.to_vec(),
+            // The CADR's 1,024: the rest is room for a QUUX's.
+            r.m.pdl[..1024].to_vec(),
             r.m.spc.iter().map(|&v| v & 0o1777777).collect(),
             r.m.dmem.iter().map(|&v| v & 0o377777).collect(),
             r.m.l1_map.iter().map(|&v| v & 0o37).collect(),
@@ -2055,7 +2056,8 @@ fn same_program_on(
     for (k, &v) in m.mmem.iter().enumerate() {
         mm.store(&mut c, k, v);
     }
-    for (k, &v) in m.pdl.iter().enumerate() {
+    // The CADR's 1,024, the board's RAM: the rest is room for a QUUX's.
+    for (k, &v) in m.pdl[..pdl.len()].iter().enumerate() {
         pdl.store(&mut c, k, v);
     }
     for (k, &v) in m.spc.iter().enumerate() {

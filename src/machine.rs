@@ -151,6 +151,10 @@ impl Geometry {
     }
 }
 
+/// The PDL buffer's words on the largest machine: a QUUX with a 14-bit
+/// pointer, 16K words.
+pub const PDL_WORDS: usize = 16 * 1024;
+
 /// The level-2 map's words on the largest machine, QUUX: 64 blocks of 32.
 pub const L2_MAP_WORDS: usize = 2048;
 
@@ -208,7 +212,10 @@ pub struct Machine {
     pub amem: [u32; 1024],
     pub mmem: [u32; 32],
     pub dmem: [u32; 2048],
-    pub pdl: [u32; 1024],
+    /// The PDL buffer: 1,024 words on the CADR, and room for the largest
+    /// QUUX's, [`PDL_WORDS`]; [`Geometry::pdl_bits`] says how much of it the
+    /// machine has.
+    pub pdl: [u32; PDL_WORDS],
     pub spc: [u32; 32],
 
     /// 5 bits.
@@ -333,7 +340,7 @@ impl Machine {
             amem: [0; 1024],
             mmem: [0; 32],
             dmem: [0; 2048],
-            pdl: [0; 1024],
+            pdl: [0; PDL_WORDS],
             spc: [0; 32],
             spcptr: 0,
             pdl_pointer: 0,
@@ -1134,11 +1141,12 @@ impl Machine {
         r.u32s_into(&mut self.pdl)?;
         r.u32s_into(&mut self.spc)?;
         // Pointers into the SPC stack and the PDL buffer: `SPCPTR<4:0>`,
-        // five bits for the 32 words of the 82S21s on page SPC, and ten
-        // bits for the 1K words of the PDL, which is all page PDLPTR keeps
-        // of a write to either register.  The engines index the arrays
-        // above with them, so a wider value is a corrupt checkpoint and is
-        // refused rather than loaded.
+        // five bits for the 32 words of the 82S21s on page SPC, and for the
+        // PDL as many bits as the machine's geometry gives it --- ten on the
+        // CADR, all page PDLPTR keeps of a write to either register --- which
+        // is checked once the geometry is read, below.  The engines index
+        // the arrays above with them, so a wider value is a corrupt
+        // checkpoint and is refused rather than loaded.
         let spcptr = r.u8()?;
         if spcptr > 0o37 {
             return Err(crate::checkpoint::bad(format!(
@@ -1147,13 +1155,6 @@ impl Machine {
         }
         let pdl_pointer = r.u16()?;
         let pdl_index = r.u16()?;
-        for (what, v) in [("PDL pointer", pdl_pointer), ("PDL index", pdl_index)] {
-            if v > 0o1777 {
-                return Err(crate::checkpoint::bad(format!(
-                    "{what} {v:o}, wider than the ten bits that address the PDL"
-                )));
-            }
-        }
         self.spcptr = spcptr;
         self.pdl_pointer = pdl_pointer;
         self.pdl_index = pdl_index;
@@ -1166,14 +1167,23 @@ impl Machine {
         self.dispatch_constant = r.u16()?;
         r.u32s_into(&mut self.l1_map)?;
         let (l1_bits, pdl_bits) = (r.u8()? as u32, r.u8()? as u32);
-        self.geometry = [Geometry::CADR, Geometry::QUUX]
-            .into_iter()
-            .find(|g| (g.l1_bits, g.pdl_bits) == (l1_bits, pdl_bits))
-            .ok_or_else(|| {
-                crate::checkpoint::bad(format!(
+        // The CADR, or a QUUX with a PDL buffer of 1K to 16K words.
+        self.geometry = match (l1_bits, pdl_bits) {
+            (5, 10) => Geometry::CADR,
+            (6, 10..=14) => Geometry { pdl_bits, ..Geometry::QUUX },
+            _ => {
+                return Err(crate::checkpoint::bad(format!(
                     "a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer is no machine's"
-                ))
-            })?;
+                )));
+            }
+        };
+        for (what, v) in [("PDL pointer", pdl_pointer), ("PDL index", pdl_index)] {
+            if v > self.geometry.pdl_mask() {
+                return Err(crate::checkpoint::bad(format!(
+                    "{what} {v:o}, wider than the {pdl_bits} bits that address the PDL"
+                )));
+            }
+        }
         r.u32s_into(&mut self.l2_map)?;
         let boards = r.u32()? as usize;
         if boards != self.memory_boards() {

@@ -174,3 +174,47 @@ fn quux_lists_its_sizes_in_its_feature_page() {
         assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "CADR, {name}: the read timed out");
     }
 }
+
+/// **QUUX's PDL buffer can be 4K or 16K words**, its pointer and index 12
+/// or 14 bits where the CADR's are 10: a push past word 1777 lands above
+/// it rather than wrapping to 0, the pointer reads back whole in source 2,
+/// and it wraps at the buffer's own size. The CADR, on the same program,
+/// wraps at 1,024.
+#[test]
+fn quux_s_pdl_buffer_is_4k_or_16k() {
+    use muir::isa::asm::{SETO, SETZ};
+    // A functional destination, with the harmless M word 31.
+    let fdest = |d: u64| (d << 19) | (0o37 << 14);
+    // Pointer to M 1, push ones, read the pointer and the word at it.
+    let prom = [
+        Insn::new(ALU | SETM | m_src(1) | fdest(0o14)),
+        Insn::new(ALU | SETO | fdest(0o11)),
+        filler(),
+        Insn::new(ALU | SETM | src(0o2) | a_dest(0o201)),
+        Insn::new(ALU | SETM | src(0o25) | a_dest(0o202)),
+        Insn::new(ALU | SETZ | a_dest(0o203)),
+    ];
+    for (bits, start, after) in [
+        (10u32, 0o1777u32, 0u32),
+        (12, 0o1777, 0o2000),
+        (12, 0o7777, 0),
+        (14, 0o7777, 0o10000),
+        (14, 0o37777, 0),
+    ] {
+        let geometry =
+            if bits == 10 { Geometry::CADR } else { Geometry { pdl_bits: bits, ..Geometry::QUUX } };
+        let set = |m: &mut Machine| {
+            m.geometry = geometry;
+            m.mmem[1] = start;
+        };
+        let (e, r) = both(&prom, &set, 30);
+        for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
+            assert_eq!(m.amem[0o201], after, "{bits} bits from {start:o}, {name}: the pointer");
+            assert_eq!(m.amem[0o202], !0, "{bits} bits from {start:o}, {name}: the word pushed");
+            assert_eq!(
+                m.pdl[after as usize], !0,
+                "{bits} bits from {start:o}, {name}: where it went"
+            );
+        }
+    }
+}
