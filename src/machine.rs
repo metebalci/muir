@@ -40,14 +40,17 @@ pub const MAIN_WORDS: usize = 2 * 1024 * 1024;
 /// Bits of the bus error status, which the console reads over SPY and the
 /// microcode tests. Three bits can be set here --- the two NXM bits and the
 /// Unibus map error; the rest of the register is parity errors, which
-/// cannot happen here. The wording is MIT's own, from the bus interface
-/// specification.
+/// cannot happen here. The wording and the bit values are MIT's own, the
+/// register's description at the head of System 100's `sys/cc/ldbg.lisp`.
 pub mod bus_error {
     /// "Xbus NXM Error. Set when an Xbus cycle times out for lack of
-    /// response."
+    /// response." --- `ldbg.lisp`, bit value 1.  `XB NXM ERROR` on the
+    /// 74276 at the interface's REQERR 0B02, set by `-NXM TIMEOUT` with `XBUS
+    /// REQUEST`, and read through the 8304 at 0B15.
     pub const XBUS_NXM: u16 = 0o1;
     /// "Unibus NXM Error. Set when a Unibus cycle times out for lack of
-    /// response."
+    /// response." --- `ldbg.lisp`, bit value 10.  `UB NXM ERROR` on the
+    /// same 74276, with `UNIBUS REQUEST`, and the same 8304.
     pub const UNIBUS_NXM: u16 = 0o10;
     /// "Unibus Map Error. Set when an attempt to perform an Xbus cycle
     /// through the Unibus map is refused because the map specifies invalid
@@ -290,7 +293,10 @@ impl Machine {
         if self.mode.prom_disable || pc >= PROM_WORDS { self.imem[pc] } else { self.prom[pc] }
     }
 
-    /// LC byte mode, `interrupt_control<29>`.
+    /// LC byte mode, `interrupt_control<29>`: the 25LS2519 at FLAG 3E08
+    /// takes `OB29` to `LC BYTE MODE` under `-DESTINTCTL`, beside `OB28` to
+    /// `PROG.UNIBUS.RESET`, `OB27` to `INT.ENABLE` and `OB26` to
+    /// `SEQUENCE.BREAK`.
     pub fn byte_mode(&self) -> bool {
         self.interrupt_control & (1 << 29) != 0
     }

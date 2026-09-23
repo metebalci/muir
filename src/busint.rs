@@ -188,7 +188,10 @@ pub const MFINISHD_NS: u64 = 30;
 /// What an interface with no cycle in its arbitration promises about its
 /// next debug request: `-MEMRQ` is sampled at an edge, the request
 /// synchronizer at the next, and the grant, `SACK`, mastery and `-UB
-/// MSYN` come after that --- 860 ns at the least on the board.  Two
+/// MSYN` come after that.  On the board, from `MEMRQ` rising to `-UB MSYN`,
+/// at the least 760 ns at extra slow, 535 at normal and 505 at fast
+/// (`the_interfaces_idle_promise_is_kept_on_the_board` in
+/// `tests/chip.rs`, which holds the promise under all three).  Two
 /// generator cycles at the slowest speed is the promise made, so that two
 /// machines each promising the other, cabled both ways, can both run:
 /// each may step while a cycle of slack fits under the other's promise.

@@ -214,6 +214,12 @@ fn the_engines_hold_the_same_lc_until_their_clocks_part() {
     const CLOCKS_PART: usize = 1_845_358;
 
     let mut a = booted(Micro::new, Micro::boot, &p);
+    // Where the clocks part turns on what `micro` charges a memory cycle,
+    // so this test names its own charge rather than taking the band's mean
+    // (`MEMORY_ACCESS_NS`, 520 ns): with 460 the two stay on the same side
+    // of a frame until `CLOCKS_PART`, after the counter first moves; with
+    // 520 they part at 1,842,835, before it does.
+    a.memory_cycle_ns = 460;
     let mut b = booted(Rtl::new, Rtl::boot, &p);
     let mut first_moved = 0;
     let mut steps = Vec::new();
@@ -355,6 +361,13 @@ fn micro_keeps_the_machines_periods() {
     eprintln!(
         "band, instructions {n0} to {n}: {s} ns stalled over {c} memory cycles, {} ns a cycle",
         s / c.max(1)
+    );
+    // `micro::MEMORY_ACCESS_NS` is that mean, rounded to ten nanoseconds.
+    let mean = s as f64 / c.max(1) as f64;
+    assert_eq!(
+        ((mean / 10.0).round() * 10.0) as u64,
+        muir::micro::MEMORY_ACCESS_NS,
+        "the band's mean wait is {mean:.1} ns a memory cycle"
     );
 }
 
