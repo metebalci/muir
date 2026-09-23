@@ -59,6 +59,44 @@ pub mod bus_error {
     pub const UB_MAP_ERROR: u16 = 0o40;
 }
 
+/// The widths of the map and the PDL buffer: what differs between the
+/// machines `--machine` chooses.
+///
+/// The CADR's are MIT's (`SIZE-OF-HARDWARE-LEVEL-1-MAP`, `-LEVEL-2-MAP` and
+/// `-PDL-BUFFER` in System 100's `sys/cold/qcom.lisp`; the netlist's RAMs,
+/// `chip_and_rtl_hold_the_same_memories` in `tests/chip.rs`): a level-1
+/// entry of five bits, the number of a block of 32 level-2 entries, and a
+/// PDL pointer and index of ten.  A level-2 block is 32 entries on every
+/// machine, `VMA<12:8>` choosing one in it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Geometry {
+    /// Bits in a level-1 map entry.
+    pub l1_bits: u32,
+    /// Bits in the PDL buffer's pointer and index.
+    pub pdl_bits: u32,
+}
+
+impl Geometry {
+    /// The CADR's.
+    pub const CADR: Geometry = Geometry { l1_bits: 5, pdl_bits: 10 };
+
+    /// A level-1 entry's bits.
+    pub fn l1_mask(self) -> u32 {
+        (1 << self.l1_bits) - 1
+    }
+
+    /// The level-2 entry a level-1 entry and an address select: the block
+    /// the entry names, and `VMA<12:8>` in it.
+    pub fn l2_index(self, l1: u32, addr: u32) -> usize {
+        (((l1 & self.l1_mask()) << 5) | ((addr >> 8) & 0o37)) as usize
+    }
+
+    /// The PDL pointer's and index's bits.
+    pub fn pdl_mask(self) -> u16 {
+        (1 << self.pdl_bits) - 1
+    }
+}
+
 /// Why a microcycle could not complete.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Halt {
@@ -135,6 +173,9 @@ pub struct Machine {
     /// `IR<41:32>` of the last DISPATCH, readable as functional source 0.
     pub dispatch_constant: u16,
 
+    /// The widths of the map and the PDL buffer, [`Geometry::CADR`] unless
+    /// the run chose another machine.
+    pub geometry: Geometry,
     /// 2048 five-bit entries, addressed by `VMA<23:13>`.
     pub l1_map: [u32; 2048],
     /// 1024 24-bit entries, addressed by the level-1 output and `VMA<12:8>`.
@@ -246,6 +287,7 @@ impl Machine {
             md: 0,
             interrupt_control: 0,
             dispatch_constant: 0,
+            geometry: Geometry::CADR,
             l1_map: [0; 2048],
             l2_map: [0; 1024],
             main: vec![0; boards << 16],
@@ -333,8 +375,8 @@ impl Machine {
         // Only VMA<23:0> reaches MAPI; `ir.bits` writes level 2 from the same
         // 24 bits.
         let vaddr = vaddr & 0x00ff_ffff;
-        let l1_data = self.l1_map[(vaddr >> 13) as usize & 0o3777] & 0o37;
-        let l2_data = self.l2_map[((l1_data << 5) | ((vaddr >> 8) & 0o37)) as usize];
+        let l1_data = self.l1_map[(vaddr >> 13) as usize & 0o3777] & self.geometry.l1_mask();
+        let l2_data = self.l2_map[self.geometry.l2_index(l1_data, vaddr)];
         // `VMO<13:0>` is the physical page: 14 bits, which is what the boot
         // PROM's own `SET-UP-FOUR-PAGES` needs to name page 0o37766.
         let page = l2_data & 0x3fff;
@@ -382,12 +424,11 @@ impl Machine {
     pub fn write_map(&mut self, vma: u32, md: u32) {
         let l1_index = (md >> 13) as usize & 0o3777;
         if vma & (1 << 26) != 0 {
-            self.l1_map[l1_index] = (vma >> 27) & 0o37;
+            self.l1_map[l1_index] = (vma >> 27) & self.geometry.l1_mask();
         }
         if vma & (1 << 25) != 0 {
-            let l1_data = if vma & (1 << 26) != 0 { 0 } else { self.l1_map[l1_index] & 0o37 };
-            let l2_index = (l1_data << 5) | ((md >> 8) & 0o37);
-            self.l2_map[l2_index as usize] = vma & 0o77777777;
+            let l1_data = if vma & (1 << 26) != 0 { 0 } else { self.l1_map[l1_index] };
+            self.l2_map[self.geometry.l2_index(l1_data, md)] = vma & 0o77777777;
         }
     }
 
@@ -934,6 +975,9 @@ impl Machine {
             md,
             interrupt_control,
             dispatch_constant,
+            // Always the CADR's until a run can choose another machine;
+            // saved from then.
+            geometry: _,
             l1_map,
             l2_map,
             main,

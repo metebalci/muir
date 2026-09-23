@@ -500,14 +500,15 @@ impl Micro {
             // SPC pointer and data
             0o1 => spc_word(&self.m),
             // Pdl Buffer Pointer, Pdl Buffer Index
-            0o2 => self.m.pdl_pointer as u32 & 0o1777,
-            0o3 => self.m.pdl_index as u32 & 0o1777,
+            0o2 => (self.m.pdl_pointer & self.m.geometry.pdl_mask()) as u32,
+            0o3 => (self.m.pdl_index & self.m.geometry.pdl_mask()) as u32,
             // Pdl Buffer Pop: by the pointer as 24, or by the index as 4,
             // MIT's `Illegal (Pdl)`, the pointer counting down either way
             // (`PDLCNT` on page PDLCTL).
             0o4 => {
                 let v = self.m.pdl[pdl_at(&self.m)];
-                self.m.pdl_pointer = self.m.pdl_pointer.wrapping_sub(1) & 0o1777;
+                self.m.pdl_pointer =
+                    self.m.pdl_pointer.wrapping_sub(1) & self.m.geometry.pdl_mask();
                 v
             }
             // Pdl Buffer (P) as 25, Pdl Buffer (X) as 5.
@@ -536,7 +537,7 @@ impl Micro {
                 let pfw = !((self.lvmo >> 22) & 1 == 0 && self.wrcyc);
                 ((!pfw as u32) << 31)
                     | ((!pfr as u32) << 30)
-                    | ((t.l1_data & 0o37) << 24)
+                    | ((t.l1_data & self.m.geometry.l1_mask()) << 24)
                     | (t.l2_data & 0o77777777)
             }
             // MD
@@ -670,12 +671,12 @@ impl Micro {
             // [`Micro::land_writes`].
             0o10 => self.pdl_write = Some((self.m.pdl_pointer, data)),
             0o11 => {
-                self.m.pdl_pointer = (self.m.pdl_pointer + 1) & 0o1777;
+                self.m.pdl_pointer = (self.m.pdl_pointer + 1) & self.m.geometry.pdl_mask();
                 self.pdl_write = Some((self.m.pdl_pointer, data));
             }
             0o12 => self.pdl_write = Some((self.m.pdl_index, data)),
-            0o13 => self.m.pdl_index = data as u16 & 0o1777,
-            0o14 => self.m.pdl_pointer = data as u16 & 0o1777,
+            0o13 => self.m.pdl_index = data as u16 & self.m.geometry.pdl_mask(),
+            0o14 => self.m.pdl_pointer = data as u16 & self.m.geometry.pdl_mask(),
             // SPC, push
             0o15 => self.push_spc(data),
             // IMOD<25:0> and IMOD<47:26>: the OA register merge into the
