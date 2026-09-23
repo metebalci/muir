@@ -556,8 +556,10 @@ impl Micro {
                 self.m.spcptr = self.m.spcptr.wrapping_sub(1) & 0o37;
                 v
             }
-            // QUUX's identity word, where it has one (`Geometry::QUUX`).
-            0o16 if self.m.geometry.id.is_some() => self.m.geometry.id.unwrap_or(!0),
+            // QUUX's MACHINE-ID, where it has one (`Geometry::QUUX`).
+            0o16 if self.m.geometry.machine_id.is_some() => {
+                self.m.geometry.machine_id.unwrap_or(!0)
+            }
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 for the
             // upper eight has those three outputs unconnected, so no part
             // drives the M bus and an undriven TTL bus reads high, as `chip`
