@@ -83,7 +83,8 @@ impl Geometry {
     /// The CADR's.
     pub const CADR: Geometry = Geometry { l1_bits: 5, pdl_bits: 10, machine_id: None };
 
-    /// QUUX's: a level-1 entry of six bits, 64 blocks of level 2 and so 63
+    /// QUUX's, revision 2: a PDL buffer of 16K words, its pointer and index
+    /// 14 bits; and a level-1 entry of six bits, 64 blocks of level 2 and so 63
     /// regions of 8K words mapped at once against the CADR's 31, the last
     /// block being the invalid one. The sixth bit is carried by the two the
     /// CADR leaves spare: `MAP(MD)<29>`, which the CADR drives low (VMEMDR
@@ -92,11 +93,12 @@ impl Geometry {
     ///
     /// It says so in functional source 16, its MACHINE-ID, which no microcode of MIT's
     /// reads and nothing on the CADR drives: the signature `0x5155` in bits
-    /// 31:16, the hardware revision in 15:4 --- 1, the six-bit map --- and
+    /// 31:16, the hardware revision in 15:4 --- 2: the six-bit map, then the
+    /// 16K PDL buffer --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry =
-        Geometry { l1_bits: 6, pdl_bits: 10, machine_id: Some((0x5155 << 16) | (1 << 4) | 4) };
+        Geometry { l1_bits: 6, pdl_bits: 14, machine_id: Some((0x5155 << 16) | (2 << 4) | 4) };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
     /// (`mit/cadr/ir.bits`, "VMA<26>=1 writes the level 1 map from

@@ -58,7 +58,7 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 1, the six-bit map | |
+| 15:4 | hardware revision: 2 --- 1 the six-bit map, 2 the 16K PDL buffer | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
@@ -79,6 +79,17 @@ the parts usually do, not what a datasheet promises. The 16-bit signature is
 what makes that safe: a floating bus would pass for QUUX once in 65,536 at
 worst. A CADR reading source 16 would settle it.
 
+## The PDL buffer
+
+**QUUX's PDL buffer is 16K words**, its pointer and index 14 bits where the
+CADR's are 10 (revision 2). They read back whole in functional sources 2 and
+3, whose upper bits read 0 on the CADR. `quux_s_pdl_buffer_is_4k_or_16k` in
+`tests/quux.rs` holds a push past word 1777 landing above it and the wrap at
+the buffer's own size. It needs QUUX's boot PROM (below): MIT's stops copying
+A memory in on the index wrapping at 2000 words. MIT's microcode 323 does not
+run on it (`microcode_323_does_not_run_on_quux_revision_2`); microcode for
+QUUX has to know the size.
+
 ## The feature page
 
 **QUUX lists its sizes in one page of Xbus I/O space**, physical `17377000`
@@ -86,12 +97,12 @@ to `17377377` (page 36776), just below the page the display's control
 registers and the disk controller share. It is read-only and read like any
 device register, through the map:
 
-| Word | QUUX, revision 1 |
+| Word | QUUX, revision 2 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
 | 2 | level-2 map: 2,048 entries |
-| 3 | PDL buffer: 1,024 words |
+| 3 | PDL buffer: 16,384 words |
 | 4 | control store: 16,384 words |
 | 5 | A memory: 1,024 words |
 | 6 | dispatch memory: 2,048 words |

@@ -159,35 +159,24 @@ fn system_1001_runs_on_a_rebuilt_microcode() {
     }
 }
 
-/// **System 1001 on microcode 323 runs on QUUX as on the CADR.** The
-/// microcode knows only the CADR's map and never uses QUUX's extra blocks:
-/// the band reaches its listener on both engines, and no level-1 entry the
-/// microcode wrote names a block above 37.
+/// **MIT's microcode 323 does not run on QUUX revision 2.** Revision 1,
+/// the six-bit map alone, ran it as a CADR; revision 2's 16K PDL buffer does
+/// not, even booted from QUUX's own PROM: the band never reaches its
+/// listener. Microcode for QUUX has to know the buffer's size. **Unverified:**
+/// why --- the likely cause is 323's PDL arithmetic masked to ten bits,
+/// which takes the buffer as a ring of 1,024 words.
 #[test]
-fn system_1001_runs_on_quux_as_on_the_cadr() {
-    for engine in ["micro", "rtl"] {
-        let Some((_dir, pack, root)) = release_1001(&format!("system-1001-quux-{engine}")) else {
-            return;
-        };
-        let mut m = machine_with_pack(&pack);
-        m.geometry = muir::machine::Geometry::QUUX;
-        let (ran, above) = match engine {
-            "micro" => {
-                let mut e = Micro::new(m);
-                e.boot();
-                let ran = boot_to_the_prompt(&mut e, CHAOS_1001, root);
-                (ran, e.machine().l1_map.iter().filter(|&&x| x > 0o37).count())
-            }
-            _ => {
-                let mut e = Rtl::new(m);
-                e.boot();
-                let ran = boot_to_the_prompt(&mut e, CHAOS_1001, root);
-                (ran, e.machine().l1_map.iter().filter(|&&x| x > 0o37).count())
-            }
-        };
-        eprintln!("{engine}: listener on QUUX after {ran} microcycles");
-        assert_eq!(above, 0, "{engine}: level-1 entries above block 37");
-    }
+fn microcode_323_does_not_run_on_quux_revision_2() {
+    let Some((_dir, pack, root)) = release_1001("system-1001-323-on-quux-2") else { return };
+    let mut m = machine_with_pack(&pack);
+    m.load_prom(&muir::prom::quux_boot_prom());
+    m.geometry = muir::machine::Geometry::QUUX;
+    let mut e = Micro::new(m);
+    e.boot();
+    let reached = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 150_000_000)
+    }));
+    assert!(reached.is_err(), "323 reached the listener on QUUX revision 2");
 }
 
 /// A copy of the release's pack with the microcode in `ucode` loaded into
@@ -208,14 +197,15 @@ fn a_mem(ucode: &std::path::Path, name: &str) -> usize {
     syms.address(muir::sym::Space::AMem, name).unwrap_or_else(|| panic!("no {name}")) as usize
 }
 
-/// **System 1001 runs on QUUX's own microcode, 1000.** muir-sys's first
-/// microcode for QUUX (`ref/ucode-1000`): the six-bit level-1 entry, 63
-/// level-2 blocks, and `A-PROCESSOR-TYPE-CODE` 4. On QUUX the band reaches its
+/// **System 1001 runs on QUUX's own microcode, 1000.** muir-sys's build of
+/// it for QUUX revision 2 (`ref/ucode-1000-pdl16k`): the six-bit level-1
+/// entry, 63 level-2 blocks, the 16K PDL buffer, and `A-PROCESSOR-TYPE-CODE`
+/// 4. On QUUX the band reaches its
 /// listener on both engines with version 1000 and type 4 in A memory, on the
 /// band as released: no rebuild.
 #[test]
 fn system_1001_runs_on_quux_microcode_1000() {
-    let Some(ucode) = rebuilt_microcode("ucode-1000") else { return };
+    let Some(ucode) = rebuilt_microcode("ucode-1000-pdl16k") else { return };
     let type_code = a_mem(&ucode, "A-PROCESSOR-TYPE-CODE");
     for engine in ["micro", "rtl"] {
         let Some((_dir, pack, root)) = release_1001(&format!("system-1001-1000-{engine}")) else {
@@ -223,6 +213,7 @@ fn system_1001_runs_on_quux_microcode_1000() {
         };
         with_microcode(&pack, &root, &ucode);
         let mut m = machine_with_pack(&pack);
+        m.load_prom(&muir::prom::quux_boot_prom());
         m.geometry = muir::machine::Geometry::QUUX;
         let (ran, version, code) = match engine {
             "micro" => {
