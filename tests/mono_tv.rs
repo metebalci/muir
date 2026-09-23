@@ -100,17 +100,27 @@ fn a_pixel_is_where_the_cadr_would_put_it_at_60_words_a_line() {
     assert!(!Frame::of(&m.tv).shows_white(x, y), "and black with it on");
 }
 
-/// **The mode register keeps black-on-white alone; the other registers read
-/// 0; and nothing interrupts**, the interrupt enable written or not, over
-/// a second of the machine's time.
+/// **The mode register keeps black-on-white alone, register 4 answers and
+/// takes no writes yet, and nothing interrupts**, the interrupt enable
+/// written or not, over a second of the machine's time. Register 4 is the
+/// color map's write, kept for a color display to come; registers 1 to 3
+/// and 5 to 7 --- the CADR's sync program and three that did nothing --- are
+/// not there, and an access times out with the Xbus NXM bit.
 #[test]
 fn it_keeps_black_on_white_and_never_interrupts() {
     let mut m = quux_with_mono_tv();
     m.bus_write(tv::CONTROL, 0o377);
     assert_eq!(m.bus_read(tv::CONTROL), tv::mode::BOW);
-    for r in 1..8 {
-        m.bus_write(tv::CONTROL + r, 0o177777);
-        assert_eq!(m.bus_read(tv::CONTROL + r), 0, "register {r}");
+    m.bus_write(tv::CONTROL + 4, 0o177777);
+    assert_eq!(m.bus_read(tv::CONTROL + 4), 0, "register 4");
+    assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0, "registers 0 and 4 answer");
+    for r in [1, 2, 3, 5, 6, 7] {
+        m.bus_error = 0;
+        m.bus_read(tv::CONTROL + r);
+        assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "register {r} read");
+        m.bus_error = 0;
+        m.bus_write(tv::CONTROL + r, 1);
+        assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "register {r} written");
     }
     for ms in 0..1000u64 {
         m.ns = ms * 1_000_000;
@@ -146,10 +156,14 @@ fn the_bus_interface_answers_the_whole_buffer() {
     let m = quux_with_mono_tv();
     let words = m.tv.buffer_words();
     assert_eq!(words, tv::MONO_TV_WORDS);
-    assert_eq!(decode_for(last, 1 << 20, false, words), Responder::Device);
-    assert_eq!(decode_for(last + 1, 1 << 20, false, words), Responder::NoXbus);
-    assert_eq!(decode_for(last, 1 << 20, false, tv::BUFFER_WORDS), Responder::NoXbus);
-    assert_eq!(decode_for(tv::CONTROL, 1 << 20, false, words), Responder::Device);
+    let all = 0xff;
+    assert_eq!(decode_for(last, 1 << 20, false, words, all), Responder::Device);
+    assert_eq!(decode_for(last + 1, 1 << 20, false, words, all), Responder::NoXbus);
+    assert_eq!(decode_for(last, 1 << 20, false, tv::BUFFER_WORDS, all), Responder::NoXbus);
+    let regs = m.tv.control_registers();
+    assert_eq!(decode_for(tv::CONTROL, 1 << 20, false, words, regs), Responder::Device);
+    assert_eq!(decode_for(tv::CONTROL + 4, 1 << 20, false, words, regs), Responder::Device);
+    assert_eq!(decode_for(tv::CONTROL + 1, 1 << 20, false, words, regs), Responder::NoXbus);
 }
 
 /// **MONO TV can be another size, `--mono-tv-size`**, and the feature page,
