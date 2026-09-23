@@ -16,7 +16,7 @@ Ubuntu, `gcc` on Fedora --- and only when a netlist has to be made again.
 | Script | Makes |
 |---|---|
 | `fetch-system-100.sh` | `vendor/`: the System 100 release --- the target --- and a directory for muir to serve it from. Nothing in `vendor/` is committed |
-| `fetch-system-1001.sh` | `vendor/system-1001/` and `vendor/run/lmz-1001-pack.img`: LMZ System 1001, the release that continues System 100, from the `lmz-1001` release of metebalci/lmz, every file checked against the sums its notes publish |
+| `fetch-system-1001.sh` | `vendor/system-1001/` and `vendor/run/release-1001-pack.img`: System 1001, the release that continues System 100, from the `release-1001` release of metebalci/muir-sys, every file checked against the sums its notes publish |
 | `cadr-netlist.sh`, `busint-netlist.sh`, `cadrm-netlist.sh`, `cadrio-netlist.sh`, `cadrdc-netlist.sh`, `simpletv-netlist.sh`, `lispmtv-netlist.sh`, `dm-netlist.sh` | `data/<BOARD>.netlist`, one board each: MIT's drawings read with `soap4`, then reconciled with MIT's wire list by `examples/reconcile.rs` |
 | `check-netlists.sh` | nothing. It runs all eight of those and says whether each committed netlist is still what its script makes, putting the committed files back afterwards. CI runs it on every push |
 | `newdsk-proms.sh` | `data/newdsk-d0?.prom`, the disk controller's control store, assembled from `mit/cadrdc/newdsk.31` by `examples/dcmicro.rs` |
