@@ -36,6 +36,35 @@ back in `MAP(MD)<29:24>`, and a translation through a block above 37, on
 `micro` and `rtl`; the same store on the CADR keeps five bits and reads bit
 29 as 0.
 
+## How software tells the two apart
+
+**QUUX answers who it is in functional source 16**, one microinstruction,
+no bus cycle:
+
+| Bits | QUUX | CADR |
+|---|---|---|
+| 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
+| 15:4 | hardware revision: 1, the six-bit map | |
+| 3:0 | processor type: 4 | |
+
+Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
+decodes it has that output unconnected, and neither microcode 323 nor
+microcode 1000 reads it. `IR<30>` is in no source decode, so source 36 is the
+same. Source 17 is left open on both machines. A machine is QUUX only if bits
+31:16 hold the signature; the revision says which QUUX, each one containing
+the last.
+
+`tests/quux.rs` holds the word on both engines and the CADR's all ones;
+`the_unassigned_sources_read_all_ones_on_the_board` in `tests/output_bus.rs`
+holds the CADR's on the netlist.
+
+**Unverified:** that a real CADR reads all ones there. The M bus has only
+tri-state drivers and no pull-ups, so for an unassigned source it floats, and
+TTL reading an open input as high is what the netlist model does and what
+the parts usually do, not what a datasheet promises. The 16-bit signature is
+what makes that safe: a floating bus would pass for QUUX once in 65,536 at
+worst. A CADR reading source 16 would settle it.
+
 ## Its microcode
 
 **Microcode 1000 is QUUX's**, muir-sys's first change to MIT's 323, made from

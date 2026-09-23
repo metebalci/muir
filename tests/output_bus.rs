@@ -102,3 +102,19 @@ fn output_bus_select_0_is_the_network_on_the_board() {
     assert_ne!(want, (!0u32).rotate_left(rotate), "the case tells the two apart");
     assert_eq!(on_chip(&program(m_ones, a_ones, rotate as u64, length as u64)), want);
 }
+
+/// **On the board, the functional sources MIT leaves unassigned read all
+/// ones**: nothing drives the M bus for them. QUUX's identity word is in
+/// source 16 (`tests/quux.rs`), and a CADR, which never drives it, can
+/// never answer with QUUX's signature.
+#[test]
+fn the_unassigned_sources_read_all_ones_on_the_board() {
+    use muir::isa::asm::{SETM, src};
+    for s in [0o15u64, 0o16, 0o17, 0o36] {
+        let mut prom =
+            vec![Insn::new(ALU | SETM | src(s) | VMA), Insn::new(JUMP | 1 << 12 | ALWAYS)];
+        prom.resize(512, filler());
+        let p = Program { name: "unassigned source", prom, top: 1, cycles_per_iteration: 1 };
+        assert_eq!(on_chip(&p), !0, "source {s:o}");
+    }
+}
