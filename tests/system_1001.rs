@@ -198,14 +198,14 @@ fn a_mem(ucode: &std::path::Path, name: &str) -> usize {
 }
 
 /// **System 1001 runs on QUUX's own microcode, 1000.** muir-sys's QUUX-only
-/// build of it (`ref/ucode-1000-quux2`, from muir-sys `0e73ff5`): the
-/// six-bit level-1 entry, 63 level-2 blocks, the 16K PDL buffer, and
-/// `A-PROCESSOR-TYPE-CODE` 4. On QUUX the band reaches its listener on both
+/// build of it (`ref/ucode-1000-quux3`, from muir-sys `070291b`): the
+/// six-bit level-1 entry, 63 level-2 blocks, the 16K PDL buffer, `MUL` and
+/// `DIV` in `MPY`, `DIV` and `BIDIV`, and `A-PROCESSOR-TYPE-CODE` 4. On QUUX the band reaches its listener on both
 /// engines with version 1000 and type 4 in A memory, on the band as
 /// released: no rebuild.
 #[test]
 fn system_1001_runs_on_quux_microcode_1000() {
-    let Some(ucode) = rebuilt_microcode("ucode-1000-quux2") else { return };
+    let Some(ucode) = rebuilt_microcode("ucode-1000-quux3") else { return };
     let type_code = a_mem(&ucode, "A-PROCESSOR-TYPE-CODE");
     for engine in ["micro", "rtl"] {
         let Some((_dir, pack, root)) = release_1001(&format!("system-1001-1000-{engine}")) else {
@@ -235,28 +235,28 @@ fn system_1001_runs_on_quux_microcode_1000() {
 }
 
 /// **QUUX's microcode 1000 stops on a CADR.** It reads the MACHINE-ID at
-/// boot and, without QUUX's signature and a revision of 2 or more, halts at
-/// `MACHINE-NOT-QUUX-2`, I-memory 26751, so that the PC shows 26752. On a CADR
-/// booted by QUUX's PROM it gets there and stays, on both engines.
+/// boot and, without QUUX's signature and a revision of 3 or more, halts at
+/// `MACHINE-NOT-QUUX-3`, so that the PC shows 26616. On a CADR booted by
+/// QUUX's PROM it gets there and stays, on both engines.
 #[test]
 fn quux_s_microcode_1000_halts_on_a_cadr() {
-    let Some(ucode) = rebuilt_microcode("ucode-1000-quux2") else { return };
-    // The PROM passes through PC 26752 while it writes the control store
+    let Some(ucode) = rebuilt_microcode("ucode-1000-quux3") else { return };
+    // The PROM passes through PC 26616 while it writes the control store
     // there, so it is the PC staying there that is the halt.
     fn stops<E: Engine>(mut e: E, name: &str) {
         e.boot();
         let mut still = 0;
         for _ in 0..50_000_000u64 {
             e.step().unwrap();
-            still = if e.pc() == 0o26752 { still + 1 } else { 0 };
+            still = if e.pc() == 0o26616 { still + 1 } else { 0 };
             if still == 10_000 {
                 return;
             }
         }
-        panic!("{name}: never halted at MACHINE-NOT-QUUX-2; PC {:o}", e.pc());
+        panic!("{name}: never halted at MACHINE-NOT-QUUX-3; PC {:o}", e.pc());
     }
     for engine in ["micro", "rtl"] {
-        let Some((_d, pack, root)) = release_1001(&format!("system-1001-quux2-on-cadr-{engine}"))
+        let Some((_d, pack, root)) = release_1001(&format!("system-1001-quux3-on-cadr-{engine}"))
         else {
             return;
         };
