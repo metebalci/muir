@@ -65,6 +65,32 @@ the parts usually do, not what a datasheet promises. The 16-bit signature is
 what makes that safe: a floating bus would pass for QUUX once in 65,536 at
 worst. A CADR reading source 16 would settle it.
 
+## The feature page
+
+**QUUX lists its sizes in one page of Xbus I/O space**, physical `17377000`
+to `17377377` (page 36776), just below the page the display's control
+registers and the disk controller share. It is read-only and read like any
+device register, through the map:
+
+| Word | QUUX, revision 1 |
+|---|---|
+| 0 | the identity word, as source 16 gives it |
+| 1 | level-1 entry: 6 bits |
+| 2 | level-2 map: 2,048 entries |
+| 3 | PDL buffer: 1,024 words |
+| 4 | control store: 16,384 words |
+| 5 | A memory: 1,024 words |
+| 6 | dispatch memory: 2,048 words |
+| 7-377 | 0 |
+
+Nothing answers at that page on the CADR --- in muir's model of it the
+display answers pages 36000-36177, 36400-36577 and 36777, the disk controller
+36777, and nothing else in Xbus I/O space --- so a read there times out and
+sets the Xbus NXM bit, as a read of any empty I/O address does. Software
+reads source 16 first and the page only on QUUX, and so never waits for the
+timeout. `quux_lists_its_sizes_in_its_feature_page` in `tests/quux.rs` holds
+the page on QUUX and the timeout on the CADR, on both engines.
+
 ## Its microcode
 
 **Microcode 1000 is QUUX's**, muir-sys's first change to MIT's 323, made from
