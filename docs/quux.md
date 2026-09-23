@@ -93,22 +93,23 @@ the page on QUUX and the timeout on the CADR, on both engines.
 
 ## Its microcode
 
-**Microcode 1000 is QUUX's**, muir-sys's first change to MIT's 323, made from
-System 1001's sources. It reads the six-bit entry at `MAP(MD)<29:24>`, writes
-it in two deposits, `VMA<31:27>` and `VMA<24>`, keeps block 77 as the invalid
-one with the reuse pointer wrapping before it, and moves the reverse
-first-level map to system communication area words 640 to 737. It sets
-`A-PROCESSOR-TYPE-CODE` to **4**, QUUX's (1 is the CADR's; 2 and 3 were the
-Lambda's and the Explorer's, which System 1001 no longer carries). At boot it
-writes a level-1 entry of 77 and reads it back, and on a machine where the
-sixth bit is not there it stops at `QUUX-MAP-MISSING`.
+**Microcode 1000 runs on both machines**, muir-sys's first change to MIT's
+323, made from System 1001's sources. At boot it reads functional source 16.
+Without the signature it is on a CADR: processor type 1, five-bit level-1
+entries, invalid block 37. With it, the type is the word's bits 3:0, 4, and
+from revision 1 on it reads the six-bit entry at `MAP(MD)<29:24>`, writes it
+in two deposits, `VMA<31:27>` and `VMA<24>`, and keeps block 77 as the
+invalid one. On both it keeps the reverse first-level map in system
+communication area words 640 to 737 and the swap-out CCWs at 440 to 457. It
+checks at boot that block 0's level-1 entry reads back as the invalid entry
+the identity word promised, and stops at `MAP-WIDTH-MISMATCH` if it does not.
 
 `tests/system_1001.rs` holds it, with the microcode's files in the gitignored
 `ref/ucode-1000`: System 1001, the band as released, reaches its listener on
-QUUX on both engines with version 1000 and type 4 in A memory; on a CADR the
-microcode stops at `QUUX-MAP-MISSING` and stays there. The band reads the
-error table for the running version at boot, `SYS: UBIN; UCADR TBL 1000`, so
-the served `sys/ubin/ucadr.tbl` must be microcode 1000's.
+QUUX on both engines with version 1000 and type 4, and on the CADR with
+version 1000 and type 1 and no level-1 entry above block 37. The band reads
+the error table for the running version at boot, `SYS: UBIN; UCADR TBL
+1000`, so the served `sys/ubin/ucadr.tbl` must be microcode 1000's.
 
 ## What the microcode had to do differently
 
