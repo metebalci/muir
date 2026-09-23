@@ -422,6 +422,8 @@ pub const REFRESH_TRIGGER_STAGES: u64 = 1;
 /// From the oscillator edge after a reset's release to the end of the
 /// refresh cycle the reset had stuck, in stages: `-T40` up at that edge
 /// and `-T440` ten stages on. See [`MemoryBoard::unibus_reset`].
+/// `a_refresh_stuck_by_a_reset_ends_where_the_model_says` in
+/// `tests/cadrm_netlist.rs` holds it to the netlist board at four phases.
 pub const MEMORY_RELEASE_STAGES: u64 = 10;
 
 /// The edge that takes the refresh cycle the boards' one-shot first runs

@@ -320,7 +320,7 @@ is the 74S112 at LMTURN `0D14` toggling on every terminal count of the
 the cable is busy. The divider reloads 14 from its own terminal count on
 `FCLK/2^`, giving a count every 500 ns, and the toggle halves that: **one
 slot is 1,000 ns and a whole round is 256 of them.** A frame ready goes
-470 ns after the count that carries the low byte from 0 to 255, the 74S74 at
+468 ns after the count that carries the low byte from 0 to 255, the 74S74 at
 LMMODU `0B15` clocking `TSTART` from `TSREMPTY AND CW AND -CBLBSY`.
 
 **The board takes the first turn of the round after its own frame, where
@@ -343,7 +343,7 @@ later. **The board is followed, and this is a discrepancy that the board
 wins.**
 
 What keeps the memo's picture true on a real machine is that no host can
-reload the transmitter inside one microsecond. Transmit Done comes 250 ns
+reload the transmitter inside one microsecond. Transmit Done comes 500 ns
 *before* the frame's nominal end, and from there the software must write the
 packet back a word at a time down the Unibus and read `START`, and the
 hardware must then shift the source and check words in behind it. So the
@@ -495,10 +495,10 @@ measured on the netlist board, and each says which.
 | `TURN_TC_NS` | 500 | the divider's terminal count | the 74LS161 at LMTURN `0A16` reloading 14 |
 | `TURN_FIRST_TC_NS` | 4250 | power-on to the first terminal count | netlist board |
 | `TURN_LOAD_NS` | 8250 | frame's first edge to `-LOAD.MY.TURN` | netlist board: `SRC STB`, 33 bit cells in |
-| `TURN_START_NS` | 470 | the count that raises bit 7 to the frame's first edge | netlist board |
-| `CBLBSY_OFF_NS` | 620 | frame's nominal end to `-CBLBSY` lifting | netlist board; `RDONE` rises with it |
-| `TDONE_BEFORE_END_NS` | 250 | how far before the nominal end Transmit Done comes | netlist board |
-| `TSR_READY_NS` | 6350 | the read of `START` to `TSREMPTY` | netlist board, one to thirty words alike |
+| `TURN_START_NS` | 468 | the count that raises bit 7 to the frame's first edge | netlist board |
+| `CBLBSY_OFF_NS` | 375 | frame's nominal end --- its first edge plus a cell for each of its bits, the appended zero included --- to `-CBLBSY` lifting | netlist board; `RDONE` rises with it |
+| `TDONE_BEFORE_END_NS` | 500 | how far before that nominal end Transmit Done comes | netlist board |
+| `TSR_READY_NS` | 4150 | the read of `START` answered, `-SSYN`, to `TSREMPTY` | netlist board, at every phase of its clocks; the answer itself takes 350 to 2,100 ns |
 | `TDONE_AFTER_ABORT_NS` | 125 | `ABORT` setting to Transmit Done | netlist board |
 
 ## What each engine has
