@@ -2,7 +2,10 @@
 
 Small, committed fixtures, every one of them **derived** from MIT's own
 files in `mit/`. Nothing here is MIT's own; `mit/README.md` is the inventory
-of those. How far each file here is checked differs:
+of those. Most are made here, by a script in `tools/`; QUUX's own hardware
+images are the exception, built by muir-sys from MIT's sources and each held
+by a test to the MIT original it changes. How far each file here is checked
+differs:
 
 - **the eight netlists** are extracted by a script in `tools/`, and
   `tools/check-netlists.sh` says each is still what its script makes.  Six
