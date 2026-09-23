@@ -1242,7 +1242,14 @@ impl Rtl {
             // VMA25` at VCTL2 1C15, and both pulses are `-WP1`, so the two
             // levels are written in the same write phase.  Address and data
             // are the live ones: nothing latches them.
+            //
+            // Written together, level 1's 93425As hold their outputs in high
+            // impedance for the pulse and `-VMAP` floats high: level 2 is
+            // then addressed with its top five bits zero
+            // (`Machine::write_map` has the whole account).
             let (adr0, adr1) = self.map_address();
+            let both = bit(self.m.vma as u64, 26) && bit(self.m.vma as u64, 25);
+            let adr1 = if both { adr1 & 0o37 } else { adr1 };
             if bit(self.m.vma as u64, 26) {
                 self.m.l1_map[adr0 as usize] = (self.m.vma >> 27) & 0o37;
             }

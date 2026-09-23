@@ -5424,3 +5424,58 @@ fn chip_and_rtl_start_a_stepped_read_while_halted_alike() {
     assert_eq!(mm.word(&c, 4), word, "the board: the instruction after the read has the word");
     assert_eq!(r.machine().mmem[4], word, "rtl");
 }
+
+/// **A store that writes both map levels writes level 2 at `{0, MD<12:8>}`,
+/// on the board, `rtl` and `micro`.** The two write pulses are one:
+/// `-VM0WPA/B` is `NAND(MAPWR0D, WP1A)` and `-VM1WPA/B` `NAND(MAPWR1D,
+/// WP1B)` at VCTL2 1D07, both off `-WP1`. The level-1 RAMs are 93425As,
+/// whose output "is held in the high impedance state" while written
+/// (Fairchild's 1977 Bipolar Memory Data Book, 93425/93425A, 7-120), and
+/// `-VMAP<4:0>` has no other driver and no pull-up: the TTL inputs of the
+/// 74S240s at VMEM1 1D08 and VMEM2 1C10 read it high, and their outputs, the
+/// level-2 RAMs' top five address bits, go low. The new entry never reaches
+/// that address before the pulse ends, and the old one is there only for
+/// the first 15 to 20 ns of a 40 ns pulse, less than the 93425A's
+/// guaranteed write, 20 ns. So the dependable write is at level-1 bits
+/// zero. Level 1 holds entry 1 at the store's index and gets 2.
+#[test]
+fn chip_rtl_and_micro_write_both_map_levels_alike() {
+    use microcode::*;
+    use muir::engine::Engine;
+    use muir::isa::Insn;
+    let n = netlist::parse(NETLIST).unwrap();
+    let write_map: u64 = (0o23 << 19) | (0o37 << 14);
+    let mut m = muir::machine::Machine::new();
+    let mut prom = vec![filler(); 512];
+    prom[1] = Insn::new(ALU | SETM | m_src(1) | MD);
+    prom[2] = Insn::new(ALU | SETM | m_src(2) | write_map);
+    m.load_prom(&prom);
+    // Level-1 index 100, level-2 low bits 0.
+    m.mmem[1] = 0o100 << 13;
+    // VMA<31:27> = 2, both write enables, and the level-2 word.
+    m.mmem[2] = (2 << 27) | (1 << 26) | (1 << 25) | 0o12345;
+    m.l1_map[0o100] = 1;
+    let (mut c, mut clk, mut far, mut r) = same_program(&n, &m);
+    let clk0 = cpu_clock(&n);
+    for _ in 0..30 {
+        generator_cycle(&mut c, &mut far, &mut clk, clk0);
+        r.step().unwrap();
+    }
+    let mut e = muir::micro::Micro::new(m.clone());
+    e.boot();
+    for _ in 0..30 {
+        e.step().unwrap();
+    }
+    let l1 = Ram::new(&c, &n, &MEMS[5]);
+    let l2 = Ram::new(&c, &n, &MEMS[6]);
+    let board: Vec<(usize, u32)> =
+        (0..l2.len()).map(|k| (k, l2.word(&c, k))).filter(|&(_, w)| w != 0).collect();
+    assert_eq!(l1.word(&c, 0o100), 2, "level 1 on the board");
+    assert_eq!(board, vec![(0, 0o12345)], "level 2 on the board");
+    for (name, mm) in [("rtl", r.machine()), ("micro", e.machine())] {
+        let got: Vec<(usize, u32)> =
+            mm.l2_map.iter().enumerate().filter(|&(_, &w)| w != 0).map(|(k, &w)| (k, w)).collect();
+        assert_eq!(mm.l1_map[0o100], 2, "level 1 on {name}");
+        assert_eq!(got, board, "level 2 on {name}");
+    }
+}
