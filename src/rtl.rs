@@ -409,6 +409,8 @@ struct Read {
     destmdr: bool,
     destlc: bool,
     destintctl: bool,
+    desttickctl: bool,
+    desttickper: bool,
     destimod0: bool,
     destimod1: bool,
     destpdlp: bool,
@@ -580,6 +582,8 @@ impl Rtl {
     /// the interface has a reset of its own and this is not it.
     pub fn reset(&mut self) {
         self.m.reset_console_registers();
+        // QUUX's tick is the processor's, and `-RESET` turns it off.
+        self.m.tick = crate::machine::Tick::new();
         // CONTRL 3D26
         self.inop = false;
         self.spushd = false;
@@ -829,6 +833,10 @@ impl Rtl {
         let low_group = destm && !bit(ir, 23) && !bit(ir, 22);
         let destlc = low_group && d19 == 1;
         let destintctl = low_group && d19 == 2;
+        // QUUX's tick, destinations 3 and 4 (`machine::Tick`); on the CADR
+        // the low group decodes neither, and only M is written.
+        let desttickctl = low_group && d19 == 3 && self.m.geometry.tick;
+        let desttickper = low_group && d19 == 4 && self.m.geometry.tick;
         let mid_group = destm && !bit(ir, 23) && bit(ir, 22);
         let destpdltop = mid_group && d19 == 0;
         let destpdl_p = mid_group && d19 == 1;
@@ -936,6 +944,9 @@ impl Rtl {
         } else if let (true, 6, Some(id)) = (group_b, src, self.m.geometry.machine_id) {
             // QUUX's MACHINE-ID in source 16 (`Geometry::QUUX`).
             id
+        } else if group_b && src == 7 && self.m.geometry.tick {
+            // QUUX's tick in source 17 (`machine::Tick`).
+            self.m.tick.status(self.ns)
         } else {
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 that decodes
             // `IR<28:26>` under `IR<31>` and `IR<29>` has those three outputs
@@ -1188,6 +1199,8 @@ impl Rtl {
             destmdr,
             destlc,
             destintctl,
+            desttickctl,
+            desttickper,
             destimod0,
             destimod1,
             destpdlp,
@@ -1908,6 +1921,12 @@ impl Rtl {
             self.lc = (self.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
         }
         // page FLAG
+        if r.desttickctl {
+            self.m.tick.control(self.ns, r.ob);
+        }
+        if r.desttickper {
+            self.m.tick.period(self.ns, r.ob);
+        }
         if r.destintctl {
             self.lc_byte_mode = bit(r.ob as u64, 29);
             let reset = bit(r.ob as u64, 28);

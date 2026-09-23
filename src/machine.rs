@@ -80,14 +80,18 @@ pub struct Geometry {
     /// Whether ALU functions 42 and 43 are QUUX's one-instruction multiply
     /// and divide ([`crate::muldiv`]) rather than the CADR's.
     pub muldiv: bool,
+    /// Whether the processor has QUUX's tick ([`Tick`]): functional
+    /// destinations 3 and 4, source 17.
+    pub tick: bool,
 }
 
 impl Geometry {
     /// The CADR's.
     pub const CADR: Geometry =
-        Geometry { l1_bits: 5, pdl_bits: 10, machine_id: None, muldiv: false };
+        Geometry { l1_bits: 5, pdl_bits: 10, machine_id: None, muldiv: false, tick: false };
 
-    /// QUUX's, revision 3: `MUL` and `DIV` in one instruction each, ALU
+    /// QUUX's, revision 4: a tick in the processor ([`Tick`]); `MUL` and
+    /// `DIV` in one instruction each, ALU
     /// functions 42 and 43 ([`crate::muldiv`]); a PDL buffer of 16K words,
     /// its pointer and index 14 bits; and a level-1 entry of six bits, 64 blocks of level 2 and so 63
     /// regions of 8K words mapped at once against the CADR's 31, the last
@@ -98,15 +102,16 @@ impl Geometry {
     ///
     /// It says so in functional source 16, its MACHINE-ID, which no microcode of MIT's
     /// reads and nothing on the CADR drives: the signature `0x5155` in bits
-    /// 31:16, the hardware revision in 15:4 --- 3: the six-bit map, then the
-    /// 16K PDL buffer, then the multiply and divide --- and
+    /// 31:16, the hardware revision in 15:4 --- 4: the six-bit map, then the
+    /// 16K PDL buffer, then the multiply and divide, then the tick --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
         l1_bits: 6,
         pdl_bits: 14,
-        machine_id: Some((0x5155 << 16) | (3 << 4) | 4),
+        machine_id: Some((0x5155 << 16) | (4 << 4) | 4),
         muldiv: true,
+        tick: true,
     };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
@@ -143,7 +148,8 @@ impl Geometry {
     /// machine has one and `phys` is on it: the MACHINE-ID, then the
     /// level-1 entry's bits, the level-2 map's entries, the PDL buffer's
     /// words, the control store's, A memory's and dispatch memory's, and
-    /// which of `MUL` (bit 0) and `DIV` (bit 1) it has; every other word 0.
+    /// which of `MUL` (bit 0) and `DIV` (bit 1) it has, and whether it has
+    /// the tick (1); every other word 0.
     /// Read-only.
     pub fn feature_word(self, phys: u32) -> Option<u32> {
         let id = self.machine_id?;
@@ -159,8 +165,95 @@ impl Geometry {
             5 => 1024,
             6 => 2048,
             7 => (self.muldiv as u32) * 3,
+            0o10 => self.tick as u32,
             _ => 0,
         })
+    }
+}
+
+/// QUUX's tick: a periodic flag in the processor, the machine's clock in
+/// place of the CADR display's vertical interrupt (revision 4).
+///
+/// Functional destination 3 is its control: `<0>` enables it, and a write
+/// with `<1>` set clears the flag. Destination 4 is its period in
+/// microseconds, `<23:0>`, 0 taken as 1. Functional source 17 reads `<0>`
+/// the flag and `<1>` the enable. The flag rises a period after the tick is
+/// enabled or its period written, and then every period, whether or not it
+/// was cleared in between; while enabled and up it is part of
+/// [`Machine::interrupt`]. The period starts at [`Tick::PERIOD_US`].
+///
+/// None of this is the CADR's: page SOURCE decodes no destination 3 or 4
+/// and no source 17. Microcode 323 and QUUX's 1000 neither write the one
+/// nor read the other, by a scan of every control-store word; an
+/// instruction modified through `IMOD` at run time could, **unverified**.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tick {
+    pub enabled: bool,
+    pub period_us: u32,
+    /// When the flag next rises, or rose and has not been cleared.
+    pub deadline_ns: u64,
+}
+
+impl Tick {
+    /// 60 Hz, near enough: what the display's vertical interrupt was.
+    pub const PERIOD_US: u32 = 16_667;
+
+    pub const fn new() -> Tick {
+        Tick { enabled: false, period_us: Self::PERIOD_US, deadline_ns: u64::MAX }
+    }
+
+    fn period_ns(self) -> u64 {
+        self.period_us.max(1) as u64 * 1000
+    }
+
+    /// The flag, at `now`.
+    pub fn flag(self, now: u64) -> bool {
+        now >= self.deadline_ns
+    }
+
+    /// Source 17 at `now`.
+    pub fn status(self, now: u64) -> u32 {
+        (self.enabled as u32) << 1 | self.flag(now) as u32
+    }
+
+    /// A write of destination 3 at `now`.
+    pub fn control(&mut self, now: u64, v: u32) {
+        let enable = v & 1 != 0;
+        if enable && !self.enabled {
+            self.deadline_ns = now + self.period_ns();
+        } else if v & 2 != 0 && self.flag(now) {
+            // The next period boundary after `now`.
+            let p = self.period_ns();
+            self.deadline_ns += (now - self.deadline_ns) / p * p + p;
+        }
+        if !enable {
+            self.deadline_ns = u64::MAX;
+        }
+        self.enabled = enable;
+    }
+
+    /// A write of destination 4 at `now`.
+    pub fn period(&mut self, now: u64, v: u32) {
+        self.period_us = v & 0o77777777;
+        if self.enabled {
+            self.deadline_ns = now + self.period_ns();
+        }
+    }
+
+    pub fn save(self, w: &mut crate::checkpoint::Writer) {
+        w.bool(self.enabled);
+        w.u32(self.period_us);
+        w.u64(self.deadline_ns);
+    }
+
+    pub fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<Tick> {
+        Ok(Tick { enabled: r.bool()?, period_us: r.u32()?, deadline_ns: r.u64()? })
+    }
+}
+
+impl Default for Tick {
+    fn default() -> Tick {
+        Tick::new()
     }
 }
 
@@ -319,6 +412,8 @@ pub struct Machine {
     /// inside the board, is not time at any speed but one, and is not
     /// advanced at all by the far end of `chip`'s cables.
     pub ns: u64,
+    /// QUUX's tick, where the geometry has one.
+    pub tick: Tick,
 }
 
 impl Machine {
@@ -366,6 +461,7 @@ impl Machine {
             interrupt_control: 0,
             dispatch_constant: 0,
             geometry: Geometry::CADR,
+            tick: Tick::new(),
             l1_map: [0; 2048],
             l2_map: [0; L2_MAP_WORDS],
             main: vec![0; boards << 16],
@@ -588,8 +684,12 @@ impl Machine {
     /// controller's request on the Xbus, or a Unibus interrupt taken or
     /// simulated. The I/O board's keyboard interrupt comes over the Unibus
     /// and is taken by [`Machine::unibus_interrupt`].
+    ///
+    /// On QUUX, its tick too, while enabled and up, at [`Machine::ns`].
     pub fn interrupt(&self) -> bool {
-        self.xbus_interrupt() || self.unibus_interrupt().is_some()
+        self.xbus_interrupt()
+            || self.unibus_interrupt().is_some()
+            || (self.geometry.tick && self.tick.enabled && self.tick.flag(self.ns))
     }
 
     /// `XBUS INTR IN`: the disk controller's request, or either display's
@@ -1061,6 +1161,7 @@ impl Machine {
             interrupt_control,
             dispatch_constant,
             geometry,
+            tick,
             l1_map,
             l2_map,
             main,
@@ -1106,6 +1207,8 @@ impl Machine {
         w.u8(geometry.l1_bits as u8);
         w.u8(geometry.pdl_bits as u8);
         w.bool(geometry.muldiv);
+        w.bool(geometry.tick);
+        tick.save(w);
         w.u32s(l2_map);
         w.u32(self.memory_boards() as u32);
         w.u32s(main);
@@ -1181,14 +1284,15 @@ impl Machine {
         self.dispatch_constant = r.u16()?;
         r.u32s_into(&mut self.l1_map)?;
         let (l1_bits, pdl_bits, muldiv) = (r.u8()? as u32, r.u8()? as u32, r.bool()?);
+        let tick = r.bool()?;
+        self.tick = Tick::load(r)?;
         // The CADR, or a QUUX with a PDL buffer of 1K to 16K words.
-        self.geometry = match (l1_bits, pdl_bits, muldiv) {
-            (5, 10, false) => Geometry::CADR,
-            (6, 10..=14, true) => Geometry { pdl_bits, ..Geometry::QUUX },
+        self.geometry = match (l1_bits, pdl_bits, muldiv, tick) {
+            (5, 10, false, false) => Geometry::CADR,
+            (6, 10..=14, true, true) => Geometry { pdl_bits, ..Geometry::QUUX },
             _ => {
                 return Err(crate::checkpoint::bad(format!(
-                    "a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer, {} multiply and divide, is no machine's",
-                    if muldiv { "with" } else { "without" }
+                    "a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer, multiply and divide {muldiv}, tick {tick}, is no machine's"
                 )));
             }
         };

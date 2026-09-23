@@ -242,6 +242,7 @@ impl Micro {
         let reset = std::mem::take(&mut self.m.prog_reset) || boot;
         if reset {
             self.m.reset_console_registers();
+            self.m.tick = crate::machine::Tick::new();
         }
         if boot {
             self.m.vmaok = false;
@@ -561,6 +562,8 @@ impl Micro {
             0o16 if self.m.geometry.machine_id.is_some() => {
                 self.m.geometry.machine_id.unwrap_or(!0)
             }
+            // QUUX's tick, where it has one (`machine::Tick`).
+            0o17 if self.m.geometry.tick => self.m.tick.status(self.m.ns),
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 for the
             // upper eight has those three outputs unconnected, so no part
             // drives the M bus and an undriven TTL bus reads high, as `chip`
@@ -671,6 +674,10 @@ impl Micro {
                     self.m.bus_reset();
                 }
             }
+            // QUUX's tick: its control and its period (`machine::Tick`). On
+            // the CADR these are two of the codes that write only M.
+            0o3 if self.m.geometry.tick => self.m.tick.control(self.m.ns, data),
+            0o4 if self.m.geometry.tick => self.m.tick.period(self.m.ns, data),
             // Pdl Buffer Top, Push, (Index), Index, Pointer
             // The word is written in the next microcycle's write phase,
             // [`Micro::land_writes`].
@@ -1154,6 +1161,7 @@ impl Engine for Micro {
         // them, which is where `PROMDISABLE` lives; the PROM is back over the
         // bottom of the control store.  `-BOOT` presets `RUN`.
         self.m.reset_console_registers();
+        self.m.tick = crate::machine::Tick::new();
         self.m.clock_control.run = true;
         self.srun = true;
         self.npc = 0;
