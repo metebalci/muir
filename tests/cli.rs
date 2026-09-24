@@ -440,11 +440,15 @@ fn mono_tv_is_quux_s() {
     }
     // Its size is a flag of its own, and says so.
     let out = muir()
-        .args(["--rtl", "--machine", "quux", "--mono-tv-size", "2560x1440", "--stop-after", "1"])
+        .args(["--rtl", "--machine", "quux", "--mono-tv-size", "1920x1080", "--stop-after", "1"])
         .run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
-    assert!(t.contains("tv: model mono-tv, 2560x1440"), "the start says the size:\n{t}");
+    assert!(t.contains("tv: model mono-tv, 1920x1080"), "the start says the size:\n{t}");
+    refused_saying(
+        &["--machine", "quux", "--mono-tv-size", "2560x1440"],
+        "--mono-tv-size: 2560 by 1440 is past 1920 by 1080",
+    );
     refused_saying(
         &["--machine", "quux", "--mono-tv-size", "1921x1080"],
         "--mono-tv-size: a width of 1921",
@@ -506,6 +510,20 @@ fn block_disk_is_quux_s() {
         assert!(!t.contains("warning: --disk-controller"), "{engine}: not ignored:\n{t}");
     }
     refused_saying(&["--rtl", "--disk-controller", "block-disk"], "block-disk is QUUX's");
+}
+
+/// **QUUX's `--prom` is a PROM assembled at 36000** (contract Q2): its own
+/// file is taken and said to be the built-in word for word, and MIT's,
+/// assembled at 0, is refused by where it is assembled.
+#[test]
+fn quux_s_prom_is_assembled_at_36000() {
+    let own = concat!(env!("CARGO_MANIFEST_DIR"), "/data/quux-promh.mcr");
+    let out = muir().args(["--rtl", "--machine", "quux", "--prom", own, "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("QUUX's own word for word"), "the start says it:\n{t}");
+    let mits = concat!(env!("CARGO_MANIFEST_DIR"), "/mit/sys/ubin/promh.mcr");
+    refused_saying(&["--rtl", "--machine", "quux", "--prom", mits], "QUUX's PROM is assembled at 36000");
 }
 
 /// **QUUX's disk is block-disk and nothing else**: without

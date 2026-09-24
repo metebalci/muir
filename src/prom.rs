@@ -58,18 +58,48 @@ pub fn boot_prom() -> Vec<Insn> {
     parse_mcr(PROMH_9MCR).expect("mit/sys/ubin/promh.mcr")
 }
 
-/// QUUX's boot PROM, version 1000: MIT's `promh.text` changed by muir-sys so
-/// that it boots a PDL buffer wider than the CADR's --- `FILL-A-LOOP` stops
-/// after 2000 words rather than on the index wrapping to 0,
-/// `CLEAR-PDL-BUFFER` starts from a pointer of all ones, `CLEAR-LEVEL-2-MAP`
-/// clears all 64 of QUUX's blocks --- and boots the CADR as MIT's does.
-/// `data/README.md` has where it came from; `tests/quux.rs` holds it to MIT's
-/// version 9 up to the first change.
+/// QUUX's boot PROM, version 1000, at control store 36000 (contract Q2):
+/// muir-sys's `promh.text`, block-disk only. `data/README.md` has where it
+/// came from; `tests/quux_prom.rs` holds it.
 const QUUX_PROMH: &[u8] = include_bytes!("../data/quux-promh.mcr");
 
-/// QUUX's boot PROM's microinstructions, [`PROM_WORDS`] of them.
+/// QUUX's boot PROM's microinstructions, [`PROM_WORDS`] of them, from
+/// 36000 up.
 pub fn quux_boot_prom() -> Vec<Insn> {
-    parse_mcr(QUUX_PROMH).expect("data/quux-promh.mcr")
+    parse_quux_mcr(QUUX_PROMH).expect("data/quux-promh.mcr")
+}
+
+/// A QUUX boot PROM out of an MCR file: [`PROM_WORDS`] words for control
+/// store [`crate::machine::QUUX_PROM_BASE`] up. The assembler writes the
+/// control store section from 0, so the words are taken from the PROM's
+/// base, and a file with anything assembled below it, or past the top of
+/// the control store, is refused; so is a word setting `IR<46>`, as for the
+/// CADR's.
+pub fn parse_quux_mcr(bytes: &[u8]) -> Result<Vec<Insn>, String> {
+    let base = crate::machine::QUUX_PROM_BASE as usize;
+    let mcr = crate::mcr::parse(bytes)
+        .map_err(|e| format!("not an MCR microcode file, as promh.mcr is: {e}"))?;
+    if mcr.imem_start != 0 {
+        return Err(format!("the control store section starts at {:o}, not 0", mcr.imem_start));
+    }
+    if mcr.imem.len() > base + PROM_WORDS {
+        return Err(format!("{:o} words: QUUX's PROM ends at {:o}", mcr.imem.len(), base + PROM_WORDS - 1));
+    }
+    if let Some(at) = mcr.imem.iter().take(base).position(|w| w.raw() != 0) {
+        return Err(format!("a word at {at:o}: QUUX's PROM is assembled at {base:o}"));
+    }
+    if mcr.imem.len() <= base {
+        return Err(format!("nothing at {base:o}: QUUX's PROM starts there"));
+    }
+    let mut v: Vec<Insn> = mcr.imem[base..].to_vec();
+    if let Some(at) = v.iter().position(|w| w.raw() >> 46 & 1 != 0) {
+        return Err(format!(
+            "word {:o} sets the statistics bit IR<46>, which a burned word has nowhere to hold",
+            base + at
+        ));
+    }
+    v.resize(PROM_WORDS, Insn::new(0));
+    Ok(v)
 }
 
 /// A boot PROM of one's own, out of an MCR microcode file: what `muir

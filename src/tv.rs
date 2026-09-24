@@ -129,14 +129,23 @@ pub const MONO_TV_WORDS: u32 = (MONO_TV_HEIGHT * MONO_TV_WORDS_PER_LINE) as u32;
 /// QUUX's feature page at `17377000`, 130,560 words.
 pub const MONO_TV_MAX_WORDS: u32 = 0o17377000 - BUFFER;
 
+/// The largest MONO TV: QUUX supports up to 1920 by 1080 (Mete, 24 Sep:
+/// revisable). Its 64,800 words also stay below the color TV's strap.
+pub const MONO_TV_MAX_SIZE: (usize, usize) = (1920, 1080);
+
 /// Whether MONO TV can be `width` by `height`: a line a whole number of
 /// words, which `BITBLT` needs of a screen array's first dimension
-/// (`BITBLT-DECODE-ARRAY` in `sys/ucadr/uc-tv.lisp`); both at most 16 bits,
-/// as the feature page gives them; the buffer inside [`MONO_TV_MAX_WORDS`];
-/// and, with the color TV fitted, below its strap at `17200000`.
+/// (`BITBLT-DECODE-ARRAY` in `sys/ucadr/uc-tv.lisp`); at most
+/// [`MONO_TV_MAX_SIZE`]; both at most 16 bits, as the feature page gives
+/// them; the buffer inside [`MONO_TV_MAX_WORDS`]; and, with the color TV
+/// fitted, below its strap at `17200000`.
 pub fn check_mono_tv_size(width: usize, height: usize, color_tv: bool) -> Result<(), String> {
     if width == 0 || height == 0 || !width.is_multiple_of(32) {
         return Err(format!("a width of {width} is not a whole number of 32-bit words"));
+    }
+    let (max_w, max_h) = MONO_TV_MAX_SIZE;
+    if width > max_w || height > max_h {
+        return Err(format!("{width} by {height} is past {max_w} by {max_h}"));
     }
     if width > 0xffff || height > 0xffff {
         return Err(format!("{width} by {height} does not fit the feature page's 16-bit fields"));

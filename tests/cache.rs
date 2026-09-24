@@ -21,6 +21,8 @@ use muir::isa::asm::{
 use muir::machine::{Geometry, Machine};
 use muir::rtl::Rtl;
 
+mod support;
+
 /// **Lines, sets and replacement**: a line of 4 fills on its first word's
 /// miss and hits on the other three; a 2-way set keeps the two most
 /// recently used lines; invalidation drops everything.
@@ -63,6 +65,7 @@ fn reader() -> Machine {
     words[..prom.len()].copy_from_slice(&prom);
     m.load_prom(&words);
     m.geometry = Geometry::QUUX;
+    support::prom_program_in_ram(&mut m);
     // Level-2 entries 0 to 7: virtual pages onto physical pages 0 to 7,
     // readable and writable.
     for p in 0..8u32 {
@@ -167,6 +170,7 @@ fn writer() -> Machine {
     let mut words = vec![filler(); 512];
     words[..prom.len()].copy_from_slice(&prom);
     m.load_prom(&words);
+    support::prom_program_in_ram(&mut m);
     m
 }
 

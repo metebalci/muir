@@ -865,8 +865,8 @@ Default: `simple-tv` on the CADR, `mono-tv` on QUUX, its only one.
 
 ### `--mono-tv-size <width>x<height>`
 
-MONO TV's size, for `--tv-board mono-tv`: the width a multiple of 32, the
-buffer at most 130,560 words, and at most 65,536 words with `--color-tv`.
+MONO TV's size, for `--tv-board mono-tv`: the width a multiple of 32, and at
+most 1920 by 1080, the largest QUUX supports.
 The start says it, the feature page gives it to the software, and a
 checkpoint carries it; a resume at another size is refused.
 

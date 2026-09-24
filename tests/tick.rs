@@ -25,6 +25,8 @@ use muir::machine::{Geometry, Machine};
 use muir::micro::Micro;
 use muir::rtl::Rtl;
 
+mod support;
+
 /// Functional destinations 2, 3 and 4, M 37 written too.
 const INTERRUPT_CONTROL: u64 = (2 << 19) | (0o37 << 14);
 const CLOCK_CONTROL: u64 = (3 << 19) | (0o37 << 14);
@@ -61,6 +63,7 @@ fn machine(geometry: Geometry, prom: &[Insn], period_us: u32, control: [u32; 2])
     words[..prom.len()].copy_from_slice(prom);
     m.load_prom(&words);
     m.geometry = geometry;
+    support::prom_program_in_ram(&mut m);
     m.mmem[1] = period_us;
     m.mmem[2] = control[0];
     m.mmem[4] = control[1];

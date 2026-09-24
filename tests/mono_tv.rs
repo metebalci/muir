@@ -18,6 +18,8 @@ use muir::rtl::Rtl;
 use muir::terminal::Frame;
 use muir::tv::{self, Board};
 
+mod support;
+
 fn quux_with_mono_tv() -> Machine {
     let mut m = Machine::new();
     m.geometry = Geometry::QUUX;
@@ -55,6 +57,7 @@ fn the_buffer_is_40960_words() {
         let mut words = vec![filler(); 512];
         words[..prom.len()].copy_from_slice(prom);
         m.load_prom(&words);
+        support::prom_program_in_ram(&mut m);
         let rw = (1 << 23) | (1 << 22);
         m.l2_map[1] = rw | (0o17000000 >> 8);
         m.l2_map[2] = rw | (last >> 8);
@@ -171,20 +174,20 @@ fn the_bus_interface_answers_the_whole_buffer() {
 }
 
 /// **MONO TV can be another size, `--mono-tv-size`**, and the feature page,
-/// the frame, the buffer's end and a checkpoint all follow it: 2560 by
-/// 1440 is 80 words a line and 115,200 words, past the color TV's strap.
+/// the frame, the buffer's end and a checkpoint all follow it: 1920 by
+/// 1080, the largest, is 60 words a line and 64,800 words.
 #[test]
 fn another_size_is_followed_everywhere() {
     let mut m = quux_with_mono_tv();
-    m.tv.set_mono_tv_size(2560, 1440);
-    assert_eq!(m.tv.screen(), (2560, 1440, 80));
-    assert_eq!(m.tv.buffer_words(), 115_200);
+    m.tv.set_mono_tv_size(1920, 1080);
+    assert_eq!(m.tv.screen(), (1920, 1080, 60));
+    assert_eq!(m.tv.buffer_words(), 64_800);
     let page = 0o17377000;
-    assert_eq!(m.bus_read(page + 0o11), 2560 << 16 | 1440);
-    assert_eq!(m.bus_read(page + 0o12), 1 << 16 | 80);
+    assert_eq!(m.bus_read(page + 0o11), 1920 << 16 | 1080);
+    assert_eq!(m.bus_read(page + 0o12), 1 << 16 | 60);
     let f = Frame::of(&m.tv);
-    assert_eq!((f.width, f.height, f.words_per_line), (2560, 1440, 80));
-    let last = 0o17000000 + 115_200 - 1;
+    assert_eq!((f.width, f.height, f.words_per_line), (1920, 1080, 60));
+    let last = 0o17000000 + 64_800 - 1;
     m.bus_write(last, 5);
     assert_eq!(m.bus_read(last), 5);
     assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0);
@@ -197,22 +200,24 @@ fn another_size_is_followed_everywhere() {
     let body = w.finish();
     let mut back = tv::Tv::default();
     back.load(&mut Reader::new(&body)).unwrap();
-    assert_eq!((back.board(), back.screen()), (Board::MonoTv, (2560, 1440, 80)));
-    assert_eq!(back.read_buffer(115_200 - 1), 5);
+    assert_eq!((back.board(), back.screen()), (Board::MonoTv, (1920, 1080, 60)));
+    assert_eq!(back.read_buffer(64_800 - 1), 5);
 }
 
-/// **A size is refused unless a line is whole words and the buffer fits**:
-/// below the feature page, and below the color TV's strap when one is
-/// fitted.
+/// **A size is refused unless a line is whole words and it is at most 1920
+/// by 1080**, the largest MONO TV supports (Mete, 24 Sep), which also keeps
+/// the buffer below the color TV's strap.
 #[test]
 fn a_size_is_checked() {
     use tv::check_mono_tv_size as check;
+    assert!(check(1024, 768, false).is_ok());
     assert!(check(1280, 1024, false).is_ok());
     assert!(check(1280, 1024, true).is_ok());
     assert!(check(1920, 1080, false).is_ok());
     assert!(check(1920, 1080, true).is_ok());
-    assert!(check(2560, 1440, false).is_ok());
-    assert!(check(2560, 1440, true).is_err(), "over the color TV's buffer");
+    assert!(check(2560, 1440, false).is_err(), "past 1920 by 1080");
+    assert!(check(1952, 1080, false).is_err(), "wider than 1920");
+    assert!(check(1920, 1088, false).is_err(), "taller than 1080");
     assert!(check(1921, 1080, false).is_err(), "not whole words");
     assert!(check(3840, 2160, false).is_err(), "259,200 words");
     assert!(check(0, 1080, false).is_err());

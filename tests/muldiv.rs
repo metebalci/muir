@@ -102,6 +102,7 @@ fn cases() -> Vec<(String, Program)> {
 fn on_engine<E: Engine>(new: fn(Machine) -> E, boot: fn(&mut E), p: &Program) -> u32 {
     let mut m = Machine::new();
     m.load_prom(&p.prom);
+    support::prom_program_in_ram(&mut m);
     let mut e = new(m);
     boot(&mut e);
     benchmark::run_engine(&mut e, p, Stop::Cycles(4)).iterations as u32
@@ -171,6 +172,7 @@ fn on_machine<E: Engine>(
     let mut m = Machine::new();
     m.geometry = geometry;
     m.load_prom(&p.prom);
+    support::prom_program_in_ram(&mut m);
     let mut e = new(m);
     boot(&mut e);
     benchmark::run_engine(&mut e, &p, Stop::Cycles(4)).iterations as u32
@@ -286,6 +288,7 @@ fn time_on<E: Engine>(
     let mut m = Machine::new();
     m.geometry = Geometry::QUUX;
     m.load_prom(&p.prom);
+    support::prom_program_in_ram(&mut m);
     let mut e = new(m);
     boot(&mut e);
     if let Some(bits) = speed {
@@ -353,6 +356,7 @@ fn a_div_stopped_and_stepped_finishes_right() {
         let mut m = Machine::new();
         m.geometry = Geometry::QUUX;
         m.load_prom(&p.prom);
+        support::prom_program_in_ram(&mut m);
         let mut e = Rtl::new(m);
         e.boot();
         while e.pc() != at + 1 {
@@ -394,6 +398,7 @@ fn a_checkpoint_keeps_the_divider_s_time() {
         let mut m = Machine::new();
         m.geometry = Geometry::QUUX;
         m.load_prom(&p.prom);
+        support::prom_program_in_ram(&mut m);
         let mut e = Rtl::new(m);
         e.boot();
         e

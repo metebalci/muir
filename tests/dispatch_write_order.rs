@@ -406,6 +406,7 @@ fn on_chip_a_popj_that_writes_its_own_dispatch_word_uses_the_new_word() {
 fn as_quux(m: &Machine) -> Machine {
     let mut m = m.clone();
     m.geometry = muir::machine::Geometry::QUUX;
+    support::prom_program_in_ram(&mut m);
     m
 }
 

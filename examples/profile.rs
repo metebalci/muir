@@ -3,7 +3,9 @@
 
 //! Where a band's microcycles go, workload by workload.
 //!
-//! Boots System 1001's pack (`tools/fetch-system-1001.sh`) with the test
+//! Boots System 1001's pack (`tools/fetch-system-1001.sh`) on the CADR, and
+//! muir-sys's latest System 1002 band on QUUX (`MUIR_BAND`, or
+//! `ref/band-1002-dev4`), with the test
 //! harness's Chaosnet server at OZ, logs in, defines a set of workloads at
 //! the listener and runs them one at a time, counting every control-store
 //! address the engine executes. Each workload ends by writing a marker
@@ -609,12 +611,39 @@ fn profile<E: Profiled>(
     geometry: muir::machine::Geometry,
     wanted: &[&(&str, &str)],
 ) {
-    let (Some(pack), Some(sources)) =
-        (support::vendor(&["run", "release-1001-pack.img"]), support::vendor(&["system-1001"]))
-    else {
-        return;
-    };
+    let on_quux = geometry != muir::machine::Geometry::CADR;
     let dir = support::scratch("profile");
+    // QUUX runs only System 1002, muir-sys's latest band: `MUIR_BAND`, or
+    // `ref/band-1002-dev4`, its pack and the tree it was built from. The
+    // CADR runs System 1001's release.
+    let (pack, sources) = if on_quux {
+        let band = std::env::var_os("MUIR_BAND").map(PathBuf::from).unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev4")
+        });
+        let file = |suffix: &str| {
+            std::fs::read_dir(&band)
+                .unwrap_or_else(|e| panic!("{}: {e}", band.display()))
+                .map(|e| e.unwrap().path())
+                .find(|p| p.to_string_lossy().ends_with(suffix))
+                .unwrap_or_else(|| panic!("{}: no *{suffix}", band.display()))
+        };
+        let untar = std::process::Command::new("tar")
+            .arg("xzf")
+            .arg(file(".tar.gz"))
+            .arg("-C")
+            .arg(dir.path())
+            .status()
+            .unwrap();
+        assert!(untar.success(), "the band's tree unpacks");
+        (file(".img"), dir.join("release-1002"))
+    } else {
+        let (Some(pack), Some(sources)) =
+            (support::vendor(&["run", "release-1001-pack.img"]), support::vendor(&["system-1001"]))
+        else {
+            return;
+        };
+        (pack, sources)
+    };
     let copy = dir.join("pack.img");
     std::fs::copy(&pack, &copy).unwrap();
     let root = dir.join("root");
@@ -661,12 +690,19 @@ fn profile<E: Profiled>(
     let qmlp = syms.address(Space::IMem, "QMLP").expect("QMLP in the symbol table");
     let files = label_files(&sources.join("sys/ucadr"));
 
-    let mut m = support::machine_with_pack(&copy);
-    m.geometry = geometry;
-    // QUUX boots from its own PROM, which a PDL buffer wider than 1K needs.
-    if geometry != muir::machine::Geometry::CADR {
+    let mut m = if on_quux {
+        // QUUX's own PROM at 36000, the pack on block-disk, MONO TV.
+        let mut m = muir::machine::Machine::new();
         m.load_prom(&muir::prom::quux_boot_prom());
-    }
+        let mut d = muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS);
+        d.attach(muir::disk_unit::Unit::open_rw(&copy, muir::disk_unit::Geometry::T300).unwrap());
+        m.block_disk = Some(d);
+        m.tv.set_board(muir::tv::Board::MonoTv);
+        m
+    } else {
+        support::machine_with_pack(&copy)
+    };
+    m.geometry = geometry;
     let mut e = make(m);
     e.boot();
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS_1001, root.clone(), 400_000_000);

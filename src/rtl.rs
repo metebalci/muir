@@ -1191,7 +1191,7 @@ impl Rtl {
         let spc1a = spcmung || bit(spc as u64, 1);
         let spc_target = ((spc as u16) & 0o37774) | (spc1a as u16) << 1 | (spc as u16 & 1);
         let npc = if trap {
-            0
+            self.m.reset_pc()
         } else {
             match (pcs1 as u8) * 2 + pcs0 as u8 {
                 0 => spc_target,
@@ -1224,12 +1224,17 @@ impl Rtl {
         let idebug = self.m.clock_control.idebug;
         // `BOTTOM.1K` at PCTL 1D18 is the top four PC bits all clear:
         // `crate::machine::PROM_WORDS` says how the 1K is decoded.
-        let bottom_1k = (self.pc as usize) < crate::machine::PROM_WORDS;
-        let promenable = bottom_1k && !self.promdisabled && !self.iwrited && !idebug;
+        // On QUUX the PROM has addresses of its own and no disable
+        // (`Geometry::prom_base`).
+        let (in_prom, prom_at) = match self.m.geometry.prom_base {
+            Some(base) => (self.pc >= base, self.pc.wrapping_sub(base) as usize),
+            None => ((self.pc as usize) < crate::machine::PROM_WORDS && !self.promdisabled, self.pc as usize),
+        };
+        let promenable = in_prom && !self.iwrited && !idebug;
         let i = if idebug {
             self.m.debug_ir
         } else if promenable {
-            self.m.prom[self.pc as usize].raw()
+            self.m.prom[prom_at].raw()
         } else if self.iwrited {
             self.iwr & 0xffff_ffff_ffff
         } else {
@@ -1364,7 +1369,7 @@ impl Rtl {
         // store is written on the pulse after `WRITE-I-MEM`, at the address
         // the PC has moved to.  One register stage, not two.
         if self.iwrited {
-            self.m.imem[self.pc as usize & (IMEM_WORDS - 1)] = crate::isa::Insn::new(self.iwr);
+            self.m.write_imem(self.pc, crate::isa::Insn::new(self.iwr));
         }
 
         // The stack is written from SPCW, at the pointer the edge has

@@ -251,7 +251,7 @@ impl Micro {
         if boot {
             self.m.vmaok = false;
             self.m.clock_control.run = true;
-            self.npc = 0;
+            self.npc = self.m.reset_pc();
             self.inhibit = true;
             self.trap = true;
         }
@@ -990,7 +990,7 @@ impl Micro {
         // them, so the cycles are charged to the clock instead and the
         // pipeline is left alone.
         if p && r {
-            self.m.imem[target as usize & (crate::machine::IMEM_WORDS - 1)] = Insn::new(self.iwr);
+            self.m.write_imem(target, Insn::new(self.iwr));
             if !invert && self.jump_condition() {
                 let ret = if n { self.npc.wrapping_sub(1) } else { self.npc } & 0o37777;
                 self.push_spc(ret as u32);
@@ -1195,7 +1195,7 @@ impl Engine for Micro {
         self.m.tick = crate::machine::Tick::new();
         self.m.clock_control.run = true;
         self.srun = true;
-        self.npc = 0;
+        self.npc = self.m.reset_pc();
         self.inhibit = true;
         self.trap = true;
     }

@@ -1250,3 +1250,22 @@ pub fn parts_on(n: &Netlist, on_board: impl Fn(&str) -> bool) -> BTreeSet<String
 pub fn parts(n: &Netlist) -> BTreeSet<String> {
     parts_on(n, |_| true)
 }
+
+/// A test program loaded as a boot PROM at 0, made to run on QUUX, whose
+/// PROM is at 36000 (contract Q2): the program goes into the control
+/// store's RAM at 0, where its jumps expect it, and the PROM is one jump
+/// there, the slot after it inhibited. Nothing on the CADR, which runs the
+/// PROM at 0 as it is.
+pub fn prom_program_in_ram(m: &mut Machine) {
+    use muir::isa::Insn;
+    use muir::isa::asm::{ALWAYS, JUMP, N, target};
+    let Some(base) = m.geometry.prom_base else { return };
+    let words: Vec<Insn> = m.prom.clone();
+    for (k, w) in words.into_iter().enumerate().take(base as usize) {
+        m.imem[k] = w;
+    }
+    m.load_prom(&[Insn::new(JUMP | target(0) | ALWAYS | N)]);
+    for k in 1..m.prom.len() {
+        m.prom[k] = Insn::new(0);
+    }
+}
