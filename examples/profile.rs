@@ -191,6 +191,8 @@ fn category(label: &str, file: &str) -> String {
 struct Phase {
     cycles: u64,
     hist: Vec<u64>,
+    /// Nanoseconds stalled in the step that executed each address.
+    stall_hist: Vec<u64>,
     meters: Vec<u32>,
     bus: Option<[u64; 5]>,
 }
@@ -260,14 +262,17 @@ fn run<E: Profiled>(
     let before = meters(e, syms);
     let bus0 = e.bus();
     let mut hist = vec![0u64; 1 << 14];
+    let mut stall_hist = vec![0u64; 1 << 14];
     let cycles0 = e.machine().cycles;
     // Typing steps the engine too, so count through it.
     let mut step = |e: &mut E| {
+        let s0 = e.bus().map_or(0, |b| b[0]);
         if let Err(Halt::UnknownDest { pc, dest }) = e.step() {
             panic!("halted at {pc:o} on destination {dest:o}");
         }
         if let Some(pc) = e.executed_pc() {
             hist[pc as usize] += 1;
+            stall_hist[pc as usize] += e.bus().map_or(0, |b| b[0]) - s0;
         }
     };
     // No Return: the listener runs a form when its last parenthesis is in,
@@ -300,6 +305,7 @@ fn run<E: Profiled>(
     Phase {
         cycles: e.machine().cycles - cycles0,
         hist,
+        stall_hist,
         meters: after.iter().zip(&before).map(|(a, b)| a.wrapping_sub(*b)).collect(),
         bus,
     }
@@ -524,5 +530,14 @@ fn profile<E: Profiled>(
         let p =
             run(&mut e, &mut k, &format!("(progn {form} (w-done \"{name}-{n}\"))"), &marker, &syms);
         report(name, &p, &syms, &files, qmlp);
+        // `MUIR_PC_DUMP=<dir>`: every executed address's count and the
+        // nanoseconds stalled at it, one file a workload.
+        if let Some(dir) = std::env::var_os("MUIR_PC_DUMP") {
+            let mut out = String::new();
+            for (pc, &n) in p.hist.iter().enumerate().filter(|(_, n)| **n > 0) {
+                out.push_str(&format!("{pc:o} {n} {}\n", p.stall_hist[pc]));
+            }
+            std::fs::write(PathBuf::from(dir).join(format!("{name}.txt")), out).unwrap();
+        }
     }
 }

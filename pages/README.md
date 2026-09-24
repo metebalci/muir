@@ -37,6 +37,9 @@ Hand-written files, no build step and no generator:
                   and typing `ss` at the prompt; then recompressed, since
                   `Tv::png` writes stored deflate blocks and zlib -9
                   puts the same pixels in 2.4K rather than 93K.
+    quux.html     QUUX, the CADR evolved: what it changes over the CADR and
+                  what each change measured, in the front page's hand; the
+                  long form is docs/quux.md
     style.css     the stylesheet the two pages share: ink and paper with
                   one spot color, the size tokens every `font-size` comes
                   from, and no dark mode --- a spot color printed on black
