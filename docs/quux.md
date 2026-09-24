@@ -22,6 +22,7 @@ differences, what it needed:
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The processor tick | nothing | none enables it yet: the clock handler is still entered from the display's interrupt | nothing | nothing |
+| Block-disk | needed: address the disk by block number | needed: the disk routines by block number, no cylinder, head or sector | needed: `io/disk.lisp` and the label editor by block number | `--disk-controller block-disk` |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
 | The synchronous microcycle (`sync`) | nothing | nothing | nothing | `--timing-model sync`, `--sync-cycle-ticks` |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
@@ -315,6 +316,37 @@ far more than read --- over four in five of its memory cycles are writes
 `tests/cache.rs` holds the lines and the replacement, a read loop and a
 write-and-read-back loop leaving the same words with the cache as without
 and sooner, the invalidation, and a checkpoint.
+
+## Block-disk
+
+**QUUX's disk is block-disk** (`--disk-controller block-disk`): the CADR
+disk controller's programming interface with the drive's geometry taken
+out. Blocks are numbered from the start of the pack, and each is 256 words,
+a page.
+
+| | CADR controller | block-disk |
+|---|---|---|
+| Registers, `17377774`-`17377777` | status and command, command list pointer, disk address, START | the same |
+| Command list | one word a block, `<23:8>` the page's physical address, `<0>` More | the same |
+| Disk address | cylinder `<27:16>`, head `<15:8>`, sector `<7:0>`, unit `<30:28>` | the block number, `<27:0>`; one pack, unit 0 |
+| Commands | read, read compare, write, read all, write all, seek, at ease, recalibrate, offset clear, reset | read, 0, and write, 11; any other stops by error |
+| Status | not active, attention, errors of the drive, the ECC and the transfer | `<0>` not active, `<3>` interrupt request, `<9>` no pack, `<13>` stopped by error, `<17>` past the end of the pack, `<20>` NXM |
+| After a transfer | the disk address at the last block moved, or the one that failed | the same |
+| Interrupt | done, command `<11>`; attention, `<10>` | done, command `<11>` |
+| Time | seeks and rotation, when timed | 100 us a block moved, **unverified**: an estimate until muir-fpga measures its disk path |
+
+The words move inside the store to START, and the controller stays busy for
+a block's time each; a transfer writes main memory behind the processor, so
+the memory cache is invalidated. The pack image is the CADR's file, its
+blocks in the same order, and the label's format is unchanged, its partition
+starts and lengths already block numbers. `tests/block_disk.rs` holds the
+read, the write, the end of the pack, the NXM, a command it does not do, the
+registers on QUUX's bus and a checkpoint.
+
+Nothing runs on it yet: the boot PROM, the microcode and Lisp address the
+disk by cylinder, head and sector from the label's geometry, and a QUUX
+boot PROM, microcode and band that address it by block are muir-sys's to
+make.
 
 ## The single-edge contract
 
