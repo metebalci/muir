@@ -628,13 +628,16 @@ impl Machine {
     /// QUUX's interrupt status, the register page's word 100: `<0>` the
     /// tick, `<1>` the interval timer, `<2>` block-disk's done, each under
     /// its own enable; `<3>` the keyboard and `<4>` the mouse
-    /// ([`crate::quux_input`]). The network, `<5>`, comes with contract Q4.
+    /// ([`crate::quux_input`]); `<5>` the network, the Chaosnet interface's
+    /// request (contract Q4).
     pub fn interrupt_sources(&self) -> u32 {
         let t = self.tick;
         (self.geometry.tick && t.enabled && t.flag(self.ns)) as u32
             | ((self.geometry.tick && t.interval_enabled && t.interval_flag(self.ns)) as u32) << 1
             | (self.block_disk.as_ref().is_some_and(|d| d.interrupt_at(self.ns)) as u32) << 2
             | if self.geometry.machine_id.is_some() { self.quux_input.interrupts() } else { 0 }
+            | (self.ioboard.chaos.as_ref().is_some_and(|c| c.interrupt_request().is_some()) as u32)
+                << 5
     }
 
     /// Fetches from the control store, honoring the PROM overlay on the
@@ -1204,6 +1207,15 @@ impl Machine {
                 0o100 => self.interrupt_sources(),
                 0o101 => self.bus_error as u32,
                 0o102 => self.mode.errstop as u32,
+                // The network (contract Q4): the Chaosnet interface's
+                // registers, word 140 + k being Unibus `764140` + 2k.
+                k @ 0o140..=0o147 => {
+                    let u = crate::chaos::interface::CSR + 2 * (k - 0o140);
+                    match ioboard::answers(u, false) {
+                        Some(r) => self.ioboard.read(r, self.ns) as u32,
+                        None => 0,
+                    }
+                }
                 k => self.quux_input.read(k).unwrap_or(w),
             };
         }
@@ -1260,6 +1272,12 @@ impl Machine {
             match phys & 0o377 {
                 0o101 => self.bus_error = 0,
                 0o102 => self.mode.errstop = value & 1 != 0,
+                k @ 0o140..=0o147 => {
+                    let u = crate::chaos::interface::CSR + 2 * (k - 0o140);
+                    if let Some(r) = ioboard::answers(u, true) {
+                        self.ioboard.write(r, value as u16, self.ns);
+                    }
+                }
                 k => {
                     self.quux_input.write(k, value);
                 }
