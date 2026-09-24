@@ -255,10 +255,16 @@ made for a QUUX machine starts on four ticks: `rtl` refuses another timing
 on it, and `micro`'s clock counts the same ticks.
 
 The ticks are a board's: the number its fit proves its longest path settles
-in. muir-fpga's routed fits put that path, from MD or `MEMSTART` through the
-map and the M bus to the dispatch address and the next PC, at 32-37 ns on
-the Arty Z7-20 and about 20 ns on the DE25-Nano; the default, 4 ticks, is
-the Arty's. **Unverified** until a fit at that deadline meets it.
+in. **Four ticks, 40 ns, is met on the Arty Z7-20**: muir-fpga's fit of QUUX
+at four ticks has a worst setup slack of +0.391 ns and no failing path (its
+report of 24 Sep 2026; muir-fpga at c161e9e plus uncommitted work, against
+muir's sync model at `ffbb76a`), the longest chains being MD through both
+map levels and the M bus to the control-store address, 28.0 ns of 40, and
+the multiplier, 24.1 ns of the 30 a path after the scratchpads gets. Both
+boards run four ticks: three, 30 ns, is out of the DE25-Nano's reach by
+the divider alone, a `DIV` of `MD` needing its word 17 ticks before its
+hold ends. The DE25-Nano's fit at four ticks is **unverified** until it
+meets them.
 
 What the microcode sees does not change, only the time: every register is
 clocked at the one edge and the late writes land one edge later, as the
