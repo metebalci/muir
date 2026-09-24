@@ -574,6 +574,8 @@ impl Micro {
             }
             // QUUX's tick, where it has one (`machine::Tick`).
             0o17 if self.m.geometry.tick => self.m.tick.status(self.m.ns),
+            // QUUX's microsecond clock (`machine::Tick`).
+            0o15 if self.m.geometry.tick => crate::machine::Tick::microseconds(self.m.ns),
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 for the
             // upper eight has those three outputs unconnected, so no part
             // drives the M bus and an undriven TTL bus reads high, as `chip`

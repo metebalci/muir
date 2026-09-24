@@ -598,8 +598,9 @@ Which machine: the CADR, or QUUX, the CADR evolved. QUUX's level-1 map entry
 is six bits where the CADR's is five, so it maps 63 regions of 8K words at
 once to the CADR's 31; its PDL buffer is 16K words to the CADR's 1K; and ALU
 functions 42 and 43 multiply and divide in one instruction each, where the
-CADR takes a step per bit; and its processor has a tick of its own, where
-the CADR's clock is the display's vertical interrupt. The rest of it is the
+CADR takes a step per bit; and its processor has its clocks, a 60 Hz tick,
+an interval timer and a microsecond clock, where the CADR's clock is the
+display's vertical interrupt and the others are on the I/O board. The rest of it is the
 CADR's. It boots from its own PROM and needs microcode that
 knows it. [QUUX](quux.md) has the
 whole of the difference. The same flag chooses the machine in muir-fpga and

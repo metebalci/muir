@@ -134,11 +134,12 @@ fn it_keeps_black_on_white_and_never_interrupts() {
 /// **The feature page describes the main screen** in three words: 11 is
 /// the width in 31:16 and the height in 15:0, 12 the bits a pixel in 31:16
 /// and the words a line in 15:0, and 13 the buffer's first physical address
-/// --- MONO TV's, or the CADR's TV's when QUUX has that board. Word 14 is 0.
+/// --- MONO TV's, or the CADR's TV's when QUUX has that board. Word 14 is
+/// the clocks' (`tests/quux.rs`), and 15 is 0.
 #[test]
 fn the_feature_page_describes_the_main_screen() {
     let page = 0o17377000;
-    let words = |m: &mut Machine| [0o11, 0o12, 0o13, 0o14].map(|w| m.bus_read(page + w));
+    let words = |m: &mut Machine| [0o11, 0o12, 0o13, 0o15].map(|w| m.bus_read(page + w));
     let packed = |hi: u32, lo: u32| hi << 16 | lo;
     assert_eq!(words(&mut quux_with_mono_tv()), [packed(1280, 1024), packed(1, 40), 0o17000000, 0]);
     let mut m = Machine::new();

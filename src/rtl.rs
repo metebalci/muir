@@ -1000,8 +1000,11 @@ impl Rtl {
             // QUUX's MACHINE-ID in source 16 (`Geometry::QUUX`).
             id
         } else if group_b && src == 7 && self.m.geometry.tick {
-            // QUUX's tick in source 17 (`machine::Tick`).
+            // QUUX's clocks' status in source 17 (`machine::Tick`).
             self.m.tick.status(self.ns)
+        } else if group_b && src == 5 && self.m.geometry.tick {
+            // QUUX's microsecond clock in source 15 (`machine::Tick`).
+            crate::machine::Tick::microseconds(self.ns)
         } else {
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 that decodes
             // `IR<28:26>` under `IR<31>` and `IR<29>` has those three outputs
