@@ -475,6 +475,21 @@ fn sync_is_quux_s_and_rtl_s() {
     );
 }
 
+/// **`--cache` is QUUX's and `rtl`'s**: it runs there and the start says
+/// the cache, and it is refused on the CADR, on `micro`, and at a size that
+/// is not a power of two.
+#[test]
+fn the_cache_is_quux_s_and_rtl_s() {
+    let out =
+        muir().args(["--rtl", "--machine", "quux", "--cache", "4096", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("cache: 4096 words, lines of 4, 2-way"), "the start says it:\n{t}");
+    refused_saying(&["--rtl", "--cache", "4096"], "--cache is QUUX's");
+    refused_saying(&["--micro", "--machine", "quux", "--cache", "4096"], "--cache is rtl's");
+    refused_saying(&["--rtl", "--machine", "quux", "--cache", "3000"], "--cache:");
+}
+
 /// **`--timing-model` is `cadr` or `fpga`, and `fpga` is `rtl`'s.** The
 /// grid is what muir-fpga's fabric runs on, and it is `rtl`'s references
 /// that fabric is held to; `chip` and `micro` keep the board's time, so a

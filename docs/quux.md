@@ -22,6 +22,7 @@ differences, what it needed:
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The processor tick | nothing | none enables it yet: the clock handler is still entered from the display's interrupt | nothing | nothing |
+| The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
 | The synchronous microcycle (`sync`) | nothing | nothing | nothing | `--timing-model sync`, `--sync-cycle-ticks` |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
 | MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
@@ -199,10 +200,13 @@ down until the next. `-RESET` turns the tick off and puts the period back.
 
 On the CADR, destinations 3 to 7 have no output on the 74S138 that decodes
 them and write only M, and source 17 has none either and reads all ones.
-Neither microcode 323 nor QUUX's 1000 writes destinations 3 to 7 or reads
-source 17, by a scan of every control-store word. **Unverified:** that no
-instruction made at run time through `IMOD` does; running the band with the
-tick decode trapping would settle it.
+Microcode 323 writes destinations 3 to 7 and reads source 17 nowhere, by
+a scan of every control-store word, and running shows the same of what
+the OA registers make at run time: `tests/unused_codes.rs` reads every
+executed microinstruction as it stood in `IR` through a boot to the
+listener. System 1001 on 323, on the CADR, runs none; System 1002 on its
+microcode for revision 4 runs them at three addresses, each a
+control-store word that carries them, the tick's own.
 
 `tests/tick.rs` holds the period against a 100 and a 300 µs one, the clear,
 the 60 Hz start, the interrupt condition taken with the tick on and not with
@@ -242,12 +246,113 @@ synchronizer's instant 60 ns into a cycle goes: QUUX has no speed bits, and
 a write lands at the edge. An `ILONG` instruction takes `ilong_ticks` more,
 0 unless the library says otherwise.
 
-System 1002 reaches its listener in the same 10.5 M microcycles under
-`sync` of 4 ticks as at QUUX's one rate, in 1.30 s of the machine's time
-against 2.32 s: 1.8 times faster, the bus keeping its own time
+System 1002 reaches its listener in the same 11 M microcycles under `sync`
+of 4 ticks as at QUUX's one rate, in 0.95 s of the machine's time against
+2.02 s: 2.1 times faster, the bus keeping its own time
 (`system_1002_runs_under_sync` in `tests/system_1002.rs`).
 `tests/sync_timing.rs` holds the microcycle's length, `ILONG`'s ticks, the
 grid, the divider's hold and a checkpoint.
+
+## The memory cache
+
+**QUUX can have a memory cache** (`--cache <words>`, H2): unified and
+write-through, in front of main memory, by physical address after the map.
+Xbus I/O space and the Unibus are not cached. In muir it is `rtl`'s, and
+it holds tags only: `rtl` takes a word from main memory as a cycle ends,
+and a write-through cache never holds a word memory does not, so the cache
+changes when a cycle is answered and never what it reads.
+
+| | |
+|---|---|
+| A read that hits | acknowledged `hit_ns` after the request (20 ns, two ticks of the grid, **unverified** until a fit), with no bus cycle and none of the bus's setup, deskew or release |
+| A read that misses | the memory board's cycle, as without the cache; it fills the line, the set's least recently used line going |
+| A write | allocates nothing. With the write buffer it is acknowledged after `hit_ns`, or when the buffer's last write is done, and the board runs it behind the processor; the word is memory's from the acknowledgement, as a read after it finds it |
+| Shape | lines of 4 words, 2-way, `<words>` in all, a power of two |
+| Coherence | a disk transfer writes main memory behind the processor, and invalidates the whole cache before the next cycle |
+
+Behind the cache is the CADR's memory board, eleven stages of its 24 MHz
+chain, 458 ns, from the request to `XACK` (`MEMORY_CYCLE_STAGES` in
+`src/busint.rs`), unless QUUX's own memory timing is fitted
+(`MemoryTiming`, `Rtl::set_memory_timing`): a read, which behind the cache
+is a line fill, and a write each answered a fixed time after the request,
+off the Xbus, one at a time. muir-fpga measured its two boards, a 1,000,000
+word array loop on System 1001 for 300 s:
+
+| | Read, average | Write | In muir |
+|---|---|---|---|
+| Arty Z7-20 | 20.68 ticks of 10 ns (19 to 88) | 12 | read 220 ns, write 120 ns |
+| DE25-Nano | 36.25 (33 to 228) | 29 (28 to 58) | read 380 ns, write 290 ns |
+
+rounded up to the tick, with a tick more on a read for a line fill of four
+words, two 64-bit beats: the machine has only ever made single-word
+accesses, so a fill's time is **unverified**.
+
+Measured with the profile harness (`examples/profile.rs`, `MUIR_CACHE` and
+`MUIR_SYNC_TICKS`) on `rtl`, System 1001's band on QUUX's microcode 1000
+for revision 4, over ten workloads (compile, two call-heavy, cons, the
+multiply-and-divide, float, array, sort, bignum, intern), in the machine's
+time:
+
+| | Total | |
+|---|---|---|
+| QUUX's one rate, 145 ns | 72.7 s | 1.00 |
+| the same, cache of 4K words | 58.6 s | 1.24 |
+| `sync` of 4 ticks, no cache | 33.7 s | 2.15 |
+| `sync`, cache of 1K words | 19.6 s | 3.70 |
+| `sync`, cache of 4K words, no write buffer | 18.9 s | 3.84 |
+| `sync`, cache of 16K words, no write buffer | 18.6 s | 3.90 |
+| `sync`, cache of 4K words and the write buffer | 17.7 s | 4.11 |
+| `sync`, the Arty's memory, no cache | 21.9 s | 3.32 |
+| `sync`, the Arty's memory, cache of 4K words and the buffer | 15.5 s | 4.70 |
+| `sync`, the DE25's memory, no cache | 26.4 s | 2.75 |
+| `sync`, the DE25's memory, cache of 4K words and the buffer | 16.2 s | 4.48 |
+
+Read hits run from 75 to 99 per cent of reads at 1K words and from 81 to 99
+at 4K; past 4K words little more is gained. The cons workload is written
+far more than read --- over four in five of its memory cycles are writes
+--- and the write buffer is most of what the cache does for it.
+
+`tests/cache.rs` holds the lines and the replacement, a read loop and a
+write-and-read-back loop leaving the same words with the cache as without
+and sooner, the invalidation, and a checkpoint.
+
+## The single-edge contract
+
+**What a single-edge core must keep**, for H1b: in which microcycle each
+resource's new value is seen, counted from the microcycle whose
+instruction produced it (cycle *n*). It is `rtl`'s read phase, write
+phase and edge, which `tests/cosim.rs`, `tests/chip.rs` and
+`tests/dispatch_write_order.rs` hold to the netlist; an FPGA core that
+keeps every row, and stalls where a row needs it, runs the microcode
+unchanged.
+
+| Resource | Written | Seen by |
+|---|---|---|
+| `IR` | at the edge ending *n*, from the I bus: the control store at `PC`, the boot PROM, the debug IR, or `IWR` in the cycle after `WRITE-I-MEM` | the instruction executed in *n*+1. The instruction at a jump's target runs in *n*+2; the one after the jump runs in *n*+1 unless `N` inhibits it |
+| `PC`, `LC`, `Q`, `VMA`, `MD` (from the processor), `INTERRUPT-CONTROL`, the PDL pointer and index, the SPC pointer, the flags | at the edge ending *n* | *n*+1 |
+| A memory, M memory | in *n*+1's write pulse, from `WADR` and `L` registered at the edge ending *n* | *n*+1, through the pass-around (ACTL 3B21/3B27, MCTL 4B18: a source address equal to the pending `WADR` reads `L`); the memory itself from *n*+2 |
+| PDL buffer | in *n*+1's write pulse, at the pointer or index registered with it (`PWIDX`) | *n*+2: no pass-around, so *n*+1 reads the word as it was (`pdl_read_right_after_a_push_on_the_board`, `tests/cosim.rs`) |
+| SPC stack, a push | in *n*+1's write pulse, at the pointer the edge ending *n* moved to | the next-address path in *n*+1 (`SPCWPASS` puts the word on the `SPC` bus); an M-source read of the stack in *n*+1 reads the RAM's old word at the new pointer; *n*+2 reads the new |
+| Map, a `WRITE-MAP` store | in *n*+1's write pulse, both levels, addressed by `MAPI` then (`VMA` while `MEMSTART`, else `MD`) | `MAP(MD)` and a dispatch on map bits read the old word in *n*+1 (QUUX's definition; below) and the new from *n*+2. A memory cycle an instruction in *n*+1 starts is translated at the edge ending *n*+2, through the new word: `PHYS-MEM-READ` stores the map and starts a read in the next instruction |
+| Dispatch memory, a dispatch write | in *n*'s own write pulse, at its own `DADR` | the dispatch in *n* reads the old word (QUUX's definition); from *n*+1 the new |
+| Control store, `WRITE-I-MEM` | in *n*+1's write pulse, at the `PC` it moved to | *n*+1's `IR` takes the word from `IWR` directly, not from the RAM; later fetches the RAM |
+| OA registers, `IMOD` | at the edge ending *n* | or'd into `IR` as it loads at that same edge: the instruction executed in *n*+1 |
+| `MD`, from memory | at `-LOADMD`, when the bus says | a microcycle that reads `MD` before `READ IN PROGRESS` falls is held by `-HANG` |
+
+Holds and write pulses:
+
+- A cycle held by `-WAIT` fires no write pulse: `TPWP` is `NOR(latch,
+  -MACHRUNA)` at CLOCK2 1C10. The pending writes wait for the cycle that
+  runs.
+- A cycle held by `-HANG` fires its write pulse, which takes its address
+  and data as the cycle's time ends: `MD` as the bus has left it then.
+  Only the next cycle's start is held (`-TPR0`, CLOCK1 1C08).
+- **QUUX's definition**: a RAM read in the cycle its own write pulse fires
+  --- the dispatch word a dispatch writes, the map word right after a map
+  store --- gives the word from before the write. On the CADR the RAM's
+  output floats while written and the answer is a race; `chip`'s answer,
+  the new word, rests on its clock cutting the pulse at the edge. Microcode
+  323 and 1000 never read either (muir-sys's search of their sources).
 
 ## MONO TV, the display
 
@@ -289,9 +394,14 @@ it. System 1002 sizes the main screen from the feature page's words 11 to 13,
 and draws it right: muir-sys's development band (`ref/band-1002-dev2`,
 muir-sys `5427570`, microcode 1000 for revision 4, no sync program and no
 speed bits) reaches its listener in
-10.5 M microcycles on both engines, its herald, listener and who line drawn at
+11 M microcycles on both engines, its herald, listener and who line drawn at
 the screen's own words a line (`system_1002_runs_on_mono_tv` in
-`tests/system_1002.rs`).
+`tests/system_1002.rs`) --- at 1920 by 1080, the size it was built at. A
+band fixes its screen's size when its window system loads, so that one
+run at another size draws 60-word lines into the raster anyway: at 1280 by
+1024 its lines spill into the next, which the test's check catches.
+**Unverified** until a band sizes its screen at boot: that System 1002
+runs right at every size the feature page can give.
 
 `tests/mono_tv.rs` holds the buffer's first and last words and the NXM past
 it on both engines, the bus interface's decode of the whole buffer, the

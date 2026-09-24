@@ -47,12 +47,27 @@ fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     Some((dir, pack, root))
 }
 
+/// The size the band's window system was loaded at: a band fixes its
+/// screen then, and `band-1002-dev2` was built at 1920 by 1080. Run at
+/// another size it draws 60-word lines into the raster anyway.
+const BAND_SIZE: (usize, usize) = (1920, 1080);
+
 fn quux(pack: &std::path::Path) -> Machine {
     let mut m = support::machine_with_pack(pack);
     m.load_prom(&muir::prom::quux_boot_prom());
     m.geometry = Geometry::QUUX;
     m.tv.set_board(Board::MonoTv);
+    m.tv.set_mono_tv_size(BAND_SIZE.0, BAND_SIZE.1);
     m
+}
+
+/// Whether the listener's rows read as text at the screen's own words a
+/// line and worse at every other width a band might have drawn at: lit
+/// pixels in the rows are most where the lines are read as drawn.
+fn drawn_at_its_words_a_line(e: &impl Engine) -> bool {
+    let own = e.machine().tv.screen().2;
+    let at_own = lit(e, 84..130, own);
+    [24, 40, 60, 80].into_iter().filter(|&w| w != own).all(|w| at_own > lit(e, 84..130, w))
 }
 
 /// Lit pixels in `rows` of a screen `words_per_line` words wide.
@@ -64,9 +79,10 @@ fn lit(e: &impl Engine, rows: std::ops::Range<usize>, words_per_line: usize) -> 
 }
 
 /// **System 1002 reaches its listener on QUUX with MONO TV, drawn at the
-/// screen's words a line**, on both engines: 40 at the default 1280 by
-/// 1024. Its listener comes up where the harness looks for it with the
-/// screen read at MONO TV's words a line; read at
+/// screen's words a line**, on both engines, at the size the band was built
+/// for ([`BAND_SIZE`]). Its listener comes up where the harness looks for
+/// it with the screen read at MONO TV's words a line, and reads worse at
+/// any other width; read at
 /// the CADR's 24, the same rows hold far less, which is the band drawing
 /// for the screen it was given and not for the CADR's.
 #[test]
@@ -76,24 +92,22 @@ fn system_1002_runs_on_mono_tv() {
             return;
         };
         let m = quux(&pack);
-        let (ran, at_screen, at_24) = match engine {
+        let (ran, drawn) = match engine {
             "micro" => {
                 let mut e = Micro::new(m);
                 e.boot();
                 let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-                (ran, lit(&e, 84..130, e.machine().tv.screen().2), lit(&e, 84..130, 24))
+                (ran, drawn_at_its_words_a_line(&e))
             }
             _ => {
                 let mut e = Rtl::new(m);
                 e.boot();
                 let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-                (ran, lit(&e, 84..130, e.machine().tv.screen().2), lit(&e, 84..130, 24))
+                (ran, drawn_at_its_words_a_line(&e))
             }
         };
-        eprintln!(
-            "{engine}: listener after {ran} microcycles; lit {at_screen} at its own, {at_24} at 24"
-        );
-        assert!(at_screen > 2 * at_24, "{engine}: drawn at the screen's words a line");
+        eprintln!("{engine}: listener after {ran} microcycles");
+        assert!(drawn, "{engine}: drawn at the screen's words a line");
     }
 }
 
@@ -113,11 +127,7 @@ fn system_1002_runs_under_sync() {
         e.set_timing_model(model);
         e.boot();
         let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-        let wpl = e.machine().tv.screen().2;
-        assert!(
-            lit(&e, 84..130, wpl) > 2 * lit(&e, 84..130, 24),
-            "{model:?}: at the screen's words a line"
-        );
+        assert!(drawn_at_its_words_a_line(&e), "{model:?}: at the screen's words a line");
         eprintln!("{}: listener after {ran} microcycles, {} ns", model.name(), e.ns());
         times.push(e.ns());
     }

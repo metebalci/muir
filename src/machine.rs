@@ -195,9 +195,10 @@ impl Geometry {
 /// [`Machine::interrupt`]. The period starts at [`Tick::PERIOD_US`].
 ///
 /// None of this is the CADR's: page SOURCE decodes no destination 3 or 4
-/// and no source 17. Microcode 323 and QUUX's 1000 neither write the one
-/// nor read the other, by a scan of every control-store word; an
-/// instruction modified through `IMOD` at run time could, **unverified**.
+/// and no source 17. Microcode 323 neither writes the one nor reads the
+/// other, by a scan of every control-store word and by running it with
+/// every executed word read as the OA registers left it
+/// (`tests/unused_codes.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tick {
     pub enabled: bool,
@@ -426,6 +427,10 @@ pub struct Machine {
     pub ns: u64,
     /// QUUX's tick, where the geometry has one.
     pub tick: Tick,
+    /// The disk controller has been written since the engine last looked,
+    /// and may have written main memory: what invalidates QUUX's memory
+    /// cache ([`crate::cache`]).
+    pub dma_written: bool,
 }
 
 impl Machine {
@@ -474,6 +479,7 @@ impl Machine {
             dispatch_constant: 0,
             geometry: Geometry::CADR,
             tick: Tick::new(),
+            dma_written: false,
             l1_map: [0; 2048],
             l2_map: [0; L2_MAP_WORDS],
             main: vec![0; boards << 16],
@@ -1090,6 +1096,9 @@ impl Machine {
             // directly, which is why the controller is handed it.
             self.disk.advance(self.ns);
             self.disk.write(r, value, &mut self.main);
+            // A transfer writes main memory behind the processor's back:
+            // QUUX's cache is invalidated before its next cycle.
+            self.dma_written = true;
             return;
         }
         if let Some(off) = self.tv.buffer_offset(phys) {
@@ -1200,6 +1209,7 @@ impl Machine {
             dispatch_constant,
             geometry,
             tick,
+            dma_written,
             l1_map,
             l2_map,
             main,
@@ -1247,6 +1257,7 @@ impl Machine {
         w.bool(geometry.muldiv);
         w.bool(geometry.tick);
         tick.save(w);
+        w.bool(*dma_written);
         w.u32s(l2_map);
         w.u32(self.memory_boards() as u32);
         w.u32s(main);
@@ -1324,6 +1335,7 @@ impl Machine {
         let (l1_bits, pdl_bits, muldiv) = (r.u8()? as u32, r.u8()? as u32, r.bool()?);
         let tick = r.bool()?;
         self.tick = Tick::load(r)?;
+        self.dma_written = r.bool()?;
         // The CADR, or a QUUX with a PDL buffer of 1K to 16K words.
         self.geometry = match (l1_bits, pdl_bits, muldiv, tick) {
             (5, 10, false, false) => Geometry::CADR,

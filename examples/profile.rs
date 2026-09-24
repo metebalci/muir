@@ -111,16 +111,17 @@ const METERS: &[&str] = &[
 /// What the two engines can say that the harness needs beyond [`Engine`].
 trait Profiled: Engine {
     fn executed_pc(&self) -> Option<u16>;
-    /// Nanoseconds stalled on the bus and memory cycles, where the engine
-    /// keeps them.
-    fn bus(&self) -> Option<(u64, u64)>;
+    /// Nanoseconds stalled on the bus, memory cycles, the machine's
+    /// nanoseconds, and the memory cache's hits and misses, where the
+    /// engine keeps them.
+    fn bus(&self) -> Option<[u64; 5]>;
 }
 
 impl Profiled for Micro {
     fn executed_pc(&self) -> Option<u16> {
         self.executed()
     }
-    fn bus(&self) -> Option<(u64, u64)> {
+    fn bus(&self) -> Option<[u64; 5]> {
         None
     }
 }
@@ -129,8 +130,9 @@ impl Profiled for Rtl {
     fn executed_pc(&self) -> Option<u16> {
         self.executed()
     }
-    fn bus(&self) -> Option<(u64, u64)> {
-        Some((self.stalled_ns(), self.bus_cycles()))
+    fn bus(&self) -> Option<[u64; 5]> {
+        let (h, m) = self.busint().cache().map_or((0, 0), |c| (c.hits, c.misses));
+        Some([self.stalled_ns(), self.bus_cycles(), self.ns(), h, m])
     }
 }
 
@@ -190,7 +192,7 @@ struct Phase {
     cycles: u64,
     hist: Vec<u64>,
     meters: Vec<u32>,
-    bus: Option<(u64, u64)>,
+    bus: Option<[u64; 5]>,
 }
 
 fn meters(e: &impl Engine, syms: &Symbols) -> Vec<u32> {
@@ -292,7 +294,7 @@ fn run<E: Profiled>(
     }
     let after = meters(e, syms);
     let bus = match (bus0, e.bus()) {
-        (Some((s0, b0)), Some((s1, b1))) => Some((s1 - s0, b1 - b0)),
+        (Some(a), Some(b)) => Some(std::array::from_fn(|i| b[i] - a[i])),
         _ => None,
     };
     Phase {
@@ -314,8 +316,11 @@ fn report(name: &str, p: &Phase, syms: &Symbols, files: &BTreeMap<String, String
         macros,
         p.cycles as f64 / macros.max(1) as f64
     );
-    if let Some((stalled, bus)) = p.bus {
-        println!("   stalled {stalled} ns, {bus} memory cycles");
+    if let Some([stalled, bus, ns, hits, misses]) = p.bus {
+        println!("   stalled {stalled} ns, {bus} memory cycles, {ns} ns in all");
+        if hits + misses > 0 {
+            println!("   cache {hits} hits, {misses} misses");
+        }
     }
     let mut by_cat: BTreeMap<String, u64> = BTreeMap::new();
     let mut by_label: BTreeMap<String, u64> = BTreeMap::new();
@@ -377,7 +382,46 @@ fn main() {
             .collect()
     };
     match engine.as_str() {
-        "rtl" => profile(Rtl::new, geometry, &wanted),
+        "rtl" => {
+            // `MUIR_SYNC_TICKS` runs QUUX's synchronous microcycle of that
+            // many ticks, and `MUIR_CACHE` fits a memory cache of that many
+            // words (H1a, H2).
+            let ticks = std::env::var("MUIR_SYNC_TICKS").ok().and_then(|v| v.parse().ok());
+            let cache = std::env::var("MUIR_CACHE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map(muir::cache::CacheConfig::with_words);
+            // `MUIR_MEMORY_NS=<read>,<write>` times main memory as QUUX's
+            // own, in place of the CADR's boards.
+            let memory = std::env::var("MUIR_MEMORY_NS").ok().and_then(|v| {
+                match v.as_str() {
+                    "arty" => return Some(muir::cache::MemoryTiming::ARTY_Z7_20),
+                    "de25" => return Some(muir::cache::MemoryTiming::DE25_NANO),
+                    _ => {}
+                }
+                let (r, w) = v.split_once(',')?;
+                Some(muir::cache::MemoryTiming {
+                    read_ns: r.parse().ok()?,
+                    write_ns: w.parse().ok()?,
+                })
+            });
+            profile(
+                move |m| {
+                    let mut e = Rtl::new(m);
+                    if let Some(cycle_ticks) = ticks {
+                        e.set_timing_model(muir::clock::TimingModel::Sync {
+                            cycle_ticks,
+                            ilong_ticks: 0,
+                        });
+                    }
+                    e.set_cache(cache);
+                    e.set_memory_timing(memory);
+                    e
+                },
+                geometry,
+                &wanted,
+            )
+        }
         _ => profile(Micro::new, geometry, &wanted),
     }
 }
