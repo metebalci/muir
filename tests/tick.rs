@@ -112,7 +112,9 @@ fn both(m: impl Fn() -> Machine, pc: u16, limit: u64) -> [(Option<u64>, Vec<u32>
 #[test]
 fn the_interval_timer_rises_each_period_and_a_write_clears_it() {
     let prom = wait_and_clear(2);
-    let run = |p| both(|| machine(Geometry::QUUX, &prom, p, [INTERVAL_ON, INTERVAL_CLEAR]), 8, 10_000_000);
+    let run = |p| {
+        both(|| machine(Geometry::QUUX, &prom, p, [INTERVAL_ON, INTERVAL_CLEAR]), 8, 10_000_000)
+    };
     let (short, long) = (run(100), run(300));
     for (k, name) in ["micro", "rtl"].into_iter().enumerate() {
         let (ts, ms) = &short[k];
@@ -121,7 +123,11 @@ fn the_interval_timer_rises_each_period_and_a_write_clears_it() {
         assert!(ts >= 100_000, "{name}: the flag rose at {ts} ns, before a period");
         let diff = tl - ts;
         assert!(diff.abs_diff(200_000) <= 3 * 220, "{name}: 200 µs more took {diff} ns");
-        assert_eq!((ms[3] & 0o17, ms[5] & 0o17), (0o14, 0o10), "{name}: source 17 up, then cleared");
+        assert_eq!(
+            (ms[3] & 0o17, ms[5] & 0o17),
+            (0o14, 0o10),
+            "{name}: source 17 up, then cleared"
+        );
     }
 }
 
@@ -205,7 +211,11 @@ fn source_15_counts_microseconds() {
             e.step().unwrap();
         }
         let want = (e.machine().ns / 1000) as u32;
-        assert!(want.wrapping_sub(e.machine().mmem[1]) <= 1, "micro from {start}: {} against {want}", e.machine().mmem[1]);
+        assert!(
+            want.wrapping_sub(e.machine().mmem[1]) <= 1,
+            "micro from {start}: {} against {want}",
+            e.machine().mmem[1]
+        );
         for model in [TimingModel::Cadr, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
             let mut r = Rtl::new(quux(start));
             r.set_timing_model(model);
@@ -215,7 +225,10 @@ fn source_15_counts_microseconds() {
             }
             let want = (r.ns() / 1000) as u32;
             let got = r.machine().mmem[1];
-            assert!(want.wrapping_sub(got) <= 1, "rtl {model:?} from {start}: {got} against {want}");
+            assert!(
+                want.wrapping_sub(got) <= 1,
+                "rtl {model:?} from {start}: {got} against {want}"
+            );
             if start == wrap {
                 assert!(got < 100_000, "rtl {model:?}: wrapped, {got}");
             }
@@ -232,9 +245,10 @@ fn the_cadr_has_no_clocks_in_the_processor() {
         p[6] = Insn::new(ALU | SETM | src(0o15) | m_dest(5));
         p
     };
-    for (k, (t, m)) in both(|| machine(Geometry::CADR, &prom, 100, [TICK_ON, TICK_CLEAR]), 8, 100_000)
-        .into_iter()
-        .enumerate()
+    for (k, (t, m)) in
+        both(|| machine(Geometry::CADR, &prom, 100, [TICK_ON, TICK_CLEAR]), 8, 100_000)
+            .into_iter()
+            .enumerate()
     {
         let name = ["micro", "rtl"][k];
         assert!(t.is_some(), "{name}: the all-ones source is a flag at once");
@@ -251,7 +265,8 @@ fn a_checkpoint_keeps_the_clocks() {
     use muir::checkpoint::{Reader, Writer};
     let prom = wait_and_clear(2);
     let make = || {
-        let mut r = Rtl::new(machine(Geometry::QUUX, &prom, 100, [INTERVAL_ON | TICK_ON, INTERVAL_CLEAR]));
+        let mut r =
+            Rtl::new(machine(Geometry::QUUX, &prom, 100, [INTERVAL_ON | TICK_ON, INTERVAL_CLEAR]));
         r.boot();
         r
     };

@@ -523,13 +523,39 @@ largest MONO TV buffer and 36777 the display's and disk's registers.
 | Word | |
 |---|---|
 | 0-77 | the feature page, read only |
-| 100 | interrupt status, read only: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's done, each under its own enable; keyboard, mouse and network, `<3>` to `<5>`, come with their devices |
+| 100 | interrupt status, read only: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's done, `<3>` the keyboard, `<4>` the mouse, each under its own enable; the network, `<5>`, comes with its device |
 | 101 | error status: the bus errors, as `766044` gives them; a write clears them |
 | 102 | mode: `<0>` error stop, which the host can set too |
+| 120-123 | the keyboard and the mouse (below) |
 | others | reserved: read 0, writes ignored |
 
 On the CADR nothing answers on the page. `tests/quux_registers.rs` holds
 each word, on the machine and through both engines' bus.
+
+## The keyboard and the mouse
+
+**QUUX's keyboard and mouse are on the register page** (contract Q3),
+without the CADR's keyboard timing or the mouse's quadrature lines: the
+CADR's I/O board takes its keyboard's words off a serial line at the
+keyboard's clock and counts its mouse's lines on `KB CLK^`.
+
+| Word | |
+|---|---|
+| 120 | keyboard status: `<0>` a key word is waiting, `<1>` the FIFO overflowed (a write clears it), `<8>` the interrupt enable |
+| 121 | a read takes the oldest key word, the same 32-bit word `764100`/`764102` give together on the CADR; 0 when none is waiting |
+| 122 | the mouse: `<11:0>` the X count, `<27:16>` the Y count, twelve bits each and wrapping as the CADR's counters do; `<14:12>` the buttons, as the CADR's Y register has them. A read clears 123's `<0>` |
+| 123 | mouse status: `<0>` moved or a button changed since 122 was read, `<8>` the interrupt enable |
+
+The FIFO holds 64 key words, the size of the microcode's own keyboard
+buffer; a word past that is dropped and `<1>` set. A host adds its motion to
+the counts, and `TRACK-MOUSE`, which takes the difference from last time and
+sign-extends from bit 11, needs no change but where it reads. There is no
+beeper: the CADR's `764110` is a toggle on the speaker line the microcode
+flips once a half-wavelength, and QUUX leaves it out. muir's terminal
+delivers to it on QUUX as it delivers to the I/O board on the CADR, and the
+keyboard's boot word still boots. `tests/quux_input.rs` holds the FIFO's
+order and its 64, the overflow, the counts and buttons, the interrupts, the
+terminal's delivery, the boot word, a checkpoint and both engines' reads.
 
 ## Its microcode
 

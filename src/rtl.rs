@@ -1228,7 +1228,10 @@ impl Rtl {
         // (`Geometry::prom_base`).
         let (in_prom, prom_at) = match self.m.geometry.prom_base {
             Some(base) => (self.pc >= base, self.pc.wrapping_sub(base) as usize),
-            None => ((self.pc as usize) < crate::machine::PROM_WORDS && !self.promdisabled, self.pc as usize),
+            None => (
+                (self.pc as usize) < crate::machine::PROM_WORDS && !self.promdisabled,
+                self.pc as usize,
+            ),
         };
         let promenable = in_prom && !self.iwrited && !idebug;
         let i = if idebug {

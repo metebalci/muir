@@ -118,10 +118,8 @@ fn both_engines_write_and_read_the_page() {
     use muir::isa::asm::{ALU, MD, SETM, SRC_MD, START_READ, START_WRITE, a_dest, filler, m_src};
     use muir::micro::Micro;
     use muir::rtl::Rtl;
-    let mut prom = vec![
-        Insn::new(ALU | SETM | m_src(2) | MD),
-        Insn::new(ALU | SETM | m_src(1) | START_WRITE),
-    ];
+    let mut prom =
+        vec![Insn::new(ALU | SETM | m_src(2) | MD), Insn::new(ALU | SETM | m_src(1) | START_WRITE)];
     prom.extend([filler(); 12]);
     prom.push(Insn::new(ALU | SETM | m_src(1) | START_READ));
     prom.extend([filler(); 12]);

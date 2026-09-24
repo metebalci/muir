@@ -404,7 +404,9 @@ fn run<E: Profiled>(
                 }
                 last = Some((now, e.machine().mmem[0o31], e.lc(), None));
                 since_dispatch = 0;
-            } else if since_dispatch == 2 && let Some((_, word, lc, h @ None)) = last.as_mut() {
+            } else if since_dispatch == 2
+                && let Some((_, word, lc, h @ None)) = last.as_mut()
+            {
                 *h = Some(pc);
                 let (lo, hi) = (*word & 0xffff, *word >> 16);
                 let chosen = if *lc & 2 != 0 { [lo, hi] } else { [hi, lo] };
@@ -742,7 +744,10 @@ fn profile<E: Profiled>(
         // nanoseconds stalled at it, one file a workload.
         // `MUIR_OPS=<dir>`: the macroinstructions, one file a workload.
         if let Some(dir) = std::env::var_os("MUIR_OPS") {
-            let mut out = format!("# decode agrees: the halfword taken {}, the other {}\n", p.decode_agrees[0], p.decode_agrees[1]);
+            let mut out = format!(
+                "# decode agrees: the halfword taken {}, the other {}\n",
+                p.decode_agrees[0], p.decode_agrees[1]
+            );
             let mut rows: Vec<_> = p.ops.iter().collect();
             rows.sort();
             for ((half, handler, cycles), n) in rows {

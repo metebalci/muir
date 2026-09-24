@@ -40,6 +40,7 @@ pub mod netlist;
 pub mod part;
 pub mod prom;
 pub mod prompt;
+pub mod quux_input;
 pub mod rtl;
 pub mod serial;
 pub mod spy;

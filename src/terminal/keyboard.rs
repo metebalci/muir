@@ -49,8 +49,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use crate::ioboard::IoBoard;
-
 /// Source ID of the new keyboard, bits 18-16 of the word.
 pub const SOURCE: u32 = 0o1;
 
@@ -1421,11 +1419,12 @@ impl Keyboard {
         self.queue.front().copied()
     }
 
-    /// Hands the next word to the behavioral I/O board, if the board has
-    /// taken the last: the board's `KBD READY` is the keyboard's `DONE`
-    /// the other way up.
-    pub fn deliver(&mut self, board: &mut IoBoard) -> bool {
-        if board.keyboard_ready() {
+    /// Hands the next word to the keyboard's device, if it can take one:
+    /// the behavioral I/O board once it has taken the last (its `KBD
+    /// READY` is the keyboard's `DONE` the other way up), or QUUX's FIFO
+    /// while it has room.
+    pub fn deliver(&mut self, board: &mut impl crate::quux_input::KeyboardMouse) -> bool {
+        if !board.takes_key() {
             return false;
         }
         match self.queue.pop_front() {

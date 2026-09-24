@@ -323,7 +323,8 @@ impl Tick {
         if interval && !self.interval_enabled {
             self.interval_deadline_ns = Self::after(now, self.interval_us);
         } else if v & 8 != 0 && self.interval_flag(now) {
-            self.interval_deadline_ns = Self::next(self.interval_deadline_ns, now, self.interval_us);
+            self.interval_deadline_ns =
+                Self::next(self.interval_deadline_ns, now, self.interval_us);
         }
         if !interval {
             self.interval_deadline_ns = u64::MAX;
@@ -510,6 +511,9 @@ pub struct Machine {
     pub color_tv: Option<Tv>,
     /// The keyboard, the mouse and the clocks.
     pub ioboard: IoBoard,
+    /// QUUX's keyboard and mouse on the register page (contract Q3,
+    /// [`crate::quux_input`]).
+    pub quux_input: crate::quux_input::QuuxInput,
 
     pub cycles: u64,
     /// Simulated nanoseconds, kept by the engine that owns this machine:
@@ -594,6 +598,7 @@ impl Machine {
             // The I/O board has its Chaosnet interface whether or not a
             // cable is plugged in: the switches at the configured address,
             // nothing on the cable until [`Machine::plug_chaos`].
+            quux_input: crate::quux_input::QuuxInput::new(),
             ioboard: {
                 let mut b = ioboard::IoBoard::default();
                 b.plug_chaos(crate::chaos::Config::default().address, None, 0, false);
@@ -622,13 +627,14 @@ impl Machine {
 
     /// QUUX's interrupt status, the register page's word 100: `<0>` the
     /// tick, `<1>` the interval timer, `<2>` block-disk's done, each under
-    /// its own enable. Keyboard, mouse and network (`<3>` to `<5>`) come
-    /// with contracts Q3 and Q4.
+    /// its own enable; `<3>` the keyboard and `<4>` the mouse
+    /// ([`crate::quux_input`]). The network, `<5>`, comes with contract Q4.
     pub fn interrupt_sources(&self) -> u32 {
         let t = self.tick;
         (self.geometry.tick && t.enabled && t.flag(self.ns)) as u32
             | ((self.geometry.tick && t.interval_enabled && t.interval_flag(self.ns)) as u32) << 1
             | (self.block_disk.as_ref().is_some_and(|d| d.interrupt_at(self.ns)) as u32) << 2
+            | if self.geometry.machine_id.is_some() { self.quux_input.interrupts() } else { 0 }
     }
 
     /// Fetches from the control store, honoring the PROM overlay on the
@@ -845,6 +851,7 @@ impl Machine {
         self.xbus_interrupt()
             || self.unibus_interrupt().is_some()
             || (self.geometry.tick && self.tick.pending(self.ns))
+            || (self.geometry.machine_id.is_some() && self.quux_input.interrupts() != 0)
     }
 
     /// `XBUS INTR IN`: the disk controller's request, or either display's
@@ -1188,7 +1195,7 @@ impl Machine {
                 0o100 => self.interrupt_sources(),
                 0o101 => self.bus_error as u32,
                 0o102 => self.mode.errstop as u32,
-                _ => w,
+                k => self.quux_input.read(k).unwrap_or(w),
             };
         }
         if let Some(r) = disk_controller::register(phys) {
@@ -1244,7 +1251,9 @@ impl Machine {
             match phys & 0o377 {
                 0o101 => self.bus_error = 0,
                 0o102 => self.mode.errstop = value & 1 != 0,
-                _ => {}
+                k => {
+                    self.quux_input.write(k, value);
+                }
             }
             return;
         }
@@ -1388,6 +1397,7 @@ impl Machine {
             tv,
             color_tv,
             ioboard,
+            quux_input,
             cycles,
             ns,
         } = self;
@@ -1442,6 +1452,7 @@ impl Machine {
             tv.save(w);
         }
         ioboard.save(w);
+        quux_input.save(w);
         w.u64(*cycles);
         w.u64(*ns);
     }
@@ -1555,6 +1566,7 @@ impl Machine {
             false => None,
         };
         self.ioboard.load(r)?;
+        self.quux_input.load(r)?;
         self.cycles = r.u64()?;
         self.ns = r.u64()?;
         Ok(())

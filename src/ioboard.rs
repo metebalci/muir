@@ -229,6 +229,25 @@ impl MouseInterface {
         Ok(())
     }
 }
+impl crate::quux_input::KeyboardMouse for IoBoard {
+    /// The board's one register is empty: `KBD READY` down.
+    fn takes_key(&self) -> bool {
+        !self.keyboard_ready()
+    }
+    fn press(&mut self, word: u32) {
+        IoBoard::press(self, word)
+    }
+    fn mouse_move(&mut self, dx: i32, dy: i32) {
+        IoBoard::mouse_move(self, dx, dy)
+    }
+    fn mouse_buttons(&mut self, mask: u8) {
+        IoBoard::mouse_buttons(self, mask)
+    }
+    fn mouse_buttons_held(&self) -> u8 {
+        IoBoard::mouse_buttons_held(self)
+    }
+}
+
 /// The beep.  Written by `%BEEP`, and read by older code to the same effect.
 ///
 /// **The register has no value in it.**  `-CLICK.AUDIO` is `Y4` of the

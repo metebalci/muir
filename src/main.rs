@@ -911,14 +911,35 @@ fn attend<E: Engine>(
             keyboard.key(keysym, down);
         }
     }
-    let board = &mut m.ioboard;
-    if keyboard.pending() > 0 {
-        keyboard.deliver(board);
-    }
-    if mouse.pending(board.mouse_buttons_held()) {
-        mouse.deliver(board);
-    }
+    deliver_input(m, keyboard, mouse);
     e.keyboard_boot();
+}
+
+/// What the viewer typed and moved, to the machine's keyboard and mouse:
+/// the I/O board's on the CADR, the register page's on QUUX (contract Q3).
+fn deliver_input(
+    m: &mut muir::machine::Machine,
+    keyboard: &mut muir::terminal::keyboard::Keyboard,
+    mouse: &mut muir::terminal::mouse::Mouse,
+) {
+    use muir::quux_input::KeyboardMouse;
+    fn to(
+        board: &mut impl KeyboardMouse,
+        keyboard: &mut muir::terminal::keyboard::Keyboard,
+        mouse: &mut muir::terminal::mouse::Mouse,
+    ) {
+        if keyboard.pending() > 0 {
+            keyboard.deliver(board);
+        }
+        if mouse.pending(board.mouse_buttons_held()) {
+            mouse.deliver(board);
+        }
+    }
+    if m.geometry.machine_id.is_some() {
+        to(&mut m.quux_input, keyboard, mouse);
+    } else {
+        to(&mut m.ioboard, keyboard, mouse);
+    }
 }
 
 const NETLIST: &str = include_str!("../data/CADR.netlist");
@@ -3036,13 +3057,7 @@ fn time_engine<S: Stepper>(
         // sequence's word, once the board has decoded it, presses the boot.
         {
             let e = s.engine_mut();
-            let board = &mut e.machine_mut().ioboard;
-            if keyboard.pending() > 0 {
-                keyboard.deliver(board);
-            }
-            if mouse.pending(board.mouse_buttons_held()) {
-                mouse.deliver(board);
-            }
+            deliver_input(e.machine_mut(), &mut keyboard, &mut mouse);
             e.keyboard_boot();
         }
         // The serial port's endpoint, when `--serial` opened one: what the

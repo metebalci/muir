@@ -83,7 +83,8 @@ fn quux_at(pack: &std::path::Path, (w, h): (usize, usize)) -> Machine {
 /// at the screen's words a line, and read at any other it does not.
 fn drawn_at_its_words_a_line(e: &impl Engine) -> bool {
     let (_, h, own) = e.machine().tv.screen();
-    framed(e, own, h) && [24, 40, 60, 80].into_iter().filter(|&w| w != own).all(|w| !framed(e, w, h))
+    framed(e, own, h)
+        && [24, 40, 60, 80].into_iter().filter(|&w| w != own).all(|w| !framed(e, w, h))
 }
 
 /// Whether, read `words_per_line` words a line, the first and the last
@@ -141,7 +142,8 @@ fn system_1002_runs_on_mono_tv() {
 #[test]
 fn system_1002_sizes_its_screen_at_boot() {
     for size in [(1024, 768), (1920, 1080)] {
-        let Some((_dir, pack, root)) = band_1002(&format!("system-1002-{}x{}", size.0, size.1)) else {
+        let Some((_dir, pack, root)) = band_1002(&format!("system-1002-{}x{}", size.0, size.1))
+        else {
             return;
         };
         let mut e = Micro::new(quux_at(&pack, size));

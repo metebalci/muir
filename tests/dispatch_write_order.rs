@@ -432,7 +432,9 @@ fn on_quux_rtl_and_micro_take_the_old_word() {
     for (old, new, _) in POPJ_CASES {
         let want = if old & DR != 0 { (RETURNED, 0) } else { (AT_OLD_DPC, 1) };
         let m = as_quux(&popj_program(old, new));
-        for (name, (e, _)) in [("rtl", rtl(&m, &[], POPJ_CYCLES)), ("micro", micro(&m, &[], POPJ_CYCLES))] {
+        for (name, (e, _)) in
+            [("rtl", rtl(&m, &[], POPJ_CYCLES)), ("micro", micro(&m, &[], POPJ_CYCLES))]
+        {
             assert_eq!((e.mmem[5], e.spcptr), want, "{name}, old {old:o} new {new:o}");
             assert_eq!(e.dmem[D as usize], new, "{name}: the new word is written");
         }
