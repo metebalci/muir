@@ -83,7 +83,11 @@ pub fn parse_quux_mcr(bytes: &[u8]) -> Result<Vec<Insn>, String> {
         return Err(format!("the control store section starts at {:o}, not 0", mcr.imem_start));
     }
     if mcr.imem.len() > base + PROM_WORDS {
-        return Err(format!("{:o} words: QUUX's PROM ends at {:o}", mcr.imem.len(), base + PROM_WORDS - 1));
+        return Err(format!(
+            "{:o} words: QUUX's PROM ends at {:o}",
+            mcr.imem.len(),
+            base + PROM_WORDS - 1
+        ));
     }
     if let Some(at) = mcr.imem.iter().take(base).position(|w| w.raw() != 0) {
         return Err(format!("a word at {at:o}: QUUX's PROM is assembled at {base:o}"));

@@ -523,7 +523,10 @@ fn quux_s_prom_is_assembled_at_36000() {
     assert!(out.status.success(), "{t}");
     assert!(t.contains("QUUX's own word for word"), "the start says it:\n{t}");
     let mits = concat!(env!("CARGO_MANIFEST_DIR"), "/mit/sys/ubin/promh.mcr");
-    refused_saying(&["--rtl", "--machine", "quux", "--prom", mits], "QUUX's PROM is assembled at 36000");
+    refused_saying(
+        &["--rtl", "--machine", "quux", "--prom", mits],
+        "QUUX's PROM is assembled at 36000",
+    );
 }
 
 /// **QUUX's disk is block-disk and nothing else**: without

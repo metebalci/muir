@@ -31,7 +31,10 @@ pub trait Engine {
     /// `chip` the wire runs from the netlist board's `-BOOT*` instead
     /// ([`crate::cable::FarEnd::join`]).
     fn keyboard_boot(&mut self) -> bool {
-        if self.machine_mut().ioboard.take_boot() {
+        let m = self.machine_mut();
+        // QUUX's keyboard is on the register page (contract Q3).
+        let boot = m.ioboard.take_boot() || m.quux_input.take_boot();
+        if boot {
             self.boot();
             true
         } else {

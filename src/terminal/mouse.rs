@@ -28,7 +28,7 @@
 //! [`IoBoard::mouse_move`], which samples them on its own clock as the
 //! board does.
 
-use crate::ioboard::{IoBoard, mouse};
+use crate::ioboard::mouse;
 
 /// How long the mouse holds each quadrature phase: two of the board's 8
 /// us clocks, [`crate::ioboard::KB_CLK_NS`], so that every step is
@@ -182,7 +182,7 @@ impl Mouse {
 
     /// Hands the behavioral I/O board what has happened: the counts,
     /// whole, and the buttons.
-    pub fn deliver(&mut self, board: &mut IoBoard) {
+    pub fn deliver(&mut self, board: &mut impl crate::quux_input::KeyboardMouse) {
         let (dx, dy) = self.take_motion();
         board.mouse_move(dx, dy);
         board.mouse_buttons(self.buttons);
