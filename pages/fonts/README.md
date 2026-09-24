@@ -23,19 +23,22 @@ The Plex files are Google Fonts' own `latin` subset, fetched on 7 September
 2026: every character these pages use is in it.
 
 The other two were cut from the upstream TTFs in
-[google/fonts](https://github.com/google/fonts) on 15 September 2026 ---
+[google/fonts](https://github.com/google/fonts) ---
 `ofl/delagothicone/DelaGothicOne-Regular.ttf`,
 `ofl/zenmarugothic/ZenMaruGothic-Medium.ttf` and `ZenMaruGothic-Bold.ttf` ---
-because they are Japanese families and the whole of one is megabytes. What is
-kept is the 112 code points the three pages actually draw: printable ASCII,
-`U+00A0` `U+00A7` `U+00A9` `U+00B5` `U+00B7` `U+2013` `U+2014` `U+2019`
-`U+201C` `U+201D` `U+2026`, and the six katakana of ミュア and カチッ ---
-`U+30A2` `U+30AB` `U+30C1` `U+30C3` `U+30DF` `U+30E5`. Each file is about
-8&nbsp;KB.
+because they are Japanese families and the whole of one is megabytes. They
+were first cut on 15 September 2026 and cut again on 24 September 2026 with
+more code points, from upstream files that still gave the first cut byte for
+byte. What is kept is the 117 code points the pages actually draw: printable
+ASCII, `U+00A0` `U+00A7` `U+00A9` `U+00B5` `U+00B7` `U+00D7` `U+2013`
+`U+2014` `U+2019` `U+201C` `U+201D` `U+2026`, and the ten katakana of
+ミュア, カチッ, ドン and クックス --- `U+30A2` `U+30AB` `U+30AF` `U+30B9`
+`U+30C1` `U+30C3` `U+30C9` `U+30DF` `U+30E5` `U+30F3`. Each file is about
+9&nbsp;KB.
 
     pip install fonttools brotli
     pyftsubset DelaGothicOne-Regular.ttf --flavor=woff2 \
-        --unicodes=U+0020-007E,U+00A0,U+00A7,U+00A9,U+00B5,U+00B7,U+2013,U+2014,U+2019,U+201C,U+201D,U+2026,U+30A2,U+30AB,U+30C1,U+30C3,U+30DF,U+30E5 \
+        --unicodes=U+0020-007E,U+00A0,U+00A7,U+00A9,U+00B5,U+00B7,U+00D7,U+2013,U+2014,U+2019,U+201C,U+201D,U+2026,U+30A2,U+30AB,U+30AF,U+30B9,U+30C1,U+30C3,U+30C9,U+30DF,U+30E5,U+30F3 \
         --output-file=dela-gothic-one.woff2
 
 **A page that adds a character not in that list gets a fallback for it**, and
