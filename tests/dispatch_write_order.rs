@@ -107,6 +107,36 @@ struct Cycle {
 /// RAM cells, `main` put on the memory boards --- booted and run for
 /// `cycles` generator cycles.
 fn on_chip(m: &Machine, main: &[(u32, u32)], cycles: usize) -> (End, Vec<Cycle>) {
+    let mut b = board(m, main);
+    let clk0 = b.n.cpu.by_name_id("-CLK0").unwrap();
+    let wps: Vec<_> = ["-WP1", "-WP2", "-WP3", "-WP4", "-WP5"]
+        .iter()
+        .map(|w| b.n.cpu.by_name_id(w).unwrap())
+        .collect();
+    let mut log = Vec::new();
+    for _ in 0..cycles {
+        let pc = b.c.bus(&b.n.cpu, "PC", 14) as u16;
+        let mut pulses = [0; 5];
+        let t0 = b.clk.time_ns();
+        let ran = generator_cycle(&mut b.c, &mut b.far, &mut b.clk, clk0, &wps, &mut pulses);
+        log.push(Cycle { pc, ran, pulses, ns: b.clk.time_ns() - t0 });
+    }
+    (board_end(&b), log)
+}
+
+/// The board, its clock and the far end of its cables.
+struct Board {
+    n: support::Netlists,
+    c: Chip,
+    clk: Behavioral,
+    far: FarEnd,
+}
+
+/// The program and memories of `m` on the board --- the PROM as a
+/// programming image, every scratchpad and both map levels stored into the
+/// RAM cells, `main` put on the memory boards --- booted, up to the first
+/// microcycle whose `PC` is not 0.
+fn board(m: &Machine, main: &[(u32, u32)]) -> Board {
     let n = support::netlists();
     let (mut c, mut clk, mut far) = support::chip(&n);
     let image: Vec<u64> = m.prom.iter().map(|&i| muir::prom::programming(i)).collect();
@@ -153,29 +183,22 @@ fn on_chip(m: &Machine, main: &[(u32, u32)], cycles: usize) -> (End, Vec<Cycle>)
         c.microcycle(&mut clk);
         skipped += 1;
     }
-    let clk0 = n.cpu.by_name_id("-CLK0").unwrap();
-    let wps: Vec<_> = ["-WP1", "-WP2", "-WP3", "-WP4", "-WP5"]
-        .iter()
-        .map(|w| n.cpu.by_name_id(w).unwrap())
-        .collect();
-    let mut log = Vec::new();
-    for _ in 0..cycles {
-        let pc = c.bus(&n.cpu, "PC", 14) as u16;
-        let mut pulses = [0; 5];
-        let t0 = clk.time_ns();
-        let ran = generator_cycle(&mut c, &mut far, &mut clk, clk0, &wps, &mut pulses);
-        log.push(Cycle { pc, ran, pulses, ns: clk.time_ns() - t0 });
-    }
-    let (mm, dm, l2, pdl, spc) = (ram(1, &c), ram(4, &c), ram(6, &c), ram(2, &c), ram(3, &c));
-    let end = End {
-        mmem: (0..32).map(|k| mm.word(&c, k)).collect(),
-        dmem: (0..dm.len()).map(|k| dm.word(&c, k)).collect(),
-        l2: (0..l2.len()).map(|k| l2.word(&c, k)).collect(),
-        pdl: (0..pdl.len()).map(|k| pdl.word(&c, k)).collect(),
-        spc: (0..32).map(|k| spc.word(&c, k) & 0o1777777).collect(),
+    Board { n, c, clk, far }
+}
+
+/// What the board holds at the end of a run.
+fn board_end(b: &Board) -> End {
+    let (n, c) = (&b.n, &b.c);
+    let ram = |k: usize| Ram::new(c, &n.cpu, &MEMS[k]);
+    let (mm, dm, l2, pdl, spc) = (ram(1), ram(4), ram(6), ram(2), ram(3));
+    End {
+        mmem: (0..32).map(|k| mm.word(c, k)).collect(),
+        dmem: (0..dm.len()).map(|k| dm.word(c, k)).collect(),
+        l2: (0..l2.len()).map(|k| l2.word(c, k)).collect(),
+        pdl: (0..pdl.len()).map(|k| pdl.word(c, k)).collect(),
+        spc: (0..32).map(|k| spc.word(c, k) & 0o1777777).collect(),
         spcptr: c.bus(&n.cpu, "SPCPTR", 5) as u8,
-    };
-    (end, log)
+    }
 }
 
 /// The same on an engine, `steps` microcycles.
@@ -356,7 +379,9 @@ const POPJ_CASES: [(u32, u32, (u32, u8)); 4] = [
 /// edge ([`on_chip_the_dispatch_ram_floats_during_its_write_and_the_pulse_ends_at_the_edge`]),
 /// where the board's pulse runs ten nanoseconds past it and the RAM's
 /// output floats while written, a race. **Unverified** on a CADR. QUUX
-/// defines the old word ([`rtl_and_micro_take_the_old_word_as_quux_defines`]).
+/// defines the old word ([`on_quux_rtl_and_micro_take_the_old_word`]); on
+/// the CADR `rtl` and `micro` follow the netlist
+/// ([`on_the_cadr_rtl_and_micro_take_the_word_chip_does`]).
 ///
 /// The dispatch memory is 93425A 1K x 1 RAMs (pages DRAM0-DRAM2), written
 /// by `-DWEA`/`-DWEB`, `NAND(WP2, DISPWR)` at DRAM0 2F03: live `DISPWR`, so
@@ -377,18 +402,39 @@ fn on_chip_a_popj_that_writes_its_own_dispatch_word_uses_the_new_word() {
     }
 }
 
+/// `m` as QUUX: the same program and memories on `--machine quux`.
+fn as_quux(m: &Machine) -> Machine {
+    let mut m = m.clone();
+    m.geometry = muir::machine::Geometry::QUUX;
+    m
+}
+
+/// **On the CADR, `rtl` and `micro` take the word the board does**: the
+/// netlist is the reference, including in a race the board itself does not
+/// settle ([`on_chip_a_popj_that_writes_its_own_dispatch_word_uses_the_new_word`]).
+#[test]
+fn on_the_cadr_rtl_and_micro_take_the_word_chip_does() {
+    for (old, new, _) in POPJ_CASES {
+        let [chip, rtl, micro] = popj_case(old, new);
+        assert_eq!(rtl, chip, "rtl, old {old:o} new {new:o}");
+        assert_eq!(micro, chip, "micro, old {old:o} new {new:o}");
+    }
+}
+
 /// **QUUX defines the word a `POPJ` in a dispatch write sees as the old
 /// one**: `R` and `DPC` from the word standing before the write, on `rtl`
-/// (`Rtl::read_phase` reads it, `Rtl::write_phase` writes after) and on
-/// `micro` (`Micro::dispatch`). With `R` set in the old word it returns;
-/// with it clear it goes to the old word's `DPC` and pops nothing.
+/// and `micro`, as a RAM read in the cycle that writes it gives on the
+/// FPGA. With `R` set in the old word it returns; with it clear it goes to
+/// the old word's `DPC` and pops nothing.
 #[test]
-fn rtl_and_micro_take_the_old_word_as_quux_defines() {
+fn on_quux_rtl_and_micro_take_the_old_word() {
     for (old, new, _) in POPJ_CASES {
         let want = if old & DR != 0 { (RETURNED, 0) } else { (AT_OLD_DPC, 1) };
-        let [_, rtl, micro] = popj_case(old, new);
-        assert_eq!(rtl, want, "rtl, old {old:o} new {new:o}");
-        assert_eq!(micro, want, "micro, old {old:o} new {new:o}");
+        let m = as_quux(&popj_program(old, new));
+        for (name, (e, _)) in [("rtl", rtl(&m, &[], POPJ_CYCLES)), ("micro", micro(&m, &[], POPJ_CYCLES))] {
+            assert_eq!((e.mmem[5], e.spcptr), want, "{name}, old {old:o} new {new:o}");
+            assert_eq!(e.dmem[D as usize], new, "{name}: the new word is written");
+        }
     }
 }
 
@@ -525,15 +571,28 @@ fn on_chip_the_instruction_after_a_map_write_reads_the_new_map_word() {
     assert_eq!(t.chip.mmem[11], t.chip.mmem[10], "chip: and so does the one after");
 }
 
+/// **On the CADR, `rtl` and `micro` read the word the board does.**
+#[test]
+fn on_the_cadr_rtl_and_micro_read_the_map_word_chip_does_after_a_map_write() {
+    let t = map_source_after_a_map_write();
+    for (name, e) in [("rtl", &t.rtl), ("micro", &t.micro)] {
+        assert_eq!((e.mmem[10], e.mmem[11]), (t.chip.mmem[10], t.chip.mmem[11]), "{name}");
+    }
+}
+
 /// **QUUX defines it as the old word**: the instruction right after the
 /// store reads the level-2 word from before the write, on `rtl` and on
 /// `micro`, and the one after that reads the new one.
 #[test]
-fn rtl_and_micro_read_the_old_map_word_after_a_map_write_as_quux_defines() {
-    let t = map_source_after_a_map_write();
-    for (name, e) in [("rtl", &t.rtl), ("micro", &t.micro)] {
+fn on_quux_rtl_and_micro_read_the_old_map_word_after_a_map_write() {
+    let m = as_quux(&map_write_then(vec![
+        Insn::new(ALU | SETM | SRC_MAP | a_src(3) | m_dest(10)),
+        Insn::new(ALU | SETM | SRC_MAP | a_src(3) | m_dest(11)),
+    ]));
+    for (name, (e, _)) in [("rtl", rtl(&m, &[], 240)), ("micro", micro(&m, &[], 240))] {
+        assert_eq!(e.l2[3], NEW_L2, "{name}: the map is written");
         assert_eq!(e.mmem[10] & 0o77777777, OLD_L2, "{name}: the next instruction");
-        assert_eq!(e.mmem[11], t.chip.mmem[11], "{name}: the one after");
+        assert_eq!(e.mmem[11] & 0o77777777, NEW_L2, "{name}: the one after");
     }
 }
 
@@ -565,11 +624,26 @@ fn on_chip_a_dispatch_on_a_map_bit_after_a_map_write_takes_the_new_word() {
     assert_eq!(t.chip.mmem[5], AT_NEW_DPC, "chip: dispatched on the new word's bit 18");
 }
 
+/// **On the CADR, `rtl` and `micro` dispatch on the bit the board does.**
+#[test]
+fn on_the_cadr_rtl_and_micro_dispatch_on_the_map_bit_chip_does() {
+    let t = map_dispatch_after_a_map_write();
+    assert_eq!((t.rtl.mmem[5], t.micro.mmem[5]), (t.chip.mmem[5], t.chip.mmem[5]));
+}
+
 /// **QUUX defines it as the old word's bit 18**, on `rtl` and `micro`.
 #[test]
-fn rtl_and_micro_dispatch_on_the_old_map_bit_as_quux_defines() {
-    let t = map_dispatch_after_a_map_write();
-    assert_eq!((t.rtl.mmem[5], t.micro.mmem[5]), (AT_OLD_DPC, AT_OLD_DPC));
+fn on_quux_rtl_and_micro_dispatch_on_the_old_map_bit() {
+    const E: u64 = 0o1300;
+    let mut m = as_quux(&map_write_then(vec![
+        Insn::new(DISPATCH | (1 << 8) | a_src(3) | m_src(3) | d_addr(E)),
+        filler(),
+    ]));
+    m.dmem[E as usize] = OLD_DPC;
+    m.dmem[E as usize + 1] = NEW_DPC;
+    let (r, _) = rtl(&m, &[], 240);
+    let (u, _) = micro(&m, &[], 240);
+    assert_eq!((r.mmem[5], u.mmem[5]), (AT_OLD_DPC, AT_OLD_DPC));
 }
 
 // --- Q4: writes pending across a held microcycle ----------------------------
@@ -839,4 +913,847 @@ fn micro_writes_a_dispatch_word_at_the_address_the_dispatch_reads() {
             assert_eq!(t.micro.dmem, t.chip.dmem, "gap {gap}: micro");
         }
     }
+}
+
+// --- QUUX: no hung microcycle ------------------------------------------------
+//
+// QUUX has no `-HANG`. A microcycle that reads `MD` while a read is in
+// flight does not run its read phase and write pulses and then hold: it
+// waits, as for `-WAIT`, whole microcycles with no write pulse, and runs
+// once the word is in `MD` ([`muir::machine::Geometry::hangs`]). `micro`,
+// where a read lands at once, has always run it so; on QUUX `rtl` agrees
+// with it.
+
+/// The QUUX run of [`dispatch_write_on_md`]'s program on `rtl`, under
+/// `timing`, and on `micro`.
+fn quux_dispatch_write_on_md(gap: usize, timing: TimingModel) -> (End, Vec<Row>, End) {
+    const E: u64 = 0o1300;
+    let mut then = vec![filler(); gap];
+    then.push(Insn::new(DISPATCH | DMEM_WRITE | SRC_MD | d_len(3) | a_src(2) | d_addr(E)));
+    let m = as_quux(&read_then(&[(DISPATCH_WORD, 2)], then));
+    let main = [(PHYS, READ_WORD)];
+    let (r, rows) = rtl_timed(&m, &main, HELD_CYCLES, timing, None);
+    let (u, _) = micro(&m, &main, HELD_CYCLES);
+    (r, rows, u)
+}
+
+/// **On QUUX a dispatch write addressed by `MD` waits for the word read**
+/// and writes where `micro` does, at every gap: 1302 at gap 0, which
+/// nothing holds, and 1305, [`READ_WORD`]'s, where the CADR's board hangs
+/// and writes at the old `MD`
+/// ([`a_dispatch_write_addressed_by_md_in_a_hang_lands_at_the_md_before_it_on_the_board`]).
+#[test]
+fn on_quux_a_dispatch_write_addressed_by_md_waits_for_the_word_read() {
+    for (gap, want) in [(0, 0o1302), (1, 0o1305), (2, 0o1305), (3, 0o1305)] {
+        for timing in [TimingModel::Cadr, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
+            let (r, _, u) = quux_dispatch_write_on_md(gap, timing);
+            let written: Vec<_> = (0..2048).filter(|&k| r.dmem[k] != 0).collect();
+            assert_eq!(written, vec![want], "gap {gap}, {timing:?}: rtl");
+            assert_eq!(r.dmem, u.dmem, "gap {gap}, {timing:?}: rtl and micro");
+        }
+    }
+}
+
+/// **On QUUX the wait is whole microcycles**: under `sync`, every
+/// microcycle of the run, the held one included, is a whole number of
+/// four-tick microcycles, and the held one is longer than one.
+#[test]
+fn on_quux_the_wait_for_md_is_whole_microcycles() {
+    let sync = TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 };
+    let (_, rows, _) = quux_dispatch_write_on_md(1, sync);
+    let x = Insn::new(DISPATCH | DMEM_WRITE | SRC_MD | d_len(3) | a_src(2) | d_addr(0o1300)).raw();
+    let r = row_of(&rows, x);
+    assert!(r.to - r.from > 40, "held: {}..{}", r.from, r.to);
+    for w in &rows {
+        assert_eq!((w.to - w.from) % 40, 0, "{}..{}", w.from, w.to);
+    }
+}
+
+/// **On QUUX a map write pending into the wait lands at the word read**:
+/// the store's pulse is in the microcycle that runs, once the word is in
+/// `MD`, where the CADR's hung microcycle fires it at the old `MD`, level-2
+/// index 3 ([`a_map_write_pending_into_a_hang_lands_at_the_md_before_the_hang_on_the_board`]).
+/// The store rewrites `VMA` under the read in flight, and the read brings
+/// back 0 as on the board, so the word read addresses level-2 index 0.
+/// (`micro` lands a read at once, before the store, and is not compared.)
+#[test]
+fn on_quux_a_map_write_pending_into_the_wait_lands_at_the_word_read() {
+    let m = as_quux(&read_then(
+        &[(MAP_STORE, 2)],
+        vec![
+            Insn::new(ALU | SETM | m_src(2) | a_src(3) | WRITE_MAP),
+            Insn::new(ALU | SETM | SRC_MD | a_src(3) | m_dest(13)),
+        ],
+    ));
+    let (r, _) = rtl(&m, &[(PHYS, READ_WORD)], HELD_CYCLES);
+    assert_eq!(r.mmem[13], 0, "rtl: what the read brought back");
+    assert_eq!((r.l2[0], r.l2[3]), (NEW_L2, 0), "rtl: at the word read, not the old MD");
+}
+
+// --- Q5: a read finishing inside the microcycle that waits for it, and edges
+//     that an acknowledgement lands on ---------------------------------------
+//
+// muir-fpga's fabric parts from `rtl` in these programs, which its sessions
+// named `x-popj-*`, `t-*`, `w-*` and `n-*`; the builders below are theirs,
+// the speed set by the program itself where the board has to run it at
+// normal speed. The board is watched net by net, each transition with its
+// nanosecond, and each microcycle's boundary (`-CLK0` falling) with the `PC`,
+// `IR` and `MD` after it.
+
+/// A net's transition on the board.
+#[derive(Debug, Clone, Copy)]
+struct Event {
+    ns: u64,
+    net: &'static str,
+    level: Level,
+}
+
+/// A boundary of the cpu clock, `-CLK0` falling, and what stands after it.
+#[derive(Debug, Clone, Copy)]
+struct Edge {
+    ns: u64,
+    ir: u64,
+    md: u32,
+}
+
+/// The nets watched: the memory cycle's end on VCTL1 (`-MEMACK`, the TD50
+/// and TD250 taps `-MFINISHD` and `-RDFINISH`, `MBUSY`, `RD.IN.PROGRESS`),
+/// the two holds, `MBUSY.SYNC` and its clock `MCLK1A` (the 74S175 at VCTL1
+/// 1E20), `MD`'s strobe `-LOADMD`, and the dispatch RAM's write pulse
+/// `-DWEA`.
+const WATCH: [&str; 11] = [
+    "-MEMACK",
+    "-MFINISHD",
+    "-RDFINISH",
+    "-HANG",
+    "-WAIT",
+    "MBUSY",
+    "MBUSY.SYNC",
+    "RD.IN.PROGRESS",
+    "-LOADMD",
+    "-DWEA",
+    "MCLK1A",
+];
+
+/// The board run for `edges` microcycles, every transition of [`WATCH`]
+/// and every boundary recorded.
+fn watch(b: &mut Board, edges: usize) -> (Vec<Edge>, Vec<Event>) {
+    let clk0 = b.n.cpu.by_name_id("-CLK0").unwrap();
+    let ids: Vec<_> = WATCH.iter().map(|s| b.n.cpu.by_name_id(s).unwrap()).collect();
+    let mut was: Vec<Level> = ids.iter().map(|&i| b.c.net(i)).collect();
+    let mut clk_was = b.c.net(clk0);
+    let (mut es, mut ev) = (Vec::new(), Vec::new());
+    while es.len() < edges {
+        b.far.tick_with(&mut b.c, &mut b.clk);
+        let now = b.clk.time_ns();
+        for (k, &i) in ids.iter().enumerate() {
+            let l = b.c.net(i);
+            if l != was[k] {
+                ev.push(Event { ns: now, net: WATCH[k], level: l });
+                was[k] = l;
+            }
+        }
+        let l = b.c.net(clk0);
+        if l == Level::Low && clk_was != Level::Low {
+            es.push(Edge {
+                ns: now,
+                ir: b.c.bus(&b.n.cpu, "IR", 48),
+                md: !(b.c.bus(&b.n.cpu, "-MD", 32) as u32),
+            });
+        }
+        clk_was = l;
+    }
+    (es, ev)
+}
+
+/// The first transition of `net` to `level` at or after `from`.
+fn first(ev: &[Event], net: &str, level: Level, from: u64) -> Option<u64> {
+    ev.iter().find(|e| e.net == net && e.level == level && e.ns >= from).map(|e| e.ns)
+}
+
+/// The microcycle in which `ir` stands in `IR`: its first and last
+/// nanosecond on the board.
+fn microcycle_of(es: &[Edge], ir: u64) -> (u64, u64) {
+    let k = es.iter().position(|e| e.ir == ir).expect("the instruction ran on the board");
+    (es[k].ns, es[k + 1].ns)
+}
+
+/// One microcycle on `rtl`: from and to, in its own nanoseconds, and what
+/// stood in `IR`.
+#[derive(Debug, Clone, Copy)]
+struct Row {
+    from: u64,
+    to: u64,
+    ir: u64,
+}
+
+/// `rtl` under `timing`, `steps` microcycles. With `speed`, the mode
+/// register's speed bits are set after the boot, as muir-fpga's generator
+/// sets them; without, the program sets them itself.
+fn rtl_timed(
+    m: &Machine,
+    main: &[(u32, u32)],
+    steps: usize,
+    timing: TimingModel,
+    speed: Option<u16>,
+) -> (End, Vec<Row>) {
+    let mut m = m.clone();
+    for &(p, w) in main {
+        m.main[p as usize] = w;
+    }
+    let mut e = muir::rtl::Rtl::new(m);
+    e.set_timing_model(timing);
+    e.boot();
+    if let Some(s) = speed {
+        e.machine_mut().mode.write(s);
+    }
+    let mut rows = Vec::new();
+    for _ in 0..steps {
+        let (from, ir) = (e.ns(), e.ir());
+        e.step().unwrap();
+        rows.push(Row { from, to: e.ns(), ir });
+    }
+    let mm = e.machine();
+    let end = End {
+        mmem: mm.mmem.to_vec(),
+        dmem: mm.dmem.iter().map(|&w| w & 0o377777).collect(),
+        l2: mm.l2_map[..1024].iter().map(|&w| w & 0o77777777).collect(),
+        pdl: mm.pdl[..1024].to_vec(),
+        spc: mm.spc.iter().map(|&w| w & 0o1777777).collect(),
+        spcptr: mm.spcptr,
+    };
+    (end, rows)
+}
+
+/// The row in which `ir` stands in `IR`.
+fn row_of(rows: &[Row], ir: u64) -> Row {
+    *rows.iter().find(|r| r.ir == ir).expect("the instruction ran on rtl")
+}
+
+use muir::clock::TimingModel;
+
+/// `IR<45>`, `ILONG`.
+fn ilong(i: Insn) -> Insn {
+    Insn::new(i.raw() | (1 << 45))
+}
+
+/// Unibus 766012, the mode register, is physical 17773005: reached from
+/// VMA 1005 through level-2 entry 2, as the boot PROM reaches it
+/// (`promh.9`).
+const MODE_VADDR: u32 = 0o1005;
+const MODE_PAGE: u32 = (1 << 23) | (1 << 22) | 0o37766;
+/// `{SPEED1, SPEED0}` = 2, normal: 145 ns a microcycle on the board, 185
+/// under `ILONG`.
+const NORMAL: u16 = 2;
+
+/// The processor writes `speed` into the mode register's speed bits and
+/// runs on, past the two stages of the synchronizer at OLORD1 1A01.
+fn speed_prologue(speed: u16, p: &mut Vec<Insn>) {
+    constant(MODE_VADDR, 20, p);
+    constant(speed as u32, 21, p);
+    p.push(Insn::new(ALU | SETM | m_src(21) | a_src(3) | MD));
+    p.push(filler());
+    p.push(Insn::new(ALU | SETM | m_src(20) | a_src(3) | START_WRITE));
+    for _ in 0..12 {
+        p.push(filler());
+    }
+}
+
+/// Where the `POPJ` returns, and the two dispatch words' `DPC`: past the
+/// program, which the speed prologue lengthens.
+const H_OLD_DPC: u32 = 0o700;
+const H_NEW_DPC: u32 = 0o720;
+const RET_PC: u32 = 0o740;
+/// The dispatch words written and read, 1300 plus `MD<2:0>`.
+const E: u64 = 0o1300;
+
+/// `DISPATCH | DMEM_WRITE | POPJ` with its address from `MD<2:0>`, writing
+/// `DR | 1234` from A 2; under `ILONG` if `long`.
+fn hung_popj_insn(long: bool) -> Insn {
+    let x = Insn::new(DISPATCH | DMEM_WRITE | POPJ | SRC_MD | d_len(3) | a_src(2) | d_addr(E));
+    if long { ilong(x) } else { x }
+}
+
+/// muir-fpga's `hung_popj(pre, n, i, xl)`: a return address pushed, `MD` set
+/// to [`MD_BEFORE`] (`MD<2:0>` = 2), `pre` fillers, then `VMA-START-READ` of
+/// [`VADDR`], whose word is 0; `n` fillers, the first `i` under `ILONG`;
+/// then [`hung_popj_insn`], which uses `MD` and so is hung while the read
+/// is in progress.
+///
+/// Word 1300 holds [`H_OLD_DPC`] with `DR` clear and 1301 [`H_NEW_DPC`].
+/// With the read landed before the write pulse, the write goes to 1300,
+/// the word the dispatch also reads. If the edge takes the new word, `DR`
+/// is set, the `POPJ` returns to [`RET_PC`], `M5` = [`AT_NEW_DPC`] and the
+/// stack pointer is back at 0. If it takes the old one, the machine goes to
+/// its `DPC`, `M5` = [`AT_OLD_DPC`] and the pointer stays at 1.
+///
+/// `own` has the program set normal speed itself, which the board needs;
+/// without, the speed is left to the caller, as muir-fpga's generator sets
+/// it into `rtl`'s mode register after the boot.
+fn hung_popj(pre: usize, n: usize, i: usize, xl: bool, own: bool) -> Machine {
+    let mut p = vec![filler()];
+    if own {
+        speed_prologue(NORMAL, &mut p);
+    }
+    constant(MD_BEFORE, 1, &mut p);
+    constant(VADDR, 12, &mut p);
+    constant(AT_OLD_DPC, 7, &mut p);
+    constant(AT_NEW_DPC, 8, &mut p);
+    constant(DR | 0o1234, 2, &mut p);
+    constant(RET_PC, 15, &mut p);
+    p.push(Insn::new(ALU | SETM | m_src(15) | a_src(3) | SPC_PUSH));
+    p.push(Insn::new(ALU | SETZ | m_dest(5)));
+    for _ in 0..pre {
+        p.push(filler());
+    }
+    p.push(Insn::new(ALU | SETM | m_src(1) | a_src(3) | MD));
+    p.push(filler());
+    p.push(Insn::new(ALU | SETM | m_src(12) | a_src(3) | START_READ));
+    for k in 0..n {
+        p.push(if k < i { ilong(filler()) } else { filler() });
+    }
+    p.push(hung_popj_insn(xl));
+    p.push(filler());
+    p.push(copy(7, 5));
+    let here = p.len();
+    p.push(halt_here(here));
+    assert!(p.len() < H_OLD_DPC as usize);
+    p.resize(512, filler());
+    for (at, from) in [(RET_PC, 8), (H_NEW_DPC, 8), (H_OLD_DPC, 7)] {
+        p[at as usize] = copy(from, 5);
+        p[at as usize + 1] = halt_here(at as usize + 1);
+    }
+    let mut m = program(p);
+    m.l2_map[1] = (1 << 23) | (1 << 22) | 0o100;
+    m.l2_map[2] = MODE_PAGE;
+    m.dmem[E as usize] = H_OLD_DPC;
+    m.dmem[E as usize + 1] = H_NEW_DPC;
+    m
+}
+
+const X_CYCLES: usize = 700;
+
+/// Three shapes whose read finishes inside the microcycle of
+/// [`hung_popj_insn`] on the board, `(pre, n, i, xl)`, each with what
+/// `-HANG` does: `(2, 6, 0, 0)`, `-RDFINISH` 50 ns in and `-HANG` never
+/// asserted; `(2, 5, 3, 0)`, 116 ns in, `-HANG` asserted at the read phase's
+/// end and released 31 ns later; `(5, 5, 1, 1)`, under `ILONG`, 178 ns into
+/// 185, `-HANG` asserted 53 ns before its release.
+const INSIDE: [((usize, usize, usize, bool), bool); 3] =
+    [((2, 6, 0, false), false), ((2, 5, 3, false), true), ((5, 5, 1, true), true)];
+
+/// **A `POPJ` in a dispatch write whose read finishes inside its own hung
+/// microcycle takes the new word, on the board and on `rtl`.** The hold
+/// does not lengthen the microcycle: `-HANG`, `NAND(RD.IN.PROGRESS, USE.MD,
+/// -CLK3G)` at VCTL1 3F17, can assert only once `-CLK3G` is up at the end of
+/// the read phase (measured: 85 ns into a 145 ns microcycle, 125 into a 185
+/// one), and what it holds off is the next `-TPR0` (CLOCK1 1C08); the read
+/// finishes before `CYCLECOMPLETED`, so the edge comes at the normal time.
+/// `MD` has the word read since `-LOADMD` (the acknowledgement), before the
+/// microcycle began, so `DADR` is 1300 throughout, and the dispatch write
+/// pulse `-DWEA` (`NAND(WP2, DISPWR)`, DRAM0 2F03) ends at the edge.
+///
+/// So this is, on the board, the microcycle of
+/// [`on_chip_a_popj_that_writes_its_own_dispatch_word_uses_the_new_word`]:
+/// a pulse that ends at the edge, which `chip` orders before it. The answer
+/// is the netlist model's and **unverified** on a CADR for the same reason
+/// as there. On the CADR `rtl` takes the word `chip` does, hung or not.
+/// QUUX has no hung microcycle and defines the old word
+/// ([`on_quux_a_popj_dispatch_write_takes_the_old_word_waiting_or_not`]).
+#[test]
+fn a_popj_dispatch_write_whose_read_finishes_inside_its_hung_microcycle_takes_the_new_word() {
+    for ((pre, n, i, xl), hangs) in INSIDE {
+        let m = hung_popj(pre, n, i, xl, true);
+        let x = hung_popj_insn(xl).raw();
+        let mut b = board(&m, &[]);
+        let (es, ev) = watch(&mut b, X_CYCLES);
+        let chip = board_end(&b);
+        let (s, t) = microcycle_of(&es, x);
+        let rdfinish = first(&ev, "-RDFINISH", Level::Low, s).unwrap();
+        let hang = first(&ev, "-HANG", Level::Low, s).filter(|&h| h < t);
+        let dwea = first(&ev, "-DWEA", Level::High, s).unwrap();
+        let what = format!(
+            "({pre}, {n}, {i}, {xl}): microcycle {s}..{t}, -RDFINISH {rdfinish}, -HANG {hang:?}"
+        );
+        eprintln!("{what}; chip M5 {:o} SPCPTR {}", chip.mmem[5], chip.spcptr);
+        assert_eq!(t - s, if xl { 185 } else { 145 }, "{what}: not lengthened");
+        assert!(s < rdfinish && rdfinish < t, "{what}: the read finishes inside");
+        assert_eq!(hang.is_some(), hangs, "{what}: -HANG");
+        assert_eq!(dwea, t, "{what}: the write pulse ends at the edge");
+        assert_eq!((chip.mmem[5], chip.spcptr), (AT_NEW_DPC, 0), "{what}: chip");
+        let (rtl, rows) = rtl_timed(&m, &[], X_CYCLES, TimingModel::Cadr, None);
+        let r = row_of(&rows, x);
+        assert_eq!((r.from, r.to), (s, t), "{what}: rtl's microcycle");
+        assert_eq!((rtl.mmem[5], rtl.spcptr), (AT_NEW_DPC, 0), "{what}: rtl");
+    }
+}
+
+/// A [`hung_popj`] program on QUUX whose read brings back a word with the
+/// same low three bits as [`MD_BEFORE`], so that the dispatch writes and
+/// reads one word, `DADR` being the same before the read lands and after;
+/// that word holds [`H_OLD_DPC`] with `R` clear. The old word goes there
+/// and leaves the stack pointer at 1; the new one, `DR` set, returns to
+/// [`RET_PC`] and pops it to 0.
+fn quux_hung_popj_one_word(pre: usize, n: usize, i: usize, xl: bool) -> (Machine, [(u32, u32); 1]) {
+    let low = MD_BEFORE & 7;
+    let mut m = as_quux(&hung_popj(pre, n, i, xl, false));
+    m.dmem[E as usize] = 0;
+    m.dmem[E as usize + 1] = 0;
+    m.dmem[(E as u32 + low) as usize] = H_OLD_DPC;
+    (m, [(PHYS, low)])
+}
+
+/// **On QUUX a `POPJ` in a dispatch write takes the old word, waiting for
+/// `MD` or not**: the same shapes on `--machine quux`, the dispatch writing
+/// and reading one word ([`quux_hung_popj_one_word`]). Among them are
+/// microcycles that wait for the word read where the CADR's would hang;
+/// QUUX runs them once, whole, after the wait.
+#[test]
+fn on_quux_a_popj_dispatch_write_takes_the_old_word_waiting_or_not() {
+    let mut stretched = 0;
+    for pre in 0..6 {
+        for n in 3..8 {
+            for i in 0..=n.min(3) {
+                for xl in [false, true] {
+                    let (m, main) = quux_hung_popj_one_word(pre, n, i, xl);
+                    let (e, rows) = rtl_timed(&m, &main, X_CYCLES, TimingModel::Cadr, None);
+                    let r = row_of(&rows, hung_popj_insn(xl).raw());
+                    stretched += (r.to - r.from > if xl { 185 } else { 145 }) as usize;
+                    let what = format!("({pre}, {n}, {i}, {xl})");
+                    assert_eq!((e.mmem[5], e.spcptr), (AT_OLD_DPC, 1), "{what}: rtl");
+                    let (u, _) = micro(&m, &main, X_CYCLES);
+                    assert_eq!((u.mmem[5], u.spcptr), (AT_OLD_DPC, 1), "{what}: micro");
+                }
+            }
+        }
+    }
+    assert!(stretched > 0, "some dispatch microcycle waited for MD");
+}
+
+/// **A checkpoint inside the wait for `MD` keeps the old word on QUUX**:
+/// the program of [`on_quux_a_popj_dispatch_write_takes_the_old_word_waiting_or_not`]
+/// ([`quux_hung_popj_one_word`]) whose dispatch waits longest, run in steps
+/// of 10 ns (a step ends inside the wait at its bound) and saved and loaded
+/// into a fresh engine after each, ends as the straight run does.
+#[test]
+fn on_quux_a_checkpoint_inside_the_wait_keeps_the_old_word() {
+    use muir::checkpoint::{Reader, Writer};
+    use muir::rtl::Rtl;
+    let mut longest = None;
+    for pre in 0..6 {
+        for n in 3..8 {
+            for i in 0..=n.min(3) {
+                for xl in [false, true] {
+                    let (m, main) = quux_hung_popj_one_word(pre, n, i, xl);
+                    let (_, rows) = rtl_timed(&m, &main, X_CYCLES, TimingModel::Cadr, None);
+                    let r = row_of(&rows, hung_popj_insn(xl).raw());
+                    let over = (r.to - r.from).saturating_sub(if xl { 185 } else { 145 });
+                    if longest.as_ref().is_none_or(|&(o, _, _, _)| over > o) {
+                        longest = Some((over, m, main, r));
+                    }
+                }
+            }
+        }
+    }
+    let (over, mut m, main, r) = longest.unwrap();
+    assert!(over > 0, "a dispatch that waits for MD");
+    for (p, w) in main {
+        m.main[p as usize] = w;
+    }
+    let mut e = Rtl::new(m);
+    e.boot();
+    let mut inside = 0;
+    while e.ns() < r.to + 2_000 {
+        let t = e.ns();
+        e.step_until(t + 10).unwrap();
+        inside += (e.ns() > r.from && e.ns() < r.to) as usize;
+        let mut w = Writer::new();
+        e.save(&mut w);
+        let body = w.finish();
+        let mut back = Rtl::new(as_quux(&Machine::new()));
+        back.load(&mut Reader::new(&body)).unwrap();
+        e = back;
+    }
+    assert!(inside > 0, "saved inside the wait ({}..{})", r.from, r.to);
+    let mm = e.machine();
+    assert_eq!((mm.mmem[5], mm.spcptr), (AT_OLD_DPC, 1));
+}
+
+/// **muir-fpga's three programs of this shape, on `rtl` under its grid,
+/// take the new word** --- the answer the fabric is held to, and the board's
+/// in [`a_popj_dispatch_write_whose_read_finishes_inside_its_hung_microcycle_takes_the_new_word`].
+/// Built as that generator builds them, the speed set after the boot and
+/// the words' `DPC` moved past a longer program, which moves no microcycle:
+/// the dispatch runs at 32170..32320, 32100..32250 and, under `ILONG`,
+/// 32020..32210, and the read is acknowledged at 32060, so `-RDFINISH`
+/// falls at 32200, 30, 100 and 180 ns into it.
+#[test]
+fn rtl_on_the_fpga_grid_takes_the_new_word_in_muir_fpgas_hung_popj_programs() {
+    for ((pre, n, i, xl), (s, t)) in [
+        ((2, 6, 0, false), (32170, 32320)),
+        ((2, 5, 2, false), (32100, 32250)),
+        ((2, 5, 0, true), (32020, 32210)),
+    ] {
+        let m = hung_popj(pre, n, i, xl, false);
+        let (rtl, rows) = rtl_timed(&m, &[], 400, TimingModel::Fpga, Some(NORMAL));
+        let r = row_of(&rows, hung_popj_insn(xl).raw());
+        assert_eq!((r.from, r.to), (s, t), "x-popj-{pre}-{n}-{i}-{}", xl as u8);
+        assert_eq!((rtl.mmem[5], rtl.spcptr), (AT_NEW_DPC, 0), "x-popj-{pre}-{n}-{i}-{}", xl as u8);
+    }
+}
+
+/// Which instruction waits on `MBUSY.SYNC` after the read.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Waits {
+    /// `VMA<-` (muir-fpga's `t-`).
+    Vma,
+    /// `VMA-WRITE-MAP<-`, then `M13<-MD` (its `w-`).
+    WriteMap,
+}
+
+/// muir-fpga's `read_then_pre` at extra slow speed: the constants of
+/// [`read_then`], `pre` fillers, `MD<-`, the PDL pointer, a filler,
+/// `VMA-START-READ` of [`VADDR`], `n` fillers, then the instruction that
+/// waits, returned beside the machine. Both waiting instructions are
+/// `DESTMEM`, and `-WAIT` holds them on `DESTMEM AND MBUSY.SYNC` (VCTL1
+/// 3F16).
+fn waits_on_the_read(waits: Waits, pre: usize, n: usize) -> (Machine, u64) {
+    waits_on_the_read_at(waits, 0, pre, n, 0)
+}
+
+/// [`waits_on_the_read`] with the program setting `speed` itself first
+/// when it is not extra slow, and the first `il` of the `pre` fillers under
+/// `ILONG`, as muir-fpga's `n-` programs have them.
+fn waits_on_the_read_at(
+    waits: Waits,
+    speed: u16,
+    pre: usize,
+    n: usize,
+    il: usize,
+) -> (Machine, u64) {
+    let mut p = vec![filler()];
+    if speed != 0 {
+        speed_prologue(speed, &mut p);
+    }
+    constant(MD_BEFORE, 1, &mut p);
+    constant(VADDR, 12, &mut p);
+    constant(0o20, 14, &mut p);
+    if waits == Waits::WriteMap {
+        constant(MAP_STORE, 2, &mut p);
+    }
+    for k in 0..pre {
+        p.push(if k < il { ilong(filler()) } else { filler() });
+    }
+    p.push(Insn::new(ALU | SETM | m_src(1) | a_src(3) | MD));
+    p.push(Insn::new(ALU | SETM | m_src(14) | a_src(3) | PDL_POINTER));
+    p.push(filler());
+    p.push(Insn::new(ALU | SETM | m_src(12) | a_src(3) | START_READ));
+    for _ in 0..n {
+        p.push(filler());
+    }
+    let x = match waits {
+        Waits::Vma => Insn::new(ALU | SETM | m_src(12) | a_src(3) | VMA),
+        Waits::WriteMap => Insn::new(ALU | SETM | m_src(2) | a_src(3) | WRITE_MAP),
+    };
+    p.push(x);
+    if waits == Waits::WriteMap {
+        p.push(Insn::new(ALU | SETM | SRC_MD | a_src(3) | m_dest(13)));
+    }
+    for _ in 0..4 {
+        p.push(filler());
+    }
+    let here = p.len();
+    p.push(halt_here(here));
+    let mut m = program(p);
+    m.l2_map[1] = (1 << 23) | (1 << 22) | 0o100;
+    m.l2_map[2] = MODE_PAGE;
+    (m, x.raw())
+}
+
+/// What the board and `rtl` do with the wait of [`waits_on_the_read`]:
+/// the board's `-MEMACK`, `-MFINISHD`, the `MCLK1A` edge at or after it and
+/// `MBUSY.SYNC`'s fall; and the waiting microcycle's length on the board,
+/// on `rtl` under the board's timing and on `rtl` under muir-fpga's grid.
+struct Wait {
+    memack: u64,
+    mfinishd: u64,
+    mclk: u64,
+    sync_falls: u64,
+    chip: u64,
+    cadr: u64,
+    fpga: u64,
+}
+
+fn wait_of(waits: Waits, pre: usize, n: usize) -> Wait {
+    let (m, x) = waits_on_the_read(waits, pre, n);
+    let main = [(PHYS, READ_WORD)];
+    let mut b = board(&m, &main);
+    let (es, ev) = watch(&mut b, 480);
+    let (s, t) = microcycle_of(&es, x);
+    let start =
+        microcycle_of(&es, Insn::new(ALU | SETM | m_src(12) | a_src(3) | START_READ).raw()).0;
+    let memack = first(&ev, "-MEMACK", Level::Low, start).unwrap();
+    let mfinishd = first(&ev, "-MFINISHD", Level::Low, start).unwrap();
+    let mclk = first(&ev, "MCLK1A", Level::High, mfinishd).unwrap();
+    let sync_falls = first(&ev, "MBUSY.SYNC", Level::Low, start).unwrap();
+    let len = |tm| {
+        let (_, rows) = rtl_timed(&m, &main, 480, tm, None);
+        let r = row_of(&rows, x);
+        r.to - r.from
+    };
+    let w = Wait {
+        memack,
+        mfinishd,
+        mclk,
+        sync_falls,
+        chip: t - s,
+        cadr: len(TimingModel::Cadr),
+        fpga: len(TimingModel::Fpga),
+    };
+    eprintln!(
+        "{waits:?} pre {pre} n {n}: -MEMACK {memack}, -MFINISHD {mfinishd}, MCLK1A {mclk}, MBUSY.SYNC falls {sync_falls}; waiting microcycle chip {} rtl {} fpga-grid {}",
+        w.chip, w.cadr, w.fpga
+    );
+    w
+}
+
+/// **`-MFINISHD` a few nanoseconds before a master clock edge ends the wait
+/// at that edge**, on the board and on `rtl` under both timings. These are
+/// muir-fpga's `t-0-2-1` and `w-0-1-1`, built as its generator builds them.
+/// On the board the acknowledgement is at 24601 and 31643 ns, so `MBUSY` is
+/// cleared (the 74S74 at VCTL1 1D21, by `-MFINISHD` off the TD50 at 1D23)
+/// 9 and 7 ns before the `MCLK1A` edge that clocks `MBUSY.SYNC` (the 74S175
+/// at 1E20, D = `MEMRQ`), and `MBUSY.SYNC` falls at that edge: the waiting
+/// microcycle is four generator cycles, 880 ns.
+///
+/// Under muir-fpga's 10 ns grid the acknowledgement is rounded up to the
+/// next tick, 24610 and 31650, which puts `-MFINISHD` exactly on the edge.
+/// `rtl` takes a change due at an edge as made before it (`Rtl::bus_cycle`
+/// and `Rtl::after_memack` run to the edge before the edge's registers),
+/// and so gives the board's 880. A grid that counts the tie as after the
+/// edge waits one generator cycle more, 1100, where the board does not.
+/// The `VMA-WRITE-MAP` store waits through the same `-WAIT` term, `DESTMEM
+/// AND MBUSY.SYNC`, and gives the same answer.
+#[test]
+fn mfinishd_just_before_a_master_clock_edge_ends_the_wait_at_that_edge() {
+    for (waits, pre, n, memack, edge) in
+        [(Waits::Vma, 2, 1, 24601, 24640), (Waits::WriteMap, 1, 1, 31643, 31680)]
+    {
+        let w = wait_of(waits, pre, n);
+        assert_eq!(
+            (w.memack, w.mfinishd),
+            (memack, memack + 30),
+            "{waits:?}: the board's acknowledgement"
+        );
+        assert_eq!(
+            (w.mclk, w.sync_falls),
+            (edge, edge),
+            "{waits:?}: MBUSY.SYNC falls at the next edge"
+        );
+        assert!(edge - w.mfinishd < 10, "{waits:?}: which the grid's round-up lands on");
+        assert_eq!(
+            (w.chip, w.cadr, w.fpga),
+            (880, 880, 880),
+            "{waits:?}: chip, rtl, rtl on the grid"
+        );
+    }
+}
+
+/// **`-MFINISHD` exactly on the master clock edge is taken as before it**,
+/// on the board as `chip` has it and on `rtl`. The board's own timing
+/// reaches the tie: in muir-fpga's `w-0-4-1`, `-4-2` and `-4-3` the read is
+/// acknowledged at 32310, `-MFINISHD` falls at 32340, and `MCLK1A` rises at
+/// 32340. `MBUSY.SYNC` falls at that edge and the wait ends there, on
+/// `chip` and on `rtl` under both timings.
+///
+/// What `chip` does is its own event order and **not the board's**:
+/// `Chip::transition` fires the delay-line taps due at an instant before it
+/// clocks the parts, so `MBUSY` is already clear when the 74S175 at VCTL1
+/// 1E20 samples `MEMRQ`. On a CADR the tie is a setup violation on that
+/// flip-flop, and either outcome, or a late one, is the hardware's. It
+/// is a convention, shared by `chip` and `rtl`: a change due at an edge is
+/// made before the edge.
+#[test]
+fn mfinishd_on_the_master_clock_edge_itself_is_taken_as_before_it() {
+    for n in 1..4 {
+        let w = wait_of(Waits::WriteMap, 4, n);
+        assert_eq!(
+            (w.memack, w.mfinishd, w.mclk),
+            (32310, 32340, 32340),
+            "n {n}: the tie on the board"
+        );
+        assert_eq!(w.sync_falls, 32340, "n {n}: MBUSY.SYNC falls at the edge");
+        assert_eq!(w.chip, w.cadr, "n {n}: rtl");
+        assert_eq!(w.chip, w.fpga, "n {n}: rtl on the grid");
+    }
+}
+
+/// **A word `-LOADMD` puts in `MD` at the instant of an edge is seen by the
+/// microcycle the edge starts, and not by the one it ends.** muir-fpga's
+/// `t-0-11-0` with its tail replaced by `MAP(MD)` read into M 16..27, one a
+/// microcycle: `MAP(MD)` is functional source 11 and not `USE.MD`, so
+/// nothing holds it while the read is in progress, and it shows which `MD`
+/// the microcycle used. Level 2's word 3 (for [`MD_BEFORE`]) is 1111111 and
+/// word 7 (for [`READ_WORD`]) 2222222.
+///
+/// On the board the memory acknowledges at 27060 ns, which is an edge: the
+/// tie is the board's own timing, not a grid's. The microcycle ending there
+/// registers the old `MD`'s word and the next the new one, on `chip` and on
+/// `rtl` under both timings. On a CADR the second is defined --- the new `MD`
+/// has the whole microcycle to reach the map and the ALU --- and so is the
+/// first: `MD` moving at the edge cannot reach the registers that edge
+/// clocks. Only `MD`'s own value at the instant is a tie, and nothing but a
+/// trace samples it there.
+#[test]
+fn md_loaded_on_an_edge_is_seen_by_the_microcycle_it_starts() {
+    let mut p = vec![filler()];
+    constant(MD_BEFORE, 1, &mut p);
+    constant(VADDR, 12, &mut p);
+    constant(0o20, 14, &mut p);
+    for _ in 0..11 {
+        p.push(filler());
+    }
+    p.push(Insn::new(ALU | SETM | m_src(1) | a_src(3) | MD));
+    p.push(Insn::new(ALU | SETM | m_src(14) | a_src(3) | PDL_POINTER));
+    p.push(filler());
+    p.push(Insn::new(ALU | SETM | m_src(12) | a_src(3) | START_READ));
+    p.push(Insn::new(ALU | SETM | m_src(12) | a_src(3) | VMA));
+    for r in 16..28 {
+        p.push(Insn::new(ALU | SETM | SRC_MAP | a_src(3) | m_dest(r)));
+    }
+    let here = p.len();
+    p.push(halt_here(here));
+    let mut m = program(p);
+    m.l2_map[1] = (1 << 23) | (1 << 22) | 0o100;
+    m.l2_map[3] = 0o1111111;
+    m.l2_map[7] = 0o2222222;
+    let main = [(PHYS, READ_WORD)];
+    let mut b = board(&m, &main);
+    let (es, ev) = watch(&mut b, 480);
+    let chip = board_end(&b);
+    let loadmd = first(&ev, "-LOADMD", Level::High, 0).unwrap();
+    assert_eq!(loadmd, 27060, "the board's acknowledgement");
+    let k = es.iter().position(|e| e.ns == loadmd).expect("on an edge");
+    assert_eq!((es[k - 1].md, es[k].md), (MD_BEFORE, READ_WORD), "MD across the edge");
+    let want: Vec<u32> = (16..28).map(|r| if r <= 20 { 0o1111111 } else { 0o2222222 }).collect();
+    assert_eq!(chip.mmem[16..28], want[..], "chip: M 20's microcycle ends at the edge");
+    for tm in [TimingModel::Cadr, TimingModel::Fpga] {
+        let (rtl, _) = rtl_timed(&m, &main, 480, tm, None);
+        assert_eq!(rtl.mmem[16..28], want[..], "rtl under {tm:?}");
+    }
+}
+
+/// The sweeps behind the tests above, printed: muir-fpga's `x-popj` shapes
+/// at normal speed, and its `t-`, `w-` and `n-` shapes at both speeds, on
+/// the board and on `rtl` under both timings. Slow (minutes), so run by
+/// hand: `cargo test --test dispatch_write_order sweep -- --ignored
+/// --nocapture`.
+#[test]
+#[ignore]
+fn sweep_the_hung_popj_and_wait_shapes() {
+    let mut jobs: Vec<(char, u16, usize, usize, usize, bool)> = Vec::new();
+    for pre in 0..6 {
+        for n in 3..8 {
+            for i in 0..=n.min(3) {
+                for xl in [false, true] {
+                    jobs.push(('x', NORMAL, pre, n, i, xl));
+                }
+            }
+        }
+    }
+    for speed in [0, NORMAL] {
+        for pre in 0..24 {
+            for n in 0..4 {
+                jobs.push(('t', speed, pre, n, 0, false));
+                jobs.push(('w', speed, pre, n, 0, false));
+                for il in 0..6.min(pre + 1) {
+                    jobs.push(('n', speed, pre, n, il, false));
+                }
+            }
+        }
+    }
+    let jobs = std::sync::Mutex::new(jobs.into_iter().enumerate().collect::<Vec<_>>());
+    let out = std::sync::Mutex::new(Vec::new());
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    std::thread::scope(|sc| {
+        for _ in 0..threads {
+            sc.spawn(|| {
+                loop {
+                    let Some((k, job)) = jobs.lock().unwrap().pop() else { break };
+                    let line = sweep_one(job);
+                    out.lock().unwrap().push((k, line));
+                }
+            });
+        }
+    });
+    let mut out = out.into_inner().unwrap();
+    out.sort();
+    for (_, line) in out {
+        println!("{line}");
+    }
+}
+
+/// One program of [`sweep_the_hung_popj_and_wait_shapes`], as a line.
+fn sweep_one((kind, speed, pre, n, i, xl): (char, u16, usize, usize, usize, bool)) -> String {
+    if kind == 'x' {
+        let m = hung_popj(pre, n, i, xl, true);
+        let x = hung_popj_insn(xl).raw();
+        let mut b = board(&m, &[]);
+        let (es, ev) = watch(&mut b, X_CYCLES);
+        let chip = board_end(&b);
+        let (s, t) = microcycle_of(&es, x);
+        let normal = if xl { 185 } else { 145 };
+        let start =
+            microcycle_of(&es, Insn::new(ALU | SETM | m_src(12) | a_src(3) | START_READ).raw()).0;
+        let rdfinish = first(&ev, "-RDFINISH", Level::Low, start).unwrap();
+        let at = rdfinish as i64 - s as i64;
+        let place = if at < 0 {
+            "before"
+        } else if at <= normal {
+            "inside"
+        } else {
+            "after"
+        };
+        let mut line = format!(
+            "x-popj-{pre}-{n}-{i}-{} -RDFINISH {at:+} ns into {s}..{t} ({place}); chip M5 {:o}",
+            xl as u8, chip.mmem[5]
+        );
+        for tm in [TimingModel::Cadr, TimingModel::Fpga] {
+            let (rtl, rows) = rtl_timed(&m, &[], X_CYCLES, tm, None);
+            let r = row_of(&rows, x);
+            line += &format!("; {tm:?} {} ns M5 {:o}", r.to - r.from, rtl.mmem[5]);
+        }
+        return line;
+    }
+    let waits = if kind == 'w' { Waits::WriteMap } else { Waits::Vma };
+    let (mut m, x) = waits_on_the_read_at(waits, speed, pre, n, i);
+    if kind == 'n' {
+        // Level-2 entry 1 at physical page 20000, past the memory: the read
+        // is ended by the bus interface's NXM timer.
+        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o20000;
+    }
+    let main: Vec<(u32, u32)> = if kind == 'n' { vec![] } else { vec![(PHYS, READ_WORD)] };
+    let mut b = board(&m, &main);
+    let (es, ev) = watch(&mut b, 520);
+    let (s, t) = microcycle_of(&es, x);
+    let start =
+        microcycle_of(&es, Insn::new(ALU | SETM | m_src(12) | a_src(3) | START_READ).raw()).0;
+    let memack = first(&ev, "-MEMACK", Level::Low, start).unwrap();
+    let mfinishd = first(&ev, "-MFINISHD", Level::Low, start).unwrap();
+    let mclk = first(&ev, "MCLK1A", Level::High, mfinishd).unwrap();
+    let loadmd_on_edge =
+        first(&ev, "-LOADMD", Level::High, start).is_some_and(|l| es.iter().any(|e| e.ns == l));
+    let mut line = format!(
+        "{kind}-{speed}-{pre}-{n}{} -MEMACK {memack} -MFINISHD {} ns before MCLK1A{}; waits chip {}",
+        if kind == 'n' { format!("-{i}") } else { String::new() },
+        mclk - mfinishd,
+        if loadmd_on_edge { ", -LOADMD on an edge" } else { "" },
+        t - s
+    );
+    for tm in [TimingModel::Cadr, TimingModel::Fpga] {
+        let (_, rows) = rtl_timed(&m, &main, 520, tm, None);
+        let r = row_of(&rows, x);
+        line += &format!("; {tm:?} {}", r.to - r.from);
+    }
+    line
 }
