@@ -24,7 +24,7 @@ differences, what it needed:
 | The clocks in the processor: the 60 Hz tick, the interval timer, the microsecond clock | nothing | none enables the tick yet: the clock handler is still entered from the display's interrupt; the microsecond clock is still read on the Unibus | nothing | nothing |
 | Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002 (dev4): the label, the band and the disk routines by block number | block-disk is QUUX's only disk, the default there; the CADR's controller is refused on QUUX |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
-| The synchronous microcycle (`sync`) | nothing | nothing | nothing | `--timing-model sync`, `--sync-cycle-ticks` |
+| No delay lines: `sync`, always | nothing | nothing | nothing | `--sync-cycle-ticks`; `--timing-model cadr` and `fpga` refused on QUUX |
 | No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and 1000 never do either, counted (below) | nothing | nothing |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
 | MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
@@ -182,7 +182,8 @@ while a `DIV` stands in `IR`, not nopped, and 330 ns (`muldiv::DIV_NS`, 32
 quotient bits and a load at 10 ns each) have not passed since the clock edge
 that loaded `IR`. The master clock runs on, so the bus interface carries on,
 and the microcycle starts at the first master clock edge after that: the
-fewest whole generator cycles covering 330 ns: three of QUUX's 145 ns. The time does not depend on the operands. A halt during the
+fewest whole generator cycles covering 330 ns: nine of QUUX's 40 ns at four
+ticks. The time does not depend on the operands. A halt during the
 hold stops the machine with the `DIV` still in `IR`. The hold does not stop a
 single step, as `-WAIT` does not; by then the divider is done.
 
@@ -239,45 +240,39 @@ the interrupt condition taken with either on and not with both off, source
 CADR's all ones, and a checkpoint taken in the middle of an interval, on
 `micro` and `rtl`.
 
-## One rate
+## QUUX drops the delay lines
 
-**QUUX has no speed bits.** On the CADR the mode register's `SPEED1` and
-`SPEED0` choose the delay-line tap that ends the read phase, from extra slow
-to fast (`mit/cadr/ir.bits`: "00 Extra slow, 01 Slow, 10 Normal, 11 Fast"),
-and reset leaves them at extra slow, so the CADR boots at 220 ns a
-microcycle until its microcode asks for normal. QUUX's mode register has no
-such bits: a write of bits 1 and 0 goes nowhere, and every microcycle is the
-same length from the boot on --- for now the CADR's normal, 145 ns, a
-normal read tap and the 60 ns restart. The register's other bits are
-unchanged. `quux_has_no_speed_bits` in `tests/quux.rs` holds it on both
-engines.
+**A QUUX microcycle is a fixed number of 10 ns ticks, always**: `sync`,
+`--sync-cycle-ticks` of them, 4 unless a board's fit says otherwise. The
+CADR's clock is a string of delay-line phases: the read phase ends at the
+tap the mode register's `SPEED1` and `SPEED0` choose (`mit/cadr/ir.bits`:
+"00 Extra slow, 01 Slow, 10 Normal, 11 Fast"), and a 60 ns restart follows,
+145 ns at normal speed, which muir-fpga's fabric replays as 15 ticks. QUUX
+has none of it: no taps, no speed bits (a write of the mode register's bits
+1 and 0 goes nowhere; its other bits are unchanged), and no timing but
+`sync`. `--timing-model cadr` and `fpga` are refused on QUUX, and an engine
+made for a QUUX machine starts on four ticks: `rtl` refuses another timing
+on it, and `micro`'s clock counts the same ticks.
 
-## The synchronous microcycle
+The ticks are a board's: the number its fit proves its longest path settles
+in. muir-fpga's routed fits put that path, from MD or `MEMSTART` through the
+map and the M bus to the dispatch address and the next PC, at 32-37 ns on
+the Arty Z7-20 and about 20 ns on the DE25-Nano; the default, 4 ticks, is
+the Arty's. **Unverified** until a fit at that deadline meets it.
 
-**Under `--timing-model sync`, a QUUX microcycle is a fixed number of 10 ns
-ticks**, `--sync-cycle-ticks`, in place of the CADR's delay-line taps. On
-the CADR a microcycle is the read tap and a 60 ns restart, 145 ns at normal
-speed, which muir-fpga's fabric replays as 15 ticks. The ticks are a
-board's: the number its fit proves its longest path settles in. muir-fpga's
-routed fits put that path, from MD or `MEMSTART` through the map and the M
-bus to the dispatch address and the next PC, at 37.35 ns on the Arty Z7-20
-and 20.2 ns on the DE25-Nano; the default, 4 ticks, is the Arty's.
-**Unverified** until a fit at that deadline meets it.
+What the microcode sees does not change, only the time: every register is
+clocked at the one edge and the late writes land one edge later, as the
+single-edge contract below has it; the bus keeps its own time on the grid;
+a held cycle is one microcycle long; and the divider's 330 ns hold is the
+fewest microcycles that cover it. An `ILONG` instruction takes `ilong_ticks`
+more, 0 unless the library says otherwise.
 
-Only the length of a microcycle changes. Every register is clocked at the
-one edge and the late writes land one edge later, as before; the bus keeps
-its own time on the grid; a held cycle is one microcycle long; and the
-divider's 330 ns hold is the fewest microcycles that cover it. The speed
-synchronizer's instant 60 ns into a cycle goes: QUUX has no speed bits, and
-a write lands at the edge. An `ILONG` instruction takes `ilong_ticks` more,
-0 unless the library says otherwise.
-
-System 1002 reaches its listener in the same 11 M microcycles under `sync`
-of 4 ticks as at QUUX's one rate, in 0.95 s of the machine's time against
-2.02 s: 2.1 times faster, the bus keeping its own time
-(`system_1002_runs_under_sync` in `tests/system_1002.rs`).
-`tests/sync_timing.rs` holds the microcycle's length, `ILONG`'s ticks, the
-grid, the divider's hold and a checkpoint.
+`tests/sync_timing.rs` holds the microcycle's length, the default and the
+refusal, `ILONG`'s ticks, the grid, the divider's hold and a checkpoint;
+`quux_has_no_speed_bits` in `tests/quux.rs` the speed bits;
+`quux_runs_on_sync_alone` in `tests/cli.rs` the flags; and
+`system_1002_runs_at_its_ticks` in `tests/system_1002.rs` System 1002 at
+four ticks and at three.
 
 ## The memory cache
 
@@ -321,7 +316,7 @@ time:
 
 | | Total | |
 |---|---|---|
-| QUUX's one rate, 145 ns | 72.7 s | 1.00 |
+| the CADR's delay lines, 145 ns, the baseline | 72.7 s | 1.00 |
 | the same, cache of 4K words | 58.6 s | 1.24 |
 | `sync` of 4 ticks, no cache | 33.7 s | 2.15 |
 | `sync`, cache of 1K words | 19.6 s | 3.70 |

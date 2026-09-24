@@ -271,8 +271,8 @@ fn quux_has_no_speed_bits() {
             ("rtl", eight(Rtl::new(make(Geometry::QUUX)), Some(bits), Rtl::ns)),
         ] {
             assert_eq!(boot, after, "{name}, speed bits {bits}: the same rate");
-            // The CADR's normal rate, 145 ns, until QUUX's own timing.
-            assert_eq!(boot, 8 * 145, "{name}, speed bits {bits}: the rate");
+            // QUUX drops the delay lines: `sync`, four ticks of 10 ns.
+            assert_eq!(boot, 8 * 40, "{name}, speed bits {bits}: the rate");
         }
         let mut m = make(Geometry::QUUX);
         m.spy_write(spy::MODE, bits);

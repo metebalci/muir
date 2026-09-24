@@ -457,26 +457,48 @@ fn mono_tv_is_quux_s() {
     refused_saying(&["--mono-tv-size", "1920x1080"], "--mono-tv-size is MONO TV's");
 }
 
-/// **`--timing-model sync` is QUUX's and `rtl`'s, and its ticks are its
-/// own**: it runs on QUUX and says so, and is refused on the CADR, on
-/// `micro`, and `--sync-cycle-ticks` without it or of no ticks.
+/// **QUUX drops the delay lines: its timing is `sync`, always.** A QUUX run
+/// is on `sync` of four 10 ns ticks without asking, on `rtl` and `micro`
+/// alike, and the start says so, the pace too; `--sync-cycle-ticks` sets
+/// the ticks on QUUX alone; the CADR's `cadr` and `fpga` are refused on
+/// QUUX, and `sync` and its ticks on the CADR, which keeps its delay lines.
 #[test]
-fn sync_is_quux_s_and_rtl_s() {
+fn quux_runs_on_sync_alone() {
+    for engine in ["--rtl", "--micro"] {
+        let out = muir().args([engine, "--machine", "quux", "--pace", "--stop-after", "1"]).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}: {t}");
+        assert!(t.contains("timing: sync, 4 ticks of 10 ns, 40 ns a microcycle"), "{engine}:\n{t}");
+        assert!(t.contains("40 ns a microcycle; the run waits"), "{engine}: the pace:\n{t}");
+    }
     let out = muir()
-        .args(["--rtl", "--machine", "quux", "--timing-model", "sync", "--sync-cycle-ticks", "3"])
+        .args(["--rtl", "--machine", "quux", "--sync-cycle-ticks", "3"])
         .args(["--stop-after", "1"])
         .run();
-    assert!(out.status.success(), "{}", text(&out));
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("timing: sync, 3 ticks of 10 ns, 30 ns a microcycle"), "{t}");
+    let out = muir()
+        .args(["--rtl", "--machine", "quux", "--timing-model", "sync", "--stop-after", "1"])
+        .run();
+    assert!(out.status.success(), "saying it is harmless: {}", text(&out));
+    for cadr in ["cadr", "fpga"] {
+        refused_saying(
+            &["--rtl", "--machine", "quux", "--timing-model", cadr],
+            "QUUX drops the delay lines",
+        );
+    }
     refused_saying(&["--rtl", "--timing-model", "sync"], "--timing-model sync is QUUX's");
+    refused_saying(&["--rtl", "--sync-cycle-ticks", "3"], "--sync-cycle-ticks is QUUX's");
     refused_saying(&["--micro", "--machine", "quux", "--timing-model", "sync"], "is rtl's");
     refused_saying(
-        &["--rtl", "--machine", "quux", "--sync-cycle-ticks", "3"],
-        "--sync-cycle-ticks is",
-    );
-    refused_saying(
-        &["--rtl", "--machine", "quux", "--timing-model", "sync", "--sync-cycle-ticks", "0"],
+        &["--rtl", "--machine", "quux", "--sync-cycle-ticks", "0"],
         "--sync-cycle-ticks wants",
     );
+    let out = muir().args(["--rtl", "--pace", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(t.contains("timing: cadr, the board's delay lines"), "the CADR's:\n{t}");
+    assert!(t.contains("145 ns a microcycle; the run waits"), "the CADR's pace:\n{t}");
 }
 
 /// **`--cache` is QUUX's and `rtl`'s**: it runs there and the start says

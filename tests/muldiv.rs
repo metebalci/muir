@@ -299,15 +299,15 @@ fn time_on<E: Engine>(
 
 /// **A `DIV` holds its microcycle until `DIV_NS` after it entered `IR`, and
 /// a `MUL` holds nothing.** The hold is whole generator cycles, so it is the
-/// fewest that cover `DIV_NS`: three of QUUX's 145 ns, the speed bits
-/// written or not.
+/// fewest that cover `DIV_NS`: nine of QUUX's 40 ns (`sync`, four ticks;
+/// QUUX drops the delay lines), the speed bits written or not.
 /// Measured as the time the program takes to reach its loop, against the
 /// same program with the one instruction replaced, on both engines.
 #[test]
 fn a_div_is_held_for_div_ns_and_a_mul_is_not() {
     fn check<E: Engine>(name: &str, new: fn(Machine) -> E, boot: fn(&mut E), ns: fn(&E) -> u64) {
         // QUUX has no speed bits: one rate, whatever is written there.
-        for (speed, want) in [(None, 145), (Some(2), 145), (Some(3), 145)] {
+        for (speed, want) in [(None, 40), (Some(2), 40), (Some(3), 40)] {
             check_at(name, new, boot, ns, speed, want);
         }
     }

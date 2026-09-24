@@ -45,6 +45,12 @@ pub trait Engine {
     /// Runs one microcycle.
     fn step(&mut self) -> Result<(), Halt>;
 
+    /// How long the machine's own microcycle is, what a run's speed is
+    /// held against: the CADR's normal 145 ns, or QUUX's `sync` ticks.
+    fn nominal_cycle_ns(&self) -> u64 {
+        crate::ioboard::CYCLE_NS
+    }
+
     /// Where the next microinstruction will be fetched from.
     fn pc(&self) -> u16;
 

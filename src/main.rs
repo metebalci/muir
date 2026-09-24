@@ -305,9 +305,6 @@ use muir::terminal::{Frame, Terminal};
 // name.
 use muir::tv::Board as TvBoard;
 
-/// 145 ns per microcycle at normal speed, [`muir::ioboard::CYCLE_NS`].
-const HARDWARE_CYCLES_PER_S: f64 = 1e9 / muir::ioboard::CYCLE_NS as f64;
-
 /// How often the terminal is given a turn: about thirty times a second.
 /// The machine's own raster is 64.7 Hz, so a viewer sees every other frame
 /// at best, and the cost does not show in any engine's rate.
@@ -972,9 +969,9 @@ enum Which {
 /// On the netlist disk controller it inverts: the drive takes its own time,
 /// the polling loop runs through every gate on the board, and a seeking
 /// program comes out slower than this rather than faster.
-fn report(name: &str, cycles: u64, secs: f64) {
+fn report(name: &str, cycles: u64, secs: f64, cycle_ns: u64) {
     let rate = cycles as f64 / secs;
-    let ratio = rate / HARDWARE_CYCLES_PER_S;
+    let ratio = rate / (1e9 / cycle_ns as f64);
     // Far below real time the reciprocal is the readable number:
     // "hardware/2800" says what "0.00x" does not. Near it, the ratio does.
     let against = if ratio >= 0.1 {
@@ -2318,7 +2315,7 @@ fn time_lashup(
             }
         }
     }
-    report("rtl, debugger", ran, t.elapsed().as_secs_f64());
+    report("rtl, debugger", ran, t.elapsed().as_secs_f64(), muir::ioboard::CYCLE_NS);
     let e = &lashup.debugger;
     stop.conclude(ran, e.pc(), !e.machine().mode.prom_disable, halt);
     println!(
@@ -2605,7 +2602,7 @@ fn time_fabric(
         hold.lines(&mut run.debugger, ran, setup, &mut Writes::CableEnd);
     }
     hold.done();
-    report("rtl, debugger", ran, t.elapsed().as_secs_f64());
+    report("rtl, debugger", ran, t.elapsed().as_secs_f64(), muir::ioboard::CYCLE_NS);
     hold.conclude(&run.debugger, &stop, ran, halt);
     match run.debuggee.taken() {
         Some((count, faults)) => println!(
@@ -3105,7 +3102,7 @@ fn time_engine<S: Stepper>(
         let now = m.ns;
         port.poll_cable(&mut m.ioboard.serial.cable, now);
     }
-    report(name, ran, t.elapsed().as_secs_f64());
+    report(name, ran, t.elapsed().as_secs_f64(), s.engine().nominal_cycle_ns());
     hold.conclude(s.engine(), &stop, ran, halt);
     if let Some(n) = s.debug_cycles() {
         println!("       {n} debug cycles on the cable");
@@ -4557,7 +4554,7 @@ fn time_chip(
     if let Some(prompt) = prompt.as_ref() {
         prompt.done();
     }
-    report("chip", ran, t.elapsed().as_secs_f64());
+    report("chip", ran, t.elapsed().as_secs_f64(), muir::ioboard::CYCLE_NS);
     {
         let c = &end.machine().cpu;
         if quit {
@@ -4665,6 +4662,7 @@ fn main() {
     let mut tv_board: Option<TvBoard> = None;
     let mut mono_tv_size: Option<(usize, usize)> = None;
     let mut timing_model = TimingModel::Cadr;
+    let mut timing_given = false;
     let mut sync_cycle_ticks: Option<u8> = None;
     let mut cache: Option<muir::cache::CacheConfig> = None;
     let mut geometry = muir::machine::Geometry::CADR;
@@ -4871,7 +4869,10 @@ fn main() {
                 _ => usage("--machine wants cadr or quux"),
             },
             (None, "--timing-model") => match args.next().as_deref().and_then(TimingModel::parse) {
-                Some(model) => timing_model = model,
+                Some(model) => {
+                    timing_model = model;
+                    timing_given = true;
+                }
                 None => usage("--timing-model wants cadr, fpga or sync"),
             },
             (None, "--cache") => match args.next().as_deref().and_then(|v| v.parse::<u32>().ok()) {
@@ -5125,17 +5126,25 @@ fn main() {
     // The grid is muir-fpga's, and it is `rtl`'s references its fabric is
     // held to; `micro` and `chip` keep the board's time.
     // `sync` is QUUX's microcycle, and its ticks are `sync`'s.
-    if let TimingModel::Sync { ilong_ticks, .. } = timing_model {
-        if geometry == muir::machine::Geometry::CADR {
+    // QUUX drops the delay lines: its timing is `sync`, always, of the
+    // ticks `--sync-cycle-ticks` gives. The CADR keeps its delay lines, and
+    // `sync` and its ticks are refused on it.
+    if geometry == muir::machine::Geometry::CADR {
+        if matches!(timing_model, TimingModel::Sync { .. }) {
             usage("--timing-model sync is QUUX's, and this run is the CADR: --machine quux");
         }
+        if sync_cycle_ticks.is_some() {
+            usage("--sync-cycle-ticks is QUUX's, and this run is the CADR: --machine quux");
+        }
+    } else {
+        if !matches!(timing_model, TimingModel::Sync { .. }) && timing_given {
+            usage(&format!(
+                "--timing-model {} is the CADR's: QUUX drops the delay lines, and its timing is sync",
+                timing_model.name()
+            ));
+        }
         let cycle_ticks = sync_cycle_ticks.unwrap_or(muir::clock::SYNC_CYCLE_TICKS);
-        timing_model = TimingModel::Sync { cycle_ticks, ilong_ticks };
-    } else if sync_cycle_ticks.is_some() {
-        usage(&format!(
-            "--sync-cycle-ticks is --timing-model sync's, and this run is {}",
-            timing_model.name()
-        ));
+        timing_model = TimingModel::Sync { cycle_ticks, ilong_ticks: 0 };
     }
     // QUUX's disk is block-disk and nothing else: muir-sys's PROM,
     // microcode and band for QUUX address the disk by block, and the
@@ -5166,7 +5175,7 @@ fn main() {
             if which == Which::Micro { "micro" } else { "chip" }
         ));
     }
-    if timing_model != TimingModel::Cadr && which != Which::Rtl {
+    if timing_given && timing_model != TimingModel::Cadr && which != Which::Rtl {
         usage(&format!(
             "--timing-model {} is rtl's, and this run is {}",
             timing_model.name(),
@@ -5867,6 +5876,23 @@ fn main() {
         if let Some(pc) = stop_at_prom {
             stops.push(format!("at PC {pc:o} in the PROM"));
         }
+        // What a microcycle takes: the board's delay lines on the CADR,
+        // muir-fpga's grid under them, or QUUX's `sync`, which has none.
+        if which != Which::Chip {
+            let per = timing_model.cycle_ns(muir::clock::Speed::Normal, false);
+            let timing = match timing_model {
+                TimingModel::Cadr => {
+                    format!("cadr, the board's delay lines, {per} ns a microcycle at normal speed")
+                }
+                TimingModel::Fpga => format!(
+                    "fpga, the board's delay lines on muir-fpga's 10 ns grid, {per} ns a microcycle at normal speed"
+                ),
+                TimingModel::Sync { cycle_ticks, .. } => {
+                    format!("sync, {cycle_ticks} ticks of 10 ns, {per} ns a microcycle")
+                }
+            };
+            writeln!(s, "timing: {timing}").unwrap();
+        }
         if stops.is_empty() {
             writeln!(s, "stop: none; a halt or ^C").unwrap();
         } else {
@@ -5881,8 +5907,12 @@ fn main() {
                 "pace: {}",
                 if which == Which::Chip {
                     "the machine's own speed; chip is far slower than that, so nothing waits"
+                        .to_string()
                 } else {
-                    "the machine's own speed, 145 ns a microcycle; the run waits when it is ahead"
+                    format!(
+                        "the machine's own speed, {} ns a microcycle; the run waits when it is ahead",
+                        timing_model.cycle_ns(muir::clock::Speed::Normal, false)
+                    )
                 }
             )
             .unwrap();
@@ -5948,6 +5978,10 @@ fn main() {
             m.chaos = chaos.clone();
             m.plug_chaos(0);
             let mut e = Micro::new(m);
+            // QUUX's microcycle is `sync`'s ticks, on this engine's clock too.
+            if let TimingModel::Sync { cycle_ticks, .. } = timing_model {
+                e.sync_cycle_ns = cycle_ticks as u64 * muir::clock::GRID_NS;
+            }
             if auto_boot {
                 e.boot();
             }

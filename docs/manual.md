@@ -91,8 +91,9 @@ Paths under the directory muir was run from are written relative to it, so
 the block stays readable wherever the tree lives.
 
 At the end it reports what it did: microcycles, wall time, the rate, and
-that rate against the machine's own 145 ns microcycle --- `2.42x hardware`
-is faster than a CADR, `hardware/3827` is that many times slower.
+that rate against the machine's own microcycle, the CADR's 145 ns or
+QUUX's `sync` ticks --- `2.42x hardware` is faster than the machine,
+`hardware/3827` is that many times slower.
 
 **That ratio is microcycles against microcycles, and the disk is outside
 it.** With the disk controller as a behavioral model --- what `micro` and
@@ -808,16 +809,18 @@ the first tick at or after it. A microcycle at normal speed is 150 ns there
 rather than 145. [What each engine models](engines.md#what-each-engine-models)
 says which delays and clocks those are.
 
-`sync` is QUUX's synchronous microcycle: the same grid, with every
-microcycle `--sync-cycle-ticks` ticks long in place of the CADR's delay-line
-taps. Registers are still clocked at the one edge, and the bus keeps its own
-time, so only the length of a microcycle changes. Refused on the CADR.
-[QUUX](quux.md) has it.
+`sync` is QUUX's microcycle, and QUUX's only one: QUUX drops the delay
+lines. The same grid, with every microcycle `--sync-cycle-ticks` ticks long
+in place of the CADR's delay-line taps. Registers are still clocked at the
+one edge, and the bus keeps its own time, so only the length of a
+microcycle changes. A QUUX run has it without the flag; `cadr` and `fpga`
+are refused on QUUX, and `sync` on the CADR. [QUUX](quux.md) has it.
 
-Refused on `micro` and `chip`, which keep the board's time. A checkpoint
-carries it, and a resume under another is refused.
+The flag is refused on `micro` and `chip`, which keep the board's time;
+`micro` on QUUX counts `sync`'s ticks without it. A checkpoint carries it,
+and a resume under another is refused.
 
-Default: `cadr`.
+Default: `cadr` on the CADR, `sync` on QUUX.
 
 ### `--cache <words>`
 
@@ -832,9 +835,9 @@ Default: none.
 
 ### `--sync-cycle-ticks <k>`
 
-**rtl, `--timing-model sync`:** a microcycle's length in 10 ns ticks, 1 to
-255. It is a board's: the number its fit proves its longest path settles
-in. Refused without `sync`.
+**QUUX, rtl and micro:** a microcycle's length in 10 ns ticks, 1 to 255. It
+is a board's: the number its fit proves its longest path settles in.
+Refused on the CADR.
 
 Default: 4, the Arty Z7-20's.
 

@@ -129,6 +129,11 @@ pub struct Micro {
     /// the bus, which this engine does not model. [`MEMORY_ACCESS_NS`], the
     /// band's mean; a test sets it to zero to see the periods alone.
     pub memory_cycle_ns: u64,
+    /// QUUX's microcycle, which has no delay lines: `sync`'s K ticks of
+    /// 10 ns, in nanoseconds, in place of the speed's period; 0 on the
+    /// CADR. [`Micro::new`] gives a QUUX machine four ticks, and `muir`
+    /// sets `--sync-cycle-ticks`'.
+    pub sync_cycle_ns: u64,
     /// Memory cycles started, for [`Micro::memory_cycles`].
     memory_cycles: u64,
     /// Microcycles the board spends nopped after a control-store write,
@@ -169,6 +174,12 @@ pub struct Micro {
 
 impl Micro {
     pub fn new(m: Machine) -> Self {
+        // QUUX drops the delay lines: four ticks of 10 ns a microcycle.
+        let sync_cycle_ns = if m.geometry.machine_id.is_some() {
+            crate::clock::SYNC_CYCLE_TICKS as u64 * crate::clock::GRID_NS
+        } else {
+            0
+        };
         Micro {
             m,
             p0: Insn::new(0),
@@ -203,6 +214,7 @@ impl Micro {
             speed: Speed::ExtraSlow,
             speed_a: Speed::ExtraSlow,
             memory_cycle_ns: MEMORY_ACCESS_NS,
+            sync_cycle_ns,
             memory_cycles: 0,
             nopped: 0,
             srun: false,
@@ -217,6 +229,12 @@ impl Micro {
             opc_ck: false,
             trap: false,
         }
+    }
+
+    /// A microcycle's length: QUUX's `sync` period, or on the CADR the
+    /// speed bits' and `ILONG`'s.
+    fn cycle_ns(&self, ilong: bool) -> u64 {
+        if self.sync_cycle_ns > 0 { self.sync_cycle_ns } else { self.speed.cycle_ns(ilong) as u64 }
     }
 
     /// The control store address executed in the last [`Engine::step`], or
@@ -1182,6 +1200,10 @@ impl Micro {
 }
 
 impl Engine for Micro {
+    fn nominal_cycle_ns(&self) -> u64 {
+        if self.sync_cycle_ns > 0 { self.sync_cycle_ns } else { crate::ioboard::CYCLE_NS }
+    }
+
     /// The boot sequence: reset, enable the PROM, then trap to control store
     /// location 0.  The trap forces NPC to zero and inhibits the unfetched
     /// instruction still sitting in the pipeline, exactly as a parity trap
@@ -1235,6 +1257,8 @@ impl Engine for Micro {
             speed,
             speed_a,
             memory_cycle_ns,
+            // The flags set it again on a resume, as the timing model is.
+            sync_cycle_ns: _,
             memory_cycles,
             nopped,
             srun,
@@ -1365,7 +1389,7 @@ impl Engine for Micro {
         let machrun = (self.sstep && !self.ssdone) || (self.srun && !errhalt);
         if !machrun {
             self.speedclk();
-            self.m.ns += self.speed.cycle_ns(false) as u64;
+            self.m.ns += self.cycle_ns(false);
             self.mclk_edge();
             self.opc_clock(true, self.p1_pc);
             return Ok(());
@@ -1378,7 +1402,7 @@ impl Engine for Micro {
         // and `memory_cycle_ns` stands in for it with the band's mean.
         while self.nopped > 0 {
             self.speedclk();
-            self.m.ns += self.speed.cycle_ns(false) as u64;
+            self.m.ns += self.cycle_ns(false);
             self.nopped -= 1;
             self.mclk_edge();
         }
@@ -1402,13 +1426,13 @@ impl Engine for Micro {
             let mut held = 0;
             while held < muldiv::DIV_NS {
                 self.speedclk();
-                let cycle = self.speed.cycle_ns(ilong) as u64;
+                let cycle = self.cycle_ns(ilong);
                 self.m.ns += cycle;
                 held += cycle;
                 self.mclk_edge();
             }
         }
-        self.m.ns += self.speed.cycle_ns(ilong) as u64;
+        self.m.ns += self.cycle_ns(ilong);
         self.mclk_edge();
         self.advance_pipeline();
         self.memstart = std::mem::take(&mut self.memop);

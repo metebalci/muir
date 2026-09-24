@@ -159,16 +159,18 @@ fn system_1002_sizes_its_screen_at_boot() {
     }
 }
 
-/// **System 1002 runs under `sync`**, QUUX's 40 ns microcycle: the same
-/// microcode and band reach the same listener, and the time to it is
-/// shorter than at QUUX's one rate of 145 ns by less than the microcycle
-/// ratio, the bus keeping its own time.
+/// **System 1002 runs at its ticks**: QUUX drops the delay lines, and its
+/// microcycle is `sync`'s K ticks of 10 ns. The same microcode and band
+/// reach the same listener at four ticks and at three, and the time to it
+/// is shorter at three by less than the microcycles' ratio, the bus keeping
+/// its own time.
 #[test]
-fn system_1002_runs_under_sync() {
+fn system_1002_runs_at_its_ticks() {
     use muir::clock::TimingModel;
     let mut times = Vec::new();
-    for model in [TimingModel::Cadr, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
-        let Some((_dir, pack, root)) = band_1002(&format!("system-1002-{}", model.name())) else {
+    for ticks in [4, 3] {
+        let model = TimingModel::Sync { cycle_ticks: ticks, ilong_ticks: 0 };
+        let Some((_dir, pack, root)) = band_1002(&format!("system-1002-sync-{ticks}")) else {
             return;
         };
         let mut e = Rtl::new(quux(&pack));
@@ -177,12 +179,12 @@ fn system_1002_runs_under_sync() {
         let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
         assert!(
             drawn_at_its_words_a_line(&e),
-            "{model:?}: at the screen's words a line; the screen is {}",
-            shot(&e, model.name())
+            "{ticks} ticks: at the screen's words a line; the screen is {}",
+            shot(&e, &format!("sync-{ticks}"))
         );
-        eprintln!("{}: listener after {ran} microcycles, {} ns", model.name(), e.ns());
+        eprintln!("{ticks} ticks: listener after {ran} microcycles, {} ns", e.ns());
         times.push(e.ns());
     }
     let ratio = times[0] as f64 / times[1] as f64;
-    assert!(ratio > 1.5 && ratio < 145.0 / 40.0, "{ratio:.2} times faster");
+    assert!(ratio > 1.0 && ratio < 4.0 / 3.0, "{ratio:.3} times faster at three ticks");
 }
