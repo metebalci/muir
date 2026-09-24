@@ -133,7 +133,7 @@ fn a_quux_prom_file_is_read_from_36000() {
 #[test]
 fn the_built_in_quux_prom_is_the_hand_over() {
     let handed =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/prom-1000-q2/promh.mcr");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev7/promh.mcr");
     let Ok(bytes) = std::fs::read(&handed) else {
         eprintln!("skipped: {} is not present", handed.display());
         return;
