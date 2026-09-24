@@ -37,6 +37,7 @@ use std::path::{Path, PathBuf};
 
 use muir::diskpack::{Command, Pack};
 use muir::engine::Engine;
+use muir::isa::{Insn, Op};
 use muir::machine::Halt;
 use muir::micro::Micro;
 use muir::rtl::Rtl;
@@ -214,6 +215,47 @@ struct Phase {
     /// check is what says so.
     ops: HashMap<(u16, u16, u64), u64>,
     decode_agrees: [u64; 2],
+    hazards: Hazards,
+}
+
+/// What a deeper microinstruction pipeline would meet, counted over the
+/// executed stream (`MUIR_HAZARDS`): how control leaves the sequence, and
+/// how often an instruction reads the A or M word one of the two before it
+/// wrote.
+#[derive(Default, Clone)]
+struct Hazards {
+    executed: u64,
+    /// Inhibited cycles: a jump's `N`, or a dispatch's.
+    nopped: u64,
+    /// Transfers (the next executed address is not this one + 1), by what
+    /// caused them: `[jump always, jump on a condition, dispatch, POPJ,
+    /// other]`, and `[through the delay slot, the slot inhibited]`.
+    transfers: [[u64; 2]; 5],
+    /// Jumps on a condition executed, taken or not.
+    conditional: u64,
+    /// Reads of the word the previous instruction wrote, and of the one
+    /// the instruction before that wrote (and not the previous).
+    reads_d1: u64,
+    reads_d2: u64,
+}
+
+/// The A memory words `i` writes, as a range, and the M word: an ALU or
+/// BYTE destination in A memory writes that word; a functional one writes M
+/// memory and the A word it shadows.
+fn writes(i: Insn) -> Option<(u16, bool)> {
+    let dest = match i.op() {
+        Op::Alu => i.alu().dest,
+        Op::Byte => i.byte().dest,
+        _ => return None,
+    };
+    Some(if dest.is_a_mem() { (dest.a_addr(), false) } else { (u16::from(dest.m_addr()), true) })
+}
+
+/// Whether `i` reads A word `a` (M words are A words 0-37).
+fn reads(i: Insn, w: (u16, bool)) -> bool {
+    let a_read = i.op() != Op::Dispatch && i.a_src() == w.0;
+    let m_read = !i.m_src_functional() && w.0 < 32 && u16::from(i.m_src()) == w.0;
+    a_read || m_read
 }
 
 fn meters(e: &impl Engine, syms: &Symbols) -> Vec<u32> {
@@ -292,6 +334,12 @@ fn run<E: Profiled>(
     let mut last: Option<(u64, u32, u32, Option<u16>)> = None;
     let mut since_dispatch = 0u32;
     let ops_wanted = std::env::var_os("MUIR_OPS").is_some();
+    let hazards_wanted = std::env::var_os("MUIR_HAZARDS").is_some();
+    let mut hz = Hazards::default();
+    // The last two executed `(PC, instruction)`, and whether a cycle was
+    // inhibited since the last.
+    let mut back: [Option<(u16, Insn)>; 2] = [None, None];
+    let mut nop_since = false;
     // Typing steps the engine too, so count through it.
     let mut step = |e: &mut E| {
         let s0 = e.bus().map_or(0, |b| b[0]);
@@ -301,6 +349,48 @@ fn run<E: Profiled>(
         if let Some(pc) = e.executed_pc() {
             hist[pc as usize] += 1;
             stall_hist[pc as usize] += e.bus().map_or(0, |b| b[0]) - s0;
+        }
+        if hazards_wanted {
+            match e.executed_pc() {
+                None => {
+                    hz.nopped += 1;
+                    nop_since = true;
+                }
+                Some(pc) => {
+                    // The workloads run with the boot PROM long disabled.
+                    let i = e.machine().imem[pc as usize];
+                    hz.executed += 1;
+                    if i.op() == Op::Jump && !(i.jump().internal_cond && i.jump().cond == 7) {
+                        hz.conditional += 1;
+                    }
+                    if let Some((ppc, _)) = back[0]
+                        && pc != ppc.wrapping_add(1)
+                    {
+                        // The jump is the one before its delay slot, or,
+                        // with the slot inhibited, the last executed.
+                        let cause = if nop_since { back[0] } else { back[1] };
+                        let kind = match cause.map(|(_, c)| c) {
+                            Some(c) if c.popj() => 3,
+                            Some(c) if c.op() == Op::Jump => {
+                                let j = c.jump();
+                                if j.internal_cond && j.cond == 7 { 0 } else { 1 }
+                            }
+                            Some(c) if c.op() == Op::Dispatch => 2,
+                            _ => 4,
+                        };
+                        hz.transfers[kind][nop_since as usize] += 1;
+                    }
+                    let w1 = back[0].and_then(|(_, p)| writes(p));
+                    let w2 = back[1].and_then(|(_, p)| writes(p));
+                    if w1.is_some_and(|w| reads(i, w)) {
+                        hz.reads_d1 += 1;
+                    } else if w2.is_some_and(|w| reads(i, w)) {
+                        hz.reads_d2 += 1;
+                    }
+                    back = [Some((pc, i)), back[0]];
+                    nop_since = false;
+                }
+            }
         }
         if ops_wanted && let (Some(pc), Some(q)) = (e.executed_pc(), qmlp) {
             since_dispatch += 1;
@@ -365,6 +455,7 @@ fn run<E: Profiled>(
         fetches,
         ops,
         decode_agrees,
+        hazards: hz,
     }
 }
 
@@ -384,6 +475,24 @@ fn report(name: &str, p: &Phase, syms: &Symbols, files: &BTreeMap<String, String
         if hits + misses > 0 {
             println!("   cache {hits} hits, {misses} misses");
         }
+    }
+    let h = &p.hazards;
+    if h.executed > 0 {
+        let pct = |n: u64| 100.0 * n as f64 / h.executed as f64;
+        let t: Vec<String> = ["always", "conditional", "dispatch", "popj", "other"]
+            .iter()
+            .zip(h.transfers)
+            .map(|(k, [slot, nop])| format!("{k} {:.2}%+{:.2}%", pct(slot), pct(nop)))
+            .collect();
+        println!(
+            "   hazards: {} executed, {:.2}% inhibited; transfers (slot+inhibited) {}; conditional jumps {:.2}%; reads of the last write {:.2}%, of the one before {:.2}%",
+            h.executed,
+            pct(h.nopped),
+            t.join(", "),
+            pct(h.conditional),
+            pct(h.reads_d1),
+            pct(h.reads_d2)
+        );
     }
     let [[q_seq, q_wrong], [o_seq, o_wrong]] = p.fetches;
     if q_seq + q_wrong + o_seq + o_wrong > 0 {
