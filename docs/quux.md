@@ -527,10 +527,11 @@ largest MONO TV buffer and 36777 the display's and disk's registers.
 | Word | |
 |---|---|
 | 0-77 | the feature page, read only |
-| 100 | interrupt status, read only: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's done, `<3>` the keyboard, `<4>` the mouse, each under its own enable; the network, `<5>`, comes with its device |
+| 100 | interrupt status, read only: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's done, `<3>` the keyboard, `<4>` the mouse, `<5>` the network, each under its own enable |
 | 101 | error status: the bus errors, as `766044` gives them; a write clears them |
 | 102 | mode: `<0>` error stop, which the host can set too |
 | 120-123 | the keyboard and the mouse (below) |
+| 140-147 | the network (below) |
 | others | reserved: read 0, writes ignored |
 
 On the CADR nothing answers on the page. `tests/quux_registers.rs` holds
@@ -560,6 +561,18 @@ delivers to it on QUUX as it delivers to the I/O board on the CADR, and the
 keyboard's boot word still boots. `tests/quux_input.rs` holds the FIFO's
 order and its 64, the overflow, the counts and buttons, the interrupts, the
 terminal's delivery, the boot word, a checkpoint and both engines' reads.
+
+## The network
+
+**QUUX's Chaosnet interface is on the register page** (contract Q4), off the
+I/O board: its registers keep their order and their bits, word 140 + k being
+the CADR's Unibus `764140` + 2k --- 140 the CSR, 141 my address (read) and
+the write buffer (written), 142 the read buffer, 143 the bit count, 145
+START --- sixteen bits each in the bottom of the word, and its interrupt is
+word 100's `<5>`. muir's cable is the same: CHUDP to `ozd`,
+`--chaos-address`, `--chaos-udp-peer`. An Ethernet interface behind the same
+device is a later contract. `tests/quux_network.rs` holds each word to its
+Unibus register and a STATUS request sent and answered through the page.
 
 ## Its microcode
 
