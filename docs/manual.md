@@ -327,6 +327,8 @@ has the rest.
 
 ### `--debug-cable-connect [<endpoint>|0x<address>]`
 
+The CADR's: refused on QUUX, which has no Unibus and so no debug cable.
+
 **rtl:** this machine is the debugger: its DBGOUT connects to a debuggee
 listening at the endpoint, a port, an address or address:port. Either end
 may be another program that speaks the cable's frames. This machine has [the
@@ -349,6 +351,8 @@ Default: `127.0.0.1:7661`.
 
 ### `--debug-cable-listen [<endpoint>]`
 
+The CADR's: refused on QUUX, which has no Unibus and so no debug cable.
+
 **rtl, chip:** where this machine's DBGIN listens for a debugger's cable
 over TCP: a port, an address or address:port. **Every `rtl` and `chip` run
 listens**, asked for or not, since the bus interface's DBGIN is on every
@@ -367,6 +371,8 @@ connector stays on the loopback unless an address is named. Default:
 muir.
 
 ### `--debug-in-process`
+
+The CADR's: refused on QUUX, which has no Unibus and so no debug cable.
 
 **rtl:** the two-machine lashup in one process. A second machine runs beside
 this one with both debug cables between them, each machine's DBGOUT to the

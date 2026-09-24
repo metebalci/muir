@@ -109,6 +109,12 @@ pub struct Geometry {
     /// `PROMDISABLE` (`None`); on QUUX at [`QUUX_PROM_BASE`], read only and
     /// never overlaid, the reset PC, with no disable bit.
     pub prom_base: Option<u16>,
+    /// Whether the machine has the Unibus (contract Q5). The CADR does: its
+    /// I/O board, the bus interface's registers, the Unibus map and the
+    /// debug cable are on it. QUUX does not: every address from physical
+    /// page 37000 up answers nothing, a read or a write timing out as an
+    /// empty Xbus address does, and its devices are on the register page.
+    pub unibus: bool,
 }
 
 impl Geometry {
@@ -123,6 +129,7 @@ impl Geometry {
         old_word_while_written: false,
         hangs: true,
         prom_base: None,
+        unibus: true,
     };
 
     /// QUUX's, revision 6: its boot PROM at control store 36000 and the
@@ -155,6 +162,7 @@ impl Geometry {
         old_word_while_written: true,
         hangs: false,
         prom_base: Some(QUUX_PROM_BASE),
+        unibus: false,
     };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
@@ -861,7 +869,7 @@ impl Machine {
     /// machine's time.
     pub fn interrupt_at(&self, now: u64) -> bool {
         self.xbus_interrupt()
-            || self.unibus_interrupt().is_some()
+            || (self.geometry.unibus && self.unibus_interrupt().is_some())
             || (self.geometry.tick && self.tick.pending(now.max(self.ns)))
             || (self.geometry.machine_id.is_some() && self.quux_input.interrupts() != 0)
             // The network's request, word 100's <5> (contract Q4), reaches
@@ -1198,6 +1206,10 @@ impl Machine {
     /// A read of a diagnostic register through this alone reads the open
     /// bus; the engines answer them.  See [`crate::spy`].
     pub fn bus_read(&mut self, phys: u32) -> u32 {
+        if !self.geometry.unibus && busint::unibus_address(phys).is_some() {
+            self.bus_error |= bus_error::XBUS_NXM;
+            return 0;
+        }
         if let Some(w) = self.geometry.feature_word(phys) {
             // Words 11 to 13 are the main screen, from the board fitted:
             // width in 31:16 and height in 15:0; bits a pixel in 31:16 and
@@ -1270,6 +1282,10 @@ impl Machine {
     }
 
     pub fn bus_write(&mut self, phys: u32, value: u32) {
+        if !self.geometry.unibus && busint::unibus_address(phys).is_some() {
+            self.bus_error |= bus_error::XBUS_NXM;
+            return;
+        }
         // QUUX's register page (contract Q2): a write of word 101 clears the
         // bus errors, as a write of `766044` does, and word 102 `<0>` is
         // error stop; the features and the reserved words ignore writes.

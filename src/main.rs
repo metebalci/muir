@@ -5158,6 +5158,16 @@ fn main() {
         }
         block_disk = true;
     }
+    // QUUX has no Unibus (contract Q5), and the debug cable is a Unibus
+    // master: no connector, and the lashup is the CADR's.
+    if !geometry.unibus
+        && ((cable_listen.asked && !cable_off) || cable_connect.is_some() || debuggee)
+    {
+        usage(
+            "QUUX has no Unibus, and so no debug cable: --debug-cable-listen, \
+             --debug-cable-connect and --debug-in-process are the CADR's",
+        );
+    }
     // Block-disk is QUUX's, and not a board `chip` has.
     if block_disk && geometry == muir::machine::Geometry::CADR {
         usage("--disk-controller block-disk is QUUX's, and this run is the CADR: --machine quux");
@@ -5518,7 +5528,9 @@ fn main() {
     // machine inside the cable it plugged into the debuggee: neither
     // listens, and their own lines say what they are.  Bound here, before
     // the machine is built, so that the start can say where.
-    let no_cable: Option<String> = if cable_off {
+    let no_cable: Option<String> = if !geometry.unibus {
+        Some("QUUX has no Unibus, and the cable is a Unibus master".to_string())
+    } else if cable_off {
         Some("--no-debug-cable-listen".to_string())
     } else if which == Which::Micro {
         Some("micro has no timing model, and no end of the debug cable".to_string())

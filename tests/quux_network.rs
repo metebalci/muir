@@ -29,13 +29,14 @@ fn quux() -> Machine {
 }
 
 /// **Each word is its Unibus register**: the same writes and reads, made
-/// on one machine through the Unibus and on another through the page, give
+/// on a CADR through its Unibus and on QUUX through the page (QUUX having
+/// no Unibus, contract Q5), give
 /// the same answers --- the CSR's writable bits, the address, the write
 /// buffer's words and the bit count they make, the read buffer, and the
 /// words that answer nothing on the CADR's board reading 0 here too.
 #[test]
 fn each_word_is_its_unibus_register() {
-    let (mut a, mut b) = (quux(), quux());
+    let (mut a, mut b) = (Machine::new(), quux());
     let at = |k: u32| (unibus(interface::CSR + 2 * k), NET + k);
     let mut both = |k: u32, write: Option<u32>| {
         let (u, p) = at(k);
