@@ -19,7 +19,7 @@
 use muir::engine::Engine;
 use muir::isa::Insn;
 use muir::isa::asm::{
-    ALU, ALWAYS, JUMP, N, SETM, SETZ, START_READ, bit, filler, m_dest, m_src, src, target,
+    ALU, ALWAYS, JUMP, N, SETM, SETO, SETZ, START_READ, bit, filler, m_dest, m_src, src, target,
 };
 use muir::machine::{Geometry, Machine};
 use muir::micro::Micro;
@@ -281,4 +281,76 @@ fn a_checkpoint_keeps_the_clocks() {
     let mut resumed = make();
     resumed.load(&mut Reader::new(&body)).unwrap();
     assert_eq!(until(&mut resumed, 8, 1_000_000, Rtl::ns), until(&mut r, 8, 1_000_000, Rtl::ns));
+}
+
+/// **A flag that rises while a microcycle waits for `MD` is seen by the
+/// jump after it**, on `rtl` under the FPGA's grid and under `sync`: the
+/// interrupt a jump tests, `SINTR`, is registered at the edge that ends the
+/// microcycle before it, with the flags as they stand at that edge ---
+/// muir-fpga's three trials (`ref/fpga-tick`), where `rtl` read them at the
+/// memory's answer, earlier, and missed a rise in between. The program:
+/// the interval timer on with a period of `p` µs, `f` fillers, a read of
+/// main memory, `MD` into A 720 (which waits for the word), and a jump on
+/// condition 5 that sets M 5 when taken. For every `p` and `f`, the jump is
+/// taken exactly when the flag rose at or before the edge that ends the
+/// waiting microcycle.
+#[test]
+fn a_flag_rising_during_a_wait_is_seen_by_the_jump_after() {
+    use muir::clock::TimingModel;
+    use muir::isa::asm::{SRC_MD, a_dest};
+    let md_read = Insn::new(ALU | SETM | SRC_MD | a_dest(0o720));
+    let mut cases = [0; 2];
+    for timing in [TimingModel::Fpga, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
+        for p in [1u32, 2] {
+            for f in 0..12usize {
+                let mut prom = vec![
+                    Insn::new(ALU | SETM | m_src(6) | INTERRUPT_CONTROL),
+                    Insn::new(ALU | SETM | m_src(2) | CLOCK_CONTROL),
+                    Insn::new(ALU | SETM | m_src(1) | INTERVAL_PERIOD),
+                ];
+                prom.extend(vec![filler(); f]);
+                prom.push(Insn::new(ALU | SETM | m_src(7) | START_READ));
+                prom.push(filler());
+                prom.push(md_read);
+                let jump_at = prom.len() as u64;
+                prom.push(Insn::new(JUMP | target(jump_at + 3) | PGF_OR_INT | N));
+                prom.push(Insn::new(JUMP | target(jump_at + 2) | ALWAYS | N));
+                prom.push(Insn::new(JUMP | target(jump_at + 2) | ALWAYS | N));
+                prom.push(Insn::new(ALU | SETO | m_dest(5)));
+                prom.push(Insn::new(JUMP | target(jump_at + 4) | ALWAYS | N));
+                let mut m = machine(Geometry::QUUX, &prom, p, [INTERVAL_ON, 0]);
+                // Virtual word 405: level-2 entry 1, physical page 100.
+                m.mmem[7] = (1 << 8) | 5;
+                m.l2_map[1] = (1 << 23) | (1 << 22) | 0o100;
+                m.main[(0o100 << 8) | 5] = 0o777;
+                let mut r = Rtl::new(m);
+                r.set_timing_model(timing);
+                r.boot();
+                // The instants: when the flag rises, as the timer has it once
+                // the period is written, and the edge that ends the
+                // microcycle `MD` is read in.
+                let (mut rise, mut ends) = (None, None);
+                for _ in 0..400 {
+                    let ir = r.ir();
+                    r.step().unwrap();
+                    let d = r.machine().tick.interval_deadline_ns;
+                    if rise.is_none() && d != u64::MAX {
+                        rise = Some(d);
+                    }
+                    if ir == md_read.raw() && ends.is_none() {
+                        ends = Some(r.ns());
+                    }
+                }
+                let (rise, ends) = (rise.unwrap(), ends.unwrap());
+                let taken = r.machine().mmem[5] == !0;
+                cases[taken as usize] += 1;
+                assert_eq!(
+                    taken,
+                    rise <= ends,
+                    "{timing:?}, {p} µs, {f} fillers: the flag rises at {rise}, the MD read ends at {ends}"
+                );
+            }
+        }
+    }
+    assert!(cases[0] > 0 && cases[1] > 0, "taken and not taken both reached: {cases:?}");
 }
