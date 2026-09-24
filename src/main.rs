@@ -1182,7 +1182,9 @@ A simulator of the MIT CADR Lisp Machine.
                                leaves. block-disk is QUUX's, on micro and
                                rtl: the same registers and command list
                                with blocks by number, read and write only,
-                               and one pack, unit 0. [default: netlist]
+                               and one pack, unit 0; QUUX's only disk, the
+                               CADR's refused on it. [default: netlist on
+                               the CADR, block-disk on QUUX]
   --disk-multiplexor           chip: a DISK MULTIPLEXOR on the netlist
                                controller's cable, which is what gives it
                                eight drive ports instead of one. Without it
@@ -3744,10 +3746,13 @@ fn resume_engine<E: Engine>(
         ));
     }
     let mut r = muir::checkpoint::Reader::new(&c.body);
-    e.load(&mut r).and_then(|()| r.done()).unwrap_or_else(|err| stale_checkpoint(path, &err, None));
     // The machine first: a board refused on another machine's checkpoint
-    // is only the machine's default board.
+    // is only the machine's default board, and a disk the same (QUUX's is
+    // block-disk). The geometry is read before either, so a load that
+    // fails on one has it already.
+    let loaded = e.load(&mut r).and_then(|()| r.done());
     refuse_machine(resume, e.machine().geometry, geometry);
+    loaded.unwrap_or_else(|err| stale_checkpoint(path, &err, None));
     if e.machine().tv.board() != tv_board {
         usage(&format!(
             "--resume {}: a {} checkpoint, and --tv-board is {}",
@@ -5106,6 +5111,18 @@ fn main() {
             "--sync-cycle-ticks is --timing-model sync's, and this run is {}",
             timing_model.name()
         ));
+    }
+    // QUUX's disk is block-disk and nothing else: muir-sys's PROM,
+    // microcode and band for QUUX address the disk by block, and the
+    // CADR's controller is refused as the CADR's TV boards are.
+    if geometry != muir::machine::Geometry::CADR {
+        if disk_given && !block_disk {
+            usage(&format!(
+                "--disk-controller {} is the CADR's, and this run is QUUX, whose disk is block-disk",
+                if disk_controller { "netlist" } else { "model" }
+            ));
+        }
+        block_disk = true;
     }
     // Block-disk is QUUX's, and not a board `chip` has.
     if block_disk && geometry == muir::machine::Geometry::CADR {

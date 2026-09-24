@@ -409,6 +409,8 @@ Default: the display above this machine's, `127.0.0.1:5901` when it is at
 `block-disk` is QUUX's, on `micro` and `rtl`: [block-disk](quux.md), the same
 registers and command list with blocks by number, read and write only, one
 pack at unit 0, and 100 us a block. Refused on the CADR and on `chip`.
+It is QUUX's only disk: a QUUX run has it without the flag, and
+`--disk-controller netlist` or `model` is refused on QUUX.
 
 **The netlist runs the drive's real milliseconds.** Its sequencer waits on
 the drive's clocks and on its own delay lines, so the block it is reading
