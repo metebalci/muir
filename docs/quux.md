@@ -25,6 +25,7 @@ differences, what it needed:
 | Block-disk | needed: address the disk by block number | needed: the disk routines by block number, no cylinder, head or sector | needed: `io/disk.lisp` and the label editor by block number | `--disk-controller block-disk` |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
 | The synchronous microcycle (`sync`) | nothing | nothing | nothing | `--timing-model sync`, `--sync-cycle-ticks` |
+| No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and 1000 never do either, counted (below) | nothing | nothing |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
 | MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
 
@@ -384,22 +385,43 @@ unchanged.
 | Dispatch memory, a dispatch write | in *n*'s own write pulse, at its own `DADR` | the dispatch in *n* reads the old word (QUUX's definition); from *n*+1 the new |
 | Control store, `WRITE-I-MEM` | in *n*+1's write pulse, at the `PC` it moved to | *n*+1's `IR` takes the word from `IWR` directly, not from the RAM; later fetches the RAM |
 | OA registers, `IMOD` | at the edge ending *n* | or'd into `IR` as it loads at that same edge: the instruction executed in *n*+1 |
-| `MD`, from memory | at `-LOADMD`, when the bus says | a microcycle that reads `MD` before `READ IN PROGRESS` falls is held by `-HANG` |
+| `MD`, from memory | at `-LOADMD`, when the bus says | on the CADR, a microcycle that reads `MD` before `READ IN PROGRESS` falls is held by `-HANG`; on QUUX it waits (below) |
 
 Holds and write pulses:
 
 - A cycle held by `-WAIT` fires no write pulse: `TPWP` is `NOR(latch,
   -MACHRUNA)` at CLOCK2 1C10. The pending writes wait for the cycle that
   runs.
-- A cycle held by `-HANG` fires its write pulse, which takes its address
-  and data as the cycle's time ends: `MD` as the bus has left it then.
-  Only the next cycle's start is held (`-TPR0`, CLOCK1 1C08).
+- On the CADR, a cycle held by `-HANG` fires its write pulse, which takes
+  its address and data as the cycle's time ends: `MD` as the bus has left
+  it then. Only the next cycle's start is held (`-TPR0`, CLOCK1 1C08).
+- **QUUX has no hung microcycle** (`Geometry::hangs`): a microcycle that
+  reads `MD` while a read is in flight waits as for `-WAIT`, whole
+  microcycles with no write pulse, and runs once, whole, when the word is
+  in `MD`. Unlike `-WAIT`, a single step does not pass it. Its writes
+  therefore take their addresses from the word read: a dispatch write
+  addressed by `MD`, and a map store's write pending into it, land where
+  the word read says, where the CADR's land at the `MD` from before
+  (`on_quux_a_dispatch_write_addressed_by_md_waits_for_the_word_read`,
+  `on_quux_a_map_write_pending_into_the_wait_lands_at_the_word_read`,
+  `on_quux_the_wait_for_md_is_whole_microcycles` in
+  `tests/dispatch_write_order.rs`).
 - **QUUX's definition**: a RAM read in the cycle its own write pulse fires
   --- the dispatch word a dispatch writes, the map word right after a map
-  store --- gives the word from before the write. On the CADR the RAM's
-  output floats while written and the answer is a race; `chip`'s answer,
-  the new word, rests on its clock cutting the pulse at the edge. Microcode
-  323 and 1000 never read either (muir-sys's search of their sources).
+  store --- gives the word from before the write
+  (`Geometry::old_word_while_written`), as an FPGA's block RAM gives it.
+  On the CADR the RAM's output floats while written and the answer is a
+  race; muir's CADR engines take `chip`'s answer, the new word, which rests
+  on its clock cutting the pulse at the edge
+  (`on_the_cadr_rtl_and_micro_take_the_word_chip_does` and the two map
+  tests beside it).
+- **Nothing MIT's or muir-sys's microcode runs does either.** Counted on
+  `rtl` over a boot of System 1001 and the profile harness's thirteen
+  workloads, on QUUX (microcode 1000) and on the CADR (System 1001's own
+  microload, 324, which is 323 rebuilt): no dispatch write
+  with `POPJ`, no map read in the microcycle a map store's write lands, and
+  no hung microcycle whose pulse writes the dispatch memory or the map.
+  The same counters fire on the test programs built to do each.
 
 ## MONO TV, the display
 

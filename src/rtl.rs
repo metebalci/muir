@@ -103,6 +103,11 @@ enum Stall {
     Wait,
     /// `-HANG`: both clocks stop.
     Hang,
+    /// QUUX's wait for `MD`, in place of `-HANG`
+    /// ([`Geometry::hangs`](crate::machine::Geometry)): the master clock
+    /// runs on and the cpu clock waits, as for `-WAIT`, but a single step
+    /// does not pass it, the instruction needing the word.
+    Hold,
 }
 use crate::clock::{Speed, TimingModel};
 use crate::engine::Engine;
@@ -924,8 +929,21 @@ impl Rtl {
 
         // pages VMAS, VMEM0 and VMEM1
         let (adr0, adr1) = self.map_address();
-        let vmap = self.m.l1_map[adr0 as usize];
-        let vmo = self.m.l2_map[adr1 as usize];
+        let mut vmap = self.m.l1_map[adr0 as usize];
+        let mut vmo = self.m.l2_map[adr1 as usize];
+        // A map store's write lands in this microcycle's write pulse. On
+        // the CADR the word the edge registers is the one the RAM shows
+        // after it, as `chip` has it; QUUX defines the one from before,
+        // which the read phase has read already (QUUX has no hung
+        // microcycle to read it again after the pulse).
+        if self.wmapd && !self.m.geometry.old_word_while_written {
+            if bit(self.m.vma as u64, 26) {
+                vmap = self.m.geometry.l1_from_vma(self.m.vma);
+            }
+            if bit(self.m.vma as u64, 25) {
+                vmo = self.m.vma & 0o77777777;
+            }
+        }
 
         // page VMEMDR 1D14: a 74S373 transparent while `MEMSTART`, so on such
         // a cycle it is already following the word the map is putting out.
@@ -1113,7 +1131,14 @@ impl Rtl {
             || bit(ir, 12);
         let dadr = (((field(ir, 22, 13) << 1) | daddr0 as u32) | (dmask & r & 0o176)) as u16;
         let dispwr = irdisp && (funct & 4) != 0;
-        let dram_q = self.m.dmem[dadr as usize];
+        // A dispatch memory write with `POPJ` reads the word it writes: on
+        // the CADR the one written, as `chip` has it, and on QUUX the one
+        // from before, which the RAM still holds in the read phase.
+        let dram_q = if dispwr && !self.m.geometry.old_word_while_written {
+            a & 0o377777
+        } else {
+            self.m.dmem[dadr as usize]
+        };
 
         // page CONTRL --- sequencing
         let dr = bit(dram_q as u64, 16);
@@ -1648,7 +1673,7 @@ impl Rtl {
             return Some(Stall::Wait);
         }
         if r.use_md && self.rd_in_progress {
-            return Some(Stall::Hang);
+            return Some(if self.m.geometry.hangs { Stall::Hang } else { Stall::Hold });
         }
         None
     }
@@ -1678,7 +1703,7 @@ impl Rtl {
             // The generator cycle the cpu sits out is as long as the
             // instruction standing in `IR` asks: `-ILONG` is `NAND(IR45,
             // -NOPA)`, and the waiting instruction is not nopped.
-            Stall::Wait => {
+            Stall::Wait | Stall::Hold => {
                 self.master_clock_cycle(r);
             }
             // Both clocks stop. The Xbus cycle is already running and

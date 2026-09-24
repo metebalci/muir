@@ -87,6 +87,20 @@ pub struct Geometry {
     /// delay-line tap that ends the read phase (`mit/cadr/ir.bits`). The
     /// CADR's do; QUUX runs at one rate and has no such bits.
     pub speed_bits: bool,
+    /// Whether a RAM read in the microcycle that writes the same word ---
+    /// a `POPJ` in a dispatch memory write, the map read in the microcycle
+    /// its store's write lands --- gives the word from before the write.
+    /// QUUX defines it so, as an FPGA's block RAM gives it. On the CADR the
+    /// RAM's output floats while written and the board races; muir takes
+    /// the netlist's answer there, the word written
+    /// (`tests/dispatch_write_order.rs`).
+    pub old_word_while_written: bool,
+    /// Whether a microcycle that reads `MD` while a read is in flight is
+    /// hung, as on the CADR: its read phase and write pulses run, then
+    /// `-HANG` holds the next cycle's start until `-RDFINISH`. QUUX has no
+    /// hung microcycle: such a microcycle waits, as for `-WAIT`, whole
+    /// microcycles with no write pulse, and runs once the word is in `MD`.
+    pub hangs: bool,
 }
 
 impl Geometry {
@@ -98,6 +112,8 @@ impl Geometry {
         muldiv: false,
         tick: false,
         speed_bits: true,
+        old_word_while_written: false,
+        hangs: true,
     };
 
     /// QUUX's, revision 4: a tick in the processor ([`Tick`]); `MUL` and
@@ -123,6 +139,8 @@ impl Geometry {
         muldiv: true,
         tick: true,
         speed_bits: false,
+        old_word_while_written: true,
+        hangs: false,
     };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine

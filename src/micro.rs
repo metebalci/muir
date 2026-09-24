@@ -1101,10 +1101,13 @@ impl Micro {
             // dispatched; but a POPJ in the same instruction is still
             // `IGNPOPJ`'s, which reads R: with R clear the POPJ is a jump to
             // the word's DPC and pops nothing (`Rtl::read_phase`'s `pcs`).
-            // The word is the one standing before the write --- which of
-            // the two the CADR's RAM gives there is a race, and QUUX defines
-            // it as the old one (`tests/dispatch_write_order.rs`).
-            self.m.dmem[(addr & 0o3777) as usize] = self.adata & 0o377777;
+            // Which word: on the CADR the RAM races and muir takes the
+            // netlist's answer, the word written; QUUX defines the one
+            // standing before ([`Geometry::old_word_while_written`],
+            // `tests/dispatch_write_order.rs`).
+            let new = self.adata & 0o377777;
+            self.m.dmem[(addr & 0o3777) as usize] = new;
+            let entry = if self.m.geometry.old_word_while_written { entry } else { new };
             if self.popj && (entry >> 16) & 1 == 0 {
                 self.npc = (entry & 0o37777) as u16;
                 self.popj = false;
@@ -1409,13 +1412,14 @@ impl Engine for Micro {
         self.memstart = std::mem::take(&mut self.memop);
         // A map store's write lands here, before the instruction runs, so
         // that its memory access translates through the new map as `rtl`'s
-        // does. But what the instruction reads of the map itself ---
-        // `MAP(MD)` and a dispatch on its bits --- is the word from before
-        // the write: on the CADR the RAM's output is high impedance while
-        // written and which word the edge sees is a race, and QUUX defines
-        // it as the old one, as `rtl`'s read phase has it
-        // (`tests/dispatch_write_order.rs`).
-        self.map_seen = self.map_write_d.is_some().then(|| self.m.translate(self.map_address()));
+        // does. What the instruction reads of the map itself --- `MAP(MD)`
+        // and a dispatch on its bits --- is on the CADR the word written, the
+        // netlist's answer to a race on the board, and on QUUX the word from
+        // before the write, as QUUX defines it
+        // ([`Geometry::old_word_while_written`],
+        // `tests/dispatch_write_order.rs`).
+        self.map_seen = (self.m.geometry.old_word_while_written && self.map_write_d.is_some())
+            .then(|| self.m.translate(self.map_address()));
         self.land_map_write();
 
         if self.new_md_delay > 0 {
