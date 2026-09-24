@@ -21,7 +21,7 @@ differences, what it needed:
 | MACHINE-ID in functional source 16 | nothing | 1000 reads it at boot and runs as either machine | `PROCESSOR-TYPE-CODE` is 4 | nothing |
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
-| The processor tick | nothing | none enables it yet: the clock handler is still entered from the display's interrupt | nothing | nothing |
+| The clocks in the processor: the 60 Hz tick, the interval timer, the microsecond clock | nothing | none enables the tick yet: the clock handler is still entered from the display's interrupt; the microsecond clock is still read on the Unibus | nothing | nothing |
 | Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002 (dev4): the label, the band and the disk routines by block number | block-disk is QUUX's only disk, the default there; the CADR's controller is refused on QUUX |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
 | The synchronous microcycle (`sync`) | nothing | nothing | nothing | `--timing-model sync`, `--sync-cycle-ticks` |
@@ -120,7 +120,7 @@ to `17377377` (page 36776), just below the page the display's control
 registers and the disk controller share. It is read-only and read like any
 device register, through the map:
 
-| Word | QUUX, revision 4 |
+| Word | QUUX, revision 5 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -134,7 +134,8 @@ device register, through the map:
 | 11 | the main screen: width in 31:16, height in 15:0 |
 | 12 | the main screen: bits a pixel in 31:16, words a line in 15:0 |
 | 13 | the main screen: its buffer's first physical address |
-| 14-377 | 0 |
+| 14 | the interval timer and the microsecond clock: 1 |
+| 15-377 | 0 |
 
 Words 11 to 13 describe whichever display is fitted: MONO TV's 1280 by 1024,
 one bit a pixel, 40 words a line at `17000000`, or, on a QUUX run with a CADR
@@ -192,43 +193,48 @@ the step sequence itself held to the netlist; the CADR's 42 and 43 to the
 netlist; the hold's length on both engines; a halted and single-stepped `DIV`;
 and a checkpoint taken during one.
 
-## The tick
+## The clocks in the processor
 
-**QUUX's processor has a tick of its own** (revision 4): a flag that rises
-every period, part of the interrupt the microcode already tests. The CADR has
-no clock in the processor. Its clock is the display board's vertical
-interrupt: microcode 323's `INTRX0` (`sys/ucadr/uc-interrupt.lisp`) reads the
-TV's mode register, clears its vertical flag, and runs the "roughly-60-cycle
-clock" handler --- the mouse, the disk's idle time, the Chaosnet's
-transmit-abort wakeup, and the sequence-break counter the scheduler runs
-on.
+**QUUX's processor has its clocks** (revision 5): a tick, fixed at 60 Hz,
+an interval timer, and a microsecond clock. The CADR has no clock in the
+processor. Its clock is the display board's vertical interrupt: microcode
+323's `INTRX0` (`sys/ucadr/uc-interrupt.lisp`) reads the TV's mode register,
+clears its vertical flag, and runs the "roughly-60-cycle clock" handler ---
+the mouse, the disk's idle time, the Chaosnet's transmit-abort wakeup, and
+the sequence-break counter the scheduler runs on. Its microsecond clock and
+interval timer are on the I/O board, on the Unibus (`764120`-`764124`).
 
 | | |
 |---|---|
-| Functional destination 3 | control: `<0>` enable; a write with `<1>` set clears the flag |
-| Functional destination 4 | the period in microseconds, `<23:0>`, 0 taken as 1; a write starts a period from then |
-| Functional source 17 | `<0>` the flag, `<1>` the enable |
-| Period at reset | 16,667 µs, 60 Hz |
-| Interrupt | while enabled, the flag is ORed into the interrupt pending that jump conditions 5 and 6 test, so it costs nothing until it rises |
+| Functional destination 3 | control: `<0>` the tick's enable, and a write with `<1>` set clears its flag; `<2>` the interval timer's enable, and a write with `<3>` set clears its flag |
+| Functional destination 4 | the interval timer's period in microseconds, `<23:0>`; a write starts a period from then; 0 stops it |
+| Functional source 17 | `<0>` the tick's flag, `<1>` its enable, `<2>` the interval timer's flag, `<3>` its enable |
+| Functional source 15 | the microseconds since power-on, 32 bits, wrapping: one read gives the whole word |
+| The tick's period | 16,667 µs, 60 Hz, fixed |
+| Interrupt | while enabled, each flag is ORed into the interrupt pending that jump conditions 5 and 6 test, so it costs nothing until it rises |
 
-The flag rises a period after the tick is enabled or its period written, then
-every period after, whether or not it was cleared between; a clear takes it
-down until the next. `-RESET` turns the tick off and puts the period back.
+A flag rises a period after its timer is enabled (the interval timer's
+also after its period is written), then every period after, whether or not
+it was cleared between; a clear takes it down until the next. `-RESET`
+turns both off. Revision 4's tick took its period from destination 4;
+revision 5 fixes it at 60 Hz and gives destination 4 to the interval timer.
 
 On the CADR, destinations 3 to 7 have no output on the 74S138 that decodes
-them and write only M, and source 17 has none either and reads all ones.
-Microcode 323 writes destinations 3 to 7 and reads source 17 nowhere, by
-a scan of every control-store word, and running shows the same of what
-the OA registers make at run time: `tests/unused_codes.rs` reads every
-executed microinstruction as it stood in `IR` through a boot to the
+them and write only M, and sources 15 and 17 have none either and read all
+ones. Microcode 323 writes destinations 3 to 7 and reads sources 15 and 17
+nowhere, by a scan of every control-store word, and running shows the same
+of what the OA registers make at run time: `tests/unused_codes.rs` reads
+every executed microinstruction as it stood in `IR` through a boot to the
 listener. System 1001 on 323, on the CADR, runs none; System 1002 on its
-microcode for revision 4 runs them at three addresses, each a
-control-store word that carries them, the tick's own.
+microcode for revision 4 runs them at three addresses, each a control-store
+word that carries them, the tick's own, and reads source 15 nowhere.
 
-`tests/tick.rs` holds the period against a 100 and a 300 µs one, the clear,
-the 60 Hz start, the interrupt condition taken with the tick on and not with
-it off, the CADR's all ones, and a checkpoint taken in the middle of a
-period, on `micro` and `rtl`.
+`tests/tick.rs` holds the interval timer against a 100 and a 300 µs period,
+its clear and its stop at 0, the tick at 60 Hz whatever destination 4 says,
+the interrupt condition taken with either on and not with both off, source
+15 against each engine's time (under `sync` too) and across its wrap, the
+CADR's all ones, and a checkpoint taken in the middle of an interval, on
+`micro` and `rtl`.
 
 ## One rate
 

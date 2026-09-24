@@ -5683,7 +5683,7 @@ fn main() {
         if geometry == muir::machine::Geometry::QUUX {
             writeln!(
                 s,
-                "machine: quux, revision 4: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, and a tick in the processor"
+                "machine: quux, revision 5: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, and clocks in the processor: a 60 Hz tick, an interval timer and a microsecond clock"
             )
             .unwrap();
         }

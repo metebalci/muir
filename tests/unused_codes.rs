@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! What runs of the codes the CADR leaves unassigned and QUUX took for its
-//! tick: functional destinations 3 to 7 and functional source 17.
+//! clocks: functional destinations 3 to 7 and functional sources 15 and 17.
 //!
 //! A scan of the control store finds which microinstructions carry them;
 //! an instruction the OA registers modify as it loads (`IMOD`) is made at
@@ -25,13 +25,14 @@ fn octal(pcs: &[u16]) -> String {
 }
 
 /// Whether `ir` writes functional destinations 3 to 7, or reads functional
-/// source 17: an ALU or BYTE instruction with `IR<25>` clear and
+/// source 15 or 17: an ALU or BYTE instruction with `IR<25>` clear and
 /// `IR<23:19>` 3 to 7, or any class with `IR<31>` set and `IR<30:26>` 17.
 fn uses_the_codes(ir: u64) -> bool {
     let class = ir >> 43 & 3;
     let dest =
         (class == 0 || class == 3) && ir >> 25 & 1 == 0 && (3..=7).contains(&(ir >> 19 & 0o37));
-    let src = ir >> 31 & 1 == 1 && (ir >> 26 & 0o37) == 0o17;
+    // `IR<30>` is in no source decode, so 35 and 37 are 15 and 17 again.
+    let src = ir >> 31 & 1 == 1 && matches!(ir >> 26 & 0o17, 0o15 | 0o17);
     dest || src
 }
 

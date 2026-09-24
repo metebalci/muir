@@ -116,7 +116,8 @@ impl Geometry {
         hangs: true,
     };
 
-    /// QUUX's, revision 4: a tick in the processor ([`Tick`]); `MUL` and
+    /// QUUX's, revision 5: clocks in the processor, the tick fixed at 60 Hz,
+    /// an interval timer and a microsecond clock ([`Tick`]); `MUL` and
     /// `DIV` in one instruction each, ALU
     /// functions 42 and 43 ([`crate::muldiv`]); a PDL buffer of 16K words,
     /// its pointer and index 14 bits; and a level-1 entry of six bits, 64 blocks of level 2 and so 63
@@ -128,14 +129,15 @@ impl Geometry {
     ///
     /// It says so in functional source 16, its MACHINE-ID, which no microcode of MIT's
     /// reads and nothing on the CADR drives: the signature `0x5155` in bits
-    /// 31:16, the hardware revision in 15:4 --- 4: the six-bit map, then the
-    /// 16K PDL buffer, then the multiply and divide, then the tick --- and
+    /// 31:16, the hardware revision in 15:4 --- 5: the six-bit map, then the
+    /// 16K PDL buffer, then the multiply and divide, then the tick, then the
+    /// clocks of contract Q1 --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
         l1_bits: 6,
         pdl_bits: 14,
-        machine_id: Some((0x5155 << 16) | (4 << 4) | 4),
+        machine_id: Some((0x5155 << 16) | (5 << 4) | 4),
         muldiv: true,
         tick: true,
         speed_bits: false,
@@ -196,33 +198,43 @@ impl Geometry {
             6 => 2048,
             7 => (self.muldiv as u32) * 3,
             0o10 => self.tick as u32,
+            // The interval timer and the microsecond clock (revision 5).
+            0o14 => self.tick as u32,
             _ => 0,
         })
     }
 }
 
-/// QUUX's tick: a periodic flag in the processor, the machine's clock in
-/// place of the CADR display's vertical interrupt (revision 4).
+/// QUUX's clocks in the processor (revision 5, contract Q1): the tick,
+/// fixed at 60 Hz, the machine's clock in place of the CADR display's
+/// vertical interrupt; an interval timer; and the microsecond clock.
 ///
-/// Functional destination 3 is its control: `<0>` enables it, and a write
-/// with `<1>` set clears the flag. Destination 4 is its period in
-/// microseconds, `<23:0>`, 0 taken as 1. Functional source 17 reads `<0>`
-/// the flag and `<1>` the enable. The flag rises a period after the tick is
-/// enabled or its period written, and then every period, whether or not it
-/// was cleared in between; while enabled and up it is part of
-/// [`Machine::interrupt`]. The period starts at [`Tick::PERIOD_US`].
+/// Functional destination 3 is their control: `<0>` enables the tick and a
+/// write with `<1>` set clears its flag; `<2>` enables the interval timer
+/// and a write with `<3>` set clears its flag. Destination 4 is the
+/// interval timer's period in microseconds, `<23:0>`, 0 stopping it.
+/// Functional source 17 reads `<0>` the tick's flag, `<1>` its enable, `<2>`
+/// the interval timer's flag and `<3>` its enable. A flag rises a period
+/// after its timer is enabled (or, the interval timer's, its period
+/// written), and then every period, whether or not it was cleared in
+/// between; while enabled and up it is part of [`Machine::interrupt`].
+/// Functional source 15 is the microsecond clock, [`Tick::microseconds`].
 ///
 /// None of this is the CADR's: page SOURCE decodes no destination 3 or 4
-/// and no source 17. Microcode 323 neither writes the one nor reads the
-/// other, by a scan of every control-store word and by running it with
+/// and no source 15 or 17. Microcode 323 neither writes the one nor reads
+/// the other, by a scan of every control-store word and by running it with
 /// every executed word read as the OA registers left it
 /// (`tests/unused_codes.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tick {
     pub enabled: bool,
-    pub period_us: u32,
-    /// When the flag next rises, or rose and has not been cleared.
+    /// When the tick's flag next rises, or rose and has not been cleared.
     pub deadline_ns: u64,
+    pub interval_enabled: bool,
+    pub interval_us: u32,
+    /// When the interval timer's flag next rises, or rose and has not been
+    /// cleared.
+    pub interval_deadline_ns: u64,
 }
 
 impl Tick {
@@ -230,55 +242,108 @@ impl Tick {
     pub const PERIOD_US: u32 = 16_667;
 
     pub const fn new() -> Tick {
-        Tick { enabled: false, period_us: Self::PERIOD_US, deadline_ns: u64::MAX }
+        Tick {
+            enabled: false,
+            deadline_ns: u64::MAX,
+            interval_enabled: false,
+            interval_us: 0,
+            interval_deadline_ns: u64::MAX,
+        }
     }
 
-    fn period_ns(self) -> u64 {
-        self.period_us.max(1) as u64 * 1000
-    }
-
-    /// The flag, at `now`.
+    /// The tick's flag, at `now`.
     pub fn flag(self, now: u64) -> bool {
         now >= self.deadline_ns
     }
 
+    /// The interval timer's flag, at `now`.
+    pub fn interval_flag(self, now: u64) -> bool {
+        now >= self.interval_deadline_ns
+    }
+
+    /// Whether either flag, under its enable, is up at `now`.
+    pub fn pending(self, now: u64) -> bool {
+        (self.enabled && self.flag(now)) || (self.interval_enabled && self.interval_flag(now))
+    }
+
     /// Source 17 at `now`.
     pub fn status(self, now: u64) -> u32 {
-        (self.enabled as u32) << 1 | self.flag(now) as u32
+        (self.interval_enabled as u32) << 3
+            | (self.interval_flag(now) as u32) << 2
+            | (self.enabled as u32) << 1
+            | self.flag(now) as u32
+    }
+
+    /// Source 15 at `now`: the microseconds since power-on, 32 bits,
+    /// wrapping.
+    pub fn microseconds(now: u64) -> u32 {
+        (now / 1000) as u32
+    }
+
+    /// A deadline `period` after `now`, or never if the period is 0.
+    fn after(now: u64, period_us: u32) -> u64 {
+        if period_us == 0 { u64::MAX } else { now + period_us as u64 * 1000 }
+    }
+
+    /// The next period boundary after `now` of a flag that rose at
+    /// `deadline`.
+    fn next(deadline: u64, now: u64, period_us: u32) -> u64 {
+        if period_us == 0 {
+            return u64::MAX;
+        }
+        let p = period_us as u64 * 1000;
+        deadline + (now - deadline) / p * p + p
     }
 
     /// A write of destination 3 at `now`.
     pub fn control(&mut self, now: u64, v: u32) {
         let enable = v & 1 != 0;
         if enable && !self.enabled {
-            self.deadline_ns = now + self.period_ns();
+            self.deadline_ns = Self::after(now, Self::PERIOD_US);
         } else if v & 2 != 0 && self.flag(now) {
-            // The next period boundary after `now`.
-            let p = self.period_ns();
-            self.deadline_ns += (now - self.deadline_ns) / p * p + p;
+            self.deadline_ns = Self::next(self.deadline_ns, now, Self::PERIOD_US);
         }
         if !enable {
             self.deadline_ns = u64::MAX;
         }
         self.enabled = enable;
+        let interval = v & 4 != 0;
+        if interval && !self.interval_enabled {
+            self.interval_deadline_ns = Self::after(now, self.interval_us);
+        } else if v & 8 != 0 && self.interval_flag(now) {
+            self.interval_deadline_ns = Self::next(self.interval_deadline_ns, now, self.interval_us);
+        }
+        if !interval {
+            self.interval_deadline_ns = u64::MAX;
+        }
+        self.interval_enabled = interval;
     }
 
-    /// A write of destination 4 at `now`.
+    /// A write of destination 4 at `now`: the interval timer's period, from
+    /// then.
     pub fn period(&mut self, now: u64, v: u32) {
-        self.period_us = v & 0o77777777;
-        if self.enabled {
-            self.deadline_ns = now + self.period_ns();
+        self.interval_us = v & 0o77777777;
+        if self.interval_enabled {
+            self.interval_deadline_ns = Self::after(now, self.interval_us);
         }
     }
 
     pub fn save(self, w: &mut crate::checkpoint::Writer) {
         w.bool(self.enabled);
-        w.u32(self.period_us);
         w.u64(self.deadline_ns);
+        w.bool(self.interval_enabled);
+        w.u32(self.interval_us);
+        w.u64(self.interval_deadline_ns);
     }
 
     pub fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<Tick> {
-        Ok(Tick { enabled: r.bool()?, period_us: r.u32()?, deadline_ns: r.u64()? })
+        Ok(Tick {
+            enabled: r.bool()?,
+            deadline_ns: r.u64()?,
+            interval_enabled: r.bool()?,
+            interval_us: r.u32()?,
+            interval_deadline_ns: r.u64()?,
+        })
     }
 }
 
@@ -735,7 +800,7 @@ impl Machine {
     pub fn interrupt(&self) -> bool {
         self.xbus_interrupt()
             || self.unibus_interrupt().is_some()
-            || (self.geometry.tick && self.tick.enabled && self.tick.flag(self.ns))
+            || (self.geometry.tick && self.tick.pending(self.ns))
     }
 
     /// `XBUS INTR IN`: the disk controller's request, or either display's
