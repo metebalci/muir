@@ -318,3 +318,29 @@ fn the_color_clock_line_is_not_drawn_in_the_machines_colors() {
     assert_eq!(f.colors[ground as usize], [0, 0, 0], "on black");
     assert_ne!(ink, ground, "the clocks are drawn on the line");
 }
+
+/// **A sample of an unchanged screen makes no frame, but a new second on
+/// either clock does, and so does the black-on-white bit alone**: what a
+/// cheap skip of an unchanged screen has to keep. The recorder with its
+/// clocks is sampled twice within one second, then with the machine's
+/// second moved, then the wall clock's, then with only `MODE BOW` changed.
+#[test]
+fn an_unchanged_screen_makes_no_frame_but_a_second_or_the_mode_does() {
+    use muir::tv::mode;
+    let mut tv = Tv::default();
+    tv.write_buffer(5, 0xff);
+    let mut rec = Recorder::new(true);
+    rec.sample(&tv, 1_000, 0);
+    rec.sample(&tv, 500_000_000, 0);
+    assert_eq!(rec.frames(), 1, "the same screen, the same second");
+    rec.sample(&tv, 1_000_000_001, 0);
+    assert_eq!(rec.frames(), 2, "the machine's clock moved to a new second");
+    rec.sample(&tv, 1_000_000_002, 2_000_000_000);
+    assert_eq!(rec.frames(), 3, "the wall clock moved to a new second");
+    tv.write_control(0, mode::BOW, 1_000_000_003);
+    rec.sample(&tv, 1_000_000_004, 2_000_000_000);
+    assert_eq!(rec.frames(), 4, "the picture inverted");
+    rec.sample(&tv, 1_000_000_005, 2_000_000_000);
+    assert_eq!(rec.frames(), 4, "and then unchanged");
+    assert_eq!(rec.samples(), 6, "every sample counted");
+}

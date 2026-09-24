@@ -71,7 +71,16 @@ pub struct Recorder {
     shown_wall_second: Option<u64>,
     frames: Vec<Frame>,
     samples: u64,
+    /// What each screen showed at the last sample that built a canvas: its
+    /// buffer's words, its size, and whether ones are black. A sample that
+    /// finds all of it, and both clocks' seconds, as they were builds
+    /// nothing: the canvas would be the last one, and make no frame.
+    seen: Vec<Seen>,
 }
+
+/// A screen as a sample saw it: its buffer's words, its size (width,
+/// height, words a line), and whether ones are black.
+type Seen = (Vec<u32>, (usize, usize, usize), bool);
 
 struct Frame {
     /// Nanoseconds this frame stays up.
@@ -120,6 +129,7 @@ impl Recorder {
             shown_wall_second: None,
             frames: Vec::new(),
             samples: 0,
+            seen: Vec::new(),
         }
     }
 
@@ -150,6 +160,31 @@ impl Recorder {
     /// differs from the last.
     fn screens(&mut self, screens: &[&Tv], ns: u64, wall_ns: u64) {
         let (sw, sh, _) = screens[0].screen();
+        // An unchanged screen, within the same seconds, is the last canvas:
+        // no frame, and nothing to build.
+        let seconds_same = !self.show_time
+            || (self.shown_second == Some(ns / 1_000_000_000)
+                && self.shown_wall_second == Some(wall_ns / 1_000_000_000));
+        if self.samples > 0
+            && seconds_same
+            && self.seen.len() == screens.len()
+            && screens.iter().zip(&self.seen).all(|(tv, (words, size, bow))| {
+                tv.screen() == *size
+                    && tv.black_on_white() == *bow
+                    && tv.buffer()[..words.len()] == words[..]
+            })
+        {
+            self.samples += 1;
+            self.sampled_at = ns;
+            return;
+        }
+        self.seen = screens
+            .iter()
+            .map(|tv| {
+                let size = tv.screen();
+                (tv.buffer()[..size.1 * size.2].to_vec(), size, tv.black_on_white())
+            })
+            .collect();
         assert!(screens.iter().all(|t| t.screen() == screens[0].screen()), "screens of two sizes");
         if self.samples == 0 {
             self.width = screens.len() * sw + (screens.len() - 1) * PAIR_RULE;
