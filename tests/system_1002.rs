@@ -61,14 +61,13 @@ fn quux(pack: &std::path::Path) -> Machine {
     quux_at(pack, BAND_SIZE)
 }
 
-/// QUUX with the band's boot PROM, its pack on block-disk, and MONO TV at
-/// `w` by `h`.
+/// QUUX with its own boot PROM at 36000 (`data/quux-promh.mcr`), the pack
+/// on block-disk, and MONO TV at `w` by `h`.
 fn quux_at(pack: &std::path::Path, (w, h): (usize, usize)) -> Machine {
     use muir::block_disk::{BLOCK_NS, BlockDisk};
     use muir::disk_unit::{Geometry as Pack, Unit};
     let mut m = Machine::new();
-    let prom = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND).join("promh.mcr"));
-    m.load_prom(&muir::prom::parse_mcr(&prom.unwrap()).expect("the band's boot PROM"));
+    m.load_prom(&muir::prom::quux_boot_prom());
     let mut d = BlockDisk::new(BLOCK_NS);
     d.attach(Unit::open_rw(pack, Pack::T300).expect("the pack"));
     m.block_disk = Some(d);
@@ -138,8 +137,7 @@ fn system_1002_runs_on_mono_tv() {
 
 /// **System 1002 sizes its screen at boot**: the same band, built at
 /// [`BAND_SIZE`], booted at other sizes, draws its listener at each size's
-/// own words a line. 2560 by 1440 is left out: there the listener's own
-/// drawing stops at pixel 2^21 at boot, which muir-sys is looking into.
+/// own words a line. 1920 by 1080 is the largest MONO TV QUUX supports.
 #[test]
 fn system_1002_sizes_its_screen_at_boot() {
     for size in [(1024, 768), (1920, 1080)] {

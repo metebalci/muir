@@ -32,6 +32,10 @@ pub const IMEM_WORDS: usize = 16 * 1024;
 /// 454 words of the first bank and the boot never leaves it; the second
 /// bank goes unused, and every engine reads the rest of the 1K as zero.
 pub const PROM_WORDS: usize = 1024;
+
+/// Where QUUX's boot PROM sits in the control store (contract Q2): 1K words
+/// at 36000-37777, never overlaid, the PC starting there at reset.
+pub const QUUX_PROM_BASE: u16 = 0o36000;
 /// Main memory by default, in 32-bit words: thirty-two boards of 64K.
 /// [`Machine::with_memory_boards`] builds a machine with another count.
 /// Physical pages above the memory are devices, or nothing.
@@ -101,6 +105,10 @@ pub struct Geometry {
     /// hung microcycle: such a microcycle waits, as for `-WAIT`, whole
     /// microcycles with no write pulse, and runs once the word is in `MD`.
     pub hangs: bool,
+    /// Where the boot PROM sits: on the CADR over control store 0 until
+    /// `PROMDISABLE` (`None`); on QUUX at [`QUUX_PROM_BASE`], read only and
+    /// never overlaid, the reset PC, with no disable bit.
+    pub prom_base: Option<u16>,
 }
 
 impl Geometry {
@@ -114,10 +122,13 @@ impl Geometry {
         speed_bits: true,
         old_word_while_written: false,
         hangs: true,
+        prom_base: None,
     };
 
-    /// QUUX's, revision 5: clocks in the processor, the tick fixed at 60 Hz,
-    /// an interval timer and a microsecond clock ([`Tick`]); `MUL` and
+    /// QUUX's, revision 6: its boot PROM at control store 36000 and the
+    /// register page (contract Q2, [`Geometry::prom_base`],
+    /// [`Machine::interrupt_sources`]); clocks in the processor, the tick
+    /// fixed at 60 Hz, an interval timer and a microsecond clock ([`Tick`]); `MUL` and
     /// `DIV` in one instruction each, ALU
     /// functions 42 and 43 ([`crate::muldiv`]); a PDL buffer of 16K words,
     /// its pointer and index 14 bits; and a level-1 entry of six bits, 64 blocks of level 2 and so 63
@@ -131,18 +142,19 @@ impl Geometry {
     /// reads and nothing on the CADR drives: the signature `0x5155` in bits
     /// 31:16, the hardware revision in 15:4 --- 5: the six-bit map, then the
     /// 16K PDL buffer, then the multiply and divide, then the tick, then the
-    /// clocks of contract Q1 --- and
+    /// clocks of contract Q1, then Q2's register page and PROM --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
         l1_bits: 6,
         pdl_bits: 14,
-        machine_id: Some((0x5155 << 16) | (5 << 4) | 4),
+        machine_id: Some((0x5155 << 16) | (6 << 4) | 4),
         muldiv: true,
         tick: true,
         speed_bits: false,
         old_word_while_written: true,
         hangs: false,
+        prom_base: Some(QUUX_PROM_BASE),
     };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
@@ -608,10 +620,42 @@ impl Machine {
         }
     }
 
-    /// Fetches from the control store, honoring the PROM overlay.
+    /// QUUX's interrupt status, the register page's word 100: `<0>` the
+    /// tick, `<1>` the interval timer, `<2>` block-disk's done, each under
+    /// its own enable. Keyboard, mouse and network (`<3>` to `<5>`) come
+    /// with contracts Q3 and Q4.
+    pub fn interrupt_sources(&self) -> u32 {
+        let t = self.tick;
+        (self.geometry.tick && t.enabled && t.flag(self.ns)) as u32
+            | ((self.geometry.tick && t.interval_enabled && t.interval_flag(self.ns)) as u32) << 1
+            | (self.block_disk.as_ref().is_some_and(|d| d.interrupt_at(self.ns)) as u32) << 2
+    }
+
+    /// Fetches from the control store, honoring the PROM overlay on the
+    /// CADR and the PROM's own addresses on QUUX.
     pub fn fetch(&self, pc: u16) -> Insn {
         let pc = pc as usize & (IMEM_WORDS - 1);
-        if self.mode.prom_disable || pc >= PROM_WORDS { self.imem[pc] } else { self.prom[pc] }
+        match self.geometry.prom_base {
+            Some(base) if pc >= base as usize => self.prom[pc - base as usize],
+            Some(_) => self.imem[pc],
+            None if self.mode.prom_disable || pc >= PROM_WORDS => self.imem[pc],
+            None => self.prom[pc],
+        }
+    }
+
+    /// Where the boot starts: 0 on the CADR, the PROM's base on QUUX.
+    pub fn reset_pc(&self) -> u16 {
+        self.geometry.prom_base.unwrap_or(0)
+    }
+
+    /// A control-store write, `WRITE-I-MEM`: the RAM at `pc`, except where
+    /// QUUX's PROM is, which nothing writes.
+    pub fn write_imem(&mut self, pc: u16, w: Insn) {
+        let pc = pc as usize & (IMEM_WORDS - 1);
+        if self.geometry.prom_base.is_some_and(|base| pc >= base as usize) {
+            return;
+        }
+        self.imem[pc] = w;
     }
 
     /// LC byte mode, `interrupt_control<29>`: the 25LS2519 at FLAG 3E08
@@ -1139,6 +1183,11 @@ impl Machine {
                 0o11 => (width as u32) << 16 | height as u32,
                 0o12 => 1 << 16 | words_per_line as u32,
                 0o13 => tv::NORMAL_TV.buffer,
+                // The register page (contract Q2): who interrupted, the
+                // bus errors, and the mode.
+                0o100 => self.interrupt_sources(),
+                0o101 => self.bus_error as u32,
+                0o102 => self.mode.errstop as u32,
                 _ => w,
             };
         }
@@ -1188,6 +1237,17 @@ impl Machine {
     }
 
     pub fn bus_write(&mut self, phys: u32, value: u32) {
+        // QUUX's register page (contract Q2): a write of word 101 clears the
+        // bus errors, as a write of `766044` does, and word 102 `<0>` is
+        // error stop; the features and the reserved words ignore writes.
+        if self.geometry.feature_word(phys).is_some() {
+            match phys & 0o377 {
+                0o101 => self.bus_error = 0,
+                0o102 => self.mode.errstop = value & 1 != 0,
+                _ => {}
+            }
+            return;
+        }
         if let Some(r) = disk_controller::register(phys) {
             // A transfer is a bus master reading and writing physical memory
             // directly, which is why the controller is handed it.

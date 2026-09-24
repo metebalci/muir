@@ -81,7 +81,7 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 4 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick | |
+| 15:4 | hardware revision: 6 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000 | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
@@ -109,9 +109,8 @@ CADR's are 10 (revision 2). They read back whole in functional sources 2 and
 3, whose upper bits read 0 on the CADR. `quux_s_pdl_buffer_is_4k_or_16k` in
 `tests/quux.rs` holds a push past word 1777 landing above it and the wrap at
 the buffer's own size. It needs QUUX's boot PROM (below): MIT's stops copying
-A memory in on the index wrapping at 2000 words. MIT's microcode 323 does not
-run on it (`microcode_323_does_not_run_on_quux_revision_2`); microcode for
-QUUX has to know the size.
+A memory in on the index wrapping at 2000 words. Microcode for QUUX has to
+know the size.
 
 ## The feature page
 
@@ -120,7 +119,7 @@ to `17377377` (page 36776), just below the page the display's control
 registers and the disk controller share. It is read-only and read like any
 device register, through the map:
 
-| Word | QUUX, revision 5 |
+| Word | QUUX, revision 6 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -452,9 +451,10 @@ boards being refused on QUUX, and refused on the CADR.
 | Interrupt | none |
 
 **Its size is muir's to choose**, `--mono-tv-size <width>x<height>`: the width
-a multiple of 32, the buffer at most 130,560 words (up to the feature page at
-`17377000`), and at most 65,536 with the color TV fitted, whose buffer starts
-at `17200000`. 2560 by 1440 fits; 3840 by 2160 does not. The feature page's
+a multiple of 32, and at most **1920 by 1080**, the largest QUUX supports
+(`a_size_is_checked` in `tests/mono_tv.rs`). That is 64,800 words, below the
+color TV's buffer at `17200000` and well below the feature page at
+`17377000`, the most the Xbus I/O space leaves (130,560 words). The feature page's
 words 11 to 13 give the size to the software. The table above is the default
 size.
 
@@ -488,16 +488,48 @@ it on both engines, the bus interface's decode of the whole buffer, the
 pixel order and the terminal's frame, the registers there and not there,
 the absence of an interrupt over a second, and the feature page's three words.
 
-## Its boot PROM
+## Its boot PROM, in its own addresses
 
-**QUUX boots from its own PROM, version 1000** (`data/quux-promh.mcr`),
-MIT's version 9 changed so that a PDL buffer of any width from 1K up boots.
-MIT's PROM loads A memory through the PDL buffer and stops copying it out
-when the PDL index wraps to 0 (`FILL-A-LOOP` in `mit/sys/ucadr/promh.text`),
-which on the CADR's 10-bit index is after 2000 words; on a wider index the
-copy runs on and overwrites A memory with what lies above. Version 1000 stops
-after 2000 words by count. The same PROM boots the CADR, whose index never
-passes 1777. `--machine quux` loads it; the CADR keeps MIT's.
+**QUUX's boot PROM has control store addresses of its own**, 36000-37777,
+1K words, read only and never overlaid (revision 6, contract Q2). Reset
+starts the PC at 36000; the microcode lives in 0-35777, which is RAM from
+the start, and there is no PROM-disable bit: the PROM loads the microcode
+and jumps to 6. A reboot is a jump to 36000. The CADR keeps MIT's overlay:
+its PROM covers 0-777 until `PROMDISABLE` in the mode register, written at
+Unibus `766012`, lets the RAM show through.
+
+The PROM is muir-sys's version 1000 for block-disk (`data/quux-promh.mcr`),
+MIT's `promh.text` changed so that a PDL buffer of any width boots, QUUX's
+64 level-2 blocks are cleared, and the disk is read by block number,
+assembled at 36000. It sets error stop through the register page, not
+`766012`, and halts at `ERROR-MICROCODE-TOO-BIG` if a microcode reaches
+36000. The control store stays 16K words: jump targets are `IR<25:12>`,
+dispatch words carry 14 address bits, and `SPC<14>` is the
+macroinstruction-return flag, so 32K waits for a new microinstruction
+format. `tests/quux_prom.rs` holds the start at 36000, the PROM read only,
+the RAM below live with no disable, the CADR's overlay, and the file read
+from 36000; `tests/system_1002.rs` boots System 1002 on it. `--prom` on
+QUUX takes a file assembled at 36000 and refuses one assembled at 0.
+
+QUUX runs only muir-sys's latest System 1002 band. The PROMs assembled at
+0, and System 1001 on QUUX, are retired with it.
+
+## The register page
+
+**QUUX's registers share the feature page**, `17377000`-`17377377` (revision
+6, contract Q2): the Xbus I/O space is full, pages 36000-36775 being the
+largest MONO TV buffer and 36777 the display's and disk's registers.
+
+| Word | |
+|---|---|
+| 0-77 | the feature page, read only |
+| 100 | interrupt status, read only: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's done, each under its own enable; keyboard, mouse and network, `<3>` to `<5>`, come with their devices |
+| 101 | error status: the bus errors, as `766044` gives them; a write clears them |
+| 102 | mode: `<0>` error stop, which the host can set too |
+| others | reserved: read 0, writes ignored |
+
+On the CADR nothing answers on the page. `tests/quux_registers.rs` holds
+each word, on the machine and through both engines' bus.
 
 ## Its microcode
 
@@ -521,11 +553,8 @@ the error table for the running version at boot, `SYS: UBIN; UCADR TBL
 
 ## What the microcode had to do differently
 
-Microcode 323 knows the CADR's map, and runs on QUUX as on a CADR: System
-1001 on it reaches its listener on both engines with no level-1 entry naming
-a block above 37 (`system_1001_runs_on_quux_as_on_the_cadr` in
-`tests/system_1001.rs`), so it uses 31 regions. Using the other 32 takes
-microcode written for QUUX. From its sources (System 1001's
+Microcode 323 knows the CADR's map, five-bit level-1 entries and 31
+regions. Using QUUX's other 32 takes microcode written for QUUX. From its sources (System 1001's
 `sys/ucadr/`):
 
 - `MAP-FIRST-LEVEL-MAP` and `MAP-WRITE-FIRST-LEVEL-MAP` are five-bit fields

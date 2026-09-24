@@ -2130,7 +2130,13 @@ fn boot_prom(file: Option<&Path>, geometry: muir::machine::Geometry) -> Vec<Insn
     };
     let bytes =
         std::fs::read(path).unwrap_or_else(|e| usage(&format!("--prom {}: {e}", shown(path))));
-    muir::prom::parse_mcr(&bytes).unwrap_or_else(|e| usage(&format!("--prom {}: {e}", shown(path))))
+    // QUUX's PROM is assembled at 36000, its own addresses (contract Q2).
+    let parsed = if geometry == muir::machine::Geometry::CADR {
+        muir::prom::parse_mcr(&bytes)
+    } else {
+        muir::prom::parse_quux_mcr(&bytes)
+    };
+    parsed.unwrap_or_else(|e| usage(&format!("--prom {}: {e}", shown(path))))
 }
 
 /// What the setup says the boot PROM is: which file, and how it stands to
@@ -2146,13 +2152,17 @@ fn prom_shown(file: Option<&Path>, prom: &[Insn], geometry: muir::machine::Geome
         return if geometry == muir::machine::Geometry::CADR {
             "built in, System 100's own sys/ubin/promh.mcr, version 9".to_string()
         } else {
-            "built in, QUUX's data/quux-promh.mcr, version 1000".to_string()
+            "built in, QUUX's data/quux-promh.mcr, version 1000, at 36000".to_string()
         };
     };
-    let mits = muir::prom::boot_prom();
-    match prom.iter().zip(&mits).filter(|(a, b)| a != b).count() {
-        0 => format!("{}, MIT's own word for word", shown(path)),
-        n => format!("{}, {n} of its {} words differing from MIT's own", shown(path), mits.len()),
+    let (theirs, whose) = if geometry == muir::machine::Geometry::CADR {
+        (muir::prom::boot_prom(), "MIT's own")
+    } else {
+        (muir::prom::quux_boot_prom(), "QUUX's own")
+    };
+    match prom.iter().zip(&theirs).filter(|(a, b)| a != b).count() {
+        0 => format!("{}, {whose} word for word", shown(path)),
+        n => format!("{}, {n} of its {} words differing from {whose}", shown(path), theirs.len()),
     }
 }
 
@@ -5683,7 +5693,7 @@ fn main() {
         if geometry == muir::machine::Geometry::QUUX {
             writeln!(
                 s,
-                "machine: quux, revision 5: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, and clocks in the processor: a 60 Hz tick, an interval timer and a microsecond clock"
+                "machine: quux, revision 6: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, clocks in the processor (a 60 Hz tick, an interval timer and a microsecond clock), the register page, and its boot PROM at control store 36000"
             )
             .unwrap();
         }

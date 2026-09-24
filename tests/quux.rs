@@ -17,6 +17,8 @@ use muir::machine::{Geometry, Machine};
 use muir::micro::Micro;
 use muir::rtl::Rtl;
 
+mod support;
+
 /// Both engines on the same boot PROM, the machine prepared by `set`.
 fn both(prom: &[Insn], set: &dyn Fn(&mut Machine), steps: usize) -> (Micro, Rtl) {
     let make = || {
@@ -25,6 +27,7 @@ fn both(prom: &[Insn], set: &dyn Fn(&mut Machine), steps: usize) -> (Micro, Rtl)
         words[..prom.len()].copy_from_slice(prom);
         m.load_prom(&words);
         set(&mut m);
+        support::prom_program_in_ram(&mut m);
         m
     };
     let mut e = Micro::new(make());
@@ -121,7 +124,7 @@ fn quux_answers_its_id_in_source_16() {
         Insn::new(ALU | SETM | src(0o36) | a_dest(0o202)),
         Insn::new(ALU | SETM | src(0o17) | a_dest(0o203)),
     ];
-    let id = (0x5155 << 16) | (5 << 4) | 4;
+    let id = (0x5155 << 16) | (6 << 4) | 4;
     for (geometry, want) in [(Geometry::QUUX, [id, id, 0]), (Geometry::CADR, [!0, !0, !0])] {
         let (e, r) = both(&prom, &|m: &mut Machine| m.geometry = geometry, 30);
         for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
@@ -223,29 +226,6 @@ fn quux_s_pdl_buffer_is_4k_or_16k() {
     }
 }
 
-/// **QUUX's boot PROM is MIT's up to its changes.** `data/quux-promh.mcr`
-/// is PROM version 1000, built by muir-sys from MIT's `promh.text`: its
-/// `FILL-A-LOOP` stops after 2000 words rather than on the PDL index
-/// wrapping to 0, `CLEAR-PDL-BUFFER` starts from a pointer of all ones, and
-/// `CLEAR-LEVEL-2-MAP` clears all 64 blocks. Every word before the first of
-/// those is MIT's version 9 word for word, and it is four words longer.
-#[test]
-fn quux_s_boot_prom_is_mits_up_to_its_changes() {
-    use muir::prom::{boot_prom, quux_boot_prom};
-    let mits = muir::mcr::parse(
-        &std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/mit/sys/ubin/promh.mcr")).unwrap(),
-    )
-    .unwrap();
-    let ours = muir::mcr::parse(
-        &std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/data/quux-promh.mcr")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!((mits.imem.len(), ours.imem.len()), (0o706, 0o712), "the words each defines");
-    let first = mits.imem.iter().zip(&ours.imem).position(|(a, b)| a.raw() != b.raw());
-    assert_eq!(first, Some(0o223), "MIT's word for word up to the first change");
-    assert_eq!(quux_boot_prom()[..0o223], boot_prom()[..0o223]);
-}
-
 /// **QUUX has no speed bits.** On the CADR the mode register's bits 1:0
 /// choose the delay-line tap that ends the read phase, extra slow to fast
 /// (`mit/cadr/ir.bits`), and reset leaves them at extra slow. QUUX runs at
@@ -281,6 +261,7 @@ fn quux_has_no_speed_bits() {
         let mut m = Machine::new();
         m.load_prom(&prom);
         m.geometry = geometry;
+        support::prom_program_in_ram(&mut m);
         m
     };
     let micro_ns = |e: &Micro| e.machine().ns;

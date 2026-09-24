@@ -19,6 +19,8 @@ use muir::isa::asm::{ALU, SETZ, filler, m_dest};
 use muir::machine::{Geometry, Machine};
 use muir::rtl::Rtl;
 
+mod support;
+
 const fn sync(cycle_ticks: u8, ilong_ticks: u8) -> TimingModel {
     TimingModel::Sync { cycle_ticks, ilong_ticks }
 }
@@ -30,6 +32,7 @@ fn quux(model: TimingModel, prom: &[Insn]) -> Rtl {
     words[..prom.len()].copy_from_slice(prom);
     m.load_prom(&words);
     m.geometry = Geometry::QUUX;
+    support::prom_program_in_ram(&mut m);
     let mut e = Rtl::new(m);
     e.set_timing_model(model);
     e.boot();
@@ -138,6 +141,7 @@ fn a_write_lands_no_earlier_than_its_answer() {
     words[..prom.len()].copy_from_slice(&prom);
     m.load_prom(&words);
     m.geometry = Geometry::QUUX;
+    support::prom_program_in_ram(&mut m);
     m.tv.set_board(muir::tv::Board::MonoTv);
     m.l2_map[1] = (1 << 23) | (1 << 22) | (0o17000000 >> 8);
     m.mmem[1] = 0o400;

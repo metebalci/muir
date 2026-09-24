@@ -50,7 +50,16 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> (Vec<u16>, Vec<u16>) {
         .at_time(support::time::TEST_UNIVERSAL)
         .plug(m, 0);
     let (mut used, mut made) = (Vec::new(), Vec::new());
-    for _ in 0..13_000_000u64 {
+    // Up to the listener, checked every million microcycles, and two
+    // million more.
+    let mut until = 300_000_000u64;
+    for n in 0..300_000_000u64 {
+        if n == until {
+            break;
+        }
+        if n % 1_000_000 == 0 && until == 300_000_000 && support::lit_rows(&e, 84..130) > 400 {
+            until = n + 2_000_000;
+        }
         let ir = e.ir();
         e.step().unwrap();
         if let Some(pc) = e.executed()
@@ -69,24 +78,24 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> (Vec<u16>, Vec<u16>) {
     (used, made)
 }
 
-/// **System 1002 uses the tick's codes only where its microcode says so**,
+/// **System 1002 uses the clocks' codes only where its microcode says so**,
 /// through its boot to the listener and a moment after on QUUX: no
 /// instruction the OA registers make writes destinations 3 to 7 or reads
-/// source 17. Its microcode, 1000 for revision 4, uses them at the tick's
-/// own sites.
+/// sources 15 or 17. Its microcode, 1000 on block-disk (dev4), uses them at
+/// the tick's own sites.
 #[test]
 fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev2");
-    if !from.join("pack-1002-dev2.img").exists() {
+    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev4");
+    if !from.join("pack-1002-dev4.img").exists() {
         eprintln!("skipped: {} is not present", from.display());
         return;
     }
     let dir = support::scratch("unused-codes-1002");
     let pack = dir.join("pack.img");
-    std::fs::copy(from.join("pack-1002-dev2.img"), &pack).unwrap();
+    std::fs::copy(from.join("pack-1002-dev4.img"), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev2.tar.gz"))
+        .arg(from.join("tree-1002-dev4.tar.gz"))
         .arg("-C")
         .arg(dir.path())
         .status()
@@ -97,11 +106,14 @@ fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
     for part in ["sys", "site"] {
         std::os::unix::fs::symlink(dir.join("release-1002").join(part), root.join(part)).unwrap();
     }
-    let mut m = support::machine_with_pack(&pack);
+    let mut m = Machine::new();
     m.load_prom(&muir::prom::quux_boot_prom());
+    let mut d = muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS);
+    d.attach(muir::disk_unit::Unit::open_rw(&pack, muir::disk_unit::Geometry::T300).unwrap());
+    m.block_disk = Some(d);
     m.geometry = Geometry::QUUX;
     m.tv.set_board(Board::MonoTv);
-    m.tv.set_mono_tv_size(1920, 1080);
+    m.tv.set_mono_tv_size(1280, 1024);
     let (used, made) = run(m, (0o177201, 0o177200), root);
     eprintln!("1002: the codes ran at {}", octal(&used));
     assert!(!used.is_empty(), "the tick's own sites ran");
