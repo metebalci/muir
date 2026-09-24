@@ -22,7 +22,7 @@ differences, what it needed:
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The processor tick | nothing | none enables it yet: the clock handler is still entered from the display's interrupt | nothing | nothing |
-| Block-disk | needed: address the disk by block number | needed: the disk routines by block number, no cylinder, head or sector | needed: `io/disk.lisp` and the label editor by block number | `--disk-controller block-disk` |
+| Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002 (dev4): the label, the band and the disk routines by block number | block-disk is QUUX's only disk, the default there; the CADR's controller is refused on QUUX |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
 | The synchronous microcycle (`sync`) | nothing | nothing | nothing | `--timing-model sync`, `--sync-cycle-ticks` |
 | No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and 1000 never do either, counted (below) | nothing | nothing |
@@ -335,7 +335,9 @@ and sooner, the invalidation, and a checkpoint.
 
 ## Block-disk
 
-**QUUX's disk is block-disk** (`--disk-controller block-disk`): the CADR
+**QUUX's disk is block-disk**, and nothing else: a QUUX run has it
+without `--disk-controller`, and the CADR's controller is refused
+(`quux_s_disk_is_block_disk_only` in `tests/cli.rs`). It is the CADR
 disk controller's programming interface with the drive's geometry taken
 out. Blocks are numbered from the start of the pack, and each is 256 words,
 a page.
@@ -359,10 +361,13 @@ starts and lengths already block numbers. `tests/block_disk.rs` holds the
 read, the write, the end of the pack, the NXM, a command it does not do, the
 registers on QUUX's bus and a checkpoint.
 
-Nothing runs on it yet: the boot PROM, the microcode and Lisp address the
-disk by cylinder, head and sector from the label's geometry, and a QUUX
-boot PROM, microcode and band that address it by block are muir-sys's to
-make.
+muir-sys's boot PROM 1000, microcode 1000 and System 1002 address it by
+block: its fourth development band boots on it on `micro`, `rtl` and
+under `sync`, at 1024 by 768, 1280 by 1024 and 1920 by 1080
+(`tests/system_1002.rs`). Lisp checks the disk address after a transfer
+against the last block it expected, and reads the command list pointer
+and the disk address after one; it does not read the fourth register,
+where the CADR's controller gave the ECC.
 
 ## The single-edge contract
 

@@ -508,6 +508,25 @@ fn block_disk_is_quux_s() {
     refused_saying(&["--rtl", "--disk-controller", "block-disk"], "block-disk is QUUX's");
 }
 
+/// **QUUX's disk is block-disk and nothing else**: without
+/// `--disk-controller` a QUUX run has block-disk, and the CADR's
+/// controller, the netlist's or the model's, is refused on it.
+#[test]
+fn quux_s_disk_is_block_disk_only() {
+    for engine in ["--micro", "--rtl"] {
+        let out = muir().args([engine, "--machine", "quux", "--stop-after", "1"]).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}: {t}");
+        assert!(t.contains("disk: block-disk"), "{engine}: the default:\n{t}");
+        for cadr in ["netlist", "model"] {
+            refused_saying(
+                &[engine, "--machine", "quux", "--disk-controller", cadr],
+                "is the CADR's, and this run is QUUX",
+            );
+        }
+    }
+}
+
 /// **`--timing-model` is `cadr` or `fpga`, and `fpga` is `rtl`'s.** The
 /// grid is what muir-fpga's fabric runs on, and it is `rtl`'s references
 /// that fabric is held to; `chip` and `micro` keep the board's time, so a

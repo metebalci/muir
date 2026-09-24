@@ -4,10 +4,11 @@
 //! System 1002 on QUUX with MONO TV: muir-sys's development band, which
 //! sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-1002-dev3` (muir-sys `0ec714d`), a
-//! pack with microcode 1000 (quux7) for QUUX revision 4 and the band, and
-//! the tree it was built from: no TV sync program and no speed bits. The
-//! band takes the screen's size from the feature page at every boot.
+//! It is in the gitignored `ref/band-1002-dev4` (muir-sys `71943b1`): boot
+//! PROM 1000 and microcode 1000 for block-disk, a pack whose Lisp addresses
+//! the disk by block, and the tree it was built from. No TV sync program,
+//! no speed bits, and no CADR disk controller: QUUX's disk is block-disk.
+//! The band takes the screen's size from the feature page at every boot.
 //! Without it the tests skip and say so.
 
 use std::path::PathBuf;
@@ -25,17 +26,17 @@ const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
 /// A copy of the pack and the served tree, in a scratch directory.
 fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev3");
-    if !from.join("pack-1002-dev3.img").exists() {
+    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND);
+    if !from.join("pack-1002-dev4.img").exists() {
         eprintln!("skipped: {} is not present", from.display());
         return None;
     }
     let dir = support::scratch(name);
     let pack = dir.join("pack.img");
-    std::fs::copy(from.join("pack-1002-dev3.img"), &pack).unwrap();
+    std::fs::copy(from.join("pack-1002-dev4.img"), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev3.tar.gz"))
+        .arg(from.join("tree-1002-dev4.tar.gz"))
         .arg("-C")
         .arg(dir.path())
         .status()
@@ -49,7 +50,10 @@ fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     Some((dir, pack, root))
 }
 
-/// The size `band-1002-dev3` was built at; it takes whatever size the
+/// The band, muir-sys's hand-over.
+const BAND: &str = "ref/band-1002-dev4";
+
+/// The size `band-1002-dev4` was built at; it takes whatever size the
 /// feature page says at boot ([`system_1002_sizes_its_screen_at_boot`]).
 const BAND_SIZE: (usize, usize) = (1280, 1024);
 
@@ -57,9 +61,17 @@ fn quux(pack: &std::path::Path) -> Machine {
     quux_at(pack, BAND_SIZE)
 }
 
+/// QUUX with the band's boot PROM, its pack on block-disk, and MONO TV at
+/// `w` by `h`.
 fn quux_at(pack: &std::path::Path, (w, h): (usize, usize)) -> Machine {
-    let mut m = support::machine_with_pack(pack);
-    m.load_prom(&muir::prom::quux_boot_prom());
+    use muir::block_disk::{BLOCK_NS, BlockDisk};
+    use muir::disk_unit::{Geometry as Pack, Unit};
+    let mut m = Machine::new();
+    let prom = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND).join("promh.mcr"));
+    m.load_prom(&muir::prom::parse_mcr(&prom.unwrap()).expect("the band's boot PROM"));
+    let mut d = BlockDisk::new(BLOCK_NS);
+    d.attach(Unit::open_rw(pack, Pack::T300).expect("the pack"));
+    m.block_disk = Some(d);
     m.geometry = Geometry::QUUX;
     m.tv.set_board(Board::MonoTv);
     m.tv.set_mono_tv_size(w, h);
