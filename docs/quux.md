@@ -215,7 +215,11 @@ interval timer are on the I/O board, on the Unibus (`764120`-`764124`).
 A flag rises a period after its timer is enabled (the interval timer's
 also after its period is written), then every period after, whether or not
 it was cleared between; a clear takes it down until the next. `-RESET`
-turns both off. Revision 4's tick took its period from destination 4;
+turns both off. A flag that rises while a microcycle waits for `MD` is up
+for the jump after it: `SINTR` is registered at the edge that ends the
+waiting microcycle, with the flags as they stand then
+(`a_flag_rising_during_a_wait_is_seen_by_the_jump_after`, the case
+muir-fpga measured). Revision 4's tick took its period from destination 4;
 revision 5 fixes it at 60 Hz and gives destination 4 to the interval timer.
 
 On the CADR, destinations 3 to 7 have no output on the 74S138 that decodes

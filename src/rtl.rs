@@ -2128,7 +2128,7 @@ impl Rtl {
         self.next_instrd = r.next_instr;
         // page LCC: `SINTR` is `INT` off the cables, registered by the 74S175
         // at 3E12 on `CLK3C`; `SINT` is it under `INT.ENABLE` at 4D09.
-        self.sintr = self.m.interrupt();
+        self.sintr = self.m.interrupt_at(self.ns);
     }
 
     /// `SPEEDCLK`, sixty nanoseconds into a generator cycle: the two-stage

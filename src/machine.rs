@@ -848,9 +848,18 @@ impl Machine {
     ///
     /// On QUUX, its tick too, while enabled and up, at [`Machine::ns`].
     pub fn interrupt(&self) -> bool {
+        self.interrupt_at(self.ns)
+    }
+
+    /// The interrupt pending at `now`, which an engine whose own clock has
+    /// moved on since the machine's gives: QUUX's clocks are read at `now`
+    /// (a flag that rises while a microcycle waits for `MD` is up at the
+    /// edge that ends it, `tests/tick.rs`); the CADR's devices keep the
+    /// machine's time.
+    pub fn interrupt_at(&self, now: u64) -> bool {
         self.xbus_interrupt()
             || self.unibus_interrupt().is_some()
-            || (self.geometry.tick && self.tick.pending(self.ns))
+            || (self.geometry.tick && self.tick.pending(now.max(self.ns)))
             || (self.geometry.machine_id.is_some() && self.quux_input.interrupts() != 0)
     }
 
