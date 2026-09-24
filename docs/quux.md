@@ -255,18 +255,17 @@ made for a QUUX machine starts on four ticks: `rtl` refuses another timing
 on it, and `micro`'s clock counts the same ticks.
 
 The ticks are a board's: the number its fit proves its longest path settles
-in. **Four ticks, 40 ns, is met on the Arty Z7-20**: muir-fpga's fit of QUUX
-at four ticks has a worst setup slack of +0.391 ns and no failing path (its
-report of 24 Sep 2026; muir-fpga at c161e9e plus uncommitted work, against
-muir's sync model at `ffbb76a`), the longest chains being MD through both
+in. **Four ticks, 40 ns, is met on the Arty Z7-20**: muir-fpga's QUUX at
+four ticks, its commit `5232ee5` (against muir's sync model at `ffbb76a`),
+has a worst setup slack of +0.404 ns and no failing path; an earlier fit of
+the same design measured the longest chains as MD through both
 map levels and the M bus to the control-store address, 28.0 ns of 40, and
 the multiplier, 24.1 ns of the 30 a path after the scratchpads gets. Both
 boards run four ticks: three, 30 ns, is out of the DE25-Nano's reach by
 the divider alone, a `DIV` of `MD` needing its word 17 ticks before its
-hold ends. The DE25-Nano's fit at four ticks meets them at every corner, a
-worst setup slack of +2.222 ns at 100 C (muir-fpga's report of 24 Sep 2026,
-the same tree), its longest chain MD through the maps to the next address at
-16.1 ns; the level-1 map's MLAB write-to-read, which Quartus does not time,
+hold ends. The DE25-Nano at four ticks meets them at every corner, a worst
+setup slack of +2.041 ns at `5232ee5` (an earlier fit's longest chain was MD through the maps to the next address at
+16.1 ns); the level-1 map's MLAB write-to-read, which Quartus does not time,
 is **unverified** by timing analysis, the rest of that path having 30 ns and
 measuring about 16.
 
