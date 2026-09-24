@@ -4,7 +4,7 @@
 //! System 1002 on QUUX with MONO TV: muir-sys's development band, which
 //! sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-1002-dev4` (muir-sys `71943b1`): boot
+//! It is in the gitignored `ref/band-1002-dev5` (muir-sys `5840ca8`, contract Q1): boot
 //! PROM 1000 and microcode 1000 for block-disk, a pack whose Lisp addresses
 //! the disk by block, and the tree it was built from. No TV sync program,
 //! no speed bits, and no CADR disk controller: QUUX's disk is block-disk.
@@ -27,16 +27,16 @@ const CHAOS: (u16, u16) = (0o177201, 0o177200);
 /// A copy of the pack and the served tree, in a scratch directory.
 fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND);
-    if !from.join("pack-1002-dev4.img").exists() {
+    if !from.join("pack-1002-dev5.img").exists() {
         eprintln!("skipped: {} is not present", from.display());
         return None;
     }
     let dir = support::scratch(name);
     let pack = dir.join("pack.img");
-    std::fs::copy(from.join("pack-1002-dev4.img"), &pack).unwrap();
+    std::fs::copy(from.join("pack-1002-dev5.img"), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev4.tar.gz"))
+        .arg(from.join("tree-1002-dev5.tar.gz"))
         .arg("-C")
         .arg(dir.path())
         .status()
@@ -51,9 +51,9 @@ fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
 }
 
 /// The band, muir-sys's hand-over.
-const BAND: &str = "ref/band-1002-dev4";
+const BAND: &str = "ref/band-1002-dev5";
 
-/// The size `band-1002-dev4` was built at; it takes whatever size the
+/// The size `band-1002-dev5` was built at; it takes whatever size the
 /// feature page says at boot ([`system_1002_sizes_its_screen_at_boot`]).
 const BAND_SIZE: (usize, usize) = (1280, 1024);
 
