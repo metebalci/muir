@@ -360,6 +360,28 @@ impl Unit {
         // "the board writes a fresh checkword after every data field it
         // writes", so a bad one a Write All left is gone.
         self.data_checkwords.remove(&lba);
+        self.write_lba(lba, data)
+    }
+
+    /// Block `lba` from the start of the pack, as QUUX's block-disk reads
+    /// it: `None` past the end, or for a block the image could not deliver.
+    pub fn read_lba(&mut self, lba: u32) -> Option<[u32; BLOCK_WORDS]> {
+        if lba >= self.geometry.blocks() {
+            return None;
+        }
+        if let Some(b) = self.written.get(&lba) {
+            return Some(*b);
+        }
+        self.file_block(lba)
+    }
+
+    /// Block `lba` written, as QUUX's block-disk writes it: to the file on a
+    /// pack opened read-write, else kept in memory. False past the end, or
+    /// for a block the image would not take.
+    pub fn write_lba(&mut self, lba: u32, data: &[u32; BLOCK_WORDS]) -> bool {
+        if lba >= self.geometry.blocks() {
+            return false;
+        }
         match (self.writable, self.image.as_mut()) {
             (true, Some(image)) => {
                 let mut bytes = [0u8; BLOCK_WORDS * 4];

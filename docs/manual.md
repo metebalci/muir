@@ -402,9 +402,13 @@ puts it elsewhere.
 Default: the display above this machine's, `127.0.0.1:5901` when it is at
 :0.
 
-### `--disk-controller netlist|model`
+### `--disk-controller netlist|model|block-disk`
 
 **chip:** the disk controller, as MIT's board or as a model of it.
+
+`block-disk` is QUUX's, on `micro` and `rtl`: [block-disk](quux.md), the same
+registers and command list with blocks by number, read and write only, one
+pack at unit 0, and 100 us a block. Refused on the CADR and on `chip`.
 
 **The netlist runs the drive's real milliseconds.** Its sequencer waits on
 the drive's clocks and on its own delay lines, so the block it is reading

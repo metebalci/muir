@@ -431,6 +431,9 @@ pub struct Machine {
     /// and may have written main memory: what invalidates QUUX's memory
     /// cache ([`crate::cache`]).
     pub dma_written: bool,
+    /// QUUX's block-disk, when it is fitted in the CADR controller's place
+    /// ([`crate::block_disk`]).
+    pub block_disk: Option<crate::block_disk::BlockDisk>,
 }
 
 impl Machine {
@@ -480,6 +483,7 @@ impl Machine {
             geometry: Geometry::CADR,
             tick: Tick::new(),
             dma_written: false,
+            block_disk: None,
             l1_map: [0; 2048],
             l2_map: [0; L2_MAP_WORDS],
             main: vec![0; boards << 16],
@@ -737,6 +741,7 @@ impl Machine {
         // The controller was told the time at the last bus access; a run's
         // engine keeps `ns` current between them (`rtl` every microcycle).
         self.disk.interrupt()
+            || self.block_disk.as_ref().is_some_and(|d| d.interrupt_at(self.ns))
             || self.tv.interrupt(self.ns)
             || self.color_tv.as_ref().is_some_and(|tv| tv.interrupt(self.ns))
     }
@@ -1033,6 +1038,9 @@ impl Machine {
             tv.xbus_init(self.ns);
         }
         self.disk.xbus_init();
+        if let Some(d) = self.block_disk.as_mut() {
+            d.xbus_init();
+        }
         self.ioboard.unibus_init();
     }
 
@@ -1052,6 +1060,12 @@ impl Machine {
             };
         }
         if let Some(r) = disk_controller::register(phys) {
+            // QUUX's block-disk, when it is fitted, in the CADR
+            // controller's place.
+            if let Some(d) = self.block_disk.as_mut() {
+                d.advance(self.ns);
+                return d.read(r);
+            }
             self.disk.advance(self.ns);
             return self.disk.read(r);
         }
@@ -1094,8 +1108,13 @@ impl Machine {
         if let Some(r) = disk_controller::register(phys) {
             // A transfer is a bus master reading and writing physical memory
             // directly, which is why the controller is handed it.
-            self.disk.advance(self.ns);
-            self.disk.write(r, value, &mut self.main);
+            if let Some(d) = self.block_disk.as_mut() {
+                d.advance(self.ns);
+                d.write(r, value, &mut self.main);
+            } else {
+                self.disk.advance(self.ns);
+                self.disk.write(r, value, &mut self.main);
+            }
             // A transfer writes main memory behind the processor's back:
             // QUUX's cache is invalidated before its next cycle.
             self.dma_written = true;
@@ -1210,6 +1229,7 @@ impl Machine {
             geometry,
             tick,
             dma_written,
+            block_disk,
             l1_map,
             l2_map,
             main,
@@ -1269,6 +1289,7 @@ impl Machine {
         w.u16s(write_buffer);
         w.bool(*vmaok);
         disk.save(w);
+        w.opt(block_disk.as_ref(), |w, d| d.save(w));
         tv.save(w);
         // Whether the color TV was on the backplane, and if it was, the
         // board: a resume onto a machine `--color-tv` says otherwise about
@@ -1370,6 +1391,17 @@ impl Machine {
         r.u16s_into(&mut self.write_buffer)?;
         self.vmaok = r.bool()?;
         self.disk.load(r)?;
+        match (r.bool()?, self.block_disk.as_mut()) {
+            (true, Some(d)) => d.load(r)?,
+            (false, None) => {}
+            (saved, _) => {
+                return Err(crate::checkpoint::bad(format!(
+                    "a checkpoint {} block-disk, onto a machine {}",
+                    if saved { "with" } else { "without" },
+                    if saved { "without one" } else { "with one" }
+                )));
+            }
+        }
         self.tv.load(r)?;
         self.color_tv = match r.bool()? {
             true => {

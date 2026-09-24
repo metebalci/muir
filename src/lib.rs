@@ -12,6 +12,7 @@
 
 pub mod band;
 pub mod benchmark;
+pub mod block_disk;
 pub mod buses;
 pub mod busint;
 pub mod cable;

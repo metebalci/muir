@@ -2417,6 +2417,9 @@ impl Rtl {
         // disk controller's done, when a run gives the disk its time.
         self.m.ns = self.ns;
         self.m.disk.advance(self.ns);
+        if let Some(d) = self.m.block_disk.as_mut() {
+            d.advance(self.ns);
+        }
         self.m.ioboard.advance(self.ns);
         // A stall resolves within the bus timeout, `busint::TIMEOUT_NS`, so a
         // microcycle that never starts is a bug in this engine rather than

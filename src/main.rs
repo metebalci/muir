@@ -18,7 +18,7 @@
 //!          [--debug-cable-listen [<endpoint>]] [--debug-in-process]
 //!          [--debuggee-disk-pack <image>[,<unit>][,ro]]
 //!          [--debuggee-terminal [<endpoint>]]
-//!          [--disk-controller netlist|model]
+//!          [--disk-controller netlist|model|block-disk]
 //!          [--disk-pack <image>[,<unit>][,ro]] [--glass-tty [<endpoint>][,ro]]
 //!          [--io-board netlist|model]
 //!          [--machine cadr|quux]
@@ -977,7 +977,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--debuggee-chaos-address <address>]
             [--debuggee-disk-pack <image>[,<unit>][,ro]]
             [--debuggee-terminal [<endpoint>]]
-            [--disk-controller netlist|model] [--disk-multiplexor]
+            [--disk-controller netlist|model|block-disk] [--disk-multiplexor]
             [--disk-pack <image>[,<unit>][,ro]]
             [--glass-tty [<endpoint>][,ro]]
             [--io-board netlist|model] [--keyboard-boot <keys>]
@@ -1171,7 +1171,7 @@ A simulator of the MIT CADR Lisp Machine.
                                address or address:port. [default: the
                                display above this machine's, 127.0.0.1:5901
                                when it is at :0]
-  --disk-controller netlist|model
+  --disk-controller netlist|model|block-disk
                                chip: the disk controller. The netlist takes
                                the drive's real milliseconds over every
                                block: a run that touches no pack pays about
@@ -1179,7 +1179,10 @@ A simulator of the MIT CADR Lisp Machine.
                                took two and a half days. model is how a run
                                that does not care about the disk is made
                                quick, and is what --main-memory model
-                               leaves. [default: netlist]
+                               leaves. block-disk is QUUX's, on micro and
+                               rtl: the same registers and command list
+                               with blocks by number, read and write only,
+                               and one pack, unit 0. [default: netlist]
   --disk-multiplexor           chip: a DISK MULTIPLEXOR on the netlist
                                controller's cable, which is what gives it
                                eight drive ports instead of one. Without it
@@ -2018,6 +2021,12 @@ fn memory_size(boards: usize) -> String {
 /// Attaches each pack, [`pack_choice`], to its unit.
 fn attach(m: &mut Machine, packs: &[Pack]) {
     for (p, unit, read_only) in pack_choice(packs) {
+        if m.block_disk.is_some() && unit != 0 {
+            fail(&format!(
+                "{}: block-disk has one pack, unit 0, and this is unit {unit}",
+                p.display()
+            ));
+        }
         // A drive writes its pack, so the image is opened read-write and a
         // written block goes into the file. `ro` is the drive's own
         // read-only switch: the file is opened read-only behind it, a
@@ -2034,7 +2043,10 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
             Err(e) => fail(&format!("{}: {e}", p.display())),
         };
         u.read_only = read_only;
-        m.disk.attach(unit, u);
+        match m.block_disk.as_mut() {
+            Some(d) => d.attach(u),
+            None => m.disk.attach(unit, u),
+        }
     }
 }
 
@@ -2083,10 +2095,13 @@ fn machine(
     memory_boards: usize,
     (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
-    geometry: muir::machine::Geometry,
+    (geometry, block_disk): (muir::machine::Geometry, bool),
 ) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
     m.geometry = geometry;
+    if block_disk {
+        m.block_disk = Some(muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS));
+    }
     m.load_prom(prom);
     m.tv.set_mono_tv_size(mono_tv_size.0, mono_tv_size.1);
     m.tv.set_board(tv_board);
@@ -4640,6 +4655,7 @@ fn main() {
     // said which it wanted, which decides what the model memory does to
     // it below.
     let mut disk_controller = true;
+    let mut block_disk = false;
     let mut disk_given = false;
     // The DISK MULTIPLEXOR on the netlist controller's cable, which is
     // what gives it eight drive ports instead of one.
@@ -4883,7 +4899,8 @@ fn main() {
                 match args.next().as_deref() {
                     Some("netlist") => disk_controller = true,
                     Some("model") => disk_controller = false,
-                    _ => usage("--disk-controller wants netlist or model"),
+                    Some("block-disk") => block_disk = true,
+                    _ => usage("--disk-controller wants netlist, model or block-disk"),
                 }
             }
             (None, "--io-board") => match args.next().as_deref() {
@@ -5089,6 +5106,13 @@ fn main() {
             "--sync-cycle-ticks is --timing-model sync's, and this run is {}",
             timing_model.name()
         ));
+    }
+    // Block-disk is QUUX's, and not a board `chip` has.
+    if block_disk && geometry == muir::machine::Geometry::CADR {
+        usage("--disk-controller block-disk is QUUX's, and this run is the CADR: --machine quux");
+    }
+    if block_disk && which == Which::Chip {
+        usage("--disk-controller block-disk has no netlist, and this run is chip");
     }
     // The memory cache is QUUX's, and `rtl` is what times it.
     if cache.is_some() && geometry == muir::machine::Geometry::CADR {
@@ -5575,7 +5599,7 @@ fn main() {
         // `.muirrc` serves runs of every engine --- but a run that quietly
         // ignored it would look as though it had obeyed.
         for (flag, engines, has) in [
-            ("--disk-controller", "chip", which == Which::Chip),
+            ("--disk-controller", "chip", which == Which::Chip || block_disk),
             ("--io-board", "chip", which == Which::Chip),
             ("--main-memory", "chip", which == Which::Chip),
             ("--tv", "chip", which == Which::Chip),
@@ -5622,6 +5646,14 @@ fn main() {
             } else {
                 writeln!(s, "tv: model {}", tv_board.name()).unwrap();
             }
+        }
+        if block_disk {
+            writeln!(
+                s,
+                "disk: block-disk, blocks by number, {} us a block",
+                muir::block_disk::BLOCK_NS / 1000
+            )
+            .unwrap();
         }
         if let Some(c) = cache {
             writeln!(
@@ -5863,7 +5895,14 @@ fn main() {
             // from an engine is a clock, and this one has the machine's
             // periods; `tests/micro_chaos.rs` holds the two engines to
             // the same conversation with the server.
-            let mut m = machine(&prom, packs, boards, (tv_board, mono_tv_size), color_tv, geometry);
+            let mut m = machine(
+                &prom,
+                packs,
+                boards,
+                (tv_board, mono_tv_size),
+                color_tv,
+                (geometry, block_disk),
+            );
             m.chaos = chaos.clone();
             m.plug_chaos(0);
             let mut e = Micro::new(m);
@@ -5894,7 +5933,14 @@ fn main() {
             );
         }
         Which::Rtl => {
-            let mut m = machine(&prom, packs, boards, (tv_board, mono_tv_size), color_tv, geometry);
+            let mut m = machine(
+                &prom,
+                packs,
+                boards,
+                (tv_board, mono_tv_size),
+                color_tv,
+                (geometry, block_disk),
+            );
             // The Chaosnet, as under chip: the interface on the I/O board
             // and, if a link was bound, the network on its cable.
             m.chaos = chaos.clone();
@@ -5910,6 +5956,10 @@ fn main() {
                 // debuggee usually has none --- CC loads it over the cable.
                 let mut mb = Machine::with_memory_boards(boards);
                 mb.geometry = geometry;
+                if block_disk {
+                    mb.block_disk =
+                        Some(muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS));
+                }
                 mb.load_prom(&prom);
                 mb.tv.set_mono_tv_size(mono_tv_size.0, mono_tv_size.1);
                 mb.tv.set_board(tv_board);
