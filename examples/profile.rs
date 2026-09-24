@@ -115,6 +115,11 @@ trait Profiled: Engine {
     /// nanoseconds, and the memory cache's hits and misses, where the
     /// engine keeps them.
     fn bus(&self) -> Option<[u64; 5]>;
+    /// `Some(wrong_word)` when the last microcycle started a macroinstruction
+    /// fetch, where the engine says.
+    fn fetch_started(&self) -> Option<bool> {
+        None
+    }
 }
 
 impl Profiled for Micro {
@@ -133,6 +138,9 @@ impl Profiled for Rtl {
     fn bus(&self) -> Option<[u64; 5]> {
         let (h, m) = self.busint().cache().map_or((0, 0), |c| (c.hits, c.misses));
         Some([self.stalled_ns(), self.bus_cycles(), self.ns(), h, m])
+    }
+    fn fetch_started(&self) -> Option<bool> {
+        Rtl::fetch_started(self)
     }
 }
 
@@ -195,6 +203,9 @@ struct Phase {
     stall_hist: Vec<u64>,
     meters: Vec<u32>,
     bus: Option<[u64; 5]>,
+    /// Macroinstruction fetches started: `[at QMLP, elsewhere]` by
+    /// `[next in sequence, wrong word]`.
+    fetches: [[u64; 2]; 2],
 }
 
 fn meters(e: &impl Engine, syms: &Symbols) -> Vec<u32> {
@@ -264,6 +275,8 @@ fn run<E: Profiled>(
     let mut hist = vec![0u64; 1 << 14];
     let mut stall_hist = vec![0u64; 1 << 14];
     let cycles0 = e.machine().cycles;
+    let mut fetches = [[0u64; 2]; 2];
+    let qmlp = syms.address(Space::IMem, "QMLP");
     // Typing steps the engine too, so count through it.
     let mut step = |e: &mut E| {
         let s0 = e.bus().map_or(0, |b| b[0]);
@@ -273,6 +286,10 @@ fn run<E: Profiled>(
         if let Some(pc) = e.executed_pc() {
             hist[pc as usize] += 1;
             stall_hist[pc as usize] += e.bus().map_or(0, |b| b[0]) - s0;
+        }
+        if let Some(wrong) = e.fetch_started() {
+            let at_qmlp = e.executed_pc().map(u32::from) == qmlp;
+            fetches[!at_qmlp as usize][wrong as usize] += 1;
         }
     };
     // No Return: the listener runs a form when its last parenthesis is in,
@@ -308,6 +325,7 @@ fn run<E: Profiled>(
         stall_hist,
         meters: after.iter().zip(&before).map(|(a, b)| a.wrapping_sub(*b)).collect(),
         bus,
+        fetches,
     }
 }
 
@@ -327,6 +345,12 @@ fn report(name: &str, p: &Phase, syms: &Symbols, files: &BTreeMap<String, String
         if hits + misses > 0 {
             println!("   cache {hits} hits, {misses} misses");
         }
+    }
+    let [[q_seq, q_wrong], [o_seq, o_wrong]] = p.fetches;
+    if q_seq + q_wrong + o_seq + o_wrong > 0 {
+        println!(
+            "   fetches: at QMLP {q_seq} next in sequence, {q_wrong} wrong word; elsewhere {o_seq}, {o_wrong}"
+        );
     }
     let mut by_cat: BTreeMap<String, u64> = BTreeMap::new();
     let mut by_label: BTreeMap<String, u64> = BTreeMap::new();

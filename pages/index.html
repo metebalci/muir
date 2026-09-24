@@ -47,19 +47,22 @@
 
     <!-- New for this page: the slow one. Weary lids, a wavy mouth and two
          sweat drops --- the chip engine at 1,400 microcycles a second. -->
-    <!-- New for this page: a rocket beside the engine with no timing model,
-         which is the quick one. Drawn in the same hand as the waving arm:
-         a capsule with a nose, a porthole, two fins and a flame, the fins
-         and the flame in the spot color, climbing up and away from the
-         monitor, off to space. -->
-    <g id="rocket">
-      <g transform="translate(28 -12) rotate(24 128 84)">
-        <path d="M118 100q0-40 10-52q10 12 10 52z" fill="#fff" stroke="#141414" stroke-width="3.5" stroke-linejoin="round"/>
-        <path d="M118 88l-9 14h9zM138 88l9 14h-9z" fill="#ff48b0" stroke="#141414" stroke-width="3" stroke-linejoin="round"/>
-        <circle cx="128" cy="72" r="5" fill="#141414" stroke="#fff" stroke-width="2"/>
-        <path d="M121 102q7 4 14 0q-2 12-7 18q-5-6-7-18z" fill="#ff48b0" stroke="#141414" stroke-width="3" stroke-linejoin="round"/>
-        <path d="M122 124l-3 11M134 124l3 11" fill="none" stroke="#141414" stroke-width="2.2" stroke-linecap="round"/>
-      </g>
+    <!-- New for this page: a sports car beside the engine with no timing
+         model, which is the quick one. Drawn in the same hand as the waving
+         arm: a low body, a spoiler and a windscreen in the spot color, and
+         speed lines behind it. -->
+    <g id="car">
+     <g transform="translate(11 14) scale(0.9)">
+      <path d="M113 114h7M111 121h10M114 128h6" stroke="#141414" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M124 124l-2-8h9l2 7" fill="#ff48b0" stroke="#141414" stroke-width="2.6" stroke-linejoin="round"/>
+      <path d="M123 137v-8q0-5 6-6l15-2l11-8q3-2 7-2h6q4 0 7 3l6 7q5 1 6 7v9z" fill="#fff" stroke="#141414" stroke-width="3.5" stroke-linejoin="round"/>
+      <path d="M152 121l8-6h7l6 6z" fill="#ff48b0" stroke="#141414" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M146 129h22" stroke="#141414" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="136" cy="138" r="7" fill="#141414" stroke="#fff" stroke-width="2"/>
+      <circle cx="168" cy="138" r="7" fill="#141414" stroke="#fff" stroke-width="2"/>
+      <circle cx="136" cy="138" r="2.2" fill="#fff"/>
+      <circle cx="168" cy="138" r="2.2" fill="#fff"/>
+     </g>
     </g>
 
     <g id="face-tired">
@@ -167,8 +170,8 @@
     <div class="panels three engines">
       <div class="panel">
         <p class="cap"><span class="mono">micro</span> &middot; the fast one</p>
-        <svg class="chara" viewBox="0 0 184 150" style="width:90%; align-self:center;" role="img" aria-label="CADR, with a rocket taking off beside it">
-          <use href="#cadr-body"/><use href="#face-happy"/><use href="#rocket"/>
+        <svg class="chara" viewBox="0 0 184 150" style="width:90%; align-self:center;" role="img" aria-label="CADR, with a sports car speeding off beside it">
+          <use href="#cadr-body"/><use href="#face-happy"/><use href="#car"/>
         </svg>
         <p class="big-number">60 M/s</p>
         <p class="small"><b>about 9x the machine</b></p>

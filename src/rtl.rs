@@ -382,6 +382,11 @@ pub struct Rtl {
     loadmd_at: u64,
 
     executed: Option<u16>,
+    /// Whether the last microcycle started a macroinstruction fetch, and if
+    /// so whether for the wrong word (`LC` written) rather than for the
+    /// next in sequence. For the profile harness; not in a checkpoint,
+    /// being cleared every microcycle.
+    fetch_started: Option<bool>,
 }
 
 /// The combinational network during the read phase.
@@ -432,6 +437,8 @@ struct Read {
     /// `DESTMEM`, and `NEEDFETCH`: two of the three terms of `-WAIT`.
     destmem: bool,
     needfetch: bool,
+    /// `HAVE WRONG WORD`, page LCC: `LC` was written since the last fetch.
+    have_wrong_word: bool,
     lcinc: bool,
 
     spush: bool,
@@ -573,6 +580,7 @@ impl Rtl {
             busint_bus: 0,
             loadmd_at: u64::MAX,
             executed: None,
+            fetch_started: None,
         }
     }
 
@@ -782,6 +790,13 @@ impl Rtl {
     /// nothing, so it is not an executed instruction.
     pub fn executed(&self) -> Option<u16> {
         self.executed
+    }
+
+    /// `Some(wrong_word)` when the last microcycle started a macroinstruction
+    /// fetch (`NEEDFETCH` and `LCINC`, page LCC): `true` when `LC` had been
+    /// written, `false` when the word is the next in sequence.
+    pub fn fetch_started(&self) -> Option<bool> {
+        self.fetch_started
     }
 }
 
@@ -1238,6 +1253,7 @@ impl Rtl {
             use_md: srcmd && !nopa,
             destmem,
             needfetch,
+            have_wrong_word,
             lcinc,
             spush,
             spcnt,
@@ -2354,6 +2370,7 @@ impl Rtl {
 
     fn step_body(&mut self) -> Result<(), Halt> {
         self.executed = None;
+        self.fetch_started = None;
         // The ring held by the debug cable's reset: time passes and nothing
         // else --- to the strobe that may lift it, else a cycle's worth,
         // and never past the caller's limit.
@@ -2532,6 +2549,7 @@ impl Rtl {
             if !r.nop {
                 self.executed = Some(self.m.opc);
             }
+            self.fetch_started = (r.needfetch && r.lcinc).then_some(r.have_wrong_word);
             if !std::mem::take(&mut self.pulsed) {
                 self.write_phase(&r);
             }
@@ -2681,6 +2699,8 @@ impl Engine for Rtl {
             busint_bus,
             loadmd_at,
             executed,
+            // Cleared every microcycle, and only the profile reads it.
+            fetch_started: _,
         } = self;
         m.save(w);
         w.u64s(trace);
