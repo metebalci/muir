@@ -1314,6 +1314,19 @@ pub struct Busint {
     /// twins with it. Not in a checkpoint: the engine that owns it says,
     /// [`Busint::keep_timing_model`].
     timing: TimingModel,
+    /// QUUX's memory cache, if the machine has one ([`crate::cache`]).
+    cache: Option<crate::cache::Cache>,
+    /// The physical address of the cycle requested, for the cache.
+    addr: u32,
+    /// The cycle running hit the cache: acknowledged with no bus cycle.
+    cached: bool,
+    /// When the memory board finishes the write in the cache's write
+    /// buffer, and the buffer is free again.
+    buffer_free_at: u64,
+    /// QUUX's main memory's timing, in place of the boards' twins
+    /// ([`crate::cache::MemoryTiming`]), and when it is free again.
+    memory_timing: Option<crate::cache::MemoryTiming>,
+    memory_free_at: u64,
 }
 
 impl Default for Busint {
@@ -1360,6 +1373,40 @@ impl Busint {
             debug_out_timeout_at: u64::MAX,
             memory_next: MemoryBoard::with_timing_model(model).next_change(),
             timing: model,
+            cache: None,
+            addr: 0,
+            cached: false,
+            buffer_free_at: 0,
+            memory_timing: None,
+            memory_free_at: 0,
+        }
+    }
+
+    /// Fits QUUX's memory cache, or takes it out.
+    pub fn set_cache(&mut self, config: Option<crate::cache::CacheConfig>) {
+        self.cache = config.map(crate::cache::Cache::new);
+    }
+
+    /// QUUX's memory timing, if it is fitted.
+    pub fn memory_timing(&self) -> Option<crate::cache::MemoryTiming> {
+        self.memory_timing
+    }
+
+    /// Times main memory as QUUX's own, or as the CADR's boards (`None`).
+    pub fn set_memory_timing(&mut self, timing: Option<crate::cache::MemoryTiming>) {
+        self.memory_timing = timing;
+    }
+
+    /// The memory cache, if there is one.
+    pub fn cache(&self) -> Option<&crate::cache::Cache> {
+        self.cache.as_ref()
+    }
+
+    /// Drops everything the cache holds: main memory was written by
+    /// something other than the processor.
+    pub fn invalidate_cache(&mut self) {
+        if let Some(c) = self.cache.as_mut() {
+            c.invalidate();
         }
     }
 
@@ -1398,15 +1445,26 @@ pub struct Ack {
     /// the I/O board's microsecond clock is the microsecond then, not at
     /// the acknowledgement 150 ns on. See [`Busint::answered_at`].
     pub answered_at: u64,
+    /// The cache answered it: no bus cycle ran, and the word needs none of
+    /// the bus's time to reach the data paths.
+    pub cached: bool,
 }
 
 impl Busint {
     /// The CPU raises `-MEMRQ`. On the board this is `MEMSTART AND VMAOK`
     /// through the 9S42 at VCTL1 1E25.
     pub fn request(&mut self, write: bool) {
+        self.request_at(write, 0);
+    }
+
+    /// [`Busint::request`], at physical address `phys`, which a cache in
+    /// front of main memory looks up.
+    pub fn request_at(&mut self, write: bool, phys: u32) {
         debug_assert_eq!(self.state, State::Idle, "a cycle is already running");
         self.state = State::Requested;
         self.write = write;
+        self.addr = phys;
+        self.cached = false;
         // Until the priority logic says where this one goes, its release
         // is nobody's: a Unibus cycle after a memory cycle held the last
         // board's refresh at 2,545,496 in the band.
@@ -1516,6 +1574,59 @@ impl Busint {
                 // answers when the board's own clock says.
                 let rq = now + SETUP_NS;
                 self.board = None;
+                // A read the cache holds is answered from it, with no bus
+                // cycle and none of the bus's setup and deskew; a miss
+                // fills its line and runs the board's cycle as before.
+                let hit = matches!(responder, Responder::Memory(_))
+                    && !self.write
+                    && self.cache.as_mut().is_some_and(|c| c.read(self.addr));
+                if hit {
+                    let at = now + self.cache.as_ref().map_or(0, |c| c.config.hit_ns);
+                    self.cached = true;
+                    self.state =
+                        State::Granted { ack: at, loadmd: at, answered: at, timed_out: false };
+                    return;
+                }
+                // QUUX's own memory: a fixed time from the request, one
+                // operation at a time, off the Xbus; a buffered write is
+                // acknowledged after the hit time and runs behind.
+                if let (Responder::Memory(_), Some(t)) = (responder, self.memory_timing) {
+                    let start = now.max(self.memory_free_at);
+                    let done = start + if self.write { t.write_ns } else { t.read_ns };
+                    self.memory_free_at = done;
+                    let buffered =
+                        self.write && self.cache.as_ref().is_some_and(|c| c.config.write_buffer);
+                    let at = if buffered {
+                        let hit = self.cache.as_ref().map_or(0, |c| c.config.hit_ns);
+                        let at = (now + hit).max(self.buffer_free_at);
+                        self.buffer_free_at = done;
+                        at
+                    } else {
+                        done
+                    };
+                    self.cached = true;
+                    self.state =
+                        State::Granted { ack: at, loadmd: at, answered: at, timed_out: false };
+                    return;
+                }
+                // A write into the write buffer: acknowledged after the hit
+                // time, or when the buffer's last write is done, and the
+                // board runs it behind the processor. The word is memory's
+                // from the acknowledgement.
+                if let (Responder::Memory(k), true, Some(c)) =
+                    (responder, self.write, self.cache.as_ref())
+                    && c.config.write_buffer
+                {
+                    let at = (now + c.config.hit_ns).max(self.buffer_free_at);
+                    let done = self.memory[k as usize].request(rq.max(at));
+                    self.memory_next = self.memory_next.min(self.memory[k as usize].next_change());
+                    self.board = Some(k);
+                    self.buffer_free_at = done;
+                    self.cached = true;
+                    self.state =
+                        State::Granted { ack: at, loadmd: at, answered: at, timed_out: false };
+                    return;
+                }
                 let answered = match responder {
                     Responder::Memory(k) => {
                         self.board = Some(k);
@@ -2252,9 +2363,14 @@ impl Busint {
             self.state = State::Acked { at: ack, loadmd, answered, timed_out };
         }
         match self.state {
-            State::Acked { at, loadmd, answered, timed_out } => {
-                Some(Ack { timed_out, responder, at, loadmd_at: loadmd, answered_at: answered })
-            }
+            State::Acked { at, loadmd, answered, timed_out } => Some(Ack {
+                timed_out,
+                responder,
+                at,
+                loadmd_at: loadmd,
+                answered_at: answered,
+                cached: self.cached,
+            }),
             _ => None,
         }
     }
@@ -2557,6 +2673,12 @@ impl Busint {
             debug_out_timeout_at,
             memory_next,
             timing: _,
+            cache,
+            addr,
+            cached,
+            buffer_free_at,
+            memory_timing,
+            memory_free_at,
         } = self;
         state.save(w);
         w.bool(*write);
@@ -2587,6 +2709,15 @@ impl Busint {
         w.bool(*debug_out_pending);
         w.u64(*debug_out_timeout_at);
         w.u64(*memory_next);
+        w.opt(cache.as_ref(), |w, c| c.save(w));
+        w.u32(*addr);
+        w.bool(*cached);
+        w.u64(*buffer_free_at);
+        w.opt(*memory_timing, |w, t| {
+            w.u64(t.read_ns);
+            w.u64(t.write_ns);
+        });
+        w.u64(*memory_free_at);
     }
 
     /// Back from a checkpoint, into a model with as many memory boards.
@@ -2627,6 +2758,13 @@ impl Busint {
         self.debug_out_pending = r.bool()?;
         self.debug_out_timeout_at = r.u64()?;
         self.memory_next = r.u64()?;
+        self.cache = r.opt(crate::cache::Cache::load)?;
+        self.addr = r.u32()?;
+        self.cached = r.bool()?;
+        self.buffer_free_at = r.u64()?;
+        self.memory_timing =
+            r.opt(|r| Ok(crate::cache::MemoryTiming { read_ns: r.u64()?, write_ns: r.u64()? }))?;
+        self.memory_free_at = r.u64()?;
         Ok(())
     }
 }

@@ -812,6 +812,17 @@ carries it, and a resume under another is refused.
 
 Default: `cadr`.
 
+### `--cache <words>`
+
+**rtl, QUUX:** a memory cache of `<words>`, a power of two: [QUUX's
+cache](quux.md), unified and write-through, by physical address, main memory
+only, in lines of 4 words, 2-way, a hit in 20 ns, with a one-word write
+buffer. It changes when the machine's reads and writes are answered and
+never what they read. The start says it and a checkpoint carries it.
+Refused on the CADR and on `micro` and `chip`.
+
+Default: none.
+
 ### `--sync-cycle-ticks <k>`
 
 **rtl, `--timing-model sync`:** a microcycle's length in 10 ns ticks, 1 to

@@ -27,7 +27,7 @@
 //!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
 //!          [--stop-after <microcycles>]
 //!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
-//!          [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>]
+//!          [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>] [--cache <words>]
 //!          [--tv netlist|model] [--tv-board simple-tv|lispm-tv|mono-tv]
 //!          [--tv-capture <gif>] [--tv-capture-no-time]
 //!
@@ -990,7 +990,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--resume <file>] [--serial <endpoint>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
-            [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>]
+            [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>] [--cache <words>]
             [--tv netlist|model] [--tv-board simple-tv|lispm-tv|mono-tv]
             [--tv-capture <gif>] [--tv-capture-no-time]
             [--watch <from>[-<to>]:<net>,<net>,...] [-h|--help]
@@ -1399,6 +1399,10 @@ A simulator of the MIT CADR Lisp Machine.
                                it; or sync, QUUX's: the grid with a
                                microcycle of --sync-cycle-ticks ticks.
                                [default: cadr]
+  --cache <words>              rtl, QUUX: a memory cache of <words> in lines
+                               of 4, 2-way, a hit in 20 ns: write-through,
+                               by physical address, main memory only.
+                               [default: none]
   --sync-cycle-ticks <k>       sync: a microcycle's 10 ns ticks, the
                                board's: its fit proves its longest path
                                settles in them. [default: 4]
@@ -4617,6 +4621,7 @@ fn main() {
     let mut mono_tv_size: Option<(usize, usize)> = None;
     let mut timing_model = TimingModel::Cadr;
     let mut sync_cycle_ticks: Option<u8> = None;
+    let mut cache: Option<muir::cache::CacheConfig> = None;
     let mut geometry = muir::machine::Geometry::CADR;
     // The color TV, the second display board: off unless `--color-tv`
     // fits it, because a CADR has one screen unless somebody plugged a
@@ -4822,6 +4827,16 @@ fn main() {
             (None, "--timing-model") => match args.next().as_deref().and_then(TimingModel::parse) {
                 Some(model) => timing_model = model,
                 None => usage("--timing-model wants cadr, fpga or sync"),
+            },
+            (None, "--cache") => match args.next().as_deref().and_then(|v| v.parse::<u32>().ok()) {
+                Some(words) => {
+                    let c = muir::cache::CacheConfig::with_words(words);
+                    if let Err(e) = c.check() {
+                        usage(&format!("--cache: {e}"));
+                    }
+                    cache = Some(c);
+                }
+                None => usage("--cache wants its size in words, a power of two"),
             },
             (None, "--sync-cycle-ticks") => {
                 match args.next().as_deref().and_then(|v| v.parse::<u8>().ok()).filter(|&k| k > 0) {
@@ -5073,6 +5088,16 @@ fn main() {
         usage(&format!(
             "--sync-cycle-ticks is --timing-model sync's, and this run is {}",
             timing_model.name()
+        ));
+    }
+    // The memory cache is QUUX's, and `rtl` is what times it.
+    if cache.is_some() && geometry == muir::machine::Geometry::CADR {
+        usage("--cache is QUUX's, and this run is the CADR: --machine quux");
+    }
+    if cache.is_some() && which != Which::Rtl {
+        usage(&format!(
+            "--cache is rtl's, and this run is {}",
+            if which == Which::Micro { "micro" } else { "chip" }
         ));
     }
     if timing_model != TimingModel::Cadr && which != Which::Rtl {
@@ -5598,6 +5623,14 @@ fn main() {
                 writeln!(s, "tv: model {}", tv_board.name()).unwrap();
             }
         }
+        if let Some(c) = cache {
+            writeln!(
+                s,
+                "cache: {} words, lines of {}, {}-way, a hit in {} ns",
+                c.words, c.line_words, c.ways, c.hit_ns
+            )
+            .unwrap();
+        }
         if geometry == muir::machine::Geometry::QUUX {
             writeln!(
                 s,
@@ -5868,6 +5901,7 @@ fn main() {
             m.plug_chaos(0);
             let mut e = Rtl::new(m);
             e.set_timing_model(timing_model);
+            e.set_cache(cache);
             if auto_boot {
                 e.boot();
             }
@@ -5889,6 +5923,7 @@ fn main() {
                 mb.plug_chaos(0);
                 let mut b = Rtl::new(mb);
                 b.set_timing_model(timing_model);
+                b.set_cache(cache);
                 b.boot();
                 time_lashup(
                     Lashup::new(e, b),

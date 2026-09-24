@@ -15,6 +15,7 @@ pub mod benchmark;
 pub mod buses;
 pub mod busint;
 pub mod cable;
+pub mod cache;
 pub mod capture;
 pub mod chaos;
 pub mod checkpoint;

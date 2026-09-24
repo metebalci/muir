@@ -700,8 +700,26 @@ impl Rtl {
     pub fn set_timing_model(&mut self, model: TimingModel) {
         assert_eq!(self.ns, 0, "a timing model is chosen before the machine runs");
         self.timing = model;
+        let cache = self.busint.cache().map(|c| c.config);
+        let memory = self.busint.memory_timing();
         self.busint = Busint::with_timing_model(self.m.memory_boards(), model);
+        self.busint.set_cache(cache);
+        self.busint.set_memory_timing(memory);
         self.m.disk.set_timing_model(model);
+    }
+
+    /// Fits QUUX's memory cache, or takes it out ([`crate::cache`]):
+    /// chosen before the machine runs, like the timing model.
+    pub fn set_cache(&mut self, config: Option<crate::cache::CacheConfig>) {
+        assert_eq!(self.ns, 0, "a cache is fitted before the machine runs");
+        self.busint.set_cache(config);
+    }
+
+    /// Times main memory as QUUX's own ([`crate::cache::MemoryTiming`]) or
+    /// as the CADR's boards: chosen before the machine runs.
+    pub fn set_memory_timing(&mut self, timing: Option<crate::cache::MemoryTiming>) {
+        assert_eq!(self.ns, 0, "a memory is fitted before the machine runs");
+        self.busint.set_memory_timing(timing);
     }
 
     /// Whose time this engine keeps.
@@ -1357,9 +1375,13 @@ impl Rtl {
         }
         // "cleared by MEMACK delayed by about 150 ns.  This delay is
         // sufficient time for the data in MD to get through the data paths."
-        self.rd_finish_at = ack.at + RD_FINISH_NS;
+        // A read the memory cache answered ran no bus cycle: its word is at
+        // the data paths with the acknowledgement, and nothing is left to
+        // release ([`crate::cache`]).
+        let (finish, release) = if ack.cached { (0, 0) } else { (RD_FINISH_NS, MFINISHD_NS) };
+        self.rd_finish_at = ack.at + finish;
         // "Clears on MEMACK or RESET" --- through [`MFINISHD_NS`].
-        self.mbusy_clear_at = ack.at + MFINISHD_NS;
+        self.mbusy_clear_at = ack.at + release;
         // `-MEMRQ` goes with `MBUSY`, and `-XBUS RQ` with it; a memory
         // board is not idle until then.
         self.busint.released(self.mbusy_clear_at);
@@ -1790,7 +1812,10 @@ impl Rtl {
                         self.m.tv.control_registers(),
                     )
                 };
-                self.busint.request(self.wrcyc);
+                if std::mem::take(&mut self.m.dma_written) {
+                    self.busint.invalidate_cache();
+                }
+                self.busint.request_at(self.wrcyc, self.bus_addr);
                 self.bus_cycles += 1;
                 self.bus_written = false;
                 self.bus_spy = busint::unibus_address(self.bus_addr).and_then(spy::register);
