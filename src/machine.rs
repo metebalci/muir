@@ -864,6 +864,11 @@ impl Machine {
             || self.unibus_interrupt().is_some()
             || (self.geometry.tick && self.tick.pending(now.max(self.ns)))
             || (self.geometry.machine_id.is_some() && self.quux_input.interrupts() != 0)
+            // The network's request, word 100's <5> (contract Q4), reaches
+            // the processor as every bit of the register page's does, not
+            // only through the Unibus interrupt that 766040 enables.
+            || (self.geometry.machine_id.is_some()
+                && self.ioboard.chaos.as_ref().is_some_and(|c| c.interrupt_request().is_some()))
     }
 
     /// `XBUS INTR IN`: the disk controller's request, or either display's

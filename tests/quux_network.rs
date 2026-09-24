@@ -111,6 +111,15 @@ fn a_frame_goes_out_and_its_answer_comes_back() {
     }
     assert!(done, "no answer came");
     assert_ne!(m.bus_read(INTERRUPTS) & 1 << 5, 0, "the network's interrupt");
+    // And it interrupts the processor through word 100 alone, as every
+    // bit there does, with the Unibus interrupt's enable (766040) never
+    // written: muir-sys's microcode for Q5 writes no Unibus address.
+    assert_eq!(
+        m.interrupt_status & muir::busint::interrupt_status::ENABLE_UB_INTS,
+        0,
+        "no Unibus interrupt enable"
+    );
+    assert!(m.interrupt(), "the processor's interrupt pending");
     let bits = m.bus_read(NET + 3) as usize + 1;
     let words: Vec<u16> = (0..bits / 16).map(|_| m.bus_read(NET + 2) as u16).collect();
     // The received buffer ends in the destination, the source and the
