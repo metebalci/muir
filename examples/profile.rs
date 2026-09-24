@@ -32,7 +32,7 @@
 //! `.sym`, which is loaded into MCR2 of the run's copy of the pack, made
 //! current, and served as the error table and read as the symbols.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use muir::diskpack::{Command, Pack};
@@ -206,6 +206,14 @@ struct Phase {
     /// Macroinstruction fetches started: `[at QMLP, elsewhere]` by
     /// `[next in sequence, wrong word]`.
     fetches: [[u64; 2]; 2],
+    /// Macroinstructions by `(halfword, handler, microcycles from its
+    /// dispatch to the next)`, and how often each halfword's opcode named,
+    /// through D-MEM, the handler that ran: `[the one taken, the other]`.
+    /// `LC` has already moved past the instruction when the dispatch has
+    /// run, so the halfword taken is the one `LC<1>` does not select; the
+    /// check is what says so.
+    ops: HashMap<(u16, u16, u64), u64>,
+    decode_agrees: [u64; 2],
 }
 
 fn meters(e: &impl Engine, syms: &Symbols) -> Vec<u32> {
@@ -277,6 +285,13 @@ fn run<E: Profiled>(
     let cycles0 = e.machine().cycles;
     let mut fetches = [[0u64; 2]; 2];
     let qmlp = syms.address(Space::IMem, "QMLP");
+    let mut ops: HashMap<(u16, u16, u64), u64> = HashMap::new();
+    let mut decode_agrees = [0u64; 2];
+    // The last dispatch on `M-INST-OP`: its microcycle, both halfwords,
+    // `LC`, and the handler once it runs.
+    let mut last: Option<(u64, u32, u32, Option<u16>)> = None;
+    let mut since_dispatch = 0u32;
+    let ops_wanted = std::env::var_os("MUIR_OPS").is_some();
     // Typing steps the engine too, so count through it.
     let mut step = |e: &mut E| {
         let s0 = e.bus().map_or(0, |b| b[0]);
@@ -286,6 +301,28 @@ fn run<E: Profiled>(
         if let Some(pc) = e.executed_pc() {
             hist[pc as usize] += 1;
             stall_hist[pc as usize] += e.bus().map_or(0, |b| b[0]) - s0;
+        }
+        if ops_wanted && let (Some(pc), Some(q)) = (e.executed_pc(), qmlp) {
+            since_dispatch += 1;
+            if u32::from(pc) == q + 2 {
+                let now = e.machine().cycles;
+                if let Some((then, word, lc, Some(handler))) = last {
+                    let half = if lc & 2 != 0 { word & 0xffff } else { word >> 16 } as u16;
+                    *ops.entry((half, handler, now - then)).or_default() += 1;
+                }
+                last = Some((now, e.machine().mmem[0o31], e.lc(), None));
+                since_dispatch = 0;
+            } else if since_dispatch == 2 && let Some((_, word, lc, h @ None)) = last.as_mut() {
+                *h = Some(pc);
+                let (lo, hi) = (*word & 0xffff, *word >> 16);
+                let chosen = if *lc & 2 != 0 { [lo, hi] } else { [hi, lo] };
+                for (i, half) in chosen.into_iter().enumerate() {
+                    let op = (half >> 9) & 0o37;
+                    if e.machine().dmem[(0o2300 + op) as usize] & 0o37777 == u32::from(pc) {
+                        decode_agrees[i] += 1;
+                    }
+                }
+            }
         }
         if let Some(wrong) = e.fetch_started() {
             let at_qmlp = e.executed_pc().map(u32::from) == qmlp;
@@ -326,6 +363,8 @@ fn run<E: Profiled>(
         meters: after.iter().zip(&before).map(|(a, b)| a.wrapping_sub(*b)).collect(),
         bus,
         fetches,
+        ops,
+        decode_agrees,
     }
 }
 
@@ -556,6 +595,16 @@ fn profile<E: Profiled>(
         report(name, &p, &syms, &files, qmlp);
         // `MUIR_PC_DUMP=<dir>`: every executed address's count and the
         // nanoseconds stalled at it, one file a workload.
+        // `MUIR_OPS=<dir>`: the macroinstructions, one file a workload.
+        if let Some(dir) = std::env::var_os("MUIR_OPS") {
+            let mut out = format!("# decode agrees: the halfword taken {}, the other {}\n", p.decode_agrees[0], p.decode_agrees[1]);
+            let mut rows: Vec<_> = p.ops.iter().collect();
+            rows.sort();
+            for ((half, handler, cycles), n) in rows {
+                out.push_str(&format!("{half:o} {handler:o} {cycles} {n}\n"));
+            }
+            std::fs::write(PathBuf::from(dir).join(format!("{name}.txt")), out).unwrap();
+        }
         if let Some(dir) = std::env::var_os("MUIR_PC_DUMP") {
             let mut out = String::new();
             for (pc, &n) in p.hist.iter().enumerate().filter(|(_, n)| **n > 0) {
