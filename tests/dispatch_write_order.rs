@@ -948,7 +948,10 @@ fn quux_dispatch_write_on_md(gap: usize, timing: TimingModel) -> (End, Vec<Row>,
 #[test]
 fn on_quux_a_dispatch_write_addressed_by_md_waits_for_the_word_read() {
     for (gap, want) in [(0, 0o1302), (1, 0o1305), (2, 0o1305), (3, 0o1305)] {
-        for timing in [TimingModel::Cadr, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
+        for timing in [
+            TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+            TimingModel::Sync { cycle_ticks: 3, ilong_ticks: 0 },
+        ] {
             let (r, _, u) = quux_dispatch_write_on_md(gap, timing);
             let written: Vec<_> = (0..2048).filter(|&k| r.dmem[k] != 0).collect();
             assert_eq!(written, vec![want], "gap {gap}, {timing:?}: rtl");
@@ -1319,9 +1322,15 @@ fn on_quux_a_popj_dispatch_write_takes_the_old_word_waiting_or_not() {
             for i in 0..=n.min(3) {
                 for xl in [false, true] {
                     let (m, main) = quux_hung_popj_one_word(pre, n, i, xl);
-                    let (e, rows) = rtl_timed(&m, &main, X_CYCLES, TimingModel::Cadr, None);
+                    let (e, rows) = rtl_timed(
+                        &m,
+                        &main,
+                        X_CYCLES,
+                        TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+                        None,
+                    );
                     let r = row_of(&rows, hung_popj_insn(xl).raw());
-                    stretched += (r.to - r.from > if xl { 185 } else { 145 }) as usize;
+                    stretched += (r.to - r.from > 40) as usize;
                     let what = format!("({pre}, {n}, {i}, {xl})");
                     assert_eq!((e.mmem[5], e.spcptr), (AT_OLD_DPC, 1), "{what}: rtl");
                     let (u, _) = micro(&m, &main, X_CYCLES);
@@ -1348,9 +1357,15 @@ fn on_quux_a_checkpoint_inside_the_wait_keeps_the_old_word() {
             for i in 0..=n.min(3) {
                 for xl in [false, true] {
                     let (m, main) = quux_hung_popj_one_word(pre, n, i, xl);
-                    let (_, rows) = rtl_timed(&m, &main, X_CYCLES, TimingModel::Cadr, None);
+                    let (_, rows) = rtl_timed(
+                        &m,
+                        &main,
+                        X_CYCLES,
+                        TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+                        None,
+                    );
                     let r = row_of(&rows, hung_popj_insn(xl).raw());
-                    let over = (r.to - r.from).saturating_sub(if xl { 185 } else { 145 });
+                    let over = (r.to - r.from).saturating_sub(40);
                     if longest.as_ref().is_none_or(|&(o, _, _, _)| over > o) {
                         longest = Some((over, m, main, r));
                     }

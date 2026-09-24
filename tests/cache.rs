@@ -97,7 +97,10 @@ fn run(cache: Option<CacheConfig>, model: TimingModel, steps: usize) -> Rtl {
 #[test]
 fn the_cache_changes_when_and_not_what() {
     let steps = 3_000;
-    for model in [TimingModel::Cadr, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
+    for model in [
+        TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+        TimingModel::Sync { cycle_ticks: 3, ilong_ticks: 0 },
+    ] {
         let without = run(None, model, steps);
         let with = run(Some(CacheConfig::with_words(1024)), model, steps);
         let state = |e: &Rtl| (e.machine().amem[3], e.machine().mmem[1], e.pc());
@@ -115,7 +118,11 @@ fn the_cache_changes_when_and_not_what() {
 /// write raises makes the next cycle's lookup miss where it would have hit.
 #[test]
 fn a_disk_transfer_invalidates_the_cache() {
-    let mut e = run(Some(CacheConfig::with_words(1024)), TimingModel::Cadr, 200);
+    let mut e = run(
+        Some(CacheConfig::with_words(1024)),
+        TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+        200,
+    );
     let before = e.busint().cache().unwrap().clone();
     assert!(before.holds(0o1000), "the loop's first line is held");
     e.machine_mut().dma_written = true;
@@ -134,7 +141,11 @@ fn a_disk_transfer_invalidates_the_cache() {
 #[test]
 fn a_checkpoint_keeps_the_cache() {
     use muir::checkpoint::{Reader, Writer};
-    let mut e = run(Some(CacheConfig::with_words(256)), TimingModel::Cadr, 500);
+    let mut e = run(
+        Some(CacheConfig::with_words(256)),
+        TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+        500,
+    );
     let mut w = Writer::new();
     e.save(&mut w);
     let body = w.finish();
@@ -180,7 +191,10 @@ fn writer() -> Machine {
 /// without, the last word read back being the last written, and sooner.
 #[test]
 fn a_written_word_is_read_back_through_the_buffer() {
-    for model in [TimingModel::Cadr, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
+    for model in [
+        TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+        TimingModel::Sync { cycle_ticks: 3, ilong_ticks: 0 },
+    ] {
         let go = |cache: Option<CacheConfig>| {
             let mut e = Rtl::new(writer());
             e.set_timing_model(model);

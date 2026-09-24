@@ -52,12 +52,26 @@ fn time_of(e: &mut Rtl, n: usize) -> u64 {
 }
 
 /// **A microcycle is `cycle_ticks` ticks**, from the boot on: 40 ns at 4,
-/// 30 at 3, against the 145 of the CADR's normal speed on QUUX's one rate.
+/// 30 at 3. QUUX drops the delay lines: an engine made for a QUUX machine
+/// is on four ticks without being told, and the CADR's timings are not
+/// QUUX's to take.
 #[test]
 fn a_microcycle_is_its_ticks() {
-    for (model, ns) in [(TimingModel::Cadr, 145), (sync(4, 0), 40), (sync(3, 0), 30)] {
+    for (model, ns) in [(sync(4, 0), 40), (sync(3, 0), 30)] {
         let mut e = quux(model, &[]);
         assert_eq!(time_of(&mut e, 8), 8 * ns, "{model:?}");
+    }
+    let mut m = Machine::new();
+    m.geometry = Geometry::QUUX;
+    let e = Rtl::new(m);
+    assert_eq!(e.timing_model(), sync(4, 0), "the default");
+    for cadr in [TimingModel::Cadr, TimingModel::Fpga] {
+        let refused = std::panic::catch_unwind(|| {
+            let mut m = Machine::new();
+            m.geometry = Geometry::QUUX;
+            Rtl::new(m).set_timing_model(cadr);
+        });
+        assert!(refused.is_err(), "{cadr:?} refused on QUUX");
     }
 }
 

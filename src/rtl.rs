@@ -506,7 +506,8 @@ fn field(v: u64, hi: u32, lo: u32) -> u32 {
 impl Rtl {
     pub fn new(m: Machine) -> Self {
         let memory_boards = m.memory_boards();
-        Rtl {
+        let on_quux = m.geometry.machine_id.is_some();
+        let mut r = Rtl {
             m,
             trace: [0; 12],
             flags: [0; 12],
@@ -586,7 +587,16 @@ impl Rtl {
             loadmd_at: u64::MAX,
             executed: None,
             fetch_started: None,
+        };
+        // QUUX drops the delay lines: `sync`, four ticks, unless `muir`
+        // sets `--sync-cycle-ticks`'.
+        if on_quux {
+            r.set_timing_model(TimingModel::Sync {
+                cycle_ticks: crate::clock::SYNC_CYCLE_TICKS,
+                ilong_ticks: 0,
+            });
         }
+        r
     }
 
     /// `-RESET`: what the 74S37 at OLORD2 1A06 clears, of what this engine
@@ -712,6 +722,11 @@ impl Rtl {
     /// boots.
     pub fn set_timing_model(&mut self, model: TimingModel) {
         assert_eq!(self.ns, 0, "a timing model is chosen before the machine runs");
+        assert!(
+            self.m.geometry.machine_id.is_none() || matches!(model, TimingModel::Sync { .. }),
+            "QUUX drops the delay lines: its timing is sync, not {}",
+            model.name()
+        );
         self.timing = model;
         let cache = self.busint.cache().map(|c| c.config);
         let memory = self.busint.memory_timing();
@@ -2642,6 +2657,10 @@ impl Rtl {
 }
 
 impl Engine for Rtl {
+    fn nominal_cycle_ns(&self) -> u64 {
+        self.timing.cycle_ns(Speed::Normal, false) as u64
+    }
+
     /// `-BOOT` from the button: it presets `RUN` at OLORD1 1A14, clears the
     /// 74LS109 at OLORD2 1A18 into `BOOT.TRAP`, and is one of the three
     /// inputs of `RESET` at 1C08.  A finger holds it for many master clocks,

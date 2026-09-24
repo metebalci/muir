@@ -216,7 +216,10 @@ fn source_15_counts_microseconds() {
             "micro from {start}: {} against {want}",
             e.machine().mmem[1]
         );
-        for model in [TimingModel::Cadr, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
+        for model in [
+            TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+            TimingModel::Sync { cycle_ticks: 3, ilong_ticks: 0 },
+        ] {
             let mut r = Rtl::new(quux(start));
             r.set_timing_model(model);
             r.boot();
@@ -300,7 +303,10 @@ fn a_flag_rising_during_a_wait_is_seen_by_the_jump_after() {
     use muir::isa::asm::{SRC_MD, a_dest};
     let md_read = Insn::new(ALU | SETM | SRC_MD | a_dest(0o720));
     let mut cases = [0; 2];
-    for timing in [TimingModel::Fpga, TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 }] {
+    for timing in [
+        TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+        TimingModel::Sync { cycle_ticks: 3, ilong_ticks: 0 },
+    ] {
         for p in [1u32, 2] {
             for f in 0..12usize {
                 let mut prom = vec![
