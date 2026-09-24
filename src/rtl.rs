@@ -1870,6 +1870,10 @@ impl Rtl {
                 self.bus_responder = if self.m.geometry.feature_word(self.bus_addr).is_some() {
                     // QUUX's feature page answers as an Xbus device.
                     busint::Responder::Device
+                } else if !self.m.geometry.unibus && busint::unibus_address(self.bus_addr).is_some()
+                {
+                    // QUUX has no Unibus: the window times out as Xbus.
+                    busint::Responder::NoXbus
                 } else {
                     busint::decode_for(
                         self.bus_addr,

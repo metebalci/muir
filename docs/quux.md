@@ -566,6 +566,29 @@ keyboard's boot word still boots. `tests/quux_input.rs` holds the FIFO's
 order and its 64, the overflow, the counts and buttons, the interrupts, the
 terminal's delivery, the boot word, a checkpoint and both engines' reads.
 
+## No Unibus
+
+**QUUX has no Unibus** (contract Q5). Every address of the CADR's Unibus
+window, physical page 37000 and up, answers nothing on QUUX: a read or a
+write times out as an empty Xbus address does, the Xbus NXM bit set in word
+101, and changes nothing. With it go, on QUUX, the I/O board (its keyboard,
+mouse, clocks and Chaosnet interface now QUUX's own, contracts Q1-Q4; its
+serial port and general-purpose register dropped), the bus interface's
+Unibus side (the adapter, the Unibus map, its buffers, WRITE-THROUGH, the
+interrupt control and error status at `766040`-`766044`, the Unibus
+interrupt), the diagnostic registers as the machine's own (the spy stays
+the host's port: muir's prompt, the FPGA's AXI face), and the debug cable,
+a Unibus master: `--debug-cable-listen`, `--debug-cable-connect` and
+`--debug-in-process` are refused on QUUX, and a QUUX run has no DBGIN
+connector. A QUUX debug design of its own is a later contract. The CADR
+keeps all of it: CC and the two-machine lashup are its acceptance test.
+
+muir-sys's microcode for Q5 makes no Unibus access over a boot and a while
+at the listener, counted on `micro`. `tests/quux_no_unibus.rs` holds the
+window's timeouts on the machine and through both engines' bus, the Unibus
+interrupt not reaching QUUX, and the CADR's Unibus unchanged;
+`quux_has_no_debug_cable` in `tests/cli.rs` the cable.
+
 ## The network
 
 **QUUX's Chaosnet interface is on the register page** (contract Q4), off the

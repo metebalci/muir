@@ -551,6 +551,27 @@ fn quux_s_prom_is_assembled_at_36000() {
     );
 }
 
+/// **QUUX has no debug cable** (contract Q5): the cable is a Unibus master
+/// and QUUX has no Unibus, so a QUUX run has no DBGIN connector and says
+/// so, and the cable's flags and the lashup are refused on it.
+#[test]
+fn quux_has_no_debug_cable() {
+    let out = muir().args(["--rtl", "--machine", "quux", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("debug cable: none --- QUUX has no Unibus"), "{t}");
+    assert!(!t.contains("DBGIN listening"), "{t}");
+    for flags in [
+        &["--debug-cable-listen"][..],
+        &["--debug-cable-connect", "127.0.0.1:1"][..],
+        &["--debug-in-process"][..],
+    ] {
+        let mut args = vec!["--rtl", "--machine", "quux"];
+        args.extend_from_slice(flags);
+        refused_saying(&args, "QUUX has no Unibus, and so no debug cable");
+    }
+}
+
 /// **QUUX's disk is block-disk and nothing else**: without
 /// `--disk-controller` a QUUX run has block-disk, and the CADR's
 /// controller, the netlist's or the model's, is refused on it.
