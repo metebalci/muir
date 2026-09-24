@@ -366,6 +366,14 @@ a page.
 | Interrupt | done, command `<11>`; attention, `<10>` | done, command `<11>` |
 | Time | seeks and rotation, when timed | 100 us a block moved, **unverified**: an estimate until muir-fpga measures its disk path |
 
+**Block-disk's contract is the outcome, not the time**: the status bits, the
+disk address left at the last block moved or at the one that failed, the
+command list pointer and memory. How long a transfer stays active, whether
+it succeeds or fails, is the implementation's, and software waits for
+not-active before it reads the status. muir's model does as follows, and a
+fabric that walks its list through a host stays active until the walk ends,
+a failure too.
+
 The words move inside the store to START, and the controller stays busy for
 a block's time each; a transfer writes main memory behind the processor, so
 the memory cache is invalidated. The pack image is the CADR's file, its
