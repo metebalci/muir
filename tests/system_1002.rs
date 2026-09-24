@@ -4,9 +4,11 @@
 //! System 1002 on QUUX with MONO TV: muir-sys's development band, which
 //! sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-1002-dev2` (muir-sys `5427570`), a
-//! pack with microcode 1000 for QUUX revision 4 and the band, and the tree
-//! it was built from: no TV sync program and no speed bits. Without it the tests skip and say so.
+//! It is in the gitignored `ref/band-1002-dev3` (muir-sys `0ec714d`), a
+//! pack with microcode 1000 (quux7) for QUUX revision 4 and the band, and
+//! the tree it was built from: no TV sync program and no speed bits. The
+//! band takes the screen's size from the feature page at every boot.
+//! Without it the tests skip and say so.
 
 use std::path::PathBuf;
 
@@ -23,17 +25,17 @@ const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
 /// A copy of the pack and the served tree, in a scratch directory.
 fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev2");
-    if !from.join("pack-1002-dev2.img").exists() {
+    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev3");
+    if !from.join("pack-1002-dev3.img").exists() {
         eprintln!("skipped: {} is not present", from.display());
         return None;
     }
     let dir = support::scratch(name);
     let pack = dir.join("pack.img");
-    std::fs::copy(from.join("pack-1002-dev2.img"), &pack).unwrap();
+    std::fs::copy(from.join("pack-1002-dev3.img"), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev2.tar.gz"))
+        .arg(from.join("tree-1002-dev3.tar.gz"))
         .arg("-C")
         .arg(dir.path())
         .status()
@@ -47,44 +49,55 @@ fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     Some((dir, pack, root))
 }
 
-/// The size the band's window system was loaded at: a band fixes its
-/// screen then, and `band-1002-dev2` was built at 1920 by 1080. Run at
-/// another size it draws 60-word lines into the raster anyway.
-const BAND_SIZE: (usize, usize) = (1920, 1080);
+/// The size `band-1002-dev3` was built at; it takes whatever size the
+/// feature page says at boot ([`system_1002_sizes_its_screen_at_boot`]).
+const BAND_SIZE: (usize, usize) = (1280, 1024);
 
 fn quux(pack: &std::path::Path) -> Machine {
+    quux_at(pack, BAND_SIZE)
+}
+
+fn quux_at(pack: &std::path::Path, (w, h): (usize, usize)) -> Machine {
     let mut m = support::machine_with_pack(pack);
     m.load_prom(&muir::prom::quux_boot_prom());
     m.geometry = Geometry::QUUX;
     m.tv.set_board(Board::MonoTv);
-    m.tv.set_mono_tv_size(BAND_SIZE.0, BAND_SIZE.1);
+    m.tv.set_mono_tv_size(w, h);
     m
 }
 
-/// Whether the listener's rows read as text at the screen's own words a
-/// line and worse at every other width a band might have drawn at: lit
-/// pixels in the rows are most where the lines are read as drawn.
+/// Whether the listener is framed at the screen's own size, and not at any
+/// other width a band might have drawn at: its border lights the first and
+/// the last pixel of every row through the middle half of the screen, read
+/// at the screen's words a line, and read at any other it does not.
 fn drawn_at_its_words_a_line(e: &impl Engine) -> bool {
-    let own = e.machine().tv.screen().2;
-    let at_own = lit(e, 84..130, own);
-    [24, 40, 60, 80].into_iter().filter(|&w| w != own).all(|w| at_own > lit(e, 84..130, w))
+    let (_, h, own) = e.machine().tv.screen();
+    framed(e, own, h) && [24, 40, 60, 80].into_iter().filter(|&w| w != own).all(|w| !framed(e, w, h))
 }
 
-/// Lit pixels in `rows` of a screen `words_per_line` words wide.
-fn lit(e: &impl Engine, rows: std::ops::Range<usize>, words_per_line: usize) -> u32 {
-    e.machine().tv.buffer()[rows.start * words_per_line..rows.end * words_per_line]
-        .iter()
-        .map(|w| w.count_ones())
-        .sum()
+/// Whether, read `words_per_line` words a line, the first and the last
+/// pixel of every row in the middle half of `h` rows are lit.
+fn framed(e: &impl Engine, words_per_line: usize, h: usize) -> bool {
+    let buf = e.machine().tv.buffer();
+    let lit = |bit: usize| buf.get(bit / 32).is_some_and(|w| w >> (bit % 32) & 1 != 0);
+    let width = words_per_line * 32;
+    (h / 4..3 * h / 4).all(|y| lit(y * width) && lit(y * width + width - 1))
+}
+
+/// The screen as a GIF in the temporary directory, for a failure message.
+fn shot(e: &impl Engine, name: &str) -> String {
+    let path = std::env::temp_dir().join(format!("muir-system-1002-{name}.gif"));
+    let mut rec = muir::capture::Recorder::new(false);
+    rec.sample(&e.machine().tv, 0, 0);
+    std::fs::write(&path, rec.gif()).unwrap();
+    path.display().to_string()
 }
 
 /// **System 1002 reaches its listener on QUUX with MONO TV, drawn at the
 /// screen's words a line**, on both engines, at the size the band was built
-/// for ([`BAND_SIZE`]). Its listener comes up where the harness looks for
-/// it with the screen read at MONO TV's words a line, and reads worse at
-/// any other width; read at
-/// the CADR's 24, the same rows hold far less, which is the band drawing
-/// for the screen it was given and not for the CADR's.
+/// for ([`BAND_SIZE`]): its listener is framed at MONO TV's words a line and
+/// at no other width, the CADR's 24 among them, which is the band drawing
+/// for the screen it was given.
 #[test]
 fn system_1002_runs_on_mono_tv() {
     for engine in ["micro", "rtl"] {
@@ -111,6 +124,29 @@ fn system_1002_runs_on_mono_tv() {
     }
 }
 
+/// **System 1002 sizes its screen at boot**: the same band, built at
+/// [`BAND_SIZE`], booted at other sizes, draws its listener at each size's
+/// own words a line. 2560 by 1440 is left out: there the listener's own
+/// drawing stops at pixel 2^21 at boot, which muir-sys is looking into.
+#[test]
+fn system_1002_sizes_its_screen_at_boot() {
+    for size in [(1024, 768), (1920, 1080)] {
+        let Some((_dir, pack, root)) = band_1002(&format!("system-1002-{}x{}", size.0, size.1)) else {
+            return;
+        };
+        let mut e = Micro::new(quux_at(&pack, size));
+        e.boot();
+        let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
+        eprintln!("{size:?}: listener after {ran} microcycles");
+        assert_eq!(e.machine().tv.screen().2, size.0 / 32, "{size:?}: the screen's words a line");
+        assert!(
+            drawn_at_its_words_a_line(&e),
+            "{size:?}: drawn at the screen's words a line; the screen is {}",
+            shot(&e, &format!("{}x{}", size.0, size.1))
+        );
+    }
+}
+
 /// **System 1002 runs under `sync`**, QUUX's 40 ns microcycle: the same
 /// microcode and band reach the same listener, and the time to it is
 /// shorter than at QUUX's one rate of 145 ns by less than the microcycle
@@ -127,7 +163,11 @@ fn system_1002_runs_under_sync() {
         e.set_timing_model(model);
         e.boot();
         let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-        assert!(drawn_at_its_words_a_line(&e), "{model:?}: at the screen's words a line");
+        assert!(
+            drawn_at_its_words_a_line(&e),
+            "{model:?}: at the screen's words a line; the screen is {}",
+            shot(&e, model.name())
+        );
         eprintln!("{}: listener after {ran} microcycles, {} ns", model.name(), e.ns());
         times.push(e.ns());
     }
