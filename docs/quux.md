@@ -28,6 +28,21 @@ differences, what it needed:
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
 | MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
 
+## What each change measured
+
+Microcycles counted by the profile harness (`examples/profile.rs`) over its
+workloads on System 1001's band, each change against the machine without
+it:
+
+| Change | Measured |
+|---|---|
+| Six-bit level-1 map (QUUX on microcode 1000 against the CADR on 323 rebuilt, 324) | 11.3% fewer microcycles on `micro` and 11.1% on `rtl` over thirteen workloads; `intern` 31% fewer, `print-scroll` 27%, `compile` 21%, the idle listener 20 to 30% |
+| 16K-word PDL buffer (against QUUX's 1K) | 3.8% fewer on `micro` and 4.3% on `rtl` over thirteen workloads; deep recursion 29% fewer, its PDL buffer's share falling from 26% of its microcycles to 0.9% |
+| `MUL` and `DIV` (microcode using them against the same without) | 20% fewer microcycles a macroinstruction on the multiply-and-divide workload (25.0 to 20.0), 7% on float, 1.5% on bignum; multiply and divide's share of the first 25.6% to 5.4% |
+
+The time these save on a machine with the synchronous microcycle and the
+cache is in [the memory cache](#the-memory-cache).
+
 ## The map
 
 **A level-1 entry is six bits, not five.** The level-1 map names, for each
