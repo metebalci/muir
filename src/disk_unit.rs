@@ -363,22 +363,10 @@ impl Unit {
         self.write_lba(lba, data)
     }
 
-    /// Block `lba` from the start of the pack, as QUUX's block-disk reads
-    /// it: `None` past the end, or for a block the image could not deliver.
-    pub fn read_lba(&mut self, lba: u32) -> Option<[u32; BLOCK_WORDS]> {
-        if lba >= self.geometry.blocks() {
-            return None;
-        }
-        if let Some(b) = self.written.get(&lba) {
-            return Some(*b);
-        }
-        self.file_block(lba)
-    }
-
-    /// Block `lba` written, as QUUX's block-disk writes it: to the file on a
+    /// Block `lba` from the start of the pack written: to the file on a
     /// pack opened read-write, else kept in memory. False past the end, or
     /// for a block the image would not take.
-    pub fn write_lba(&mut self, lba: u32, data: &[u32; BLOCK_WORDS]) -> bool {
+    fn write_lba(&mut self, lba: u32, data: &[u32; BLOCK_WORDS]) -> bool {
         if lba >= self.geometry.blocks() {
             return false;
         }

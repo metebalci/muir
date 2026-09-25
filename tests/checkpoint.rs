@@ -163,10 +163,13 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// QUUX's keyboard FIFO and mouse, which `a_checkpoint_keeps_it` in
 /// `tests/quux_input.rs` holds, and version 40 QUUX's memory port in place
 /// of the bus interface, which `a_checkpoint_keeps_the_memory_port` in
-/// `tests/quux_memory_port.rs` holds.
+/// `tests/quux_memory_port.rs` holds, and version 41 QUUX's disk of any
+/// size in place of a T-300's drive under block-disk, its size in blocks
+/// and the blocks written, which `a_checkpoint_keeps_the_disk` in
+/// `tests/quux_disk.rs` holds.
 #[test]
-fn the_format_is_version_40_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 40, "a new version needs its own tests");
+fn the_format_is_version_41_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 41, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -174,14 +177,14 @@ fn the_format_is_version_40_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 40u32.to_le_bytes());
+    assert_eq!(&good[at..at + 4], 41u32.to_le_bytes());
     for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 40"), "{err}");
+        assert!(err.contains("reads 41"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

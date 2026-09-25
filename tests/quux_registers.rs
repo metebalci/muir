@@ -9,7 +9,7 @@
 //! (`766012`) on QUUX.
 
 use muir::block_disk::{BLOCK_NS, BlockDisk};
-use muir::disk_unit::{Geometry as Pack, Unit};
+use muir::disk_unit::Geometry as Pack;
 use muir::machine::{Geometry, Machine, bus_error};
 
 const PAGE: u32 = 0o17377000;
@@ -45,7 +45,7 @@ fn word_100_says_who_interrupted() {
     assert_eq!(m.bus_read(INTERRUPTS), 0, "disabled, neither");
     // Block-disk's done interrupt, command <11>.
     let mut d = BlockDisk::new(BLOCK_NS);
-    d.attach(Unit::blank(Pack::T300));
+    d.attach(muir::disk_image::Disk::blank(Pack::T300.blocks()));
     m.block_disk = Some(d);
     m.main[0o100] = 0o1000;
     m.bus_write(muir::block_disk::REGS + muir::block_disk::CLP, 0o100);

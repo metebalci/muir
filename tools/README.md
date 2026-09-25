@@ -1,7 +1,7 @@
 # `tools/`
 
-Scripts that make the committed fixtures in `data/` from MIT's files in
-`mit/`, two that fetch what is not committed, and one that checks the
+Scripts that make the committed fixtures in `data/`, from MIT's files in
+`mit/` or, for QUUX's disks, with standard tools, two that fetch what is not committed, and one that checks the
 first lot still make what is committed. None of them runs as part of the
 build --- CI runs `check-netlists.sh` on every push, which is what says the
 fixtures and the drawings have not drifted apart. `data/README.md` says
@@ -21,6 +21,7 @@ Ubuntu, `gcc` on Fedora --- and only when a netlist has to be made again.
 | `check-netlists.sh` | nothing. It runs all eight of those and says whether each committed netlist is still what its script makes, putting the committed files back afterwards. CI runs it on every push |
 | `newdsk-proms.sh` | `data/newdsk-d0?.prom`, the disk controller's control store, assembled from `mit/cadrdc/newdsk.31` by `examples/dcmicro.rs` |
 | `trident-tables.sh` | `data/trident-connectors.txt` and `data/trident-bus.txt`, by `examples/trident-tables.rs` |
+| `quux-disk-fixtures.sh` | `data/quux-disk*`, QUUX's disk raw, as a fixed and a dynamic VHD, and grown: with sgdisk, dd, qemu-img and qemu-io, not muir. `QEMU_IMG` and `QEMU_IO` name the qemu tools when they are not on the path |
 
 ## `soap4/`
 

@@ -109,7 +109,7 @@ fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
     let mut m = Machine::new();
     m.load_prom(&muir::prom::quux_boot_prom());
     let mut d = muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS);
-    d.attach(muir::disk_unit::Unit::open_rw(&pack, muir::disk_unit::Geometry::T300).unwrap());
+    d.attach(muir::disk_image::Disk::open_rw(&pack).unwrap());
     m.block_disk = Some(d);
     m.geometry = Geometry::QUUX;
     m.tv.set_board(Board::MonoTv);

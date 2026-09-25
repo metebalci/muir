@@ -14,16 +14,18 @@
 //!
 //! What goes: cylinders, heads and sectors, seeks, the ECC, Read All and
 //! Write All, the drive's own states. The disk address is a block number
-//! from the start of the pack, `<27:0>`; the commands are read, 0, and
+//! from the start of the disk, `<27:0>`; the commands are read, 0, and
 //! write, 11; anything else stops by error, and so does a transfer that
-//! runs past the end of the pack. The pack image is the same file the CADR
-//! reads, its blocks in the order `crate::disk_unit::Unit` numbers them.
+//! runs past the end of the disk. The disk is a file of any size, raw or a
+//! VHD, [`crate::disk_image::Disk`]: block `n` is its 512-byte sectors `2n`
+//! and `2n + 1` (contract Q8).
 //!
 //! The words move inside the store to START, as the CADR model's do; the
 //! controller then stays busy for [`BLOCK_NS`] a block moved, which is when
 //! it goes not-active and the done interrupt comes.
 
-use crate::disk_unit::{BLOCK_WORDS, Unit};
+use crate::disk_image::Disk;
+use crate::disk_unit::BLOCK_WORDS;
 
 /// The registers' first physical address, the CADR controller's.
 pub const REGS: u32 = crate::disk_controller::REGS;
@@ -40,7 +42,7 @@ pub const START: u32 = 3;
 /// **Unverified**: an estimate until muir-fpga measures its disk path.
 pub const BLOCK_NS: u64 = 100_000;
 
-/// The block-disk: its registers, its error flags, and its pack.
+/// The block-disk: its registers, its error flags, and its disk.
 #[derive(Clone)]
 pub struct BlockDisk {
     cmd: u32,
@@ -56,7 +58,7 @@ pub struct BlockDisk {
     past_end: bool,
     nxm: bool,
     bad_command: bool,
-    unit: Option<Unit>,
+    disk: Option<Disk>,
 }
 
 impl BlockDisk {
@@ -72,16 +74,16 @@ impl BlockDisk {
             past_end: false,
             nxm: false,
             bad_command: false,
-            unit: None,
+            disk: None,
         }
     }
 
-    pub fn attach(&mut self, unit: Unit) {
-        self.unit = Some(unit);
+    pub fn attach(&mut self, disk: Disk) {
+        self.disk = Some(disk);
     }
 
-    pub fn unit_mut(&mut self) -> Option<&mut Unit> {
-        self.unit.as_mut()
+    pub fn disk_mut(&mut self) -> Option<&mut Disk> {
+        self.disk.as_mut()
     }
 
     /// The machine's clock, told before the disk is read, written or asked
@@ -120,7 +122,7 @@ impl BlockDisk {
         if self.interrupt() {
             v |= 1 << 3;
         }
-        if self.unit.is_none() {
+        if self.disk.is_none() {
             v |= 1 << 9;
         }
         if self.error() {
@@ -172,10 +174,10 @@ impl BlockDisk {
                 return;
             }
         };
-        let Some(mut unit) = self.unit.take() else { return };
+        let Some(mut disk) = self.disk.take() else { return };
         let mut moved = 0u64;
         let mut n = 0u32;
-        let mut lba = self.da;
+        let mut block = self.da;
         loop {
             // "Only bits <15:0> of the CLP can count", as on the CADR.
             let clp = self.clp & !0xffff | (self.clp.wrapping_add(n)) & 0xffff;
@@ -190,7 +192,7 @@ impl BlockDisk {
                 break;
             }
             let ok = if read {
-                match unit.read_lba(lba) {
+                match disk.read_block(block) {
                     Some(b) => {
                         main[page..page + BLOCK_WORDS].copy_from_slice(&b);
                         true
@@ -199,7 +201,7 @@ impl BlockDisk {
                 }
             } else {
                 let b: [u32; BLOCK_WORDS] = main[page..page + BLOCK_WORDS].try_into().unwrap();
-                unit.write_lba(lba, &b)
+                disk.write_block(block, &b)
             };
             if !ok {
                 self.past_end = true;
@@ -211,11 +213,11 @@ impl BlockDisk {
                 break;
             }
             n += 1;
-            lba += 1;
+            block += 1;
         }
         // The last block moved, or the one that failed.
-        self.da = lba;
-        self.unit = Some(unit);
+        self.da = block;
+        self.disk = Some(disk);
         self.done_at = self.now + moved * self.block_ns;
     }
 
@@ -238,10 +240,11 @@ impl BlockDisk {
         w.bool(self.past_end);
         w.bool(self.nxm);
         w.bool(self.bad_command);
-        w.opt(self.unit.as_ref(), |w, u| u.save(w));
+        w.opt(self.disk.as_ref(), |w, d| d.save(w));
     }
 
-    /// Back from a checkpoint, onto a disk whose pack is already attached.
+    /// Back from a checkpoint, onto a block-disk whose disk is already
+    /// attached.
     pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
         self.cmd = r.u32()?;
         self.clp = r.u32()?;
@@ -253,11 +256,11 @@ impl BlockDisk {
         self.past_end = r.bool()?;
         self.nxm = r.bool()?;
         self.bad_command = r.bool()?;
-        let has_unit = r.bool()?;
-        match (has_unit, self.unit.as_mut()) {
-            (true, Some(u)) => u.load(r)?,
+        let has_disk = r.bool()?;
+        match (has_disk, self.disk.as_mut()) {
+            (true, Some(d)) => d.load(r)?,
             (false, None) => {}
-            _ => return Err(crate::checkpoint::bad("block-disk: a pack in one and not the other")),
+            _ => return Err(crate::checkpoint::bad("block-disk: a disk in one and not the other")),
         }
         Ok(())
     }
