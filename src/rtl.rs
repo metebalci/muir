@@ -1926,14 +1926,14 @@ impl Rtl {
     /// `MBUSY.SYNC` is `MEMRQ` registered at the edge, and `MEMRQ` is low
     /// until the edge ending the first start raises `MEMSTART`, so the
     /// second start runs: at the edge ending it the first cycle goes out
-    /// with the second's direction and `VMA<7:0>`, and it is lost. The
-    /// board does exactly that
+    /// with the second's direction and `VMA<7:0>`, the second start asks
+    /// for nothing more, and the first is lost ([`Rtl::start_bus_cycle`]).
+    /// The board does exactly that
     /// (`on_the_board_a_start_right_after_a_start_loses_the_first`,
     /// `tests/chip.rs`). **QUUX holds it** instead, a `-WAIT` term of its
     /// own, `MEMSTART AND MEMOP`: the first cycle goes out at the next
     /// master clock edge, `MBUSY.SYNC` then holds the second start until
-    /// that cycle ends, and both land as written, as `micro`, which moves
-    /// every word at its start, has them
+    /// that cycle ends, and both land as written, as `micro` has them
     /// (`a_start_right_after_a_start_waits_for_it`,
     /// `tests/quux_device_registers.rs`). **Unverified** that muir-fpga's
     /// fabric holds it the same way.
@@ -2105,7 +2105,8 @@ impl Rtl {
         // 1D27, which is low with the cpu clock held: the edge that starts a
         // pending cycle also clears it.
         let memstart = self.memstart;
-        self.start_bus_cycle(r);
+        // The cpu clock is held, so `WRCYC` holds too.
+        self.start_bus_cycle(r, self.wrcyc);
         self.memstart = false;
         self.bus.mclk_edge(self.ns, self.bus_responder);
         self.mbusy_sync = (memstart && r.vmaok) || self.mbusy;
@@ -2119,10 +2120,44 @@ impl Rtl {
     /// the cpu clock.  A cycle started by the last microcycle therefore goes
     /// out at the next master clock edge whether or not the cpu clock runs
     /// again, which is what a halted or single-stepped machine sees.
-    fn start_bus_cycle(&mut self, r: &Read) {
+    ///
+    /// `wrcyc` is `WRCYC` as the edge leaves it, which is what the bus is
+    /// given: the Xbus's write line comes off the flip-flop through the bus
+    /// interface, which lets it "just pass straight through"
+    /// (`mit/cadr/busint.erface`). `READ IN PROGRESS`, clocked at the same
+    /// edge, takes `RDCYC` from before it.
+    ///
+    /// **A start in the microcycle right after a start** sees the first
+    /// cycle go out at the edge ending the second start's microcycle, with
+    /// the second's direction, and finds `MBUSY` up at the next: nothing more
+    /// is asked of the bus, one cycle goes out for the two, and the first
+    /// is lost. The map's latch at VMEMDR 1D14 is transparent while
+    /// `MEMSTART` is up, and `MEMSTART` is up through both microcycles, so
+    /// the cycle's page follows `VMA` to the second's; the address and a
+    /// write's `MD` are taken again here, and `READ IN PROGRESS` comes up
+    /// for a read. Measured on `chip`, the netlist bus interface and memory
+    /// boards: one grant, the second start's direction, page and word
+    /// (`on_the_board_a_start_right_after_a_start_loses_the_first`,
+    /// `a_start_right_after_a_start_goes_out_as_the_second`,
+    /// `a_fetch_right_after_a_write_loses_the_write`, `tests/chip.rs`).
+    /// QUUX never gets here: it holds the second start ([`Rtl::stall`]).
+    /// The bus interface keeps the responder it decoded for the first
+    /// address; **unverified** what the board does when the second start's
+    /// address is on another responder, which a start on main memory then
+    /// one on the Unibus would settle.
+    fn start_bus_cycle(&mut self, r: &Read, wrcyc: bool) {
         if self.memstart {
             self.lvmo = r.vmo;
-            if r.vmaok {
+            if r.vmaok && self.mbusy {
+                self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
+                self.bus_data = self.m.md;
+                if self.rdcyc {
+                    self.rd_in_progress = true;
+                    if !self.bus_acked {
+                        self.rd_finish_at = u64::MAX;
+                    }
+                }
+            } else if r.vmaok {
                 self.mbusy = true;
                 // The bus interface holds the address and, on a write, the
                 // word, until the cycle ends: `xspec.text.3` requires the
@@ -2133,8 +2168,8 @@ impl Rtl {
                 // start, and `MD` is written above before this runs, so an
                 // `MD` loaded in that microcycle is the word written: the
                 // board's too, `MD` passing through the bus interface with
-                // no latch (`chip_and_rtl_write_the_md_of_the_microcycle_after_the_start`,
-                // `tests/chip.rs`). `micro` writes the `MD` of the start.
+                // no latch (`the_engines_write_the_md_of_the_microcycle_after_the_start`,
+                // `tests/chip.rs`).
                 self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
                 self.bus_data = self.m.md;
                 let frame_buffer = crate::tv::BUFFER..crate::tv::BUFFER + self.m.tv.buffer_words();
@@ -2164,7 +2199,7 @@ impl Rtl {
                 if std::mem::take(&mut self.m.dma_written) {
                     self.bus.invalidate_cache();
                 }
-                self.bus.request_at(self.wrcyc, self.bus_addr);
+                self.bus.request_at(wrcyc, self.bus_addr);
                 self.bus_cycles += 1;
                 self.bus_written = false;
                 self.bus_spy = busint::unibus_address(self.bus_addr).and_then(spy::register);
@@ -2382,8 +2417,10 @@ impl Rtl {
 
         // page VCTL1: the memory cycle.  MEMPREPARE is the write phase's
         // level, MEMSTART its registered copy, so a cycle prepared here runs
-        // over the next microcycle.
-        self.start_bus_cycle(r);
+        // over the next microcycle. The bus is given `WRCYC` as this edge
+        // leaves it, below: a cycle going out at the edge that starts
+        // another takes the new one's direction.
+        self.start_bus_cycle(r, if r.memop { r.memwr } else { self.wrcyc });
         // `WRCYC` and `RDCYC` are one flip-flop: 1C23's 74S175 on `CLK2A`,
         // whose D comes off the 74S51 at 1D16 as
         // `NOT((MEMPREPARE AND -MEMWR) OR (-MEMPREPARE AND RDCYC))`.  With

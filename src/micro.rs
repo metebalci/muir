@@ -157,6 +157,9 @@ pub struct Micro {
     memstart: bool,
     /// A memory operation started in this microcycle, for `memstart`.
     memop: bool,
+    /// A write started and not yet gone out: the physical address, and
+    /// when it goes out ([`Micro::start_write`]).
+    write_out: Option<(u32, WriteOut)>,
     /// The PDL buffer write an instruction hands to the next microcycle's
     /// write phase, `PDLWRITED`: the index and the word.
     pdl_write: Option<(u16, u32)>,
@@ -223,6 +226,7 @@ impl Micro {
             halted: false,
             memstart: false,
             memop: false,
+            write_out: None,
             pdl_write: None,
             spc_write: None,
             opc: [0; 8],
@@ -268,6 +272,8 @@ impl Micro {
         if reset {
             self.m.reset_console_registers();
             self.m.tick = crate::machine::Tick::new();
+            // `-RESET` clears `MEMSTART` (`Rtl::reset`).
+            self.write_out = None;
         }
         if boot {
             self.m.vmaok = false;
@@ -441,12 +447,28 @@ impl Micro {
     /// VCTL1's `VMAS` multiplexer gives `IFETCH` the last word on `VMA`:
     /// `vmaenb = destvma | ifetch` and `vmas` is `LC<25:2>` whenever
     /// `IFETCH`, whatever the instruction wanted to put there.
+    ///
+    /// A write started in this microcycle goes out first, if the next
+    /// microcycle leaves `MD` alone, and one due goes out last, with `MD`
+    /// as this microcycle leaves it ([`Micro::start_write`]).
     fn fetch_and_clock(&mut self) {
+        if let Some((physical, WriteOut::Started)) = self.write_out {
+            if self.next_microcycle_holds_the_write() {
+                self.write_out = Some((physical, WriteOut::Next));
+            } else {
+                self.write_goes_out();
+            }
+        }
         if self.next_instrd {
             self.step_lc();
         }
         self.next_instrd = std::mem::take(&mut self.next_instr);
         self.clock_map_write();
+        match self.write_out {
+            Some((_, WriteOut::Due)) => self.write_goes_out(),
+            Some((physical, WriteOut::Next)) => self.write_out = Some((physical, WriteOut::Due)),
+            _ => {}
+        }
     }
 
     /// A pop whose word has bit 14 up: the counter steps and, if
@@ -747,9 +769,7 @@ impl Micro {
             }
             0o22 => {
                 self.m.vma = data;
-                self.start_cycle(true);
-                let md = self.m.md;
-                self.m.vm_write(self.m.vma, md);
+                self.start_write();
             }
             0o23 => {
                 self.m.vma = data;
@@ -763,9 +783,7 @@ impl Micro {
             }
             0o32 => {
                 self.m.md = data;
-                self.start_cycle(true);
-                let (vma, md) = (self.m.vma, self.m.md);
-                self.m.vm_write(vma, md);
+                self.start_write();
             }
             0o33 => {
                 self.m.md = data;
@@ -793,18 +811,139 @@ impl Micro {
     /// A memory cycle starts: the latch at VMEMDR 1D14 takes the map word
     /// of the page `VMA` is on, the cycle's direction is kept for the
     /// permission bits, and the clock is charged the mean wait for a
-    /// cycle. The word itself moves at once, as it always has
-    /// here: this engine has no bus to wait on, only a clock to keep. So a
-    /// write takes `MD` as it stands at the start, where the board, and
-    /// `rtl`, write an `MD` loaded in the microcycle after it
-    /// (`chip_and_rtl_write_the_md_of_the_microcycle_after_the_start`,
-    /// `tests/chip.rs`).
+    /// cycle. A read's word moves at once, this engine having no bus to
+    /// wait on, only a clock to keep; a write's waits for `MD`
+    /// ([`Micro::start_write`]).
+    ///
+    /// **A start in the microcycle right after a start** is two things.
+    /// On the CADR nothing holds it, and the one cycle that goes out is the
+    /// second's: the first cycle goes out at the edge ending the second
+    /// start's microcycle with its direction, page and word, `MBUSY` is up
+    /// by the second's own edge, and nothing more is asked of the bus. So
+    /// the first is lost here --- a write not written, a read's word never
+    /// in `MD` --- and a second write goes out at the end of its own
+    /// microcycle, the clock charged one cycle for the two. Measured on
+    /// `chip` and held with `rtl` (`on_the_board_a_start_right_after_a_start_loses_the_first`,
+    /// `a_start_right_after_a_start_goes_out_as_the_second`,
+    /// `a_fetch_right_after_a_write_loses_the_write`, `tests/chip.rs`).
+    /// **Not modelled here**: a first read lost has been read all the
+    /// same, so a device register a read changes is changed, where on the
+    /// board it is not. QUUX holds the second start until the first has
+    /// gone out, so a first write has gone out already, with `MD` as it
+    /// stood before the second start's microcycle
+    /// ([`Micro::next_microcycle_holds_the_write`]), and both land
+    /// (`a_start_right_after_a_start_waits_for_it`,
+    /// `tests/quux_device_registers.rs`; `a_start_held_behind_a_write_loads_md_after_the_write`
+    /// and `a_fetch_right_after_a_write_waits_for_it`,
+    /// `tests/quux_memory_port.rs`).
     fn start_cycle(&mut self, write: bool) {
+        let lost = self.memstart && self.m.geometry.unibus;
+        if lost {
+            self.write_out = None;
+            self.new_md_delay = 0;
+        } else if self.memstart {
+            self.write_goes_out();
+        }
         self.memop = true;
         self.lvmo = self.m.translate(self.m.vma).l2_data;
         self.wrcyc = write;
-        self.m.ns += self.memory_cycle_ns;
-        self.memory_cycles += 1;
+        if !lost {
+            self.m.ns += self.memory_cycle_ns;
+            self.memory_cycles += 1;
+        }
+    }
+
+    /// A write cycle starts at `VMA`: the cycle's bookkeeping as
+    /// [`Micro::start_cycle`] does it, and `-VMAOK` from the map at once,
+    /// for the page-fault check in the next microcycle. The word waits:
+    /// the cycle goes out at the edge ending the microcycle after the
+    /// start (`mit/cadr/busint.erface`: "The next clock (3) terminates
+    /// MEMSTART and starts XBUSRQ"), and `MD` reaches the bus through the
+    /// bus interface with no latch, the 8304 transceivers of
+    /// `mit/cadr1/lmdata.drw` --- "address, data, ack, and wrcyc lines
+    /// just pass straight through". So the word written is `MD` as it
+    /// stands after that microcycle, and an `MD` load later still waits
+    /// on `MBUSY.SYNC` for the cycle to end, as it does in `rtl`
+    /// (`the_engines_write_the_md_of_the_microcycle_after_the_start`,
+    /// `tests/chip.rs`; `a_write_carries_the_md_of_the_microcycle_after_its_start`,
+    /// `tests/quux_memory_port.rs`).
+    ///
+    /// When the next microcycle cannot change `MD`, its word is the one
+    /// `MD` holds already, and the write goes out at the end of the
+    /// start's own microcycle ([`Micro::fetch_and_clock`]): the moment this
+    /// engine has always given a device its write, which is what keeps its
+    /// clock on `rtl`'s less the waits it has no model of --- a mode
+    /// register write's speed bits are taken a microcycle after the start
+    /// on both (`micro_keeps_the_machines_periods`, `tests/cosim.rs`). One
+    /// right after a start, on the CADR, goes out at the end of its own
+    /// microcycle ([`Micro::start_cycle`]). **Not modelled**: `VMA<7:0>`
+    /// is also taken at the edge the cycle goes out on, so a `VMA` written
+    /// in the microcycle after the start moves the word on the board and
+    /// `rtl`, and not here.
+    fn start_write(&mut self) {
+        let after_a_start = self.memstart;
+        self.start_cycle(true);
+        let t = self.m.translate(self.m.vma);
+        self.m.vmaok = t.access_permitted && t.write_permitted;
+        if self.m.vmaok {
+            let when = if after_a_start && self.m.geometry.unibus {
+                WriteOut::Due
+            } else {
+                WriteOut::Started
+            };
+            self.write_out = Some((t.physical, when));
+        }
+    }
+
+    /// The write waiting to go out goes out, with `MD` as it stands.
+    fn write_goes_out(&mut self) {
+        if let Some((physical, _)) = self.write_out.take() {
+            let md = self.m.md;
+            self.m.bus_write(physical, md);
+        }
+    }
+
+    /// Whether a write started in this microcycle waits for the next: it
+    /// does when the next loads `MD`, whose word is then the one written,
+    /// and, on the CADR, when the next starts a cycle, which the write is
+    /// lost to ([`Micro::start_cycle`]). On QUUX a start there is held
+    /// until the write has gone out, `MEMSTART AND MEMOP`, `MD` load and
+    /// all, so the write goes out now with the `MD` it has.
+    ///
+    /// The next microcycle is the instruction in the pipeline, with the OA
+    /// registers ORed in, or nothing if it is nopped; what changes `MD` in
+    /// it is functional destinations 30 to 33 (34 to 37 decoding as those,
+    /// [`Micro::write_functional`]) and a read's word landing at its head;
+    /// what starts a cycle is destinations 21, 22, 31 and 32, and an
+    /// instruction fetch, `NEXT INSTRD`'s or a `DISPATCH`'s with `IR<24>`,
+    /// when `NEEDFETCH` is up (`IFETCH`, page VCTL1).
+    fn next_microcycle_holds_the_write(&self) -> bool {
+        let nopped = self.inhibit || self.m.clock_control.nop11;
+        let mut ir = if self.m.clock_control.idebug { self.m.debug_ir } else { self.p1.raw() };
+        if self.oal {
+            ir |= self.oa_low;
+        }
+        if self.oah {
+            ir |= self.oa_high << 26;
+        }
+        let next = Insn::new(ir);
+        let field = |pos: u32, len: u32| ((ir >> pos) & ((1u64 << len) - 1)) as u32;
+        let dest = match next.op() {
+            Op::Alu | Op::Byte if !nopped && field(25, 1) == 0 => {
+                let code = field(19, 5);
+                if code & 0o20 != 0 { code & !0o4 } else { code }
+            }
+            _ => 0,
+        };
+        let loads_md = self.new_md_delay == 1 || (0o30..=0o33).contains(&dest);
+        let fetches = self.needfetch()
+            && (self.next_instr
+                || (!nopped
+                    && next.op() == Op::Dispatch
+                    && field(24, 1) != 0
+                    && field(10, 2) != 2));
+        let starts = fetches || matches!(dest, 0o21 | 0o22 | 0o31 | 0o32);
+        if self.m.geometry.unibus { loads_md || starts } else { loads_md && !starts }
     }
 
     /// A read cycle starts at `VMA`: the cycle's bookkeeping as
@@ -844,6 +983,18 @@ impl Micro {
         }
         Ok(())
     }
+}
+
+/// When a write started on `micro` goes out ([`Micro::start_write`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteOut {
+    /// Started in this microcycle: out at its end, or at the end of the
+    /// next if that one holds it.
+    Started = 0,
+    /// Out at the end of the next microcycle.
+    Next = 1,
+    /// Out at the end of this microcycle.
+    Due = 2,
 }
 
 /// Rotate left, the machine's only shifter primitive.
@@ -1240,6 +1391,9 @@ impl Engine for Micro {
         // (`tests/oa_boot.rs`).
         self.oal = false;
         self.oah = false;
+        // `-RESET` clears `MEMSTART` (`Rtl::reset`): a write not yet gone
+        // out never does.
+        self.write_out = None;
     }
     fn save(&self, w: &mut crate::checkpoint::Writer) {
         let Micro {
@@ -1287,6 +1441,7 @@ impl Engine for Micro {
             halted,
             memstart,
             memop,
+            write_out,
             pdl_write,
             spc_write,
             opc,
@@ -1337,6 +1492,10 @@ impl Engine for Micro {
         w.bool(*halted);
         w.bool(*memstart);
         w.bool(*memop);
+        w.opt(*write_out, |w, (physical, when)| {
+            w.u32(physical);
+            w.u8(when as u8);
+        });
         w.opt(*pdl_write, |w, (adr, word)| {
             w.u16(adr);
             w.u32(word);
@@ -1391,6 +1550,21 @@ impl Engine for Micro {
         self.halted = r.bool()?;
         self.memstart = r.bool()?;
         self.memop = r.bool()?;
+        self.write_out = r.opt(|r| {
+            let physical = r.u32()?;
+            let when = match r.u8()? {
+                0 => WriteOut::Started,
+                1 => WriteOut::Next,
+                2 => WriteOut::Due,
+                k => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("a write going out at {k}"),
+                    ));
+                }
+            };
+            Ok((physical, when))
+        })?;
         self.pdl_write = r.opt(|r| Ok((r.u16()?, r.u32()?)))?;
         self.spc_write = r.opt(|r| Ok((r.u8()?, r.u32()?)))?;
         r.u16s_into(&mut self.opc)?;
@@ -1408,6 +1582,10 @@ impl Engine for Micro {
         let errhalt = self.m.mode.errstop && self.halted;
         let machrun = (self.sstep && !self.ssdone) || (self.srun && !errhalt);
         if !machrun {
+            // A write started before the halt goes out at the master
+            // clock's edge, which runs on: `MEMSTART` is clocked by
+            // `MCLK1A` (`Rtl::start_bus_cycle`).
+            self.write_goes_out();
             self.speedclk();
             self.m.ns += self.cycle_ns(false);
             self.mclk_edge();
@@ -1447,6 +1625,10 @@ impl Engine for Micro {
             && !stepping
             && muldiv::decode(self.p1.raw()) == Some(muldiv::Op::Div)
         {
+            // The master clock runs through the wait, and a write started
+            // in the microcycle before goes out at its first edge, ahead of
+            // the `DIV`'s own destination.
+            self.write_goes_out();
             for _ in 0..muldiv::DIV_CYCLES {
                 self.speedclk();
                 self.m.ns += self.cycle_ns(ilong);

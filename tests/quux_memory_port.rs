@@ -14,8 +14,8 @@ use muir::cache::{CacheConfig, MemoryTiming};
 use muir::engine::Engine;
 use muir::isa::Insn;
 use muir::isa::asm::{
-    ALU, ALWAYS, JUMP, MD, N, SETA, SETM, SRC_MD, START_READ, START_WRITE, a_dest, a_src, filler,
-    m_src, target,
+    ALU, ALWAYS, JUMP, MD, N, POPJ, SETA, SETM, SRC_MD, START_READ, START_WRITE, a_dest, a_src,
+    filler, m_src, target,
 };
 use muir::machine::{Geometry, Machine, bus_error};
 use muir::micro::Micro;
@@ -300,10 +300,9 @@ fn rtl_shows_the_bus_interface_s_acknowledgement_and_grant() {
 }
 
 /// **A write carries the `MD` of the microcycle after its start**, as on
-/// the CADR (`chip_and_rtl_write_the_md_of_the_microcycle_after_the_start`,
+/// the CADR (`the_engines_write_the_md_of_the_microcycle_after_the_start`,
 /// `tests/chip.rs`): QUUX's port takes the word at the same edge, and `MD`
-/// loaded a microcycle later is not written. `rtl` alone: `micro` writes
-/// the `MD` of the start.
+/// loaded a microcycle later is not written. `rtl` and `micro` alike.
 #[test]
 fn a_write_carries_the_md_of_the_microcycle_after_its_start() {
     let prom = [
@@ -317,11 +316,92 @@ fn a_write_carries_the_md_of_the_microcycle_after_its_start() {
         filler(),
         Insn::new(ALU | SETA | a_src(0o111) | MD),
     ];
-    let mut m = machine(Geometry::QUUX, &prom, &[0o1000, 0o1001]);
-    m.amem[0o110] = 0o1111;
-    m.amem[0o111] = 0o2222;
-    let mut r = Rtl::new(m);
+    let setup = || {
+        let mut m = machine(Geometry::QUUX, &prom, &[0o1000, 0o1001]);
+        m.amem[0o110] = 0o1111;
+        m.amem[0o111] = 0o2222;
+        m
+    };
+    let mut r = Rtl::new(setup());
     run(&mut r);
-    assert_eq!(r.machine().main[0o1000], 0o2222, "MD loaded in the microcycle after the start");
-    assert_eq!(r.machine().main[0o1001], 0o1111, "and not a microcycle later");
+    let mut e = Micro::new(setup());
+    run(&mut e);
+    for (name, m) in [("rtl", r.machine()), ("micro", e.machine())] {
+        assert_eq!(m.main[0o1000], 0o2222, "{name}: MD loaded in the microcycle after the start");
+        assert_eq!(m.main[0o1001], 0o1111, "{name}: and not a microcycle later");
+    }
+}
+
+/// **A start held behind a write's start loads its `MD` after the write
+/// has gone out.** A write of 1111 at 1000, then, in the next microcycle,
+/// `MD` <- 2222 with a read of 1000: QUUX's `-WAIT` term `MEMSTART AND
+/// MEMOP` holds the whole second microcycle, its `MD` load with it, until
+/// the write has gone out with 1111 (`a_start_right_after_a_start_waits_for_it`,
+/// `tests/quux_device_registers.rs`); the read then gets 1111. On `rtl`
+/// and `micro` alike.
+#[test]
+fn a_start_held_behind_a_write_loads_md_after_the_write() {
+    // Functional destination 31, `MD` with a read started.
+    let md_start_read = (0o31 << 19) | (0o37 << 14);
+    let prom = [
+        Insn::new(ALU | SETA | a_src(0o110) | MD),
+        Insn::new(ALU | SETM | m_src(1) | START_WRITE),
+        Insn::new(ALU | SETA | a_src(0o111) | md_start_read),
+        filler(),
+        Insn::new(ALU | SETM | SRC_MD | a_dest(0o200)),
+    ];
+    let setup = || {
+        let mut m = machine(Geometry::QUUX, &prom, &[0o1000]);
+        m.amem[0o110] = 0o1111;
+        m.amem[0o111] = 0o2222;
+        m
+    };
+    let mut r = Rtl::new(setup());
+    run(&mut r);
+    let mut e = Micro::new(setup());
+    run(&mut e);
+    for (name, m) in [("rtl", r.machine()), ("micro", e.machine())] {
+        assert_eq!(m.main[0o1000], 0o1111, "{name}: the write, with the MD of before the hold");
+        assert_eq!(m.amem[0o200], 0o1111, "{name}: the read, after it");
+    }
+}
+
+/// **An instruction fetch right after a write's start waits for the
+/// write**, as any start does on QUUX: a `POPJ` whose return asks for a
+/// fetch, on the write's own instruction, puts the fetch in the next
+/// microcycle, which also loads `MD` with 2222. The hold keeps that load
+/// back until the write has gone out with 1111, and the fetch then reads
+/// its word into `MD`. On the CADR the write is lost to the fetch
+/// (`a_fetch_right_after_a_write_loses_the_write`, `tests/chip.rs`). On
+/// `rtl` and `micro` alike.
+#[test]
+fn a_fetch_right_after_a_write_waits_for_it() {
+    let spc_push = (0o15 << 19) | (0o37 << 14);
+    let lc = (0o1 << 19) | (0o37 << 14);
+    let mut prom = vec![
+        Insn::new(ALU | SETA | a_src(0o110) | MD),
+        Insn::new(ALU | SETA | a_src(0o112) | spc_push),
+        Insn::new(ALU | SETA | a_src(0o113) | lc),
+        Insn::new(ALU | SETM | m_src(1) | START_WRITE | POPJ),
+        Insn::new(ALU | SETA | a_src(0o111) | MD),
+    ];
+    prom.resize(20, filler());
+    prom.extend([filler(), filler(), filler(), Insn::new(ALU | SETM | SRC_MD | a_dest(0o200))]);
+    let setup = || {
+        let mut m = machine(Geometry::QUUX, &prom, &[0o1000, 0o1020]);
+        m.amem[0o110] = 0o1111;
+        m.amem[0o111] = 0o2222;
+        // The return to 20, asking for a fetch, and LC at the second word.
+        m.amem[0o112] = 20 | (1 << 14);
+        m.amem[0o113] = m.mmem[2] << 2;
+        m
+    };
+    let mut r = Rtl::new(setup());
+    run(&mut r);
+    let mut e = Micro::new(setup());
+    run(&mut e);
+    for (name, m) in [("rtl", r.machine()), ("micro", e.machine())] {
+        assert_eq!(m.main[0o1000], 0o1111, "{name}: the write, with the MD of before the hold");
+        assert_eq!(m.amem[0o200], 0o1001020, "{name}: the fetched word");
+    }
 }

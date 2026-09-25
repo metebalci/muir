@@ -172,10 +172,12 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// `tests/quux_rtc.rs` holds, and version 43 QUUX's file device, its
 /// registers and its rings' indexes, which
 /// `a_checkpoint_waits_for_an_idle_device_and_keeps_its_registers` in
-/// `tests/quux_file_device.rs` holds.
+/// `tests/quux_file_device.rs` holds, and version 44 `micro`'s write not
+/// yet gone out, which `micro_carries_a_write_not_yet_gone_out_across_a_checkpoint`
+/// holds.
 #[test]
-fn the_format_is_version_43_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 43, "a new version needs its own tests");
+fn the_format_is_version_44_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 44, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -183,14 +185,14 @@ fn the_format_is_version_43_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 43u32.to_le_bytes());
+    assert_eq!(&good[at..at + 4], 44u32.to_le_bytes());
     for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 43"), "{err}");
+        assert!(err.contains("reads 44"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -733,4 +735,53 @@ fn micro_carries_its_late_writes_across_a_checkpoint() {
     assert_eq!(got(&resumed), got(&straight));
     assert_eq!(got(&straight).0, 0, "the stale PDL word");
     assert_eq!(got(&straight).2, !0, "the PDL word once landed");
+}
+
+/// **A `micro` checkpoint taken between a write's start and the edge it
+/// goes out on keeps the write.** `MD` <- 1111, a write at word 1000, and
+/// `MD` <- 2222 in the microcycle after it, checkpointed after the start:
+/// the resumed engine writes 2222, the `MD` of the microcycle after the
+/// start, as the one run straight through does
+/// (`the_engines_write_the_md_of_the_microcycle_after_the_start`,
+/// `tests/chip.rs`).
+#[test]
+fn micro_carries_a_write_not_yet_gone_out_across_a_checkpoint() {
+    use muir::isa::Insn;
+    use muir::isa::asm::{ALU, MD, SETM, START_WRITE, filler, m_src};
+    let mut prom = vec![filler(); 10];
+    prom.extend([
+        Insn::new(ALU | SETM | m_src(1) | MD),
+        Insn::new(ALU | SETM | m_src(2) | START_WRITE),
+        Insn::new(ALU | SETM | m_src(3) | MD),
+    ]);
+    prom.resize(512, filler());
+    let make = || {
+        let mut m = Machine::new();
+        m.load_prom(&prom);
+        m.l2_map[0] = (1 << 23) | (1 << 22) | 1;
+        m.mmem[1] = 0o1111;
+        m.mmem[2] = 0o10;
+        m.mmem[3] = 0o2222;
+        let mut e = Micro::new(m);
+        e.boot();
+        e
+    };
+    let mut straight = make();
+    while straight.executed() != Some(11) {
+        straight.step().unwrap();
+    }
+    let mut w = Writer::new();
+    straight.save(&mut w);
+    let body = w.finish();
+    let mut resumed = make();
+    let mut r = Reader::new(&body);
+    resumed.load(&mut r).unwrap();
+    r.done().unwrap();
+    assert_eq!(resumed.machine().main[0o410], 0, "not written at the checkpoint");
+    for _ in 0..10 {
+        straight.step().unwrap();
+        resumed.step().unwrap();
+    }
+    assert_eq!(straight.machine().main[0o410], 0o2222, "run straight through");
+    assert_eq!(resumed.machine().main[0o410], 0o2222, "resumed");
 }
