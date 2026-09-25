@@ -2320,29 +2320,81 @@ fn on_main_memory(program: &[muir::isa::Insn], m_words: &[u32]) -> muir::machine
     m
 }
 
-/// Runs `m` on the board for `cycles` generator cycles, and, when asked, on
-/// `rtl` for as many steps: the A memory words `park` of each.
-fn a_words_after(
-    m: &muir::machine::Machine,
-    cycles: usize,
-    park: &[usize],
-    rtl_too: bool,
-) -> (Vec<u32>, Option<Vec<u32>>) {
+/// What a run of `m` leaves, on one engine: the A memory words asked for,
+/// how many memory cycles went out, and, where the engine has a bus
+/// interface, each cycle's direction, `true` for a write.
+#[derive(Debug, PartialEq)]
+struct Left {
+    words: Vec<u32>,
+    cycles: u64,
+    writes: Option<Vec<bool>>,
+}
+
+/// Runs `m` on the board for `cycles` generator cycles, and on `rtl` and
+/// `micro` for as many steps: what each leaves, the A memory words `park`
+/// and the memory cycles that went out. On the board a cycle is a grant,
+/// the fall of `-MEMGRANT` at VCTL1 as the generator cycles sample it (a
+/// grant is held for longer than a generator cycle, until `-MEMACK`), and
+/// its direction `WRCYC` then, which the bus interface passes to the bus;
+/// on `rtl` a grant is its bus interface's, seen after a step, and the
+/// direction the one the interface was given.
+fn left_after(m: &muir::machine::Machine, cycles: usize, park: &[usize]) -> [Left; 3] {
     use muir::engine::Engine;
+    use muir::part::Level;
     let n = netlist::parse(NETLIST).unwrap();
     let (mut c, mut clk, mut far, mut r) = same_program(&n, m);
     let clk0 = cpu_clock(&n);
+    let grant = n.by_name_id("-MEMGRANT").unwrap();
+    let wrcyc = n.by_name_id("WRCYC").unwrap();
     let a = Ram::new(&c, &n, &MEMS[0]);
+    let mut writes = Vec::new();
+    let mut was = c.net(grant);
     for _ in 0..cycles {
         generator_cycle(&mut c, &mut far, &mut clk, clk0);
-    }
-    let rtl = rtl_too.then(|| {
-        for _ in 0..cycles {
-            r.step().unwrap();
+        let now = c.net(grant);
+        if was == Level::High && now == Level::Low {
+            writes.push(c.net(wrcyc) == Level::High);
         }
-        park.iter().map(|&p| r.machine().amem[p]).collect()
-    });
-    (park.iter().map(|&p| a.word(&c, p)).collect(), rtl)
+        was = now;
+    }
+    let chip = Left {
+        words: park.iter().map(|&p| a.word(&c, p)).collect(),
+        cycles: writes.len() as u64,
+        writes: Some(writes),
+    };
+    let rtl_before = r.bus_cycles();
+    let mut writes = Vec::new();
+    let mut was = false;
+    for _ in 0..cycles {
+        r.step().unwrap();
+        let b = r.busint().unwrap();
+        if !was && b.granted() {
+            writes.push(b.writing());
+        }
+        was = b.granted();
+    }
+    let rtl = Left {
+        words: park.iter().map(|&p| r.machine().amem[p]).collect(),
+        cycles: r.bus_cycles() - rtl_before,
+        writes: Some(writes),
+    };
+    let mut e = muir::micro::Micro::new(m.clone());
+    e.boot();
+    for _ in 0..cycles {
+        e.step().unwrap();
+    }
+    let micro = Left {
+        words: park.iter().map(|&p| e.machine().amem[p]).collect(),
+        cycles: e.memory_cycles(),
+        writes: None,
+    };
+    [chip, rtl, micro]
+}
+
+/// `micro` against the board: the words and the count, `micro` having no
+/// bus to give a direction to.
+fn same_but_the_bus(micro: &Left, chip: &Left) -> bool {
+    micro.words == chip.words && micro.cycles == chip.cycles
 }
 
 /// **A write carries the `MD` of the microcycle after its start**: loaded
@@ -2354,9 +2406,10 @@ fn a_words_after(
 /// `MEM<31:0>` and the bus, "address, data, ack, and wrcyc lines just pass
 /// straight through". A `DESTMEM` in that microcycle is not held, since
 /// `MBUSY.SYNC` is still low there, and the one after it is. Main memory
-/// the netlist boards, as the harness runs them.
+/// the netlist boards, as the harness runs them. `rtl` and `micro` write
+/// the same words.
 #[test]
-fn chip_and_rtl_write_the_md_of_the_microcycle_after_the_start() {
+fn the_engines_write_the_md_of_the_microcycle_after_the_start() {
     use microcode::*;
     use muir::isa::Insn;
     let mut p = vec![filler(); 120];
@@ -2373,9 +2426,11 @@ fn chip_and_rtl_write_the_md_of_the_microcycle_after_the_start() {
     p[91] = Insn::new(ALU | SETM | m_src(4) | START_READ);
     p[101] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o102));
     let m = on_main_memory(&p, &[0o1111, 0o10, 0o2222, 0o11]);
-    let (chip, rtl) = a_words_after(&m, 200, &[0o101, 0o102], true);
-    assert_eq!(chip, [0o2222, 0o1111], "the board");
-    assert_eq!(rtl, Some(chip), "rtl");
+    let [chip, rtl, micro] = left_after(&m, 200, &[0o101, 0o102]);
+    let writes = Some(vec![true, true, false, false]);
+    assert_eq!(chip, Left { words: vec![0o2222, 0o1111], cycles: 4, writes }, "the board");
+    assert_eq!(rtl, chip, "rtl");
+    assert!(same_but_the_bus(&micro, &chip), "micro: {micro:?}");
 }
 
 /// **On the board, a start in the microcycle right after a start loses the
@@ -2383,11 +2438,10 @@ fn chip_and_rtl_write_the_md_of_the_microcycle_after_the_start() {
 /// microcycle. The read gets 11's word, and 10 and 11 keep theirs: no term
 /// of `-WAIT` holds the second start, `MBUSY.SYNC` being `MEMRQ` registered
 /// at the edge that raises `MEMSTART`, and the cycle that goes out takes
-/// the second start's direction and `VMA<7:0>`. `rtl` gets the same words
-/// in a release build, but it asks the bus interface for a second cycle
-/// while the first is running, which its debug assertion refuses, so it is
-/// not run here; QUUX holds the second start
-/// (`a_start_right_after_a_start_waits_for_it`,
+/// the second start's direction and `VMA<7:0>`. One cycle goes out for the
+/// two starts: the second `MEMSTART` finds `MBUSY` already up and asks for
+/// nothing more. `rtl` and `micro` do the same. QUUX holds the second
+/// start instead (`a_start_right_after_a_start_waits_for_it`,
 /// `tests/quux_device_registers.rs`).
 #[test]
 fn on_the_board_a_start_right_after_a_start_loses_the_first() {
@@ -2409,8 +2463,116 @@ fn on_the_board_a_start_right_after_a_start_loses_the_first() {
     p[101] = Insn::new(ALU | SETM | m_src(4) | START_READ);
     p[120] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o103));
     let m = on_main_memory(&p, &[0o1111, 0o10, 0o2222, 0o11, 0o5555, 0o6666]);
-    let (chip, _) = a_words_after(&m, 300, &[0o101, 0o102, 0o103], false);
-    assert_eq!(chip, [0o6666, 0o5555, 0o6666], "the read of 11, then 10 and 11 as they were");
+    let [chip, rtl, micro] = left_after(&m, 300, &[0o101, 0o102, 0o103]);
+    let writes = Some(vec![true, true, false, false, false]);
+    assert_eq!(
+        chip,
+        Left { words: vec![0o6666, 0o5555, 0o6666], cycles: 5, writes },
+        "the read of 11, then 10 and 11 as they were"
+    );
+    assert_eq!(rtl, chip, "rtl");
+    assert!(same_but_the_bus(&micro, &chip), "micro: {micro:?}");
+}
+
+/// **The one cycle two starts in a row make is the second's, page and
+/// all**: a start at 10 on virtual page 0 and one at 411 on page 1 in the
+/// next microcycle, a read then a write and a write then a read. The cycle
+/// that goes out is a write of `MD` as it stands at the end of the second
+/// start's microcycle at page 1's 11, or a read of it: the map's latch at
+/// VMEMDR 1D14 is transparent while `MEMSTART` is up, and `MEMSTART` stays
+/// up through the second start's microcycle, following `VMA`. A read lost
+/// loads nothing into `MD`. Page 0's words, and page 1's 10, are as they
+/// were. `rtl` and `micro` do the same.
+#[test]
+fn a_start_right_after_a_start_goes_out_as_the_second() {
+    use microcode::*;
+    use muir::isa::Insn;
+    for (first, second, md, p1_11) in
+        [(START_READ, START_WRITE, 0o1111, 0o1111), (START_WRITE, START_READ, 0o7777, 0o7777)]
+    {
+        let mut p = vec![filler(); 260];
+        // 5555 at page 0's 10, 6666 at its 11, 4444 at page 1's 10 and
+        // 7777 at its 11, each write on its own.
+        for (k, (md, vma)) in [(5, 2), (6, 7), (8, 9), (10, 4)].into_iter().enumerate() {
+            p[20 * k] = Insn::new(ALU | SETM | m_src(md) | MD);
+            p[20 * k + 1] = Insn::new(ALU | SETM | m_src(vma) | START_WRITE);
+        }
+        // MD <- 1111, the start at page 0's 10, the start at page 1's 11.
+        p[100] = Insn::new(ALU | SETM | m_src(1) | MD);
+        p[101] = Insn::new(ALU | SETM | m_src(2) | first);
+        p[102] = Insn::new(ALU | SETM | m_src(4) | second);
+        p[130] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o110));
+        for (k, vma) in [2, 7, 9, 4].into_iter().enumerate() {
+            p[150 + 25 * k] = Insn::new(ALU | SETM | m_src(vma) | START_READ);
+            p[170 + 25 * k] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o101 + k as u64));
+        }
+        let mut m = on_main_memory(
+            &p,
+            &[0o1111, 0o10, 0, 0o411, 0o5555, 0o6666, 0o11, 0o4444, 0o410, 0o7777],
+        );
+        m.l2_map[1] = (1 << 23) | (1 << 22) | 2;
+        let [chip, rtl, micro] = left_after(&m, 420, &[0o110, 0o101, 0o102, 0o103, 0o104]);
+        let what =
+            if first == START_READ { "a read, then a write" } else { "a write, then a read" };
+        let mut writes = vec![true; 4];
+        writes.push(second == START_WRITE);
+        writes.extend([false; 4]);
+        assert_eq!(
+            chip,
+            Left {
+                words: vec![md, 0o5555, 0o6666, 0o4444, p1_11],
+                cycles: 9,
+                writes: Some(writes)
+            },
+            "{what}: MD, then page 0's 10 and 11 and page 1's 10 and 11, on the board"
+        );
+        assert_eq!(rtl, chip, "{what}: rtl");
+        assert!(same_but_the_bus(&micro, &chip), "{what}: micro: {micro:?}");
+    }
+}
+
+/// **An instruction fetch right after a write's start is a start after a
+/// start too**: `IFETCH` is a term of `MEMOP` on page VCTL1, so a `POPJ`
+/// whose return asks for a fetch, on the write's own instruction, puts
+/// the fetch in the next microcycle, and the write is lost to it. The
+/// fetch reads its word into `MD`, 10 keeps its word, and one cycle goes
+/// out for the two starts. `rtl` and `micro` do the same; on QUUX the
+/// fetch waits for the write
+/// (`a_fetch_right_after_a_write_waits_for_it`, `tests/quux_memory_port.rs`).
+#[test]
+fn a_fetch_right_after_a_write_loses_the_write() {
+    use microcode::*;
+    use muir::isa::Insn;
+    let spc_push = (0o15 << 19) | (0o37 << 14);
+    let lc = (0o1 << 19) | (0o37 << 14);
+    let mut p = vec![filler(); 120];
+    // 5555 at 10 and 3333 at 20, each write on its own.
+    p[0] = Insn::new(ALU | SETM | m_src(4) | MD);
+    p[1] = Insn::new(ALU | SETM | m_src(2) | START_WRITE);
+    p[20] = Insn::new(ALU | SETM | m_src(7) | MD);
+    p[21] = Insn::new(ALU | SETM | m_src(8) | START_WRITE);
+    // A return to p[60] that asks for a fetch, and LC at word 20.
+    p[40] = Insn::new(ALU | SETM | m_src(5) | spc_push);
+    p[41] = Insn::new(ALU | SETM | m_src(6) | lc);
+    // MD <- 1111, a write at 10 with the POPJ, then MD <- 2222 in the
+    // microcycle the fetch is in.
+    p[42] = Insn::new(ALU | SETM | m_src(1) | MD);
+    p[43] = Insn::new(ALU | SETM | m_src(2) | START_WRITE | POPJ);
+    p[44] = Insn::new(ALU | SETM | m_src(3) | MD);
+    p[70] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o110));
+    p[71] = Insn::new(ALU | SETM | m_src(2) | START_READ);
+    p[90] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o101));
+    let ret = (20 + 60) | (1 << 14);
+    let m = on_main_memory(&p, &[0o1111, 0o10, 0o2222, 0o5555, ret, 0o20 << 2, 0o3333, 0o20]);
+    let [chip, rtl, micro] = left_after(&m, 300, &[0o110, 0o101]);
+    let writes = Some(vec![true, true, false, false]);
+    assert_eq!(
+        chip,
+        Left { words: vec![0o3333, 0o5555], cycles: 4, writes },
+        "the fetched word in MD, and 10 as it was, on the board"
+    );
+    assert_eq!(rtl, chip, "rtl");
+    assert!(same_but_the_bus(&micro, &chip), "micro: {micro:?}");
 }
 
 /// **`PROG.BOOT`, bit 7 of a mode-register write, reboots the machine.**  The

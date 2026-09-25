@@ -1285,7 +1285,7 @@ mod engines {
             Insn::new(ALU | SETM | m_src(3) | START_WRITE),
             // An `MD` loaded in the microcycle after a start is the word
             // written, on the CADR and QUUX alike: `tests/chip.rs`,
-            // `chip_and_rtl_write_the_md_of_the_microcycle_after_the_start`.
+            // `the_engines_write_the_md_of_the_microcycle_after_the_start`.
             filler(),
             Insn::new(ALU | SETM | m_src(2) | MD),
             Insn::new(ALU | SETM | m_src(1) | START_WRITE),

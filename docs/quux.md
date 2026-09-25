@@ -610,20 +610,28 @@ Holds and write pulses:
   `tests/dispatch_write_order.rs`).
 - A memory cycle goes out at the edge ending the microcycle after its
   start, and a write carries `MD` as it stands then: an `MD` loaded in
-  that microcycle is the word written, on the CADR as on QUUX; one loaded
-  later waits on `MBUSY.SYNC` for the cycle to end
-  (`chip_and_rtl_write_the_md_of_the_microcycle_after_the_start` in
+  that microcycle is the word written, on the CADR as on QUUX and on
+  `rtl` and `micro` alike; one loaded later waits on `MBUSY.SYNC` for the
+  cycle to end
+  (`the_engines_write_the_md_of_the_microcycle_after_the_start` in
   `tests/chip.rs`, `a_write_carries_the_md_of_the_microcycle_after_its_start`
   in `tests/quux_memory_port.rs`).
 - **QUUX holds a memory start in the microcycle right after a start**, a
   `-WAIT` term of its own, `MEMSTART AND MEMOP`, until the first cycle has
-  gone out and ended; both then land as written
-  (`a_start_right_after_a_start_waits_for_it` in
-  `tests/quux_device_registers.rs`). On the CADR nothing holds it: the
-  cycle that goes out takes the second start's direction and `VMA<7:0>`,
-  and the first is lost
-  (`on_the_board_a_start_right_after_a_start_loses_the_first` in
-  `tests/chip.rs`). **Unverified** that muir-fpga's fabric holds it.
+  gone out and ended; both then land as written, a first write with the
+  `MD` from before the held microcycle, an instruction fetch held the
+  same way (`a_start_right_after_a_start_waits_for_it` in
+  `tests/quux_device_registers.rs`,
+  `a_start_held_behind_a_write_loads_md_after_the_write` and
+  `a_fetch_right_after_a_write_waits_for_it` in
+  `tests/quux_memory_port.rs`). On the CADR nothing holds it: one cycle
+  goes out for the two starts, with the second start's direction, page
+  and `VMA<7:0>`, and the first is lost, measured on `chip` and held on
+  `rtl` and `micro`
+  (`on_the_board_a_start_right_after_a_start_loses_the_first`,
+  `a_start_right_after_a_start_goes_out_as_the_second` and
+  `a_fetch_right_after_a_write_loses_the_write` in `tests/chip.rs`).
+  **Unverified** that muir-fpga's fabric holds it.
 - **QUUX's definition**: a RAM read in the cycle its own write pulse fires
   --- the dispatch word a dispatch writes, the map word right after a map
   store --- gives the word from before the write
