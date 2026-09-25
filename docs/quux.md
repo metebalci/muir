@@ -1,9 +1,9 @@
 # QUUX
 
 QUUX is the CADR evolved: the same processor, buses and boards, changed where
-a change pays for itself. It is chosen with `--machine quux` in muir, and by
-the same flag in muir-fpga and muir-sys; `--machine cadr`, the default, is
-the CADR as MIT built it. Back to [the manual](manual.md).
+a change pays for itself. In muir it is the `quux` executable, and `cadr`
+is the CADR as MIT built it; muir-fpga and muir-sys choose it with
+`--machine quux`. Back to [the manual](manual.md).
 
 This page says where QUUX differs from the CADR. Everything it does not
 mention is the CADR's.
@@ -22,9 +22,9 @@ differences, what it needed:
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The clocks in the processor: the 60 Hz tick, the interval timer, the microsecond clock | nothing | none enables the tick yet: the clock handler is still entered from the display's interrupt; the microsecond clock is still read on the Unibus | nothing | nothing |
-| Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002: the partitions, the band and the disk routines by block number | block-disk is QUUX's only disk, the default there; the CADR's controller is refused on QUUX |
+| Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002: the partitions, the band and the disk routines by block number | block-disk is `quux`'s only disk; `--disk-controller`, the CADR's controller, is `cadr`'s |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
-| No delay lines: `sync`, always | nothing | nothing | nothing | `--sync-cycle-ticks`; `--timing-model cadr` and `fpga` refused on QUUX |
+| No delay lines: `sync`, always | nothing | nothing | nothing | `--sync-cycle-ticks`; `--timing-model` is `cadr`'s |
 | No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and 1000 never do either, counted (below) | nothing | nothing |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
 | MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
@@ -290,7 +290,7 @@ tap the mode register's `SPEED1` and `SPEED0` choose (`mit/cadr/ir.bits`:
 145 ns at normal speed, which muir-fpga's fabric replays as 15 ticks. QUUX
 has none of it: no taps, no speed bits (a write of the mode register's bits
 1 and 0 goes nowhere; its other bits are unchanged), and no timing but
-`sync`. `--timing-model cadr` and `fpga` are refused on QUUX, and an engine
+`sync`. `--timing-model` is `cadr`'s alone, and an engine
 made for a QUUX machine starts on four ticks: `rtl` refuses another timing
 on it, and `micro`'s clock counts the same ticks.
 
@@ -425,8 +425,8 @@ that saves nothing, and sooner, the invalidation, and a checkpoint.
 
 ## Block-disk
 
-**QUUX's disk is block-disk**, and nothing else: a QUUX run has it
-without `--disk-controller`, and the CADR's controller is refused
+**QUUX's disk is block-disk**, and nothing else: a `quux` run has it,
+and `--disk-controller`, the CADR's controller, is `cadr`'s alone
 (`quux_s_disk_is_block_disk_only` in `tests/cli.rs`). It is the CADR
 disk controller's programming interface with the drive's geometry taken
 out. Blocks are numbered from the start of the pack, and each is 256 words,
@@ -654,8 +654,8 @@ Holds and write pulses:
 **QUUX's display is MONO TV**, a monochrome frame buffer: 1280 by 1024 unless
 `--mono-tv-size` gives another size, one bit a pixel. It is the frame buffer and one register, and nothing else: no sync
 program, no color map, and no interrupt, the machine's clock being the
-processor's tick. `--tv-board mono-tv`: QUUX's only display, the CADR's two
-boards being refused on QUUX, and refused on the CADR.
+processor's tick. It is `quux`'s only display, and `--tv-board`, the choice
+between the CADR's two boards, is `cadr`'s alone.
 
 | | |
 |---|---|
@@ -775,7 +775,7 @@ stays MIT's, and so does `diskpack`, which is the CADR's.
 `tests/quux_prom.rs` holds the start at 36000, the PROM read only, the RAM
 below live with no disable, the CADR's overlay, and the file read from
 36000 in partition order; `tests/system_1002.rs` boots System 1002 on it.
-`--prom` on QUUX takes a file in partition order assembled at 36000, and
+`--prom` on `quux` takes a file in partition order assembled at 36000, and
 refuses one in MIT's order or assembled at 0.
 
 QUUX runs only muir-sys's latest System 1002 band. The PROMs assembled at
@@ -1089,7 +1089,7 @@ interrupt control and error status at `766040`-`766044`, the Unibus
 interrupt), the diagnostic registers as the machine's own (the spy stays
 the host's port: muir's prompt, the FPGA's AXI face), and the debug cable,
 a Unibus master: `--debug-cable-listen`, `--debug-cable-connect` and
-`--debug-in-process` are refused on QUUX, and a QUUX run has no DBGIN
+`--debug-in-process` are `cadr`'s alone, and a `quux` run has no DBGIN
 connector. A QUUX debug design of its own is a later contract. The CADR
 keeps all of it: CC and the two-machine lashup are its acceptance test.
 
@@ -1153,5 +1153,5 @@ settle it.
 
 ## Not modeled
 
-`chip` is the CADR's boards, netlist for netlist, and QUUX has none: a run
-that asks for both is refused.
+`chip` is the CADR's boards, netlist for netlist, and QUUX has none:
+`--chip` is `cadr`'s alone.

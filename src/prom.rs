@@ -9,7 +9,7 @@
 //! System 100 and System 304.  [`boot_prom`]
 //! is that file's words in the 1K the board decodes as PROM
 //! ([`PROM_WORDS`]).  [`parse_mcr`] reads a PROM of one's own out of the
-//! same kind of file, which is what `muir --prom` hands it.
+//! same kind of file, which is what `cadr --prom` hands it.
 //!
 //! What the PROM *chips* hold is not a control store word.  A bank of six
 //! 74S472s, 512 by 8 each, holds 48 bits a word and the microinstruction is

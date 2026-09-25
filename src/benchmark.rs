@@ -406,7 +406,7 @@ pub fn engine_vma<E: Engine>(e: &mut E) -> u32 {
 /// interface, main memory, the I/O board and the display, with thirty-two
 /// memory boards and no pack.
 ///
-/// **Not every board `muir --chip` runs**, which now includes MIT's disk
+/// **Not every board `cadr --chip` runs**, which now includes MIT's disk
 /// controller: there is no disk board here at all, and none of these
 /// programs touches a pack. What the figures measure is the datapath.
 pub fn chip(
@@ -424,7 +424,7 @@ pub fn chip(
 /// ([`crate::netlist::parse_color_tv`]), with the model fitted behind the
 /// buses beside it as the run does, and MIT's disk controller parsed for
 /// the multiplexor ([`crate::netlist::parse_with_multiplexor`]) with the
-/// multiplexor on its cable --- what `muir --chip --color-tv
+/// multiplexor on its cable --- what `cadr --chip --color-tv
 /// --disk-multiplexor` runs, for the worst-case figure. No pack is on the
 /// drive, and the programs never ask for one.
 pub fn chip_with(
@@ -448,7 +448,7 @@ pub fn chip_with(
     (Chip::new(cpu), Behavioral::new(), far)
 }
 
-/// The program into the board's PROM, and the board booted as `muir --chip`
+/// The program into the board's PROM, and the board booted as `cadr --chip`
 /// boots it: the far end joined, the button, the start-up microcycles before
 /// the PC moves.
 pub fn boot_chip(
@@ -478,7 +478,7 @@ pub fn boot_chip(
     }
 }
 
-/// One microcycle of the board, as `muir --chip` runs it: however many clock
+/// One microcycle of the board, as `cadr --chip` runs it: however many clock
 /// transitions it takes for the phase to wrap, the far end taking its own
 /// turns in between.
 fn chip_step(c: &mut Chip, far: &mut FarEnd, clk: &mut Behavioral) {

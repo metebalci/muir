@@ -64,7 +64,7 @@ pub mod bus_error {
 }
 
 /// The widths of the map and the PDL buffer: what differs between the
-/// machines `--machine` chooses, `cadr` and `quux`.
+/// machines the two executables are, `cadr` and `quux`.
 ///
 /// The CADR's are MIT's (`SIZE-OF-HARDWARE-LEVEL-1-MAP`, `-LEVEL-2-MAP` and
 /// `-PDL-BUFFER` in System 100's `sys/cold/qcom.lisp`; the netlist's RAMs,
@@ -1667,9 +1667,11 @@ impl Machine {
         w.u64(*ns);
     }
 
-    /// Back from a checkpoint, into a machine built as the flags say: the
-    /// same memory, the same pack under it, the same Chaosnet on it.
-    pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+    /// The first part of [`Machine::load`]: everything a checkpoint holds
+    /// up to and including the machine's geometry, which is how
+    /// [`Machine::checkpointed_geometry`] learns whose a checkpoint is
+    /// without reading the rest of it.
+    fn load_to_geometry(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
         fn insns(r: &mut crate::checkpoint::Reader, into: &mut [Insn]) -> std::io::Result<()> {
             let mut raw = vec![0u64; into.len()];
             r.u64s_into(&mut raw)?;
@@ -1740,6 +1742,25 @@ impl Machine {
                 )));
             }
         }
+        Ok(())
+    }
+
+    /// **Which machine a `micro` or `rtl` checkpoint's body was written
+    /// of**, the CADR or a QUUX, read as [`Machine::load`] reads it and no
+    /// further: both engines' bodies begin with the machine, and its
+    /// geometry is read before main memory. So a resume can say whose a
+    /// checkpoint is before it builds anything, or before an engine's
+    /// refusal would say something less to the point.
+    pub fn checkpointed_geometry(body: &[u8]) -> std::io::Result<Geometry> {
+        let mut m = Machine::with_memory_boards(1);
+        m.load_to_geometry(&mut crate::checkpoint::Reader::new(body))?;
+        Ok(m.geometry)
+    }
+
+    /// Back from a checkpoint, into a machine built as the flags say: the
+    /// same memory, the same pack under it, the same Chaosnet on it.
+    pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        self.load_to_geometry(r)?;
         r.u32s_into(&mut self.l2_map)?;
         let boards = r.u32()? as usize;
         if boards != self.memory_boards() {

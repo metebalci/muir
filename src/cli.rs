@@ -1,42 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! muir: the simulator. One engine at a time from the boot PROM, a pack on
-//! the disk controller's cable, and microcycles per second against the
-//! machine's own rate.
+//! The command line of muir's two executables, `cadr` and `quux`: one
+//! engine at a time from the boot PROM, a pack on the disk controller's
+//! cable, and microcycles per second against the machine's own rate.
+//! **The executable is the machine**: `cadr` is MIT's CADR as built and
+//! `quux` the CADR evolved, and each takes only the flags that mean
+//! something on its own machine. [`run`] is both, given the machine;
+//! `src/bin/cadr.rs` and `src/bin/quux.rs` are each one call of it.
 //!
 //! The reference is the machine's own microcycle, read off the delay-line
 //! taps: 145 ns at normal speed, so 6.9 M microcycles/s.
 //!
-//!     muir [--micro|--rtl|--chip] [--chaos-address <address>]
-//!          [--chaos-udp [<endpoint>]]
-//!          [--chaos-udp-default-peer <host>[:<port>]]
-//!          [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
-//!          [--color-terminal [<endpoint>]] [--color-tv [netlist|model]]
-//!          [--color-tv-capture <gif>]
-//!          [--debug-cable-connect [<endpoint>|0x<address>]]
-//!          [--debug-cable-listen [<endpoint>]] [--debug-in-process]
-//!          [--debuggee-disk-pack <image>[,<unit>][,ro]]
-//!          [--debuggee-terminal [<endpoint>]]
-//!          [--disk-controller netlist|model|block-disk]
-//!          [--disk-pack <image>[,<unit>][,ro]]
-//!          [--file-root [<name>=]<folder>[,ro]] [--glass-tty [<endpoint>][,ro]]
-//!          [--io-board netlist|model]
-//!          [--machine cadr|quux]
-//!          [--main-memory netlist|model] [--main-memory-boards <n>]
-//!          [--no-debug-cable-listen] [--no-pace] [--pace]
-//!          [--prom <file>] [--resume <file>] [--rtc <unix-seconds>|host]
-//!          [--serial <endpoint>]
-//!          [--stop-after <microcycles>]
-//!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
-//!          [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>] [--cache <words>]
-//!          [--memory-timing <r>,<w>]
-//!          [--tv netlist|model] [--tv-board simple-tv|lispm-tv|mono-tv]
-//!          [--tv-capture <gif>] [--tv-capture-no-time]
+//! `cadr --help` and `quux --help` list the flags each takes: its usage
+//! and the entries of `HELP` that are its own.
 //!
-//! `cargo build --release` leaves it at `target/release/muir`, and `cargo
-//! install --path .` puts it on the path. The programs in `examples/` stay
-//! `cargo run --example` programs.
+//! `cargo build --release` leaves them at `target/release/cadr` and
+//! `target/release/quux`, and `cargo install --path .` puts both on the
+//! path. The programs in `examples/` stay `cargo run --example` programs.
 //!
 //! The engine flags are mutually exclusive and `--rtl` is the default,
 //! which is the engine for ordinary use: the models throughout, at about
@@ -148,7 +129,7 @@
 //!
 //! **What a viewer types waits for the machine's next look, and a queue
 //! that fills loses the oldest keystroke** ---
-//! [`muir::terminal::INPUT_BACKLOG`] events of it --- so that a machine
+//! [`crate::terminal::INPUT_BACKLOG`] events of it --- so that a machine
 //! that has stopped reading its keyboard cannot grow a queue for the
 //! length of the run. **A run says what went**: once, from the first
 //! keystroke it loses, and every time the count changes under
@@ -156,7 +137,7 @@
 //! type. A keystroke lost in silence is a character that does not type
 //! with nothing to tell it from a mapping that has no binding for the key.
 //! Below the terminal the keyboard holds a queue of its own,
-//! [`muir::terminal::keyboard::BACKLOG`] words the machine takes one at a
+//! [`crate::terminal::keyboard::BACKLOG`] words the machine takes one at a
 //! time, and a keystroke it has no room for is refused whole and said the
 //! same way: once unasked, and as itself under the trace, which used to
 //! call it sent. The pointer's queue loses its oldest too and nothing is
@@ -219,7 +200,7 @@
 //! the fabric: `boot`, `hold`, `continue`, `step`, `pc`, `reg`, `amem`,
 //! `mmem`, `dmem`, `pdl`, `spc`, `screenshot`, `startcapture`,
 //! `endcapture`, `info`, `checkpoint`, `quit` and `help`,
-//! [`muir::prompt`], read from a pipe or from a terminal muir is in the
+//! [`crate::prompt`], read from a pipe or from a terminal muir is in the
 //! foreground of, and acted on between two microcycles. An end of the
 //! cable refuses `checkpoint` and the capture commands, saying why, as
 //! the command line refuses `--checkpoint` and `--tv-capture` there; the
@@ -283,33 +264,33 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use muir::cable::{Boards, DebugIn, FarEnd};
-use muir::capture::{ColorRecorder, Recorder, local_time, wall_clock};
-use muir::checkpoint::Checkpoint;
-use muir::chip::Chip;
-use muir::clock::{Behavioral, Clock, TimingModel};
-use muir::disk_unit::{Geometry, Unit};
-use muir::engine::Engine;
-use muir::isa::Insn;
-use muir::lashup::{CableEnd, Connector, FreeRunning, Lashup, Plug, Remote, Turn};
-use muir::machine::Machine;
-use muir::micro::Micro;
-use muir::netlist;
-use muir::part::Level;
-use muir::prompt::{Command, Memory, NetName};
-use muir::rtl::Rtl;
-use muir::serial::Endpoint;
-use muir::terminal::glass_tty::{Glass, GlassTty};
-use muir::terminal::keyboard::{BootKeys, Keyboard, Mapping};
-use muir::terminal::mouse::Mouse;
-use muir::terminal::{Frame, Terminal};
+use crate::cable::{Boards, DebugIn, FarEnd};
+use crate::capture::{ColorRecorder, Recorder, local_time, wall_clock};
+use crate::checkpoint::Checkpoint;
+use crate::chip::Chip;
+use crate::clock::{Behavioral, Clock, TimingModel};
+use crate::disk_unit::{Geometry, Unit};
+use crate::engine::Engine;
+use crate::isa::Insn;
+use crate::lashup::{CableEnd, Connector, FreeRunning, Lashup, Plug, Remote, Turn};
+use crate::machine::Machine;
+use crate::micro::Micro;
+use crate::netlist;
+use crate::part::Level;
+use crate::prompt::{Command, Memory, NetName};
+use crate::rtl::Rtl;
+use crate::serial::Endpoint;
+use crate::terminal::glass_tty::{Glass, GlassTty};
+use crate::terminal::keyboard::{BootKeys, Keyboard, Mapping};
+use crate::terminal::mouse::Mouse;
+use crate::terminal::{Frame, Terminal};
 // Which display board `--tv-board` puts on the backplane, on every engine.
 // The model's own type, since the board a machine has is the machine's and
 // not this program's: it names the netlist `chip` builds the backplane
 // with and the board every engine's model answers as, and a checkpoint
 // carries it so that a resume onto the other one is refused by the flag's
 // name.
-use muir::tv::Board as TvBoard;
+use crate::tv::Board as TvBoard;
 
 /// How often the terminal is given a turn: about thirty times a second.
 /// The machine's own raster is 64.7 Hz, so a viewer sees every other frame
@@ -636,7 +617,7 @@ fn bind_cable(at: CableAt) -> Result<std::net::TcpListener, String> {
 /// Where `--debug-cable-connect` puts the debuggee: at an endpoint on the
 /// network, which is another program speaking the cable's frames, or
 /// behind a window of memory-mapped registers, which is a CADR in FPGA
-/// fabric on the board muir is running on ([`muir::fabric`]).
+/// fabric on the board muir is running on ([`crate::fabric`]).
 ///
 /// One flag rather than two, because it is one concept --- this machine is
 /// the debugger and here is the debuggee --- and the argument says which
@@ -697,7 +678,7 @@ fn pack_spec(arg: &str) -> Result<Pack, String> {
                 return Err("ro or rw twice".into());
             }
         } else if !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()) {
-            let u = part.parse().ok().filter(|&u| u < muir::disk_controller::UNITS);
+            let u = part.parse().ok().filter(|&u| u < crate::disk_controller::UNITS);
             let u = u.ok_or_else(|| format!("unit {part} is not one of 0 to 7"))?;
             if unit.replace(u).is_some() {
                 return Err("the unit twice".into());
@@ -720,7 +701,7 @@ fn pack_spec(arg: &str) -> Result<Pack, String> {
 /// followed; naming the address instead is what covers that.
 fn peer_spec(arg: &str) -> Result<(u16, SocketAddr), String> {
     let (address, lives) = arg.split_once('@').ok_or("wants <address>@<host>:<port>")?;
-    let a = muir::chaos::parse_address(address)
+    let a = crate::chaos::parse_address(address)
         .ok_or_else(|| format!("{address} is not an address in octal or subnet:host"))?;
     let at =
         resolved(lives).ok_or_else(|| format!("{lives} has no address this host can reach"))?;
@@ -731,7 +712,7 @@ fn peer_spec(arg: &str) -> Result<(u16, SocketAddr), String> {
 /// taking CHUDP's own. The lookup happens here and not again.
 fn resolved(lives: &str) -> Option<SocketAddr> {
     let first = |s: String| s.to_socket_addrs().ok().and_then(|mut a| a.next());
-    first(lives.to_string()).or_else(|| first(format!("{lives}:{}", muir::chaos::udp::PORT)))
+    first(lives.to_string()).or_else(|| first(format!("{lives}:{}", crate::chaos::udp::PORT)))
 }
 
 /// `--chaos-udp-default-peer`'s argument, `<host>[:<port>]`: where a
@@ -745,7 +726,7 @@ fn resolved(lives: &str) -> Option<SocketAddr> {
 /// --- a bare port on the loopback, an address at the protocol's own
 /// port, or address:port --- or a name, resolved here as a peer's is.
 fn default_peer_spec(arg: &str) -> Option<SocketAddr> {
-    endpoint(Some(arg), muir::chaos::udp::PORT).or_else(|| resolved(arg))
+    endpoint(Some(arg), crate::chaos::udp::PORT).or_else(|| resolved(arg))
 }
 
 /// A pack flag's argument parsed, or the usage. Which units a run can
@@ -853,9 +834,9 @@ fn terminal_line(terminal: &Option<Terminal>, why: &Option<String>, at: SocketAd
 /// which put `SIGINT`'s default back first --- and that ended the process
 /// with nothing dropped, as `kill -KILL`, the way out on the other five,
 /// does. Issue 103 met it on the fabric's run.
-fn serve_last_screens(screens: &mut [(&mut Terminal, &muir::tv::Tv)], seen: &mut u32) {
+fn serve_last_screens(screens: &mut [(&mut Terminal, &crate::tv::Tv)], seen: &mut u32) {
     let looking =
-        |screens: &[(&mut Terminal, &muir::tv::Tv)]| screens.iter().any(|(t, _)| t.viewers() > 0);
+        |screens: &[(&mut Terminal, &crate::tv::Tv)]| screens.iter().any(|(t, _)| t.viewers() > 0);
     // A ^C since the run last looked at the count --- while the checkpoint
     // was written, say --- is the stop it asked for, and is not to be
     // asked for twice.
@@ -921,15 +902,15 @@ fn attend<E: Engine>(
 /// What the viewer typed and moved, to the machine's keyboard and mouse:
 /// the I/O board's on the CADR, the register page's on QUUX (contract Q3).
 fn deliver_input(
-    m: &mut muir::machine::Machine,
-    keyboard: &mut muir::terminal::keyboard::Keyboard,
-    mouse: &mut muir::terminal::mouse::Mouse,
+    m: &mut crate::machine::Machine,
+    keyboard: &mut crate::terminal::keyboard::Keyboard,
+    mouse: &mut crate::terminal::mouse::Mouse,
 ) {
-    use muir::quux_input::KeyboardMouse;
+    use crate::quux_input::KeyboardMouse;
     fn to(
         board: &mut impl KeyboardMouse,
-        keyboard: &mut muir::terminal::keyboard::Keyboard,
-        mouse: &mut muir::terminal::mouse::Mouse,
+        keyboard: &mut crate::terminal::keyboard::Keyboard,
+        mouse: &mut crate::terminal::mouse::Mouse,
     ) {
         if keyboard.pending() > 0 {
             keyboard.deliver(board);
@@ -990,7 +971,57 @@ fn report(name: &str, cycles: u64, secs: f64, cycle_ns: u64) {
     );
 }
 
-const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <address>]
+/// Whose a flag is: both executables', or one machine's alone. **The
+/// executable is the machine**, so a flag that means nothing on it is no
+/// flag of it: `cadr` refuses QUUX's by name and `quux` the CADR's, each
+/// saying which executable takes it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Whose {
+    /// A flag of both, meaning the same thing on each.
+    Both,
+    /// The CADR's alone: `chip` and its boards, the debug cable, the
+    /// CADR's timing, display boards, disk controller and color TV, and
+    /// the Unibus's serial port.
+    Cadr,
+    /// QUUX's alone: its cache, main memory's port, clock, display size,
+    /// real-time clock and file device.
+    Quux,
+}
+
+/// The flags that are one machine's alone, and whose. A flag not here is
+/// both executables', or neither's; `--machine` is neither's, the
+/// executable being the machine.
+const OWN_FLAGS: &[(&str, Whose)] = &[
+    ("--chip", Whose::Cadr),
+    ("--color-terminal", Whose::Cadr),
+    ("--color-tv", Whose::Cadr),
+    ("--color-tv-capture", Whose::Cadr),
+    ("--debug-cable-connect", Whose::Cadr),
+    ("--debug-cable-listen", Whose::Cadr),
+    ("--debug-in-process", Whose::Cadr),
+    ("--debuggee-chaos-address", Whose::Cadr),
+    ("--debuggee-disk-pack", Whose::Cadr),
+    ("--debuggee-terminal", Whose::Cadr),
+    ("--disk-controller", Whose::Cadr),
+    ("--disk-multiplexor", Whose::Cadr),
+    ("--io-board", Whose::Cadr),
+    ("--main-memory", Whose::Cadr),
+    ("--no-debug-cable-listen", Whose::Cadr),
+    ("--serial", Whose::Cadr),
+    ("--timing-model", Whose::Cadr),
+    ("--tv", Whose::Cadr),
+    ("--tv-board", Whose::Cadr),
+    ("--watch", Whose::Cadr),
+    ("--cache", Whose::Quux),
+    ("--file-root", Whose::Quux),
+    ("--memory-timing", Whose::Quux),
+    ("--mono-tv-size", Whose::Quux),
+    ("--rtc", Whose::Quux),
+    ("--sync-cycle-ticks", Whose::Quux),
+];
+
+/// `cadr`'s usage: its flags, in the order `--help` lists them.
+const USAGE_CADR: &str = "usage: cadr [--micro|--rtl|--chip] [--chaos-address <address>]
             [--chaos-trace] [--chaos-udp [<endpoint>]]
             [--chaos-udp-default-peer <host>[:<port>]]
             [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
@@ -1001,35 +1032,59 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--debuggee-chaos-address <address>]
             [--debuggee-disk-pack <image>[,<unit>][,ro]]
             [--debuggee-terminal [<endpoint>]]
-            [--disk-controller netlist|model|block-disk] [--disk-multiplexor]
+            [--disk-controller netlist|model] [--disk-multiplexor]
             [--disk-pack <image>[,<unit>][,ro]]
-            [--file-root [<name>=]<folder>[,ro]]
             [--glass-tty [<endpoint>][,ro]]
             [--io-board netlist|model] [--keyboard-boot <keys>]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
-            [--keyboard-mapping-trace]
-            [--machine cadr|quux] [--main-memory netlist|model]
+            [--keyboard-mapping-trace] [--main-memory netlist|model]
             [--main-memory-boards <n>] [--no-auto-boot]
             [--no-debug-cable-listen] [--no-pace] [--pace]
-            [--prom <file>]
-            [--resume <file>] [--rtc <unix-seconds>|host] [--serial <endpoint>]
+            [--prom <file>] [--resume <file>] [--serial <endpoint>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
-            [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>] [--cache <words>]
-            [--memory-timing <r>,<w>]
-            [--tv netlist|model] [--tv-board simple-tv|lispm-tv|mono-tv]
+            [--timing-model cadr|fpga]
+            [--tv netlist|model] [--tv-board simple-tv|lispm-tv]
             [--tv-capture <gif>] [--tv-capture-no-time]
             [--watch <from>[-<to>]:<net>,<net>,...] [-h|--help]
             [-V|--version]";
 
-/// What `-h` and `--help` print: the usage, then each flag in the order
-/// the usage lists them.
-const HELP: &str = "\
-A simulator of the MIT CADR Lisp Machine.
+/// `quux`'s usage: its flags, in the order `--help` lists them.
+const USAGE_QUUX: &str = "usage: quux [--micro|--rtl] [--cache <words>] [--chaos-address <address>]
+            [--chaos-trace] [--chaos-udp [<endpoint>]]
+            [--chaos-udp-default-peer <host>[:<port>]]
+            [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
+            [-c|--config <file>] [--disk-pack <image>[,ro]]
+            [--file-root [<name>=]<folder>[,ro]]
+            [--glass-tty [<endpoint>][,ro]] [--keyboard-boot <keys>]
+            [--keyboard-mapping <file>] [--keyboard-mapping-dump]
+            [--keyboard-mapping-trace] [--main-memory-boards <n>]
+            [--memory-timing <r>,<w>] [--mono-tv-size <w>x<h>]
+            [--no-auto-boot] [--no-pace] [--pace] [--prom <file>]
+            [--resume <file>] [--rtc <unix-seconds>|host]
+            [--stop-after <microcycles>] [--stop-at <pc>]
+            [--stop-at-prom <pc>] [--sync-cycle-ticks <k>]
+            [--terminal [<endpoint>]] [--tv-capture <gif>]
+            [--tv-capture-no-time] [-h|--help] [-V|--version]";
 
-  --micro | --rtl | --chip     the engine: microinstruction, register
-                               transfer, or chip level. [default: --rtl]
-  --chaos-address <address>    this machine's Chaosnet address: the sixteen
+/// What `-h` and `--help` print after the usage: each flag the executable
+/// takes, in the order the usage lists them --- the entries of the other
+/// machine's left out, and a flag both take given its own entry for each
+/// where the two machines differ. `{exe}` is the executable's name.
+const HELP: &[(Whose, &str)] = &[
+    (
+        Whose::Cadr,
+        "  --micro | --rtl | --chip     the engine: microinstruction, register
+                               transfer, or chip level. [default: --rtl]",
+    ),
+    (
+        Whose::Quux,
+        "  --micro | --rtl              the engine: microinstruction or register
+                               transfer. [default: --rtl]",
+    ),
+    (
+        Whose::Both,
+        "  --chaos-address <address>    this machine's Chaosnet address: the sixteen
                                address switches on the I/O board, the bits
                                in octal, 3050, or subnet:host with each in
                                octal, 6:50 --- the same number, subnet in
@@ -1041,10 +1096,16 @@ A simulator of the MIT CADR Lisp Machine.
                                --- not muir, but another program on the
                                network, named with --chaos-udp-peer.
                                [default: 177001, on subnet 376 and no
-                               band's]
-  --chaos-trace                every Chaosnet packet and frame on the cable,
-                               to stderr. [default: off]
-  --chaos-udp [<endpoint>]     the Chaosnet cable, plugged in: Chaosnet over
+                               band's]",
+    ),
+    (
+        Whose::Both,
+        "  --chaos-trace                every Chaosnet packet and frame on the cable,
+                               to stderr. [default: off]",
+    ),
+    (
+        Whose::Both,
+        "  --chaos-udp [<endpoint>]     the Chaosnet cable, plugged in: Chaosnet over
                                UDP, which cbridge, usim, klh10 and ozd
                                speak. **Without this muir sends nothing**,
                                whatever --chaos-address has set the switches
@@ -1057,8 +1118,11 @@ A simulator of the MIT CADR Lisp Machine.
                                it on the cable, so one peer's is never
                                carried on to another. [default: off, the cable
                                unplugged; 127.0.0.1:42042, the protocol's
-                               own port, when the flag is given bare]
-  --chaos-udp-default-peer <host>[:<port>]
+                               own port, when the flag is given bare]",
+    ),
+    (
+        Whose::Both,
+        "  --chaos-udp-default-peer <host>[:<port>]
                                where a frame goes whose destination no
                                --chaos-udp-peer named: the route of last
                                resort, which is what lets a cbridge beside
@@ -1074,23 +1138,32 @@ A simulator of the MIT CADR Lisp Machine.
                                going to the named peers alone, who are
                                stations on this machine's cable. It needs
                                the cable, --chaos-udp. [default: off, and a
-                               frame no peer entry names is dropped]
-  --chaos-udp-peer <address>@<host>:<port>
+                               frame no peer entry names is dropped]",
+    ),
+    (
+        Whose::Both,
+        "  --chaos-udp-peer <address>@<host>:<port>
                                a Chaosnet host reached over UDP and where it
                                lives: 3060@127.0.0.1:42043, the address in
                                octal or subnet:host and the host a name or
                                an address, resolved once here. The port may
                                be left off for 42042. Once per peer, and the
                                address may not be this machine's own. It
-                               needs the cable, --chaos-udp.
-  --checkpoint <file>          write the machine's whole state to <file>
+                               needs the cable, --chaos-udp.",
+    ),
+    (
+        Whose::Both,
+        "  --checkpoint <file>          write the machine's whole state to <file>
                                when the run stops, for --resume to start
                                from. On chip it is the boards themselves,
                                taken at the first microcycle from the stop
                                with no bus cycle in flight. The prompt's
                                checkpoint writes one as the run goes, and
-                               the run goes on.
-  --color-terminal [<endpoint>]
+                               the run goes on.",
+    ),
+    (
+        Whose::Cadr,
+        "  --color-terminal [<endpoint>]
                                where the color TV's screen is served, as
                                --terminal is the main screen's: a port, an
                                address or address:port. Pixels only --- the
@@ -1099,8 +1172,11 @@ A simulator of the MIT CADR Lisp Machine.
                                screen --- so what a viewer types or points
                                at here is dropped. It needs --color-tv.
                                [default: the display above the main
-                               screen's]
-  --color-tv [netlist|model]   fit the color TV, the second display board:
+                               screen's]",
+    ),
+    (
+        Whose::Cadr,
+        "  --color-tv [netlist|model]   fit the color TV, the second display board:
                                a LISPM TV strapped to 17200000 with its
                                registers at 17377750, which is MIT's own
                                \"for the color TV, x is 5\". Off by default,
@@ -1119,8 +1195,11 @@ A simulator of the MIT CADR Lisp Machine.
                                a word it is the netlist on chip and the
                                model elsewhere.
                                [default: off; with the flag and no word,
-                               netlist on chip and model elsewhere]
-  --color-tv-capture <gif>     record the color TV's screen to <gif> as the
+                               netlist on chip and model elsewhere]",
+    ),
+    (
+        Whose::Cadr,
+        "  --color-tv-capture <gif>     record the color TV's screen to <gif> as the
                                run goes, as --tv-capture records the main
                                screen: a file of its own, 576 x 454, four
                                bits a pixel through the color map, which
@@ -1128,15 +1207,21 @@ A simulator of the MIT CADR Lisp Machine.
                                again whenever the machine changes it. There
                                is no default path; one must be given. It
                                needs --color-tv. Not over the debug cable,
-                               where the two machines are two clocks.
-  -c, --config <file>          the file of flags to read before the command
-                               line, which must be there. Without it muir
-                               reads .muirrc in the directory it was run
-                               from, or failing that .muirrc in the home
+                               where the two machines are two clocks.",
+    ),
+    (
+        Whose::Both,
+        "  -c, --config <file>          the file of flags to read before the command
+                               line, which must be there. Without it {exe}
+                               reads .{exe}rc in the directory it was run
+                               from, or failing that .{exe}rc in the home
                                directory --- the first of the three there,
                                not all of them. MUIR_RC names a file in
-                               place of the two that are looked for.
-  --debug-cable-connect [<endpoint>|0x<address>]
+                               place of the two that are looked for.",
+    ),
+    (
+        Whose::Cadr,
+        "  --debug-cable-connect [<endpoint>|0x<address>]
                                rtl: this machine is the debugger: its DBGOUT
                                connects to a debuggee listening at the
                                endpoint, a port, an address or address:port.
@@ -1150,8 +1235,11 @@ A simulator of the MIT CADR Lisp Machine.
                                and there is no default for where it sits.
                                Either way this machine has the prompt, as
                                one alone has, less checkpoint and the
-                               capture commands. [default: 127.0.0.1:7661]
-  --debug-cable-listen [<endpoint>]
+                               capture commands. [default: 127.0.0.1:7661]",
+    ),
+    (
+        Whose::Cadr,
+        "  --debug-cable-listen [<endpoint>]
                                rtl, chip: where this machine's DBGIN
                                listens for a debugger's cable over TCP: a
                                port, an address or address:port. Every rtl
@@ -1168,8 +1256,11 @@ A simulator of the MIT CADR Lisp Machine.
                                chip the cable meets the board's own
                                connector, run an event at a time while a
                                debugger is on. [default: 127.0.0.1:7661, or
-                               the port above it when that one is taken]
-  --debug-in-process           rtl: the two-machine lashup in one process. A
+                               the port above it when that one is taken]",
+    ),
+    (
+        Whose::Cadr,
+        "  --debug-in-process           rtl: the two-machine lashup in one process. A
                                second machine runs beside this one with both
                                debug cables between them, each machine's
                                DBGOUT to the other's DBGIN, so that CC here
@@ -1179,39 +1270,49 @@ A simulator of the MIT CADR Lisp Machine.
                                The stops are this machine's, and
                                --stop-after counts its microcycles. Both
                                machines get a terminal, the other's one port
-                               above; neither has the prompt.
-  --debuggee-chaos-address <address>
+                               above; neither has the prompt.",
+    ),
+    (
+        Whose::Cadr,
+        "  --debuggee-chaos-address <address>
                                rtl: the other machine's Chaosnet address, as
                                --chaos-address is this machine's. The other
                                machine has a cable of its own with no link
                                on it, so the address is all it has.
                                [default: the same address as this machine's,
-                               the two cables never meeting]
-  --debuggee-disk-pack <image>[,<unit>][,ro]
+                               the two cables never meeting]",
+    ),
+    (
+        Whose::Cadr,
+        "  --debuggee-disk-pack <image>[,<unit>][,ro]
                                rtl: the other machine's pack, as
-                               --disk-pack.
-  --debuggee-terminal [<endpoint>]
+                               --disk-pack.",
+    ),
+    (
+        Whose::Cadr,
+        "  --debuggee-terminal [<endpoint>]
                                rtl: the other machine's terminal, as
                                --terminal is this machine's, somewhere other
                                than the display above this one's: a port, an
                                address or address:port. [default: the
                                display above this machine's, 127.0.0.1:5901
-                               when it is at :0]
-  --disk-controller netlist|model|block-disk
+                               when it is at :0]",
+    ),
+    (
+        Whose::Cadr,
+        "  --disk-controller netlist|model
                                chip: the disk controller. The netlist takes
-                               the drive's real milliseconds over every
-                               block: a run that touches no pack pays about
-                               3% for that, and System 100's boot through it
-                               took two and a half days. model is how a run
-                               that does not care about the disk is made
-                               quick, and is what --main-memory model
-                               leaves. block-disk is QUUX's, on micro and
-                               rtl: the same registers and command list
-                               with blocks by number, read and write only,
-                               and one pack, unit 0; QUUX's only disk, the
-                               CADR's refused on it. [default: netlist on
-                               the CADR, block-disk on QUUX]
-  --disk-multiplexor           chip: a DISK MULTIPLEXOR on the netlist
+                               the drive's real milliseconds over every block:
+                               a run that touches no pack pays about 3% for
+                               that, and System 100's boot through it took two
+                               and a half days. model is how a run that does
+                               not care about the disk is made quick, and is
+                               what --main-memory model leaves. [default:
+                               netlist]",
+    ),
+    (
+        Whose::Cadr,
+        "  --disk-multiplexor           chip: a DISK MULTIPLEXOR on the netlist
                                controller's cable, which is what gives it
                                eight drive ports instead of one. Without it
                                the one port is unit 0, so a second
@@ -1219,24 +1320,42 @@ A simulator of the MIT CADR Lisp Machine.
                                It needs --disk-controller netlist; the model
                                controller wants no board. [default: off,
                                with one pack in unit 0; the start says when
-                               it is fitted]
-  --disk-pack <image>[,<unit>][,ro]
-                               the pack in a drive: its blocks end to end.
-                               The image is opened read-write, as a drive
-                               writes its pack. After the image, in either
-                               order: the unit, and ro for the drive's
-                               read-only switch --- the status word says so,
-                               a write faults, and the image is opened
+                               it is fitted]",
+    ),
+    (
+        Whose::Cadr,
+        "  --disk-pack <image>[,<unit>][,ro]
+                               the pack in a drive: its blocks end to end. The
+                               image is opened read-write, as a drive writes
+                               its pack. After the image, in either order: the
+                               unit, and ro for the drive's read-only switch
+                               --- the status word says so, a write faults,
+                               and the image is opened read-only, so a written
+                               block reaches a checkpoint rather than the
+                               file. Once for each pack, one to a unit, up to
+                               the eight the controller addresses. [default:
+                               unit 0; no pack unless one is named, which is a
+                               drive with no pack in it and a boot that waits
+                               on it for ever]",
+    ),
+    (
+        Whose::Quux,
+        "  --disk-pack <image>[,ro]     block-disk's one disk, unit 0: raw, a fixed VHD
+                               or a dynamic VHD, of any size, and the start
+                               says which. block-disk has the same registers
+                               and command list as the CADR's controller, with
+                               blocks by number, read and write only. The
+                               image is opened read-write, as a drive writes
+                               its pack; ro is the drive's read-only switch
+                               --- a write faults, and the image is opened
                                read-only, so a written block reaches a
-                               checkpoint rather than the file. Once for
-                               each pack, one to a unit, up to the eight the
-                               controller addresses. On QUUX it is
-                               block-disk's one disk, raw, a fixed VHD or a
-                               dynamic VHD, of any size, and the start says
-                               which. [default: unit 0; no pack unless one
-                               is named, which is a drive with no pack in it
-                               and a boot that waits on it for ever]
-  --file-root [<name>=]<folder>[,ro]
+                               checkpoint rather than the file. [default: no
+                               disk unless one is named, and a boot that waits
+                               on it for ever]",
+    ),
+    (
+        Whose::Quux,
+        "  --file-root [<name>=]<folder>[,ro]
                                QUUX: a host folder its file device serves.
                                A folder alone is HOST's /, holding sys/,
                                site/ and home/<user>/; <name>=<folder> is
@@ -1246,8 +1365,11 @@ A simulator of the MIT CADR Lisp Machine.
                                name once and one default folder; with no
                                default folder / holds the mounts alone and
                                is read-only. The start lists them.
-                               [default: none; / is empty]
-  --glass-tty [<endpoint>][,ro]
+                               [default: none; / is empty]",
+    ),
+    (
+        Whose::Cadr,
+        "  --glass-tty [<endpoint>][,ro]
                                a glass TTY: the screen as text over
                                telnet, and what is typed there back into
                                the keyboard. **Not a device.** --serial is
@@ -1275,9 +1397,37 @@ A simulator of the MIT CADR Lisp Machine.
                                muir's own number and no convention ---
                                telnet's own port is 23 and a server on it
                                needs privilege this has no business
-                               asking for]
-  --io-board netlist|model     chip: the I/O board. [default: netlist]
-  --keyboard-boot <keys>       the keys the boot sequence needs: held
+                               asking for]",
+    ),
+    (
+        Whose::Quux,
+        "  --glass-tty [<endpoint>][,ro]
+                               a glass TTY: the screen as text over telnet,
+                               and what is typed there back into the
+                               keyboard. **Not a device**: nothing in the
+                               band knows it is there. It reads the frame
+                               buffer through the machine's own character
+                               font and puts what is typed on the keyboard.
+                               A cell that is not a character of that font
+                               reads as `?`, so under the window system
+                               much of the screen will not read at all.
+                               Nothing, a port, an address or address:port,
+                               and `ro` for a client that may watch and not
+                               type, in either order. Once for each; a port
+                               not named moves up until it finds one free,
+                               so the flag twice is two of them. Any telnet
+                               client will do: `telnet 127.0.0.1 10023`.
+                               [default: off, and no glass TTY at all;
+                               127.0.0.1:10023 when the flag is given bare,
+                               which is muir's own number and no convention
+                               --- telnet's own port is 23 and a server on
+                               it needs privilege this has no business
+                               asking for]",
+    ),
+    (Whose::Cadr, "  --io-board netlist|model     chip: the I/O board. [default: netlist]"),
+    (
+        Whose::Both,
+        "  --keyboard-boot <keys>       the keys the boot sequence needs: held
                                with Rubout they cold-boot the machine,
                                with Return they warm-boot it, from the
                                keyboard, as on a CADR. ctrl is MIT's
@@ -1289,8 +1439,11 @@ A simulator of the MIT CADR Lisp Machine.
                                Meta; ctrl,meta,meta either Control and
                                both Metas; ctrl,ctrl,meta,meta both of
                                each, the CADR keyboard's own sequence.
-                               [default: ctrl,meta]
-  --keyboard-mapping <file>    what a viewer's keysyms mean on the Lisp
+                               [default: ctrl,meta]",
+    ),
+    (
+        Whose::Both,
+        "  --keyboard-mapping <file>    what a viewer's keysyms mean on the Lisp
                                Machine keyboard: `key <keysym> <key>` a
                                line, and `prefix <keysym> <keysym> <key>`
                                for a key reached by pressing one and then
@@ -1298,16 +1451,22 @@ A simulator of the MIT CADR Lisp Machine.
                                rather than replacing it, and the prompt's
                                `keys` prints what is in force. MUIR_KEYS
                                names a file in place of the two looked for.
-                               [default: .muirkeys, looked for where .muirrc
-                               is; without one the built-in mapping stands]
-  --keyboard-mapping-dump      write the mapping this run would use to
+                               [default: .muirkeys, looked for where .{exe}rc
+                               is; without one the built-in mapping stands]",
+    ),
+    (
+        Whose::Both,
+        "  --keyboard-mapping-dump      write the mapping this run would use to
                                stdout, in the format --keyboard-mapping
                                reads, and stop before a machine is built.
                                Fed back in unedited it changes nothing, so
                                it is a copy to edit rather than a report:
-                               `muir --keyboard-mapping-dump > my.keys`,
-                               edit it, `muir --keyboard-mapping my.keys`.
-  --keyboard-mapping-trace     every keysym a viewer sends and what it
+                               `{exe} --keyboard-mapping-dump > my.keys`,
+                               edit it, `{exe} --keyboard-mapping my.keys`.",
+    ),
+    (
+        Whose::Both,
+        "  --keyboard-mapping-trace     every keysym a viewer sends and what it
                                became, on stderr, alongside the run: the
                                keysym by name and number, whether it went
                                down or up, and the key it became, spelled as
@@ -1319,45 +1478,56 @@ A simulator of the MIT CADR Lisp Machine.
                                every time that count changes: a keystroke
                                lost there never became a keysym line at all.
                                A run says the first of either without this
-                               flag. [default: off]
-  --machine cadr|quux          which machine: the CADR, or QUUX, the CADR
-                               evolved: a six-bit level-1 map entry, 63
-                               regions mapped at once to the CADR's 31, a
-                               16K-word PDL buffer, MUL and DIV in one
-                               instruction each, and a tick in the
-                               processor. Not on chip, which is the CADR's
-                               boards. [default: cadr]
-  --main-memory netlist|model  chip: main memory as MIT's board or as rtl's
+                               flag. [default: off]",
+    ),
+    (
+        Whose::Cadr,
+        "  --main-memory netlist|model  chip: main memory as MIT's board or as rtl's
                                model of it. model takes the disk controller
                                down with it, the netlist controller being a
                                second master the model memory does not
                                answer; asking for it and --disk-controller
                                netlist together is refused. [default:
-                               netlist]
-  --main-memory-boards <n>     how many 64K-word boards, 1 to 60: main
+                               netlist]",
+    ),
+    (
+        Whose::Both,
+        "  --main-memory-boards <n>     how many 64K-word boards, 1 to 60: main
                                memory on every engine, and on chip the
                                boards on the backplane. [default: 32, the
-                               two million words]
-  --no-auto-boot               leave the boot button unpressed, as a CADR is
+                               two million words]",
+    ),
+    (
+        Whose::Both,
+        "  --no-auto-boot               leave the boot button unpressed, as a CADR is
                                when the power comes on: RUN clear and
                                nothing running. The run starts held at the
                                prompt, and boot there presses the button;
                                nothing else starts it, and continue and step
                                say so. [default: muir presses the button for
-                               you]
-  --no-debug-cable-listen      rtl, chip: no connector for a debugger's
+                               you]",
+    ),
+    (
+        Whose::Cadr,
+        "  --no-debug-cable-listen      rtl, chip: no connector for a debugger's
                                cable; the machine cannot be debugged from
                                another. Of this and --debug-cable-listen
                                the last given wins. --checkpoint,
                                --tv-capture and chip's --watch leave the
                                connector empty by themselves, wanting a
                                machine on its own, and the start says so.
-                               [default: the connector is there]
-  --no-pace                    run as fast as the host will take it, rather
+                               [default: the connector is there]",
+    ),
+    (
+        Whose::Both,
+        "  --no-pace                    run as fast as the host will take it, rather
                                than at the machine's own speed. Of this and
                                --pace the last given wins. [default: rtl and
-                               chip are paced, micro is not]
-  --pace                       run at the machine's own speed rather than
+                               chip are paced, micro is not]",
+    ),
+    (
+        Whose::Both,
+        "  --pace                       run at the machine's own speed rather than
                                as fast as the host will take it: the
                                machine's own nanoseconds are the target, and
                                a run ahead of them waits. Unpaced, micro
@@ -1378,8 +1548,11 @@ A simulator of the MIT CADR Lisp Machine.
                                end of the debug cable, where the two
                                machines pace each other, and not taken there
                                by default. [default: on for rtl and chip,
-                               off for micro]
-  --prom <file>                the boot PROM to run, an MCR microcode file
+                               off for micro]",
+    ),
+    (
+        Whose::Cadr,
+        "  --prom <file>                the boot PROM to run, an MCR microcode file
                                as MIT's own sys/ubin/promh.mcr is: at most
                                the 512 words the machine fetches before it
                                turns the PROM off, assembled at address 0,
@@ -1387,24 +1560,46 @@ A simulator of the MIT CADR Lisp Machine.
                                Anything else is refused rather than run. The
                                start says how the file stands to MIT's own.
                                [default: MIT's own, built in --- System
-                               100's sys/ubin/promh.mcr, version 9]
-  --resume <file>              start from a checkpoint instead of cold: the
+                               100's sys/ubin/promh.mcr, version 9]",
+    ),
+    (
+        Whose::Quux,
+        "  --prom <file>                the boot PROM to run, an MCR microcode file as
+                               QUUX's own data/quux-promh.mcr is: in partition
+                               order, MIT's with the two 16-bit halves of
+                               every 32-bit word swapped, and assembled at
+                               36000, where QUUX's PROM sits, with the
+                               statistics bit IR<46> nowhere set. A file in
+                               MIT's order is refused saying so, and so is one
+                               assembled at 0. The start says how the file
+                               stands to QUUX's own. [default: QUUX's own,
+                               built in --- data/quux-promh.mcr, version 1000]",
+    ),
+    (
+        Whose::Both,
+        "  --resume <file>              start from a checkpoint instead of cold: the
                                engine that wrote it, the same pack under it,
                                the Chaosnet plugged in afresh, and as many
                                memory boards as it had, which
                                --main-memory-boards may not gainsay. On chip
                                the boards on the backplane have to be the
                                checkpoint's too. The button is not pressed,
-                               and the stops count from here.
-  --rtc <unix-seconds>|host    QUUX: its real-time clock, register page word
+                               and the stops count from here.",
+    ),
+    (
+        Whose::Quux,
+        "  --rtc <unix-seconds>|host    QUUX: its real-time clock, register page word
                                103. host reads the host's clock at each
                                read; a second, 0 to 4294967295, starts it
                                there at power-on and counts the machine's
                                own time from it, holding at 4294967295, so
                                that runs repeat. A checkpoint carries it,
                                and a resume under another is refused.
-                               [default: host]
-  --serial <endpoint>          where the serial port at J9 is reached: a TCP
+                               [default: host]",
+    ),
+    (
+        Whose::Cadr,
+        "  --serial <endpoint>          where the serial port at J9 is reached: a TCP
                                port, or address:port. Attach with `nc <host>
                                <port>` or telnet. A connection is the device
                                on the null-modem cable plugging in: it
@@ -1417,19 +1612,43 @@ A simulator of the MIT CADR Lisp Machine.
                                even parity --- and nothing here sets them.
                                One machine's port, so it is refused with
                                --debug-in-process and the cable flags.
-                               [default: off, and J9 empty]
-  --stop-after <microcycles>   how many to run, then stop. [default: none;
+                               [default: off, and J9 empty]",
+    ),
+    (
+        Whose::Both,
+        "  --stop-after <microcycles>   how many to run, then stop. [default: none;
                                the run goes on until a --stop-at, a halt or
-                               ^C]
-  --stop-at <pc>               stop when the PC reaches this address with
-                               the boot PROM disabled: in microcode loaded
-                               into the control store. Octal, as MIT writes
-                               it. On QUUX, outside its PROM's 36000-37777.
-  --stop-at-prom <pc>          the same with the PROM enabled: an address in
-                               the boot PROM, below 1000 on the CADR, in
-                               36000-37777 on QUUX. With --stop-after,
-                               whichever comes first.
-  --terminal [<endpoint>]      where the display, keyboard and mouse are
+                               ^C]",
+    ),
+    (
+        Whose::Cadr,
+        "  --stop-at <pc>               stop when the PC reaches this address with the
+                               boot PROM disabled: in microcode loaded into
+                               the control store. Octal, as MIT writes it.",
+    ),
+    (
+        Whose::Quux,
+        "  --stop-at <pc>               stop when the PC reaches this address in
+                               microcode loaded into the control store,
+                               outside the boot PROM's 36000-37777. Octal, as
+                               MIT writes it.",
+    ),
+    (
+        Whose::Cadr,
+        "  --stop-at-prom <pc>          the same with the PROM enabled: an address in
+                               the boot PROM, below 1000. With --stop-after,
+                               whichever comes first.",
+    ),
+    (
+        Whose::Quux,
+        "  --stop-at-prom <pc>          the same in the boot PROM, which is never
+                               disabled: an address in 36000-37777, the
+                               control-store address the PC holds. With
+                               --stop-after, whichever comes first.",
+    ),
+    (
+        Whose::Both,
+        "  --terminal [<endpoint>]      where the display, keyboard and mouse are
                                served over RFB, RFC 6143, for any VNC viewer
                                to connect to: a port, an address or
                                address:port. Every run serves one, asked for
@@ -1442,43 +1661,57 @@ A simulator of the MIT CADR Lisp Machine.
                                RFB's None security being the only type
                                offered. [default: 127.0.0.1:5900, VNC's
                                display :0, or the first free display above
-                               it]
-  --timing-model cadr|fpga|sync
-                               rtl: whose time the processor keeps: the
-                               CADR's own, or the 10 ns grid muir-fpga's
-                               fabric runs on, where a delay rounds up to
-                               the next tick and a free-running clock's
-                               edge is taken at the first tick at or after
-                               it; or sync, QUUX's: the grid with a
-                               microcycle of --sync-cycle-ticks ticks.
-                               [default: cadr]
-  --cache <words>              rtl, QUUX: its memory cache of <words> in
+                               it]",
+    ),
+    (
+        Whose::Cadr,
+        "  --timing-model cadr|fpga     rtl: whose time the processor keeps: the CADR's
+                               own, or the 10 ns grid muir-fpga's fabric runs
+                               on, where a delay rounds up to the next tick
+                               and a free-running clock's edge is taken at the
+                               first tick at or after it. [default: cadr]",
+    ),
+    (
+        Whose::Quux,
+        "  --cache <words>              rtl, QUUX: its memory cache of <words> in
                                lines of 4, 2-way, a hit in 20 ns:
                                write-through, by physical address, main
-                               memory only. [default: 4096]
-  --memory-timing <r>,<w>      rtl, QUUX: main memory's line fill and write
+                               memory only. [default: 4096]",
+    ),
+    (
+        Whose::Quux,
+        "  --memory-timing <r>,<w>      rtl, QUUX: main memory's line fill and write
                                in ns, or arty or de25, the boards' own.
-                               [default: 380,290]
-  --sync-cycle-ticks <k>       sync: a microcycle's 10 ns ticks, the
+                               [default: 380,290]",
+    ),
+    (
+        Whose::Quux,
+        "  --sync-cycle-ticks <k>       sync: a microcycle's 10 ns ticks, the
                                board's: its fit proves its longest path
-                               settles in them. [default: 4]
-  --tv netlist|model           chip: the display. [default: netlist]
-  --tv-board simple-tv|lispm-tv|mono-tv
+                               settles in them. [default: 4]",
+    ),
+    (Whose::Cadr, "  --tv netlist|model           chip: the display. [default: netlist]"),
+    (
+        Whose::Cadr,
+        "  --tv-board simple-tv|lispm-tv
                                which display board, on every engine: the
-                               SIMPLE TV that System 100 drives, or the
-                               LISPM TV that replaced it in 1980. The two
-                               program alike but for mode bit 7, which
-                               reads the sync enable back on the LISPM TV
-                               and zero on the SIMPLE TV. mono-tv is QUUX's:
-                               1280 by 1024, one bit a pixel, no
-                               interrupt; refused on the CADR, and the
-                               CADR's boards refused on QUUX. [default:
-                               simple-tv on the CADR, mono-tv on QUUX]
-  --mono-tv-size <w>x<h>       MONO TV's size: the width a multiple of 32,
-                               the buffer at most 130,560 words, and 65,536
-                               with --color-tv. The feature page gives it
-                               to the software. [default: 1280x1024]
-  --tv-capture <gif>           record the display to <gif> as the run goes,
+                               SIMPLE TV that System 100 drives, or the LISPM
+                               TV that replaced it in 1980. The two program
+                               alike but for mode bit 7, which reads the sync
+                               enable back on the LISPM TV and zero on the
+                               SIMPLE TV. [default: simple-tv]",
+    ),
+    (
+        Whose::Quux,
+        "  --mono-tv-size <w>x<h>       MONO TV's size, QUUX's display: 1280 by 1024
+                               unless this says otherwise, one bit a pixel, no
+                               interrupt. The width a multiple of 32, the
+                               buffer at most 130,560 words. The feature page
+                               gives it to the software. [default: 1280x1024]",
+    ),
+    (
+        Whose::Cadr,
+        "  --tv-capture <gif>           record the display to <gif> as the run goes,
                                an animated GIF timed by the machine's own
                                clock so that it plays at the machine's
                                speed. There is no default path; one must be
@@ -1486,15 +1719,36 @@ A simulator of the MIT CADR Lisp Machine.
                                one canvas, the debugger at the left and the
                                debuggee at the right; not over the debug
                                cable, where they are two clocks. The main
-                               screen: the color TV's is --color-tv-capture's.
-  --tv-capture-no-time         leave the clocks off the recordings, the
+                               screen: the color TV's is --color-tv-capture's.",
+    ),
+    (
+        Whose::Quux,
+        "  --tv-capture <gif>           record the display to <gif> as the run goes, an
+                               animated GIF timed by the machine's own clock
+                               so that it plays at the machine's speed. There
+                               is no default path; one must be given.",
+    ),
+    (
+        Whose::Cadr,
+        "  --tv-capture-no-time         leave the clocks off the recordings, the
                                color screen's as much as the main
                                screen's: there is one flag for the two. By
                                default a line below the screen, hiding none
                                of it, shows the machine's simulated time at
                                the left and the local time of day at the
-                               right, each hh:mm:ss.
-  --watch <from>[-<to>]:<net>,<net>,...
+                               right, each hh:mm:ss.",
+    ),
+    (
+        Whose::Quux,
+        "  --tv-capture-no-time         leave the clocks off the recording. By default
+                               a line below the screen, hiding none of it,
+                               shows the machine's simulated time at the left
+                               and the local time of day at the right, each
+                               hh:mm:ss.",
+    ),
+    (
+        Whose::Cadr,
+        "  --watch <from>[-<to>]:<net>,<net>,...
                                chip: record the named nets over microcycles
                                <from> to <to>, or from <from> to the end of
                                the run with no <to>, counted as --stop-after
@@ -1509,14 +1763,18 @@ A simulator of the MIT CADR Lisp Machine.
                                as the range begins and then at every change.
                                The prompt's watch records the next n
                                microcycles the same way, without a restart.
-                               [default: off]
-  -h, --help                   this.
-  -V, --version                what this build calls itself: the version,
+                               [default: off]",
+    ),
+    (Whose::Both, "  -h, --help                   this."),
+    (
+        Whose::Both,
+        "  -V, --version                what this build calls itself: the version,
                                the commit it was built from --- with -dirty
                                after it if the tree had uncommitted work ---
                                and whether it was built with optimizations
-                               off. Every run says it in its first line too.
-";
+                               off. Every run says it in its first line too.",
+    ),
+];
 
 /// What this build calls itself: the crate's version, the commit it was
 /// built from, and whether it was built with optimizations off ---
@@ -1542,15 +1800,50 @@ fn version() -> String {
 /// shape: a pack that will not open, a port already taken. The flags are no
 /// help, so they are not printed.
 fn fail(msg: &str) -> ! {
-    eprintln!("muir: {msg}");
+    eprintln!("{}: {msg}", executable());
     std::process::exit(1);
 }
 
 fn usage(msg: &str) -> ! {
-    eprintln!("muir: {msg}");
-    eprintln!("{USAGE}");
-    eprintln!("muir --help says more");
+    let exe = executable();
+    eprintln!("{exe}: {msg}");
+    eprintln!("{}", if exe == "quux" { USAGE_QUUX } else { USAGE_CADR });
+    eprintln!("{exe} --help says more");
     std::process::exit(2);
+}
+
+/// The executable this run is, `cadr` or `quux`, which [`run`] settles
+/// once from the machine it is given: what the refusals and the usage are
+/// said by, as a program's messages are said by its name.
+static EXECUTABLE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// [`EXECUTABLE`], or the crate's name before [`run`] has settled it.
+fn executable() -> &'static str {
+    EXECUTABLE.get().copied().unwrap_or("muir")
+}
+
+/// The executable that is `machine`: `cadr` for the CADR, `quux` for QUUX.
+fn executable_of(machine: crate::machine::Geometry) -> &'static str {
+    if machine == crate::machine::Geometry::CADR { "cadr" } else { "quux" }
+}
+
+/// Why `flag` is no flag of the executable `exe`, when it is the other
+/// machine's or `--machine`, which chose between them: the one refusal,
+/// said of the command line and of a file of flags alike.
+fn not_this_executables(flag: &str, exe: &str) -> Option<String> {
+    match (whose(flag), exe) {
+        (Whose::Quux, "cadr") => Some(format!("{flag} is quux's, not cadr's")),
+        (Whose::Cadr, "quux") => Some(format!("{flag} is cadr's, not quux's")),
+        _ if flag == "--machine" => Some(format!(
+            "--machine is not a flag of {exe}: the executable is the machine, cadr or quux"
+        )),
+        _ => None,
+    }
+}
+
+/// Whose `flag` is, when it is one machine's alone: [`OWN_FLAGS`].
+fn whose(flag: &str) -> Whose {
+    OWN_FLAGS.iter().find(|(f, _)| *f == flag).map_or(Whose::Both, |&(_, w)| w)
 }
 
 /// **A checkpoint this build cannot read is a file to make again, not a
@@ -1565,7 +1858,7 @@ fn usage(msg: &str) -> ! {
 /// fixes both is running the machine again to the same place with
 /// `--checkpoint`, which is what wrote the file in the first place.
 fn stale_checkpoint(path: &Path, err: &dyn std::fmt::Display, ran: Option<u64>) -> ! {
-    eprintln!("muir: --resume {}: {err}", path.display());
+    eprintln!("{}: --resume {}: {err}", executable(), path.display());
     eprintln!("  the file is from another build, not a broken one, and making it again is");
     eprintln!("  the fix: run the machine to the same place with --checkpoint, as this was");
     match ran {
@@ -1575,8 +1868,20 @@ fn stale_checkpoint(path: &Path, err: &dyn std::fmt::Display, ran: Option<u64>) 
     std::process::exit(2);
 }
 
-fn help() -> ! {
-    println!("{USAGE}\n\n{HELP}");
+/// Prints `-h` and `--help`'s answer for the executable `exe`: its usage,
+/// then the [`HELP`] entries that are its own or both executables'.
+fn help(exe: &'static str) -> ! {
+    let (usage, own, title) = if exe == "quux" {
+        (USAGE_QUUX, Whose::Quux, "A simulator of QUUX, the MIT CADR Lisp Machine evolved.")
+    } else {
+        (USAGE_CADR, Whose::Cadr, "A simulator of the MIT CADR Lisp Machine.")
+    };
+    println!("{usage}\n\n{title}\n");
+    for (whose, entry) in HELP {
+        if *whose == Whose::Both || *whose == own {
+            println!("{}", entry.replace("{exe}", exe));
+        }
+    }
     std::process::exit(0);
 }
 
@@ -1589,8 +1894,13 @@ fn pack_choice(packs: &[Pack]) -> Vec<(PathBuf, usize, bool)> {
     packs.iter().map(|p| (p.path.clone(), p.unit, p.read_only)).collect()
 }
 
-/// What a file of flags is called where muir looks for one.
-const RC: &str = ".muirrc";
+/// What a file of flags is called where the executable `exe` looks for
+/// one: `.cadrrc` for `cadr` and `.quuxrc` for `quux`, each executable
+/// reading its own and never the other's, the flags in it being its
+/// machine's.
+fn rc_name(exe: &str) -> String {
+    format!(".{exe}rc")
+}
 
 /// The keyboard mapping this run's terminal uses, settled once from the
 /// flags and read by every place that makes a [`Keyboard`].
@@ -1836,7 +2146,7 @@ fn watch_spec(arg: &str) -> Result<WatchSpec, String> {
     if to.is_some_and(|t| t < from) {
         return Err(format!("the range ends at {} before it begins at {from}", to.unwrap()));
     }
-    let nets = muir::prompt::parse_net_names(list, "--watch")?;
+    let nets = crate::prompt::parse_net_names(list, "--watch")?;
     Ok((from, to, nets))
 }
 
@@ -1976,8 +2286,8 @@ fn keyboard_mapping(named: Option<&Path>) -> (Mapping, String) {
 
 /// The file of flags this run reads, and whether it was asked for by name.
 ///
-/// `--config` if it is given, else `.muirrc` in the directory muir was run
-/// from, else `.muirrc` in the user's home directory: **the first of those
+/// `--config` if it is given, else [`rc_name`] in the directory the
+/// executable was run from, else [`rc_name`] in the user's home directory: **the first of those
 /// there, not all of them**, so a file in the directory is the whole of
 /// the run's flags and not an addition to the home one.  `MUIR_RC` stands
 /// in for the two that are looked for, which is how a test gives a run a
@@ -1985,7 +2295,7 @@ fn keyboard_mapping(named: Option<&Path>) -> (Mapping, String) {
 ///
 /// A file asked for by name must be there; the ones looked for need not
 /// be, and most runs have none.
-fn config_path(typed: &[String]) -> Option<(PathBuf, bool)> {
+fn config_path(typed: &[String], exe: &str) -> Option<(PathBuf, bool)> {
     let mut typed = typed.iter();
     while let Some(word) = typed.next() {
         if word == "-c" || word == "--config" {
@@ -1996,11 +2306,11 @@ fn config_path(typed: &[String]) -> Option<(PathBuf, bool)> {
     if let Some(named) = std::env::var_os("MUIR_RC") {
         return Some((PathBuf::from(named), false));
     }
-    let here = PathBuf::from(RC);
+    let here = PathBuf::from(rc_name(exe));
     if here.exists() {
         return Some((here, false));
     }
-    std::env::var_os("HOME").map(|home| (PathBuf::from(home).join(RC), false))
+    std::env::var_os("HOME").map(|home| (PathBuf::from(home).join(rc_name(exe)), false))
 }
 
 /// The flags in the file, [`config_path`], and which file that was.
@@ -2015,9 +2325,9 @@ fn config_path(typed: &[String]) -> Option<(PathBuf, bool)> {
 /// at the keyboard means this time, and `--micro`, `--rtl` and `--chip`
 /// are exclusive of each other, not last-wins.  A file cannot name
 /// another; that is the command line's to say.
-fn muirrc(typed: &[String]) -> (Vec<String>, Option<PathBuf>) {
+fn rc_flags(typed: &[String], exe: &str) -> (Vec<String>, Option<PathBuf>) {
     const ENGINES: [&str; 3] = ["--micro", "--rtl", "--chip"];
-    let Some((path, named)) = config_path(typed) else { return (Vec::new(), None) };
+    let Some((path, named)) = config_path(typed, exe) else { return (Vec::new(), None) };
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if named => usage(&format!("--config {}: {e}", path.display())),
@@ -2037,6 +2347,12 @@ fn muirrc(typed: &[String]) -> (Vec<String>, Option<PathBuf>) {
         };
         if flag == "-c" || flag == "--config" {
             usage(&format!("{}: a file of flags cannot name another", shown(&path)));
+        }
+        // The file is this executable's own, so a flag of the other
+        // machine's in it is the file's to mend: refused as the command
+        // line refuses it, with the file named.
+        if let Some(why) = not_this_executables(flag, exe) {
+            usage(&format!("{}: {why}", shown(&path)));
         }
         if typed.iter().any(|a| a == flag) || (engine_typed && ENGINES.contains(&flag)) {
             continue;
@@ -2085,9 +2401,9 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
         // written block then kept for the run and a checkpoint.
         if let Some(d) = m.block_disk.as_mut() {
             let opened = if read_only {
-                muir::disk_image::Disk::open(&p)
+                crate::disk_image::Disk::open(&p)
             } else {
-                muir::disk_image::Disk::open_rw(&p)
+                crate::disk_image::Disk::open_rw(&p)
             };
             match opened {
                 Ok(disk) => d.attach(disk),
@@ -2131,7 +2447,7 @@ enum ColorTv {
     /// One screen. `17200000` and `17377750` answer with an NXM, which is
     /// how `COLOR-EXISTS-P` finds out which machine this is.
     Off,
-    /// The model, [`muir::machine::Machine::fit_color_tv`].
+    /// The model, [`crate::machine::Machine::fit_color_tv`].
     Model,
     /// The netlist on the backplane, `data/LISPMTV.netlist` through
     /// [`netlist::parse_color_tv`].
@@ -2161,10 +2477,10 @@ fn machine(
     (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
     (geometry, block_disk, rtc, file_roots): (
-        muir::machine::Geometry,
+        crate::machine::Geometry,
         bool,
-        muir::machine::Rtc,
-        &muir::file_device::Mounts,
+        crate::machine::Rtc,
+        &crate::file_device::Mounts,
     ),
 ) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
@@ -2172,13 +2488,13 @@ fn machine(
     m.file_device.mounts = file_roots.clone();
     // Counted from the machine's clock at power-on, which is now.
     m.rtc = match rtc {
-        muir::machine::Rtc::Counted { start, .. } => {
-            muir::machine::Rtc::Counted { start, base_ns: m.ns }
+        crate::machine::Rtc::Counted { start, .. } => {
+            crate::machine::Rtc::Counted { start, base_ns: m.ns }
         }
         live => live,
     };
     if block_disk {
-        m.block_disk = Some(muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS));
+        m.block_disk = Some(crate::block_disk::BlockDisk::new(crate::block_disk::BLOCK_NS));
     }
     m.load_prom(prom);
     m.tv.set_mono_tv_size(mono_tv_size.0, mono_tv_size.1);
@@ -2191,26 +2507,26 @@ fn machine(
 }
 
 /// The boot PROM this run loads: MIT's own, built in, or QUUX's on
-/// `--machine quux`, unless `--prom` names an MCR microcode file of one's own.
+/// `quux`, unless `--prom` names an MCR microcode file of one's own.
 ///
 /// A file muir cannot read stops the run before it starts. It is the
 /// program the machine is about to execute, so there is nothing to fall
 /// back on: 512 zero words are not a boot PROM.
-fn boot_prom(file: Option<&Path>, geometry: muir::machine::Geometry) -> Vec<Insn> {
+fn boot_prom(file: Option<&Path>, geometry: crate::machine::Geometry) -> Vec<Insn> {
     let Some(path) = file else {
-        return if geometry == muir::machine::Geometry::CADR {
-            muir::prom::boot_prom()
+        return if geometry == crate::machine::Geometry::CADR {
+            crate::prom::boot_prom()
         } else {
-            muir::prom::quux_boot_prom()
+            crate::prom::quux_boot_prom()
         };
     };
     let bytes =
         std::fs::read(path).unwrap_or_else(|e| usage(&format!("--prom {}: {e}", shown(path))));
     // QUUX's PROM is assembled at 36000, its own addresses (contract Q2).
-    let parsed = if geometry == muir::machine::Geometry::CADR {
-        muir::prom::parse_mcr(&bytes)
+    let parsed = if geometry == crate::machine::Geometry::CADR {
+        crate::prom::parse_mcr(&bytes)
     } else {
-        muir::prom::parse_quux_mcr(&bytes)
+        crate::prom::parse_quux_mcr(&bytes)
     };
     parsed.unwrap_or_else(|e| usage(&format!("--prom {}: {e}", shown(path))))
 }
@@ -2223,18 +2539,18 @@ fn boot_prom(file: Option<&Path>, geometry: muir::machine::Geometry) -> Vec<Insn
 /// nothing about a copy announces which it is --- so a run on a file of
 /// one's own says how the file stands to MIT's: word for word, or how
 /// many words apart.
-fn prom_shown(file: Option<&Path>, prom: &[Insn], geometry: muir::machine::Geometry) -> String {
+fn prom_shown(file: Option<&Path>, prom: &[Insn], geometry: crate::machine::Geometry) -> String {
     let Some(path) = file else {
-        return if geometry == muir::machine::Geometry::CADR {
+        return if geometry == crate::machine::Geometry::CADR {
             "built in, System 100's own sys/ubin/promh.mcr, version 9".to_string()
         } else {
             "built in, QUUX's data/quux-promh.mcr, version 1000, at 36000".to_string()
         };
     };
-    let (theirs, whose) = if geometry == muir::machine::Geometry::CADR {
-        (muir::prom::boot_prom(), "MIT's own")
+    let (theirs, whose) = if geometry == crate::machine::Geometry::CADR {
+        (crate::prom::boot_prom(), "MIT's own")
     } else {
-        (muir::prom::quux_boot_prom(), "QUUX's own")
+        (crate::prom::quux_boot_prom(), "QUUX's own")
     };
     match prom.iter().zip(&theirs).filter(|(a, b)| a != b).count() {
         0 => format!("{}, {whose} word for word", shown(path)),
@@ -2265,7 +2581,7 @@ impl Stop {
         &self,
         ran: u64,
         (pc, prom_enabled, a_write): (u16, bool, bool),
-        halt: Option<muir::machine::Halt>,
+        halt: Option<crate::machine::Halt>,
     ) {
         let prom = if prom_enabled { " in the PROM" } else { "" };
         if self.reached((pc, prom_enabled, a_write)) {
@@ -2286,7 +2602,7 @@ impl Stop {
 }
 
 /// Where an engine's PC is, for [`Stop`]: the PC, whether it is the
-/// PROM's ([`muir::machine::Machine::in_prom`]), and whether it is a
+/// PROM's ([`crate::machine::Machine::in_prom`]), and whether it is a
 /// control-store write's ([`Engine::pc_is_a_write`]).
 fn stop_pc<E: Engine>(e: &E) -> (u16, bool, bool) {
     (e.pc(), e.machine().in_prom(e.pc()), e.pc_is_a_write())
@@ -2387,7 +2703,7 @@ fn time_lashup(
             }
         }
     }
-    report("rtl, debugger", ran, t.elapsed().as_secs_f64(), muir::ioboard::CYCLE_NS);
+    report("rtl, debugger", ran, t.elapsed().as_secs_f64(), crate::ioboard::CYCLE_NS);
     let e = &lashup.debugger;
     stop.conclude(ran, stop_pc(e), halt);
     println!(
@@ -2439,7 +2755,7 @@ trait Stepper {
     /// One turn: whether a microcycle ran.  None ran when the other end of
     /// the cable had not promised one yet and its next message was waited
     /// for instead, or when the cable went.
-    fn step(&mut self) -> Result<bool, muir::lashup::Error>;
+    fn step(&mut self) -> Result<bool, crate::lashup::Error>;
     /// Between microcycles: the connector's listener looked at, and what
     /// it found said.
     fn attend(&mut self) {}
@@ -2462,7 +2778,7 @@ trait Stepper {
         None
     }
     /// The run's end: the other end of the cable told, and waited for.
-    fn finish(&mut self) -> Result<(), muir::lashup::Error> {
+    fn finish(&mut self) -> Result<(), crate::lashup::Error> {
         Ok(())
     }
 }
@@ -2478,7 +2794,7 @@ impl<E: Engine> Stepper for Alone<E> {
     fn engine_mut(&mut self) -> &mut E {
         &mut self.0
     }
-    fn step(&mut self) -> Result<bool, muir::lashup::Error> {
+    fn step(&mut self) -> Result<bool, crate::lashup::Error> {
         self.0.step()?;
         Ok(true)
     }
@@ -2504,7 +2820,7 @@ impl<E: Engine + CableEnd> Stepper for Connector<E> {
     fn engine_mut(&mut self) -> &mut E {
         self.machine_mut()
     }
-    fn step(&mut self) -> Result<bool, muir::lashup::Error> {
+    fn step(&mut self) -> Result<bool, crate::lashup::Error> {
         if self.debugger().is_none() {
             self.machine_mut().step()?;
             return Ok(true);
@@ -2530,7 +2846,7 @@ impl<E: Engine + CableEnd> Stepper for Connector<E> {
     fn debug_cycles(&self) -> Option<u64> {
         (self.connections() > 0).then(|| Connector::debug_cycles(self))
     }
-    fn finish(&mut self) -> Result<(), muir::lashup::Error> {
+    fn finish(&mut self) -> Result<(), crate::lashup::Error> {
         Connector::finish(self)
     }
 }
@@ -2549,7 +2865,7 @@ impl<E: Engine + CableEnd> Stepper for Remote<E> {
     fn engine_mut(&mut self) -> &mut E {
         &mut self.machine
     }
-    fn step(&mut self) -> Result<bool, muir::lashup::Error> {
+    fn step(&mut self) -> Result<bool, crate::lashup::Error> {
         Remote::step(self)
     }
     fn on_cable(&self) -> bool {
@@ -2558,7 +2874,7 @@ impl<E: Engine + CableEnd> Stepper for Remote<E> {
     fn debug_cycles(&self) -> Option<u64> {
         Some(Remote::debug_cycles(self))
     }
-    fn finish(&mut self) -> Result<(), muir::lashup::Error> {
+    fn finish(&mut self) -> Result<(), crate::lashup::Error> {
         Remote::finish(self)
     }
 }
@@ -2599,12 +2915,12 @@ fn say_unplugged(addr: Option<SocketAddr>, why: &str) {
 /// its own crystal and is not held with the debugger.  A request standing
 /// at the window when the hold comes on stands through it, and holds
 /// `-DB NEED UB` down on the debuggee and its Unibus with it, until the
-/// adapter's watchdog lifts it ([`muir::fabric::FAULT_WATCHDOG`]); the
+/// adapter's watchdog lifts it ([`crate::fabric::FAULT_WATCHDOG`]); the
 /// debugger's own timeout on that cycle is in its clock, which the hold
 /// stops, so the cycle is costed when the debugger runs on, as one the
 /// adapter dropped is.
 fn time_fabric(
-    mut run: FreeRunning<muir::fabric::Fabric<muir::fabric::Mapped>>,
+    mut run: FreeRunning<crate::fabric::Fabric<crate::fabric::Mapped>>,
     stop: Stop,
     terminal: Option<&mut Terminal>,
     color: Option<&mut Terminal>,
@@ -2629,12 +2945,12 @@ fn time_fabric(
                     ran += 1;
                     hold.stepped(&run.debugger, ran);
                 }
-                Err(muir::lashup::Error::Halt(h)) => {
+                Err(crate::lashup::Error::Halt(h)) => {
                     halt = Some(h);
                     break;
                 }
                 Err(e) => {
-                    eprintln!("muir: the debug cable: {e}");
+                    eprintln!("{}: the debug cable: {e}", executable());
                     break;
                 }
             }
@@ -2644,7 +2960,7 @@ fn time_fabric(
             // the cycle is one the debugger times out, and the next begins
             // again.
             if let Some(fault) = run.debuggee.fault() {
-                eprintln!("muir: the fabric's window: {}", fault.what);
+                eprintln!("{}: the fabric's window: {}", executable(), fault.what);
                 if fault.fatal {
                     break;
                 }
@@ -2671,7 +2987,7 @@ fn time_fabric(
         hold.lines(&mut run.debugger, ran, setup, &mut Writes::CableEnd);
     }
     hold.done();
-    report("rtl, debugger", ran, t.elapsed().as_secs_f64(), muir::ioboard::CYCLE_NS);
+    report("rtl, debugger", ran, t.elapsed().as_secs_f64(), crate::ioboard::CYCLE_NS);
     hold.conclude(&run.debugger, &stop, ran, halt);
     match run.debuggee.taken() {
         Some((count, faults)) => println!(
@@ -2685,7 +3001,7 @@ fn time_fabric(
     }
     if !hold.quit {
         let m = run.debugger.machine();
-        let mut screens: Vec<(&mut Terminal, &muir::tv::Tv)> = Vec::new();
+        let mut screens: Vec<(&mut Terminal, &crate::tv::Tv)> = Vec::new();
         if let Some(term) = terminal {
             screens.push((term, &m.tv));
         }
@@ -2761,7 +3077,7 @@ enum Writes<'a> {
     /// unless `--tv-capture-no-time`.
     Alone { name: &'a str, capture: &'a mut Option<(PathBuf, Recorder)>, clocks: bool },
     /// An end of the debug cable writes neither, and says why: the cable
-    /// is in the bus interface's state ([`muir::busint::Busint`] saves
+    /// is in the bus interface's state ([`crate::busint::Busint`] saves
     /// whether one is attached), so its checkpoint is none `--resume`,
     /// which takes a machine on its own, can start from; and over the
     /// cable the two machines are two clocks, which is why `--tv-capture`
@@ -2848,7 +3164,7 @@ impl Hold {
         // was already true is one nothing can run on.
         let ending = prompt.ended();
         while let Some(line) = prompt.line() {
-            match muir::prompt::parse(&line) {
+            match crate::prompt::parse(&line) {
                 Ok(None) => {}
                 Ok(Some(Command::Boot)) => {
                     // The button starts the machine: it presets RUN, and a
@@ -2896,7 +3212,7 @@ impl Hold {
                 Ok(Some(Command::Mem { from, words })) => {
                     let m = e.machine();
                     let read = |a: usize| m.main.get(a).copied();
-                    match muir::prompt::main_dump(from, words, m.main.len(), read) {
+                    match crate::prompt::main_dump(from, words, m.main.len(), read) {
                         Ok(dump) => print!("{dump}"),
                         Err(what) => println!("prompt: {what}"),
                     }
@@ -2950,7 +3266,7 @@ impl Hold {
                     self.quit = true;
                     break;
                 }
-                Ok(Some(Command::Help)) => print!("{}", muir::prompt::HELP),
+                Ok(Some(Command::Help)) => print!("{}", crate::prompt::HELP),
                 Err(what) => println!("prompt: {what}"),
             }
         }
@@ -2981,7 +3297,13 @@ impl Hold {
 
     /// The run's last word: that it was quit at the prompt, or how the
     /// stop came.
-    fn conclude<E: Engine>(&self, e: &E, stop: &Stop, ran: u64, halt: Option<muir::machine::Halt>) {
+    fn conclude<E: Engine>(
+        &self,
+        e: &E,
+        stop: &Stop,
+        ran: u64,
+        halt: Option<crate::machine::Halt>,
+    ) {
         if self.quit {
             let prom = if e.machine().in_prom(e.pc()) { " in the PROM" } else { "" };
             println!("       quit at PC {:o}{prom} after {ran}", e.pc());
@@ -3051,12 +3373,12 @@ fn time_engine<S: Stepper>(
                 // The other end's message was waited for, or the cable
                 // went: no microcycle ran, so nothing below is due.
                 Ok(false) => continue,
-                Err(muir::lashup::Error::Halt(h)) => {
+                Err(crate::lashup::Error::Halt(h)) => {
                     halt = Some(h);
                     break;
                 }
                 Err(e) => {
-                    eprintln!("muir: the debug cable: {e}");
+                    eprintln!("{}: the debug cable: {e}", executable());
                     break;
                 }
             }
@@ -3174,7 +3496,7 @@ fn time_engine<S: Stepper>(
         println!("       {n} debug cycles on the cable");
     }
     if let Err(e) = s.finish() {
-        eprintln!("muir: the debug cable at the end: {e}");
+        eprintln!("{}: the debug cable at the end: {e}", executable());
     }
     if let Some((path, rec)) = capture.as_mut() {
         let m = s.engine().machine();
@@ -3193,7 +3515,7 @@ fn time_engine<S: Stepper>(
     }
     if !hold.quit {
         let m = s.engine().machine();
-        let mut screens: Vec<(&mut Terminal, &muir::tv::Tv)> = Vec::new();
+        let mut screens: Vec<(&mut Terminal, &crate::tv::Tv)> = Vec::new();
         if let Some(term) = terminal {
             screens.push((term, &m.tv));
         }
@@ -3349,7 +3671,7 @@ fn say_pc_chip(
 /// for as long as it was left to.  `tests/halt.rs` holds both engines to
 /// that.
 fn machrun_low<E: Engine>(e: &E) -> Option<&'static str> {
-    let f = muir::spy::Flag1::of(e.spy_read(muir::spy::FLAG_1));
+    let f = crate::spy::Flag1::of(e.spy_read(crate::spy::FLAG_1));
     if !f.srun {
         // A cleared RUN is the other halt, and `halted` is its name.
         return None;
@@ -3383,7 +3705,7 @@ fn say_machrun_low(why: &str) {
 /// at a time through the OPC control register.
 fn say_registers<E: Engine>(e: &E) -> String {
     let m = e.machine();
-    muir::prompt::registers(&[
+    crate::prompt::registers(&[
         ("PC", e.pc() as u32),
         ("OPC", m.opc as u32),
         ("Q", m.q),
@@ -3406,7 +3728,7 @@ fn say_registers<E: Engine>(e: &E) -> String {
 /// when the machine was.
 fn say_chip_memory(
     c: &Chip,
-    rams: &[muir::chip::Ram],
+    rams: &[crate::chip::Ram],
     memory: Memory,
     from: usize,
     words: Option<usize>,
@@ -3424,7 +3746,7 @@ fn say_chip_memory(
         None => ram.len(),
     };
     let all: Vec<u32> = (from..to).map(|a| ram.word(c, a)).collect();
-    Ok(muir::prompt::dump(&all, from))
+    Ok(crate::prompt::dump(&all, from))
 }
 
 fn say_memory(
@@ -3454,11 +3776,11 @@ fn say_memory(
         Some(n) => from.saturating_add(n).min(all.len()),
         None => all.len(),
     };
-    Ok(muir::prompt::dump(&all[from..to], from))
+    Ok(crate::prompt::dump(&all[from..to], from))
 }
 
 /// The prompt: a line on stdin is a command to muir itself,
-/// [`muir::prompt`], read on a thread of its own and acted on between two
+/// [`crate::prompt`], read on a thread of its own and acted on between two
 /// microcycles, where the terminal is attended.
 struct Prompt {
     lines: std::sync::mpsc::Receiver<String>,
@@ -3537,7 +3859,7 @@ impl Prompt {
         if self.showing.get() || !self.terminal {
             return;
         }
-        print!("{}", muir::prompt::PROMPT);
+        print!("{}", crate::prompt::PROMPT);
         let _ = std::io::stdout().flush();
         self.showing.set(true);
     }
@@ -3587,9 +3909,9 @@ fn write_checkpoint<E: Engine>(name: &str, e: &E, path: &Path) {
         eprintln!("checkpoint: {} not written: {why}", path.display());
         return;
     }
-    let mut w = muir::checkpoint::Writer::new();
+    let mut w = crate::checkpoint::Writer::new();
     e.save(&mut w);
-    match muir::checkpoint::write(path, name, e.machine().memory_boards(), &w.finish()) {
+    match crate::checkpoint::write(path, name, e.machine().memory_boards(), &w.finish()) {
         Ok(n) => eprintln!(
             "checkpoint: {} at {} microcycles, {n} bytes",
             path.display(),
@@ -3610,7 +3932,7 @@ fn timestamped(extension: &str) -> PathBuf {
 
 /// The screen as it stands, as a PNG: [`Tv::png`], which is the
 /// frame buffer as the monitor shows it.
-fn write_screenshot(path: &Path, tv: &muir::tv::Tv) {
+fn write_screenshot(path: &Path, tv: &crate::tv::Tv) {
     match std::fs::write(path, tv.png()) {
         Ok(()) => eprintln!(
             "screenshot: {}, {} bytes",
@@ -3622,7 +3944,7 @@ fn write_screenshot(path: &Path, tv: &muir::tv::Tv) {
 }
 
 /// Writes a netlist machine to `path` and says how big it came, or why
-/// it did not: [`muir::cable::write_checkpoint`], which is the one format
+/// it did not: [`crate::cable::write_checkpoint`], which is the one format
 /// the cosim harness writes too.  Taken where [`FarEnd::quiet`] says it
 /// may be, which is what [`chip_to_quiet`] runs on to.
 fn write_chip_checkpoint(
@@ -3634,7 +3956,7 @@ fn write_chip_checkpoint(
     color_tv: ColorTv,
     ran: u64,
 ) {
-    match muir::cable::write_checkpoint(path, ran, tv_board.name(), color_tv.name(), cpu, clk, far)
+    match crate::cable::write_checkpoint(path, ran, tv_board.name(), color_tv.name(), cpu, clk, far)
     {
         Ok(n) => eprintln!("checkpoint: {} at {ran} microcycles, {n} bytes", path.display()),
         Err(err) => eprintln!("checkpoint: could not write {}: {err}", path.display()),
@@ -3654,7 +3976,7 @@ fn resume_chip(
     (path, c): &(PathBuf, Checkpoint),
 ) -> u64 {
     let refuse = |err: std::io::Error| -> ! { stale_checkpoint(path, &err, None) };
-    let mut it = muir::cable::read_checkpoint(c).unwrap_or_else(|e| refuse(e));
+    let mut it = crate::cable::read_checkpoint(c).unwrap_or_else(|e| refuse(e));
     if it.tv_board != tv_board.name() {
         usage(&format!(
             "--resume {}: a {} checkpoint, and --tv-board is {}",
@@ -3699,8 +4021,8 @@ fn resume_chip(
 /// flag's name: a resume under its own `--rtc` reads the second the run
 /// that wrote it would have. The base is the checkpoint's, the machine's
 /// clock at its power-on, and a resume's clock carries on from it.
-fn refuse_rtc(path: &Path, had: muir::machine::Rtc, asked: muir::machine::Rtc) {
-    use muir::machine::Rtc;
+fn refuse_rtc(path: &Path, had: crate::machine::Rtc, asked: crate::machine::Rtc) {
+    use crate::machine::Rtc;
     let same = match (had, asked) {
         (Rtc::Host, Rtc::Host) => true,
         (Rtc::Counted { start: a, .. }, Rtc::Counted { start: b, .. }) => a == b,
@@ -3805,30 +4127,48 @@ fn chip_busy_with(cpu: &Chip, far: &FarEnd, memrq: netlist::NetId) -> Option<&'s
     }
 }
 
-/// Loads the checkpoint read from `path` into `e`, built and booted as the
-/// flags say, or says why not and exits.
-///
-/// **The display board is refused after the read, not before it.** A
-/// `chip` checkpoint carries the board in its own header, so
-/// [`resume_chip`] can refuse one before it builds anything; an engine's
-/// carries it in the body, where `Tv::save` writes it, and the machine is
-/// built before the file is opened. So the file is read, and a board apart
-/// from the flag's ends the run then --- by the flag's name, as the other
-/// refusal does.
-/// A checkpoint written of one machine resumed under `--machine` naming
-/// another is refused by the flag's name: the map in it is that machine's.
+/// **A checkpoint the other executable wrote is refused naming that
+/// executable**: the executable is the machine, and the map in a
+/// checkpoint is its machine's. A `chip` checkpoint is the CADR's boards,
+/// QUUX having no netlist; an engine's says its machine in its body,
+/// [`crate::machine::Machine::checkpointed_geometry`]. Settled before
+/// anything is built, and before the engine's own refusal, which would
+/// say something less to the point. A body that cannot be read that far
+/// is left to the resume, which says why.
+fn refuse_other_executable((path, c): &(PathBuf, Checkpoint), exe: &str) {
+    let saved = if c.engine == "chip" {
+        Some(crate::machine::Geometry::CADR)
+    } else {
+        crate::machine::Machine::checkpointed_geometry(&c.body).ok()
+    };
+    if let Some(saved) = saved
+        && executable_of(saved) != exe
+    {
+        let (theirs, p) = (executable_of(saved), path.display());
+        usage(&format!("--resume {p} is {theirs}'s, not {exe}'s: {theirs} --resume {p}"));
+    }
+}
+
+/// A checkpoint of this executable's machine with another geometry --- a
+/// QUUX whose PDL buffer is not this one's --- is refused rather than
+/// loaded: the map and the PDL in it are that machine's.
+/// [`refuse_other_executable`] has refused the other executable's already.
 fn refuse_machine(
     (path, _): &(PathBuf, Checkpoint),
-    saved: muir::machine::Geometry,
-    flag: muir::machine::Geometry,
+    saved: crate::machine::Geometry,
+    flag: crate::machine::Geometry,
 ) {
-    let name = |g| if g == muir::machine::Geometry::QUUX { "quux" } else { "cadr" };
+    if executable_of(saved) != executable_of(flag) {
+        let (theirs, exe, p) = (executable_of(saved), executable_of(flag), path.display());
+        usage(&format!("--resume {p} is {theirs}'s, not {exe}'s: {theirs} --resume {p}"));
+    }
     if saved != flag {
         usage(&format!(
-            "--resume {}: written of --machine {}, and this run is --machine {}",
+            "--resume {}: a checkpoint of a {} with a {}-bit PDL buffer, and this is {}",
             path.display(),
-            name(saved),
-            name(flag)
+            executable_of(saved),
+            saved.pdl_bits,
+            executable_of(flag)
         ));
     }
 }
@@ -3851,12 +4191,22 @@ fn refuse_timing_model((path, _): &(PathBuf, Checkpoint), saved: TimingModel, fl
     }
 }
 
+/// Loads the checkpoint read from `path` into `e`, built and booted as the
+/// flags say, or says why not and exits.
+///
+/// **The display board is refused after the read, not before it.** A
+/// `chip` checkpoint carries the board in its own header, so
+/// [`resume_chip`] can refuse one before it builds anything; an engine's
+/// carries it in the body, where `Tv::save` writes it, and the machine is
+/// built before the file is opened. So the file is read, and a board apart
+/// from the flag's ends the run then --- by the flag's name, as the other
+/// refusal does.
 fn resume_engine<E: Engine>(
     name: &str,
     e: &mut E,
     (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
-    (geometry, rtc): (muir::machine::Geometry, muir::machine::Rtc),
+    (geometry, rtc): (crate::machine::Geometry, crate::machine::Rtc),
     resume: &(PathBuf, Checkpoint),
 ) {
     let (path, c) = resume;
@@ -3867,7 +4217,7 @@ fn resume_engine<E: Engine>(
             c.engine
         ));
     }
-    let mut r = muir::checkpoint::Reader::new(&c.body);
+    let mut r = crate::checkpoint::Reader::new(&c.body);
     // The machine first: a board refused on another machine's checkpoint
     // is only the machine's default board, and a disk the same (QUUX's is
     // block-disk). The geometry is read before either, so a load that
@@ -3947,7 +4297,7 @@ struct ChipMachine {
     /// map from the RAM chips' cells to a word.  Built once: `Ram::new`
     /// walks every instance, and the prompt would otherwise do it per
     /// command.
-    rams: Vec<muir::chip::Ram>,
+    rams: Vec<crate::chip::Ram>,
     promdisable: netlist::NetId,
     /// `-BOOT1`, the keyboard's boot line, for the boot sequence under
     /// `--io-board model`: with no netlist board to drive it, the model
@@ -3977,7 +4327,7 @@ fn chip_machine(
     packs: &[Pack],
     boards: Boards,
     memory_boards: usize,
-    chaos: muir::chaos::Config,
+    chaos: crate::chaos::Config,
     tv_board: TvBoard,
     color_tv: ColorTv,
     auto_boot: bool,
@@ -4019,11 +4369,11 @@ fn chip_machine(
     let pc_nets = c.bus_nets(&n, "PC", 14);
     let ir_nets = c.bus_nets(&n, "IR", 48);
     // In `Memory`'s order, so the prompt indexes by the command's own enum.
-    let rams: Vec<muir::chip::Ram> = ["A", "M", "DISPATCH", "PDL", "SPC"]
+    let rams: Vec<crate::chip::Ram> = ["A", "M", "DISPATCH", "PDL", "SPC"]
         .iter()
         .map(|name| {
-            let m = muir::chip::MEMS.iter().find(|m| m.name == *name).expect("a memory by name");
-            muir::chip::Ram::new(&c, &n, m)
+            let m = crate::chip::MEMS.iter().find(|m| m.name == *name).expect("a memory by name");
+            crate::chip::Ram::new(&c, &n, m)
         })
         .collect();
     // The mode register's bit, as `Machine::mode` has it on the other
@@ -4190,7 +4540,7 @@ fn time_chip(
     packs: &[Pack],
     boards: Boards,
     memory_boards: usize,
-    chaos: muir::chaos::Config,
+    chaos: crate::chaos::Config,
     terminal: Option<&mut Terminal>,
     mut glass: Option<&mut Glass>,
     serial: Option<&mut Endpoint>,
@@ -4350,7 +4700,7 @@ fn time_chip(
                 Ok(Turn::Unplugged(why)) => say_unplugged(end.addr(), &why),
                 Ok(Turn::Stepped | Turn::Waited) => {}
                 Err(h) => {
-                    eprintln!("muir: the debug cable: the machine halted: {h:?}");
+                    eprintln!("{}: the debug cable: the machine halted: {h:?}", executable());
                     break;
                 }
             }
@@ -4482,7 +4832,7 @@ fn time_chip(
         {
             let ending = prompt.ended();
             while let Some(line) = prompt.line() {
-                match muir::prompt::parse(&line) {
+                match crate::prompt::parse(&line) {
                     Ok(None) => {}
                     Ok(Some(Command::Boot)) => {
                         press_boot(&mut m.cpu, &mut m.clk, boot);
@@ -4544,7 +4894,7 @@ fn time_chip(
                     },
                     // The scratchpads live in the RAM chips' own cells here
                     // rather than in arrays, so a dump walks those cells:
-                    // `muir::chip::Ram`, which is also what
+                    // `crate::chip::Ram`, which is also what
                     // `chip_and_rtl_hold_the_same_memories` holds to `rtl`,
                     // so this prints the same words that comparison checks.
                     Ok(Some(Command::Dump { memory, from, words })) => {
@@ -4560,7 +4910,7 @@ fn time_chip(
                     // machine runs as `net` is.
                     Ok(Some(Command::Mem { from, words })) => {
                         let read = |a: usize| m.far.main_word(a as u32);
-                        match muir::prompt::main_dump(from, words, m.far.main_words(), read) {
+                        match crate::prompt::main_dump(from, words, m.far.main_words(), read) {
                             Ok(dump) => print!("{dump}"),
                             Err(what) => println!("prompt: {what}"),
                         }
@@ -4635,7 +4985,7 @@ fn time_chip(
                         quit = true;
                         break;
                     }
-                    Ok(Some(Command::Help)) => print!("{}", muir::prompt::HELP),
+                    Ok(Some(Command::Help)) => print!("{}", crate::prompt::HELP),
                     Err(what) => println!("prompt: {what}"),
                 }
             }
@@ -4661,7 +5011,7 @@ fn time_chip(
     if let Some(prompt) = prompt.as_ref() {
         prompt.done();
     }
-    report("chip", ran, t.elapsed().as_secs_f64(), muir::ioboard::CYCLE_NS);
+    report("chip", ran, t.elapsed().as_secs_f64(), crate::ioboard::CYCLE_NS);
     {
         let c = &end.machine().cpu;
         if quit {
@@ -4677,7 +5027,7 @@ fn time_chip(
         println!("       {} debug cycles on the cable", end.debug_cycles());
     }
     if let Err(e) = end.finish() {
-        eprintln!("muir: the debug cable at the end: {e}");
+        eprintln!("{}: the debug cable at the end: {e}", executable());
     }
     let m = end.machine_mut();
     if let Some((path, rec)) = capture.as_mut() {
@@ -4719,7 +5069,7 @@ fn time_chip(
     }
     {
         let machine = &m.far.buses.machine;
-        let mut screens: Vec<(&mut Terminal, &muir::tv::Tv)> = Vec::new();
+        let mut screens: Vec<(&mut Terminal, &crate::tv::Tv)> = Vec::new();
         if let Some(term) = terminal {
             screens.push((term, &machine.tv));
         }
@@ -4730,13 +5080,20 @@ fn time_chip(
     }
 }
 
-fn main() {
+/// Runs `cadr` or `quux`, whichever executable is `geometry`'s machine ---
+/// [`crate::machine::Geometry::CADR`] or [`crate::machine::Geometry::QUUX`]
+/// --- on the command line it was given. A flag of the other machine's is
+/// refused by name, saying which executable takes it, and so is a
+/// checkpoint the other one wrote.
+pub fn run(geometry: crate::machine::Geometry) {
+    let exe = executable_of(geometry);
+    let _ = EXECUTABLE.set(exe);
     let mut which: Option<Which> = None;
     let mut packs: Vec<Pack> = Vec::new();
     // The glass TTYs asked for, in the order the flags came. Bound after
     // the flags are read, as the terminal is.
     let mut glass_at: Vec<GlassAt> = Vec::new();
-    let mut chaos = muir::chaos::Config::default();
+    let mut chaos = crate::chaos::Config::default();
     // The CHUDP link: where it listens, the peers named for it, and
     // where a frame goes that none of them names. The socket is bound
     // after the flags are read, so that what is refused is refused before
@@ -4771,17 +5128,13 @@ fn main() {
     let mut timing_model = TimingModel::Cadr;
     let mut timing_given = false;
     let mut sync_cycle_ticks: Option<u8> = None;
-    let mut cache: Option<muir::cache::CacheConfig> = None;
-    let mut memory_timing: Option<muir::cache::MemoryTiming> = None;
+    let mut cache: Option<crate::cache::CacheConfig> = None;
+    let mut memory_timing: Option<crate::cache::MemoryTiming> = None;
     // QUUX's real-time clock: live unless `--rtc` gives a second to count
-    // from; whether the flag was given, to refuse it on the CADR.
-    let mut rtc = muir::machine::Rtc::Host;
-    let mut rtc_given = false;
-    // QUUX's file device's folders (contract Q9), and whether the flag was
-    // given, to refuse it on the CADR.
-    let mut file_roots = muir::file_device::Mounts::default();
-    let mut file_root_given = false;
-    let mut geometry = muir::machine::Geometry::CADR;
+    // from.
+    let mut rtc = crate::machine::Rtc::Host;
+    // QUUX's file device's folders (contract Q9).
+    let mut file_roots = crate::file_device::Mounts::default();
     // The color TV, the second display board: off unless `--color-tv`
     // fits it, because a CADR has one screen unless somebody plugged a
     // second board in, and `COLOR-EXISTS-P` is System 100 asking which
@@ -4799,7 +5152,6 @@ fn main() {
     // said which it wanted, which decides what the model memory does to
     // it below.
     let mut disk_controller = true;
-    let mut block_disk = false;
     let mut disk_given = false;
     // The DISK MULTIPLEXOR on the netlist controller's cable, which is
     // what gives it eight drive ports instead of one.
@@ -4834,10 +5186,10 @@ fn main() {
     // the machine is built.
     let mut watch: Option<WatchSpec> = None;
 
-    // The flags in `~/.muirrc` come first, so that a flag on the command
-    // line, which is read after, has the last word.  [`muirrc`] drops the
-    // ones the command line gives too, for the few that may not be given
-    // twice.
+    // The flags in the executable's own file, `~/.cadrrc` or `~/.quuxrc`,
+    // come first, so that a flag on the command line, which is read after,
+    // has the last word.  [`rc_flags`] drops the ones the command line
+    // gives too, for the few that may not be given twice.
     let typed: Vec<String> = std::env::args().skip(1).collect();
     // **Asked what this build is, muir answers before it reads anything
     // else.**  Neither of these runs a machine, so nothing a file of
@@ -4849,7 +5201,7 @@ fn main() {
     // and reaches nothing this has not.
     for a in &typed {
         if a == "-h" || a == "--help" {
-            help();
+            help(exe);
         }
         if a == "-V" || a == "--version" {
             println!("{}", version());
@@ -4863,7 +5215,7 @@ fn main() {
     // spelled differently outlives the spelling.  So both are said here,
     // and every refusal below follows them.  The rest of the setup waits
     // until there is a machine to describe.
-    let (from_file, rc) = muirrc(&typed);
+    let (from_file, rc) = rc_flags(&typed, exe);
     let head = {
         let mut head = format!("{} started\n", version());
         if let Some(path) = &rc
@@ -4880,11 +5232,18 @@ fn main() {
     let mut args = words.into_iter().peekable();
     while let Some(a) = args.next() {
         if a == "-h" || a == "--help" {
-            help();
+            help(exe);
         }
         if a == "-V" || a == "--version" {
             println!("{}", version());
             std::process::exit(0);
+        }
+        // **The executable is the machine**: a flag of the other one's is
+        // refused by name before anything it takes is read, saying which
+        // executable takes it, and `--machine`, which chose between them,
+        // is a flag of neither.
+        if let Some(why) = not_this_executables(&a, exe) {
+            usage(&why);
         }
         let engine = match a.as_str() {
             "--micro" => Some(Which::Micro),
@@ -4912,7 +5271,7 @@ fn main() {
                 // the old spelling and is refused by name.
                 let want = "--chaos-address wants one address in octal or subnet:host; the file and time host is not muir's, and --chaos-udp-peer is where it lives";
                 let arg = args.next().unwrap_or_else(|| usage(want));
-                match muir::chaos::parse_address(&arg) {
+                match crate::chaos::parse_address(&arg) {
                     Some(a) => chaos.address = a,
                     None => usage(want),
                 }
@@ -4932,7 +5291,7 @@ fn main() {
             (None, "--chaos-udp") => {
                 // The endpoint is optional: the next word is it unless it is a flag.
                 let spec = args.next_if(|v| !v.starts_with('-'));
-                match endpoint(spec.as_deref(), muir::chaos::udp::PORT) {
+                match endpoint(spec.as_deref(), crate::chaos::udp::PORT) {
                     Some(a) => udp_at = Some(a),
                     None => usage("--chaos-udp wants nothing, a port, an address or address:port"),
                 }
@@ -4965,13 +5324,13 @@ fn main() {
             // (`busint::MAX_MEMORY_BOARDS`). Zero is no memory; the model
             // memory on chip is `--main-memory model`.
             (None, "--main-memory-boards") => match args.next().and_then(|v| v.parse().ok()) {
-                Some(b) if (1..=muir::busint::MAX_MEMORY_BOARDS).contains(&b) => {
+                Some(b) if (1..=crate::busint::MAX_MEMORY_BOARDS).contains(&b) => {
                     boards = b;
                     boards_given = true;
                 }
                 _ => usage(&format!(
                     "--main-memory-boards wants a count from 1 to {}",
-                    muir::busint::MAX_MEMORY_BOARDS
+                    crate::busint::MAX_MEMORY_BOARDS
                 )),
             },
             (None, "--tv") => match args.next().as_deref() {
@@ -4979,21 +5338,21 @@ fn main() {
                 Some("model") => tv = false,
                 _ => usage("--tv wants netlist or model"),
             },
-            (None, "--machine") => match args.next().as_deref() {
-                Some("cadr") => geometry = muir::machine::Geometry::CADR,
-                Some("quux") => geometry = muir::machine::Geometry::QUUX,
-                _ => usage("--machine wants cadr or quux"),
-            },
-            (None, "--timing-model") => match args.next().as_deref().and_then(TimingModel::parse) {
-                Some(model) => {
-                    timing_model = model;
-                    timing_given = true;
-                }
-                None => usage("--timing-model wants cadr, fpga or sync"),
+            // The CADR's delay lines or muir-fpga's grid under them;
+            // QUUX's `sync` is `quux`'s own, and its ticks the flag's.
+            (None, "--timing-model") => match args.next().as_deref() {
+                Some("sync") => usage("--timing-model wants cadr or fpga: sync is quux's timing"),
+                model => match model.and_then(TimingModel::parse) {
+                    Some(model) => {
+                        timing_model = model;
+                        timing_given = true;
+                    }
+                    None => usage("--timing-model wants cadr or fpga"),
+                },
             },
             (None, "--cache") => match args.next().as_deref().and_then(|v| v.parse::<u32>().ok()) {
                 Some(words) => {
-                    let c = muir::cache::CacheConfig::with_words(words);
+                    let c = crate::cache::CacheConfig::with_words(words);
                     if let Err(e) = c.check() {
                         usage(&format!("--cache: {e}"));
                     }
@@ -5004,10 +5363,10 @@ fn main() {
             (None, "--memory-timing") => {
                 let t = args.next();
                 memory_timing = match t.as_deref() {
-                    Some("arty") => Some(muir::cache::MemoryTiming::ARTY_Z7_20),
-                    Some("de25") => Some(muir::cache::MemoryTiming::DE25_NANO),
+                    Some("arty") => Some(crate::cache::MemoryTiming::ARTY_Z7_20),
+                    Some("de25") => Some(crate::cache::MemoryTiming::DE25_NANO),
                     Some(v) => v.split_once(',').and_then(|(r, w)| {
-                        Some(muir::cache::MemoryTiming {
+                        Some(crate::cache::MemoryTiming {
                             read_ns: r.parse().ok().filter(|&n| n > 0)?,
                             write_ns: w.parse().ok().filter(|&n| n > 0)?,
                         })
@@ -5020,12 +5379,11 @@ fn main() {
             }
             (None, "--rtc") => {
                 const WANTS: &str = "--rtc wants a Unix second, 0 to 4294967295, or host";
-                rtc_given = true;
                 rtc = match args.next().as_deref() {
-                    Some("host") => muir::machine::Rtc::Host,
+                    Some("host") => crate::machine::Rtc::Host,
                     Some(v) => match v.parse::<u64>() {
                         Ok(start) => match u32::try_from(start) {
-                            Ok(start) => muir::machine::Rtc::Counted { start, base_ns: 0 },
+                            Ok(start) => crate::machine::Rtc::Counted { start, base_ns: 0 },
                             Err(_) => usage(&format!(
                                 "--rtc {start} is past 4294967295, 2^32-1, the last second the RTC's 32 bits hold"
                             )),
@@ -5041,11 +5399,14 @@ fn main() {
                     None => usage("--sync-cycle-ticks wants a count of 10 ns ticks, 1 to 255"),
                 }
             }
+            // The CADR's two boards; MONO TV is QUUX's display, always.
             (None, "--tv-board") => match args.next().as_deref() {
                 Some("simple-tv") => tv_board = Some(TvBoard::SimpleTv),
                 Some("lispm-tv") => tv_board = Some(TvBoard::LispmTv),
-                Some("mono-tv") => tv_board = Some(TvBoard::MonoTv),
-                _ => usage("--tv-board wants simple-tv, lispm-tv or mono-tv"),
+                Some("mono-tv") => {
+                    usage("--tv-board wants simple-tv or lispm-tv: mono-tv is quux's display")
+                }
+                _ => usage("--tv-board wants simple-tv or lispm-tv"),
             },
             (None, "--mono-tv-size") => {
                 let v = args.next().unwrap_or_default();
@@ -5075,18 +5436,21 @@ fn main() {
                 // The endpoint is optional: the next word is it unless it is a flag.
                 color_terminal = Some(args.next_if(|v| !v.starts_with('-')));
             }
+            // MIT's controller, as its netlist or its model; block-disk is
+            // QUUX's disk, and `quux`'s only one.
             (None, "--disk-controller") => {
                 disk_given = true;
                 match args.next().as_deref() {
                     Some("netlist") => disk_controller = true,
                     Some("model") => disk_controller = false,
-                    Some("block-disk") => block_disk = true,
-                    _ => usage("--disk-controller wants netlist, model or block-disk"),
+                    Some("block-disk") => {
+                        usage("--disk-controller wants netlist or model: block-disk is quux's disk")
+                    }
+                    _ => usage("--disk-controller wants netlist or model"),
                 }
             }
             (None, "--file-root") => {
                 const WANTS: &str = "--file-root wants <folder>[,ro] or <name>=<folder>[,ro]";
-                file_root_given = true;
                 let v = args.next().unwrap_or_else(|| usage(WANTS));
                 if let Err(e) = file_roots.add(&v) {
                     usage(&format!("--file-root {v}: {e}"));
@@ -5124,7 +5488,7 @@ fn main() {
             (None, "--debuggee-chaos-address") => {
                 let want = "--debuggee-chaos-address wants one address in octal or subnet:host";
                 let arg = args.next().unwrap_or_else(|| usage(want));
-                match muir::chaos::parse_address(&arg) {
+                match crate::chaos::parse_address(&arg) {
                     Some(a) => debuggee_address = Some(a),
                     None => usage(want),
                 }
@@ -5200,7 +5564,7 @@ fn main() {
                 Some(path) => checkpoint = Some(PathBuf::from(path)),
                 None => usage("--checkpoint wants a file to write"),
             },
-            // Read before the loop, by `muirrc`, since the file it names is
+            // Read before the loop, by `rc_flags`, since the file it names is
             // where the loop's first words come from.
             (None, "-c" | "--config") => {
                 args.next();
@@ -5261,7 +5625,7 @@ fn main() {
                     ),
                 }
             }
-            (None, v) => usage(&format!("unknown argument {v}")),
+            (None, v) => usage(&format!("{v} is not a flag of {exe}")),
         }
     }
 
@@ -5293,91 +5657,29 @@ fn main() {
             }
         }
     }
-    // `chip` is the CADR's boards, netlist for netlist: QUUX has none.
-    if geometry != muir::machine::Geometry::CADR && which == Which::Chip {
-        usage("--machine quux has no netlist, and this run is chip");
-    }
-    // MONO TV is QUUX's display and has no place on a CADR's backplane.
-    let tv_board = tv_board.unwrap_or(if geometry == muir::machine::Geometry::CADR {
+    // The display is the machine's: the SIMPLE TV unless `--tv-board`
+    // names the LISPM TV on the CADR, and MONO TV on QUUX, always --- the
+    // flag being `cadr`'s alone, refused on `quux` with the others.
+    let tv_board = tv_board.unwrap_or(if geometry == crate::machine::Geometry::CADR {
         TvBoard::SimpleTv
     } else {
         TvBoard::MonoTv
     });
-    // And the CADR's boards have none on QUUX's.
-    if tv_board != TvBoard::MonoTv && geometry != muir::machine::Geometry::CADR {
-        usage(&format!(
-            "--tv-board {} is the CADR's, and this run is QUUX, whose display is mono-tv",
-            tv_board.name()
-        ));
-    }
-    if tv_board == TvBoard::MonoTv && geometry == muir::machine::Geometry::CADR {
-        usage("--tv-board mono-tv is QUUX's, and this run is the CADR: --machine quux");
-    }
     // The grid is muir-fpga's, and it is `rtl`'s references its fabric is
     // held to; `micro` and `chip` keep the board's time.
-    // `sync` is QUUX's microcycle, and its ticks are `sync`'s.
     // QUUX drops the delay lines: its timing is `sync`, always, of the
-    // ticks `--sync-cycle-ticks` gives. The CADR keeps its delay lines, and
-    // `sync` and its ticks are refused on it.
-    if geometry == muir::machine::Geometry::CADR {
-        if matches!(timing_model, TimingModel::Sync { .. }) {
-            usage("--timing-model sync is QUUX's, and this run is the CADR: --machine quux");
-        }
-        if sync_cycle_ticks.is_some() {
-            usage("--sync-cycle-ticks is QUUX's, and this run is the CADR: --machine quux");
-        }
-    } else {
-        if !matches!(timing_model, TimingModel::Sync { .. }) && timing_given {
-            usage(&format!(
-                "--timing-model {} is the CADR's: QUUX drops the delay lines, and its timing is sync",
-                timing_model.name()
-            ));
-        }
-        let cycle_ticks = sync_cycle_ticks.unwrap_or(muir::clock::SYNC_CYCLE_TICKS);
+    // ticks `--sync-cycle-ticks` gives, both flags being their own
+    // machine's alone.
+    if geometry != crate::machine::Geometry::CADR {
+        let cycle_ticks = sync_cycle_ticks.unwrap_or(crate::clock::SYNC_CYCLE_TICKS);
         timing_model = TimingModel::Sync { cycle_ticks, ilong_ticks: 0 };
     }
     // QUUX's disk is block-disk and nothing else: muir-sys's PROM,
-    // microcode and band for QUUX address the disk by block, and the
-    // CADR's controller is refused as the CADR's TV boards are.
-    if geometry != muir::machine::Geometry::CADR {
-        if disk_given && !block_disk {
-            usage(&format!(
-                "--disk-controller {} is the CADR's, and this run is QUUX, whose disk is block-disk",
-                if disk_controller { "netlist" } else { "model" }
-            ));
-        }
-        block_disk = true;
-    }
-    // QUUX has no Unibus (contract Q5), and the debug cable is a Unibus
-    // master: no connector, and the lashup is the CADR's.
-    if !geometry.unibus
-        && ((cable_listen.asked && !cable_off) || cable_connect.is_some() || debuggee)
-    {
-        usage(
-            "QUUX has no Unibus, and so no debug cable: --debug-cable-listen, \
-             --debug-cable-connect and --debug-in-process are the CADR's",
-        );
-    }
-    // Block-disk is QUUX's, and not a board `chip` has.
-    if block_disk && geometry == muir::machine::Geometry::CADR {
-        usage("--disk-controller block-disk is QUUX's, and this run is the CADR: --machine quux");
-    }
-    if block_disk && which == Which::Chip {
-        usage("--disk-controller block-disk has no netlist, and this run is chip");
-    }
-    // The real-time clock is QUUX's (contract Q9): nothing answers on the
-    // CADR's page.
-    if rtc_given && !geometry.rtc {
-        usage("--rtc is QUUX's, and this run is the CADR: --machine quux");
-    }
-    // So is the file device: the CADR's files are a Chaosnet host's.
-    if file_root_given && !geometry.file_device {
-        usage("--file-root is QUUX's, and this run is the CADR: --machine quux");
-    }
+    // microcode and band for QUUX address the disk by block. The CADR's
+    // is MIT's controller, `--disk-controller` choosing its netlist or its
+    // model, which is `cadr`'s alone.
+    let block_disk = geometry != crate::machine::Geometry::CADR;
     // QUUX's main memory is on its own port and `rtl` times it.
-    if memory_timing.is_some() && geometry == muir::machine::Geometry::CADR {
-        usage("--memory-timing is QUUX's, and this run is the CADR: --machine quux");
-    }
     if memory_timing.is_some() && which != Which::Rtl {
         usage(&format!(
             "--memory-timing is rtl's, and this run is {}",
@@ -5385,9 +5687,6 @@ fn main() {
         ));
     }
     // The memory cache is QUUX's, and `rtl` is what times it.
-    if cache.is_some() && geometry == muir::machine::Geometry::CADR {
-        usage("--cache is QUUX's, and this run is the CADR: --machine quux");
-    }
     if cache.is_some() && which != Which::Rtl {
         usage(&format!(
             "--cache is rtl's, and this run is {}",
@@ -5429,8 +5728,9 @@ fn main() {
     if mono_tv_size.is_some() && tv_board != TvBoard::MonoTv {
         usage(&format!("--mono-tv-size is MONO TV's, and this run's board is {}", tv_board.name()));
     }
-    let mono_tv_size = mono_tv_size.unwrap_or((muir::tv::MONO_TV_WIDTH, muir::tv::MONO_TV_HEIGHT));
-    if let Err(e) = muir::tv::check_mono_tv_size(mono_tv_size.0, mono_tv_size.1, color_tv.fitted())
+    let mono_tv_size =
+        mono_tv_size.unwrap_or((crate::tv::MONO_TV_WIDTH, crate::tv::MONO_TV_HEIGHT));
+    if let Err(e) = crate::tv::check_mono_tv_size(mono_tv_size.0, mono_tv_size.1, color_tv.fitted())
     {
         usage(&format!("--mono-tv-size: {e}"));
     }
@@ -5455,7 +5755,7 @@ fn main() {
     // built: the mapping is `/dev/mem`, which only Linux has, and the
     // debugger has to be a muir running on the board's own processor.
     if let Some(Connect::Window(at)) = cable_connect
-        && let Some(why) = muir::fabric::unmappable()
+        && let Some(why) = crate::fabric::unmappable()
     {
         usage(&format!("--debug-cable-connect {at:#x}: {why}"));
     }
@@ -5618,10 +5918,13 @@ fn main() {
     // A checkpoint is read before the machine is built, so that the machine
     // can be built with as much memory as the checkpoint's had.
     let resume = resume.map(|path| {
-        let c =
-            muir::checkpoint::read(&path).unwrap_or_else(|err| stale_checkpoint(&path, &err, None));
+        let c = crate::checkpoint::read(&path)
+            .unwrap_or_else(|err| stale_checkpoint(&path, &err, None));
         (path, c)
     });
+    if let Some(r) = &resume {
+        refuse_other_executable(r, exe);
+    }
     if let Some((path, c)) = &resume {
         if boards_given && boards != c.memory_boards {
             usage(&format!(
@@ -5826,7 +6129,7 @@ fn main() {
     // The CHUDP link, bound here so that a port that cannot be had stops
     // the run rather than leaving a machine that quietly reaches nobody.
     chaos.udp = udp_at.map(|at| {
-        muir::chaos::udp::Link::bind(at, udp_peers, udp_default_peer)
+        crate::chaos::udp::Link::bind(at, udp_peers, udp_default_peer)
             .unwrap_or_else(|e| usage(&format!("--chaos-udp {at}: {e}")))
     });
     // The other machine's Chaosnet: a cable of its own, since muir's cable
@@ -5835,7 +6138,7 @@ fn main() {
     // nothing for them to collide with.  The other machine has no CHUDP
     // link: one socket belongs to one cable, and there is no flag that
     // gives the other machine one.
-    let debuggee_chaos = muir::chaos::Config {
+    let debuggee_chaos = crate::chaos::Config {
         address: debuggee_address.unwrap_or(chaos.address),
         udp: None,
         ..chaos.clone()
@@ -5868,8 +6171,8 @@ fn main() {
             Which::Chip => "chip",
         };
         // A flag the chosen engine has no use for is not an error --- one
-        // `.muirrc` serves runs of every engine --- but a run that quietly
-        // ignored it would look as though it had obeyed.
+        // file of flags serves runs of every engine --- but a run that
+        // quietly ignored it would look as though it had obeyed.
         for (flag, engines, has) in [
             ("--disk-controller", "chip", which == Which::Chip || block_disk),
             ("--io-board", "chip", which == Which::Chip),
@@ -5923,19 +6226,19 @@ fn main() {
             writeln!(
                 s,
                 "disk: block-disk, blocks by number, {} us a block",
-                muir::block_disk::BLOCK_NS / 1000
+                crate::block_disk::BLOCK_NS / 1000
             )
             .unwrap();
         }
         // QUUX's main memory is behind its own port, through its cache
         // (contract Q6): `rtl` times both.
-        let quux_rtl = geometry == muir::machine::Geometry::QUUX && which == Which::Rtl;
+        let quux_rtl = geometry == crate::machine::Geometry::QUUX && which == Which::Rtl;
         if quux_rtl {
-            let t = memory_timing.unwrap_or(muir::cache::MemoryTiming::NOMINAL);
+            let t = memory_timing.unwrap_or(crate::cache::MemoryTiming::NOMINAL);
             writeln!(s, "memory port: a line fill in {} ns, a write in {}", t.read_ns, t.write_ns)
                 .unwrap();
         }
-        if let Some(c) = cache.or(quux_rtl.then_some(muir::cache::CacheConfig::QUUX)) {
+        if let Some(c) = cache.or(quux_rtl.then_some(crate::cache::CacheConfig::QUUX)) {
             writeln!(
                 s,
                 "cache: {} words, lines of {}, {}-way, a hit in {} ns",
@@ -5943,7 +6246,7 @@ fn main() {
             )
             .unwrap();
         }
-        if geometry == muir::machine::Geometry::QUUX {
+        if geometry == crate::machine::Geometry::QUUX {
             writeln!(
                 s,
                 "machine: quux, revision 9: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, clocks in the processor (a 60 Hz tick, an interval timer and a microsecond clock), the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, its devices reached by their registers, a real-time clock and a file device"
@@ -5952,8 +6255,8 @@ fn main() {
         }
         if geometry.rtc {
             match rtc {
-                muir::machine::Rtc::Host => writeln!(s, "rtc: the host's clock").unwrap(),
-                muir::machine::Rtc::Counted { start, .. } => {
+                crate::machine::Rtc::Host => writeln!(s, "rtc: the host's clock").unwrap(),
+                crate::machine::Rtc::Counted { start, .. } => {
                     writeln!(s, "rtc: from {start}, counting machine time").unwrap()
                 }
             }
@@ -5962,8 +6265,8 @@ fn main() {
             writeln!(
                 s,
                 "file device: {} us a command and {} us a KiB",
-                muir::file_device::COMMAND_NS / 1000,
-                muir::file_device::KIB_NS / 1000
+                crate::file_device::COMMAND_NS / 1000,
+                crate::file_device::KIB_NS / 1000
             )
             .unwrap();
             for line in file_roots.describe() {
@@ -5977,12 +6280,12 @@ fn main() {
         for (p, unit, ro) in chosen {
             // QUUX's disk says what its footer made it and its size, the
             // two things that are no longer a T-300's (contract Q8).
-            let kind = match block_disk.then(|| muir::disk_image::probe(&p)) {
+            let kind = match block_disk.then(|| crate::disk_image::probe(&p)) {
                 Some(Ok((f, bytes))) => {
                     format!(
                         ", {}, {} blocks",
                         f.name(),
-                        bytes / muir::disk_image::BLOCK_BYTES as u64
+                        bytes / crate::disk_image::BLOCK_BYTES as u64
                     )
                 }
                 _ => String::new(),
@@ -6140,7 +6443,7 @@ fn main() {
         // What a microcycle takes: the board's delay lines on the CADR,
         // muir-fpga's grid under them, or QUUX's `sync`, which has none.
         if which != Which::Chip {
-            let per = timing_model.cycle_ns(muir::clock::Speed::Normal, false);
+            let per = timing_model.cycle_ns(crate::clock::Speed::Normal, false);
             let timing = match timing_model {
                 TimingModel::Cadr => {
                     format!("cadr, the board's delay lines, {per} ns a microcycle at normal speed")
@@ -6172,7 +6475,7 @@ fn main() {
                 } else {
                     format!(
                         "the machine's own speed, {} ns a microcycle; the run waits when it is ahead",
-                        timing_model.cycle_ns(muir::clock::Speed::Normal, false)
+                        timing_model.cycle_ns(crate::clock::Speed::Normal, false)
                     )
                 }
             )
@@ -6241,7 +6544,7 @@ fn main() {
             let mut e = Micro::new(m);
             // QUUX's microcycle is `sync`'s ticks, on this engine's clock too.
             if let TimingModel::Sync { cycle_ticks, .. } = timing_model {
-                e.sync_cycle_ns = cycle_ticks as u64 * muir::clock::GRID_NS;
+                e.sync_cycle_ns = cycle_ticks as u64 * crate::clock::GRID_NS;
             }
             if auto_boot {
                 e.boot();
@@ -6307,7 +6610,7 @@ fn main() {
                 mb.geometry = geometry;
                 if block_disk {
                     mb.block_disk =
-                        Some(muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS));
+                        Some(crate::block_disk::BlockDisk::new(crate::block_disk::BLOCK_NS));
                 }
                 mb.load_prom(&prom);
                 mb.tv.set_mono_tv_size(mono_tv_size.0, mono_tv_size.1);
@@ -6388,8 +6691,8 @@ fn main() {
                 // The identity is read before anything is stored, and a
                 // window that is not the adapter ends the run here: there
                 // is no falling back to the network and no retrying.
-                let window = muir::fabric::open(at).unwrap_or_else(|why| {
-                    eprintln!("muir: --debug-cable-connect {at:#x}: {why}");
+                let window = crate::fabric::open(at).unwrap_or_else(|why| {
+                    eprintln!("{}: --debug-cable-connect {at:#x}: {why}", executable());
                     std::process::exit(1);
                 });
                 eprintln!("debug cable: DBGOUT at the fabric's window at {at:#x}");
@@ -6433,7 +6736,7 @@ fn main() {
             }
         }
         Which::Chip => {
-            let image: Vec<u64> = prom.iter().copied().map(muir::prom::programming).collect();
+            let image: Vec<u64> = prom.iter().copied().map(crate::prom::programming).collect();
             let io_n = io.then(|| netlist::parse(CADRIO).unwrap());
             let tv_n = tv.then(|| {
                 netlist::parse(match tv_board {
@@ -6519,8 +6822,8 @@ mod tests {
         const HALT_CONS: u64 = 1 << 10;
         let halting = || {
             let mut m = Machine::new();
-            let mut prom = vec![muir::isa::asm::filler(); 512];
-            prom[5] = Insn::new(muir::isa::asm::filler().raw() | HALT_CONS);
+            let mut prom = vec![crate::isa::asm::filler(); 512];
+            prom[5] = Insn::new(crate::isa::asm::filler().raw() | HALT_CONS);
             m.load_prom(&prom);
             m
         };
@@ -6562,7 +6865,7 @@ mod tests {
     /// a run against fabric wants `/dev/mem` on Linux and cannot be
     /// spawned here, so this is the [`Hold`] `time_fabric` runs, on the
     /// machine it runs it on --- [`FreeRunning`] over a
-    /// [`muir::fabric::Fabric`], on the array window --- fed lines as
+    /// [`crate::fabric::Fabric`], on the array window --- fed lines as
     /// stdin would feed them.  `hold` holds; `step` runs exactly so many
     /// and holds again, with no line read until they have run;
     /// `checkpoint` is refused and writes nothing; and ^C holds, and one
@@ -6573,8 +6876,8 @@ mod tests {
     #[test]
     fn the_prompt_holds_the_fabrics_debugger() {
         let mut m = Machine::new();
-        m.load_prom(&muir::prom::boot_prom());
-        let window = muir::fabric::Fabric::open(muir::fabric::Words::new()).unwrap();
+        m.load_prom(&crate::prom::boot_prom());
+        let window = crate::fabric::Fabric::open(crate::fabric::Words::new()).unwrap();
         let mut run = FreeRunning::new(Rtl::new(m), window);
         run.debugger.boot();
         let (typed, prompt) = Prompt::piped();

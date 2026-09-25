@@ -480,7 +480,7 @@ fn the_endpoint_runs_at_whatever_rate_the_port_was_given() {
     // A far end with nothing connected to it reads as an empty J9 does:
     // the MC1489's open inputs hold the three controls off and `RxD`
     // marking, and a far end that is down holds them at the same levels.
-    // `muir --serial` puts one there before anything has connected.
+    // `cadr --serial` puts one there before anything has connected.
     far.apply(&mut b.chip, b.now);
     for net in ["'TTL CTS IN'", "'TTL DSR IN'", "'TTL DCD IN'", "'TTL DATA IN'"] {
         assert_eq!(b.level(net), Level::High, "{net} with nothing connected");

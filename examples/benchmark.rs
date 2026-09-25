@@ -9,7 +9,7 @@
 //! different number of seconds is given. `--everything` is the worst case
 //! the figures are quoted for: the color TV fitted on every engine, and on
 //! `chip` MIT's disk controller with the disk multiplexor on its cable as
-//! well, every board a netlist, as `muir --chip --color-tv --disk-multiplexor`
+//! well, every board a netlist, as `cadr --chip --color-tv --disk-multiplexor`
 //! runs. The programs touch no pack, so the disk boards only sit on the bus.  Each run is checked against the
 //! count the program left in `VMA`, so a rate is only printed for a run that
 //! did the work.  Nothing is read from `vendor/`.

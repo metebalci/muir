@@ -13,12 +13,12 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use support::{Child, Run, muir, text};
+use support::{Child, Run, cadr, text};
 
 /// A run long enough to be looked at, started and left running: killed
 /// when the test drops it.
 fn running(args: &[&str]) -> Child {
-    muir().args(args).args(["--stop-after", "4000000000"]).start()
+    cadr().args(args).args(["--stop-after", "4000000000"]).start()
 }
 
 /// The endpoint a run says its terminal is at, read off what it wrote as
@@ -118,13 +118,13 @@ fn a_second_muir_takes_the_next_display() {
 fn an_asked_for_port_that_is_taken_is_refused() {
     let held = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = held.local_addr().unwrap().port().to_string();
-    let out = muir().args(["--micro", "--terminal", &port, "--stop-after", "1"]).run();
+    let out = cadr().args(["--micro", "--terminal", &port, "--stop-after", "1"]).run();
     let t = text(&out);
     assert_eq!(out.status.code(), Some(2), "a usage error:\n{t}");
     assert!(
         String::from_utf8_lossy(&out.stderr)
             .lines()
-            .find(|l| l.starts_with("muir: "))
+            .find(|l| l.starts_with("cadr: "))
             .is_some_and(|l| l.contains("--terminal")),
         "the refusal names --terminal:\n{t}"
     );
@@ -188,7 +188,7 @@ fn a_run_says_when_its_terminal_loses_typing() {
 #[test]
 fn control_c_ends_the_serving_of_the_last_screen() {
     for engine in [&["--micro"][..], &["--chip", "--main-memory-boards", "1"][..]] {
-        let mut run = muir()
+        let mut run = cadr()
             .args(engine)
             .args(["--no-auto-boot", "--stop-after", "10", "--terminal", "127.0.0.1:0"])
             .stdin(Stdio::piped())

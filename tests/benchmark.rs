@@ -11,7 +11,7 @@
 //! believed.  And that the engines agree: `micro`, `rtl` and the board reach
 //! the same count in the same microcycles.
 //!
-//! `chip` is booted as `muir --chip` boots it, every board a netlist but the
+//! `chip` is booted as `cadr --chip` boots it, every board a netlist but the
 //! disk controller, and needs nothing from `vendor/`.
 
 use muir::benchmark::{self, Program, Run, Stop};

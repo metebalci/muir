@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! The serial port's route out of the process: [`muir::serial::Endpoint`],
-//! the TCP endpoint `muir --serial` opens, against the behavioral far end
+//! the TCP endpoint `cadr --serial` opens, against the behavioral far end
 //! of `src/serial.rs`.
 //!
 //! What is held here is the plug and the characters. `tests/serial.rs`

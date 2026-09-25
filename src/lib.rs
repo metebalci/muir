@@ -21,6 +21,7 @@ pub mod capture;
 pub mod chaos;
 pub mod checkpoint;
 pub mod chip;
+pub mod cli;
 pub mod clock;
 pub mod dcmicro;
 pub mod disk_controller;

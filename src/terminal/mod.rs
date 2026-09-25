@@ -31,7 +31,7 @@
 //! **The socket is bound to the loopback address unless told otherwise.**
 //! RFC 6143's `None` security type is the only one offered, so a viewer
 //! needs no password; a terminal on a routable address would hand anyone
-//! who can reach it the keyboard of the machine. `muir --terminal 5900`
+//! who can reach it the keyboard of the machine. `cadr --terminal 5900`
 //! listens on `127.0.0.1` and `--terminal 0.0.0.0:5900` is how one says
 //! otherwise, out loud.
 

@@ -20,7 +20,7 @@ use muir::terminal::keyboard::{
 };
 
 mod support;
-use support::{Run, muir, scratch, text};
+use support::{Run, cadr, scratch, text};
 
 /// The words a fresh keyboard makes of a run of keysyms, each pressed and
 /// released in turn.
@@ -285,7 +285,7 @@ fn muir_reads_a_mapping_and_prints_it() {
     let file = dir.join("keys");
     std::fs::write(&file, "key F13 Greek\n").unwrap();
 
-    let mut child = muir()
+    let mut child = cadr()
         .args([
             "--micro",
             "--keyboard-mapping",
@@ -309,7 +309,7 @@ fn muir_reads_a_mapping_and_prints_it() {
     assert!(t.contains("Alt Mode"), "and what the default still says:\n{t}");
 
     // With no file, the run says so and still works.
-    let out = muir().args(["--micro", "--stop-after", "10"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "10"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("keyboard: built in"), "the default needs no file:\n{t}");
@@ -394,7 +394,7 @@ fn the_dump_is_a_file_the_mapping_flag_reads() {
     let dump = |extra: &[&str]| {
         let mut args = vec!["--keyboard-mapping-dump"];
         args.extend_from_slice(extra);
-        let out = muir().args(args).run();
+        let out = cadr().args(args).run();
         assert!(out.status.success(), "muir failed:\n{}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).expect("the dump is text")
     };

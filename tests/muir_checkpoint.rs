@@ -7,7 +7,7 @@
 
 mod support;
 
-use support::{Run, muir, scratch, text};
+use support::{Run, cadr, quux, scratch, text};
 
 /// `--checkpoint` writes the machine at the stop, `--resume` starts there:
 /// the microcycle count carries on, the window counts from the resume.
@@ -15,7 +15,7 @@ use support::{Run, muir, scratch, text};
 fn a_run_checkpoints_at_its_stop_and_another_resumes_from_it() {
     let dir = scratch("checkpoint");
     let chk = dir.join("a.chk");
-    let out = muir().args(["--micro", "--stop-after", "3000", "--checkpoint"]).arg(&chk).run();
+    let out = cadr().args(["--micro", "--stop-after", "3000", "--checkpoint"]).arg(&chk).run();
     let t = text(&out);
     assert!(out.status.success(), "the first run failed:\n{t}");
     assert!(
@@ -23,7 +23,7 @@ fn a_run_checkpoints_at_its_stop_and_another_resumes_from_it() {
         "the checkpoint reported:\n{t}"
     );
     assert!(chk.exists());
-    let out = muir().args(["--micro", "--stop-after", "1000", "--resume"]).arg(&chk).run();
+    let out = cadr().args(["--micro", "--stop-after", "1000", "--resume"]).arg(&chk).run();
     let t = text(&out);
     assert!(out.status.success(), "the resumed run failed:\n{t}");
     assert!(
@@ -31,7 +31,7 @@ fn a_run_checkpoints_at_its_stop_and_another_resumes_from_it() {
         "the resume reported:\n{t}"
     );
     assert!(t.contains("ran out at 1000"), "the window counts from the resume:\n{t}");
-    let out = muir().args(["--rtl", "--stop-after", "1", "--resume"]).arg(&chk).run();
+    let out = cadr().args(["--rtl", "--stop-after", "1", "--resume"]).arg(&chk).run();
     assert!(!out.status.success());
     assert!(text(&out).contains("a micro checkpoint"), "{}", text(&out));
 }
@@ -42,16 +42,16 @@ fn a_run_checkpoints_at_its_stop_and_another_resumes_from_it() {
 fn a_resume_has_the_checkpoint_s_memory() {
     let dir = scratch("checkpoint-memory");
     let chk = dir.join("four.chk");
-    let out = muir()
+    let out = cadr()
         .args(["--micro", "--main-memory-boards", "4", "--stop-after", "100", "--checkpoint"])
         .arg(&chk)
         .run();
     assert!(out.status.success(), "{}", text(&out));
-    let out = muir().args(["--micro", "--stop-after", "10", "--resume"]).arg(&chk).run();
+    let out = cadr().args(["--micro", "--stop-after", "10", "--resume"]).arg(&chk).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("100 microcycles") && t.contains("4 memory boards"), "{t}");
-    let out = muir()
+    let out = cadr()
         .args(["--micro", "--main-memory-boards", "8", "--stop-after", "10", "--resume"])
         .arg(&chk)
         .run();
@@ -65,7 +65,7 @@ fn a_resume_has_the_checkpoint_s_memory() {
 #[test]
 fn a_checkpoint_is_one_machine() {
     let dir = scratch("checkpoint-refused");
-    let out = muir()
+    let out = cadr()
         .args(["--rtl", "--debug-in-process", "--stop-after", "1", "--resume", "x.chk"])
         .current_dir(&dir)
         .run();
@@ -105,14 +105,14 @@ fn chip_checkpoints_the_netlist_controllers_drives() {
         "--disk-pack",
         pack.to_str().unwrap(),
     ];
-    let out = muir().args(chip).args(["--stop-after", "300", "--checkpoint"]).arg(&chk).run();
+    let out = cadr().args(chip).args(["--stop-after", "300", "--checkpoint"]).arg(&chk).run();
     let t = text(&out);
     assert!(out.status.success(), "the first run failed:\n{t}");
     assert!(chk.exists(), "the checkpoint was written:\n{t}");
-    let out = muir().args(chip).args(["--stop-after", "200", "--resume"]).arg(&chk).run();
+    let out = cadr().args(chip).args(["--stop-after", "200", "--resume"]).arg(&chk).run();
     let resumed = text(&out);
     assert!(out.status.success(), "the resumed run failed:\n{resumed}");
-    let out = muir().args(chip).args(["--stop-after", "500"]).run();
+    let out = cadr().args(chip).args(["--stop-after", "500"]).run();
     let straight = text(&out);
     assert!(out.status.success(), "the straight run failed:\n{straight}");
     let stop = |t: &str| {
@@ -139,14 +139,14 @@ fn chip_checkpoints_at_its_stop_and_another_resumes_from_it() {
     let dir = scratch("checkpoint-chip");
     let chk = dir.join("chip.chk");
     let chip = ["--chip", "--main-memory-boards", "4"];
-    let out = muir().args(chip).args(["--stop-after", "300", "--checkpoint"]).arg(&chk).run();
+    let out = cadr().args(chip).args(["--stop-after", "300", "--checkpoint"]).arg(&chk).run();
     let t = text(&out);
     assert!(out.status.success(), "the first run failed:\n{t}");
     assert!(
         t.contains(&format!("checkpoint: {} at 300 microcycles", chk.display())),
         "the checkpoint reported at the microcycle it was taken at:\n{t}"
     );
-    let out = muir().args(chip).args(["--stop-after", "200", "--resume"]).arg(&chk).run();
+    let out = cadr().args(chip).args(["--stop-after", "200", "--resume"]).arg(&chk).run();
     let resumed = text(&out);
     assert!(out.status.success(), "the resumed run failed:\n{resumed}");
     assert!(
@@ -155,7 +155,7 @@ fn chip_checkpoints_at_its_stop_and_another_resumes_from_it() {
     );
     assert!(resumed.contains("ran out at 200"), "the window counts from the resume:\n{resumed}");
     // The same place a run that was never stopped is at.
-    let out = muir().args(chip).args(["--stop-after", "500"]).run();
+    let out = cadr().args(chip).args(["--stop-after", "500"]).run();
     let straight = text(&out);
     assert!(out.status.success(), "the straight run failed:\n{straight}");
     let pc = |t: &str| {
@@ -170,10 +170,10 @@ fn chip_checkpoints_at_its_stop_and_another_resumes_from_it() {
     );
     // A checkpoint of one machine does not load onto another engine, and
     // the engine it names is what it says.
-    let out = muir().args(["--rtl", "--stop-after", "1", "--resume"]).arg(&chk).run();
+    let out = cadr().args(["--rtl", "--stop-after", "1", "--resume"]).arg(&chk).run();
     assert!(!out.status.success());
     assert!(text(&out).contains("a chip checkpoint"), "{}", text(&out));
-    let out = muir()
+    let out = cadr()
         .args(chip)
         .args(["--tv-board", "lispm-tv", "--stop-after", "1", "--resume"])
         .arg(&chk)
@@ -189,7 +189,7 @@ fn chip_checkpoints_at_its_stop_and_another_resumes_from_it() {
 fn a_resume_has_the_checkpoint_s_timing_model() {
     let dir = scratch("checkpoint-timing-model");
     let chk = dir.join("fpga.chk");
-    let out = muir()
+    let out = cadr()
         .args(["--rtl", "--timing-model", "fpga", "--stop-after", "100", "--checkpoint"])
         .arg(&chk)
         .run();
@@ -197,70 +197,97 @@ fn a_resume_has_the_checkpoint_s_timing_model() {
     assert!(out.status.success(), "the first run failed:\n{t}");
     assert!(chk.exists(), "the checkpoint was written:\n{t}");
 
-    let out = muir()
+    let out = cadr()
         .args(["--rtl", "--timing-model", "fpga", "--stop-after", "10", "--resume"])
         .arg(&chk)
         .run();
     let t = text(&out);
     assert!(out.status.success(), "the resumed run failed:\n{t}");
 
-    let out = muir().args(["--rtl", "--stop-after", "10", "--resume"]).arg(&chk).run();
+    let out = cadr().args(["--rtl", "--stop-after", "10", "--resume"]).arg(&chk).run();
     let t = text(&out);
     assert_eq!(out.status.code(), Some(2), "not a usage error:\n{t}");
     assert!(t.contains("written under --timing-model fpga, and this run is under cadr"), "{t}");
 }
 
-/// **A checkpoint carries its machine**, and a resume under `--machine`
-/// naming the other is refused by the flag's name: the map in it is that
-/// machine's. Resumed under its own, it runs on, on both engines.
+/// **A checkpoint carries its machine, and the executable is the
+/// machine**: `cadr` refuses a checkpoint `quux` wrote and `quux` one
+/// `cadr` wrote, each naming the executable that resumes it, since the map
+/// in it is that machine's. Resumed by its own, it runs on, on both
+/// engines. The refusal comes before the engine's: a QUUX checkpoint on
+/// `cadr --chip` is QUUX's before it is `rtl`'s, and a `chip` checkpoint is
+/// the CADR's, QUUX having no netlist.
 #[test]
 fn a_resume_has_the_checkpoint_s_machine() {
     let dir = scratch("checkpoint-machine");
-    for engine in ["--micro", "--rtl"] {
-        let chk = dir.join(format!("{}.chk", &engine[2..]));
-        let out = muir()
-            .args([engine, "--machine", "quux", "--stop-after", "100", "--checkpoint"])
-            .arg(&chk)
-            .run();
-        assert!(out.status.success(), "{engine}: the first run failed:\n{}", text(&out));
-        let out = muir()
-            .args([engine, "--machine", "quux", "--stop-after", "10", "--resume"])
-            .arg(&chk)
-            .run();
-        assert!(out.status.success(), "{engine}: the resumed run failed:\n{}", text(&out));
-        let out = muir().args([engine, "--stop-after", "10", "--resume"]).arg(&chk).run();
+    let refused = |out: std::process::Output, says: &str| {
         let t = text(&out);
-        assert_eq!(out.status.code(), Some(2), "{engine}: not a usage error:\n{t}");
-        assert!(t.contains("written of --machine quux, and this run is --machine cadr"), "{t}");
+        assert_eq!(out.status.code(), Some(2), "not a usage error:\n{t}");
+        assert!(t.contains(says), "the refusal says {says:?}:\n{t}");
+    };
+    for engine in ["--micro", "--rtl"] {
+        let chk = dir.join(format!("quux-{}.chk", &engine[2..]));
+        let out = quux().args([engine, "--stop-after", "100", "--checkpoint"]).arg(&chk).run();
+        assert!(out.status.success(), "{engine}: the first run failed:\n{}", text(&out));
+        let out = quux().args([engine, "--stop-after", "10", "--resume"]).arg(&chk).run();
+        assert!(out.status.success(), "{engine}: the resumed run failed:\n{}", text(&out));
+        let path = chk.display();
+        let says = format!("--resume {path} is quux's, not cadr's: quux --resume {path}");
+        for cadr_engine in ["--micro", "--rtl", "--chip"] {
+            let out = cadr().args([cadr_engine, "--stop-after", "10", "--resume"]).arg(&chk).run();
+            refused(out, &says);
+        }
+
+        let chk = dir.join(format!("cadr-{}.chk", &engine[2..]));
+        let out = cadr().args([engine, "--stop-after", "100", "--checkpoint"]).arg(&chk).run();
+        assert!(out.status.success(), "{engine}: the CADR's run failed:\n{}", text(&out));
+        let path = chk.display();
+        let says = format!("--resume {path} is cadr's, not quux's: cadr --resume {path}");
+        for quux_engine in ["--micro", "--rtl"] {
+            let out = quux().args([quux_engine, "--stop-after", "10", "--resume"]).arg(&chk).run();
+            refused(out, &says);
+        }
     }
+    // A `chip` checkpoint is the CADR's boards.
+    let chk = dir.join("cadr-chip.chk");
+    let models = ["--main-memory", "model", "--io-board", "model", "--tv", "model"];
+    let out = cadr()
+        .args(["--chip", "--main-memory-boards", "1"])
+        .args(models)
+        .args(["--stop-after", "20", "--checkpoint"])
+        .arg(&chk)
+        .run();
+    assert!(out.status.success(), "the chip run failed:\n{}", text(&out));
+    let path = chk.display();
+    let out = quux().args(["--rtl", "--stop-after", "10", "--resume"]).arg(&chk).run();
+    refused(out, &format!("--resume {path} is cadr's, not quux's: cadr --resume {path}"));
 }
 
 /// **A checkpoint carries the RTC's setting** (contract Q9): a run under
 /// `--rtc <s>` resumes counting from the same start and the same base, and
 /// a resume whose `--rtc` says otherwise --- another second, or the host's
-/// clock --- is refused by the flag's name, as `--machine` is. A live
+/// clock --- is refused by the flag's name, as the machine is. A live
 /// checkpoint resumes live.
 #[test]
 fn a_resume_has_the_checkpoint_s_rtc() {
     let dir = scratch("checkpoint-rtc");
     for engine in ["--micro", "--rtl"] {
         let chk = dir.join(format!("{}.chk", &engine[2..]));
-        let quux = [engine, "--machine", "quux"];
-        let out = muir()
-            .args(quux)
+        let out = quux()
+            .args([engine])
             .args(["--rtc", "1700000000", "--stop-after", "100", "--checkpoint"])
             .arg(&chk)
             .run();
         assert!(out.status.success(), "{engine}: the first run failed:\n{}", text(&out));
-        let out = muir()
-            .args(quux)
+        let out = quux()
+            .args([engine])
             .args(["--rtc", "1700000000", "--stop-after", "10", "--resume"])
             .arg(&chk)
             .run();
         assert!(out.status.success(), "{engine}: the resumed run failed:\n{}", text(&out));
         for other in [&["--rtc", "1700000001"][..], &["--rtc", "host"], &[]] {
-            let out = muir()
-                .args(quux)
+            let out = quux()
+                .args([engine])
                 .args(other)
                 .args(["--stop-after", "10", "--resume"])
                 .arg(&chk)
@@ -272,12 +299,13 @@ fn a_resume_has_the_checkpoint_s_rtc() {
                 "{engine} {other:?}: {t}"
             );
         }
-        let out = muir().args(quux).args(["--stop-after", "100", "--checkpoint"]).arg(&chk).run();
+        let out =
+            quux().args([engine]).args(["--stop-after", "100", "--checkpoint"]).arg(&chk).run();
         assert!(out.status.success(), "{engine}: the live run failed:\n{}", text(&out));
-        let out = muir().args(quux).args(["--stop-after", "10", "--resume"]).arg(&chk).run();
+        let out = quux().args([engine]).args(["--stop-after", "10", "--resume"]).arg(&chk).run();
         assert!(out.status.success(), "{engine}: live resumes live:\n{}", text(&out));
-        let out = muir()
-            .args(quux)
+        let out = quux()
+            .args([engine])
             .args(["--rtc", "5", "--stop-after", "10", "--resume"])
             .arg(&chk)
             .run();
@@ -297,7 +325,7 @@ fn a_resume_has_the_checkpoint_s_rtc() {
 fn a_resume_has_the_checkpoint_s_display_board() {
     let dir = scratch("checkpoint-tv-board");
     let chk = dir.join("lispm.chk");
-    let out = muir()
+    let out = cadr()
         .args(["--micro", "--tv-board", "lispm-tv", "--stop-after", "100", "--checkpoint"])
         .arg(&chk)
         .run();
@@ -306,7 +334,7 @@ fn a_resume_has_the_checkpoint_s_display_board() {
     assert!(chk.exists(), "the checkpoint was written:\n{t}");
 
     // The board it was written with, and the run resumes.
-    let out = muir()
+    let out = cadr()
         .args(["--micro", "--tv-board", "lispm-tv", "--stop-after", "10", "--resume"])
         .arg(&chk)
         .run();
@@ -316,7 +344,7 @@ fn a_resume_has_the_checkpoint_s_display_board() {
     assert!(t.contains("tv: model lispm-tv"), "the resumed run has the board:\n{t}");
 
     // Without the flag it is the SIMPLE TV, which is another machine.
-    let out = muir().args(["--micro", "--stop-after", "10", "--resume"]).arg(&chk).run();
+    let out = cadr().args(["--micro", "--stop-after", "10", "--resume"]).arg(&chk).run();
     let t = text(&out);
     assert!(!out.status.success(), "a board apart resumed anyway:\n{t}");
     assert!(t.contains("--tv-board"), "the refusal names the flag:\n{t}");
@@ -332,7 +360,7 @@ fn a_resume_has_the_checkpoint_s_display_board() {
 fn a_resume_has_the_checkpoint_s_color_tv() {
     let dir = scratch("checkpoint-color-tv");
     let chk = dir.join("color.chk");
-    let out = muir()
+    let out = cadr()
         .args(["--micro", "--color-tv", "--stop-after", "100", "--checkpoint"])
         .arg(&chk)
         .run();
@@ -342,14 +370,14 @@ fn a_resume_has_the_checkpoint_s_color_tv() {
 
     // The board it was written with, and the run resumes.
     let out =
-        muir().args(["--micro", "--color-tv", "--stop-after", "10", "--resume"]).arg(&chk).run();
+        cadr().args(["--micro", "--color-tv", "--stop-after", "10", "--resume"]).arg(&chk).run();
     let t = text(&out);
     assert!(out.status.success(), "the resumed run failed:\n{t}");
     assert!(t.contains("100 microcycles"), "{t}");
     assert!(t.contains("color tv: model lispm-tv"), "the resumed run has the board:\n{t}");
 
     // Without the flag there is one screen, which is another machine.
-    let out = muir().args(["--micro", "--stop-after", "10", "--resume"]).arg(&chk).run();
+    let out = cadr().args(["--micro", "--stop-after", "10", "--resume"]).arg(&chk).run();
     let t = text(&out);
     assert!(!out.status.success(), "a machine without the board resumed anyway:\n{t}");
     assert!(t.contains("--color-tv"), "the refusal names the flag:\n{t}");
@@ -385,7 +413,7 @@ fn a_chip_resume_has_the_checkpoint_s_color_tv() {
         "--disk-controller",
         "model",
     ];
-    let out = muir()
+    let out = cadr()
         .args(chip)
         .args(["--color-tv", "--stop-after", "300", "--checkpoint"])
         .arg(&chk)
@@ -397,7 +425,7 @@ fn a_chip_resume_has_the_checkpoint_s_color_tv() {
 
     // The same machine resumes, and goes on from where it was.
     let out =
-        muir().args(chip).args(["--color-tv", "--stop-after", "50", "--resume"]).arg(&chk).run();
+        cadr().args(chip).args(["--color-tv", "--stop-after", "50", "--resume"]).arg(&chk).run();
     let t = text(&out);
     assert!(out.status.success(), "the resumed run failed:\n{t}");
     assert!(t.contains("at 300 microcycles"), "the resume reported:\n{t}");
@@ -406,7 +434,7 @@ fn a_chip_resume_has_the_checkpoint_s_color_tv() {
     // Without the flag there is one screen, and with `model` the second
     // board is another board: both refused by the flag's name.
     for args in [&["--stop-after", "50"][..], &["--color-tv", "model", "--stop-after", "50"][..]] {
-        let out = muir().args(chip).args(args).args(["--resume"]).arg(&chk).run();
+        let out = cadr().args(chip).args(args).args(["--resume"]).arg(&chk).run();
         let t = text(&out);
         assert!(!out.status.success(), "{args:?}: a board apart resumed anyway:\n{t}");
         assert!(t.contains("--color-tv"), "{args:?}: the refusal names the flag:\n{t}");

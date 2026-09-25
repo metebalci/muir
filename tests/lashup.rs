@@ -946,7 +946,7 @@ fn let_it_run(peer: &mut std::net::TcpStream) -> Vec<Message> {
 }
 
 /// The netlist board as a debuggee: the processor with the boot PROM,
-/// started from the button as `muir --chip` starts it, the interface
+/// started from the button as `cadr --chip` starts it, the interface
 /// board on its cables and a bare backplane behind it, as
 /// [`muir::cable::DebugIn`] runs them.
 fn board() -> muir::cable::DebugIn {

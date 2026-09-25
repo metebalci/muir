@@ -13,12 +13,12 @@ mod support;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-use support::{Child, Run, muir, text};
+use support::{Child, Run, cadr, text};
 
 /// A run long enough to be looked at, started and left running: killed
 /// when the test drops it.
 fn running(args: &[&str]) -> Child {
-    muir().args(args).args(["--stop-after", "4000000000"]).start()
+    cadr().args(args).args(["--stop-after", "4000000000"]).start()
 }
 
 /// The endpoint a run says its serial port is at, read off what it wrote
@@ -53,7 +53,7 @@ fn connect(at: SocketAddr) -> TcpStream {
 /// endpoint because it has none.
 #[test]
 fn the_port_is_off_unless_the_flag_is_given() {
-    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(!t.contains("serial: tcp://"), "no endpoint was asked for:\n{t}");
@@ -81,13 +81,13 @@ fn the_flag_says_where_the_port_is_and_a_connection_plugs_in() {
 fn a_port_that_is_taken_is_refused() {
     let held = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = held.local_addr().unwrap().port().to_string();
-    let out = muir().args(["--micro", "--serial", &port, "--stop-after", "1"]).run();
+    let out = cadr().args(["--micro", "--serial", &port, "--stop-after", "1"]).run();
     let t = text(&out);
     assert_eq!(out.status.code(), Some(2), "a usage error:\n{t}");
     assert!(
         String::from_utf8_lossy(&out.stderr)
             .lines()
-            .find(|l| l.starts_with("muir: "))
+            .find(|l| l.starts_with("cadr: "))
             .is_some_and(|l| l.contains("--serial")),
         "the refusal names --serial:\n{t}"
     );
@@ -99,13 +99,13 @@ fn a_port_that_is_taken_is_refused() {
 #[test]
 fn the_endpoint_must_name_a_port() {
     for arg in ["127.0.0.1", "nowhere", ""] {
-        let out = muir().args(["--micro", "--serial", arg, "--stop-after", "1"]).run();
+        let out = cadr().args(["--micro", "--serial", arg, "--stop-after", "1"]).run();
         let t = text(&out);
         assert_eq!(out.status.code(), Some(2), "--serial {arg:?}:\n{t}");
         assert!(
             String::from_utf8_lossy(&out.stderr)
                 .lines()
-                .find(|l| l.starts_with("muir: "))
+                .find(|l| l.starts_with("cadr: "))
                 .is_some_and(|l| l.contains("--serial")),
             "the refusal names --serial:\n{t}"
         );

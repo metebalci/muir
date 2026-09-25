@@ -22,5 +22,5 @@ on their own, and each links back to it.
 | `keyboard-boot.md` | The keyboard boot chord, Control-Meta-Control-Meta-Rubout: the firmware that detects it, the I/O board that decodes it, the wire it takes to the processor link by link, and what muir has of it |
 | `tv.md` | The TV board: the SIMPLE TV and the LISPM TV, the one programming interface they share, the sync program that makes the raster, the color map, the color TV as System 100 drives it, and what muir has of it |
 | `glass-tty.md` | The glass TTY: the screen read back as text over telnet and typed into the keyboard, the two fonts that are both called `CPTFONT`, which part of a screen taller than the window a person is shown, and what it cannot read |
-| `quux.md` | QUUX, the CADR evolved, `--machine quux`: where it differs from the CADR, how the difference reaches the microcode, and which tests hold it |
+| `quux.md` | QUUX, the CADR evolved, the `quux` executable: where it differs from the CADR, how the difference reaches the microcode, and which tests hold it |
 | `chaosnet.md` | The Chaosnet board: MIT's interface as it shares the I/O board, the registers the software sees, the cable and its coding, whose turn it is to transmit, the abort signal in both its uses, and what muir has of it |
