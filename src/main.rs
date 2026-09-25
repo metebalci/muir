@@ -19,7 +19,8 @@
 //!          [--debuggee-disk-pack <image>[,<unit>][,ro]]
 //!          [--debuggee-terminal [<endpoint>]]
 //!          [--disk-controller netlist|model|block-disk]
-//!          [--disk-pack <image>[,<unit>][,ro]] [--glass-tty [<endpoint>][,ro]]
+//!          [--disk-pack <image>[,<unit>][,ro]]
+//!          [--file-root [<name>=]<folder>[,ro]] [--glass-tty [<endpoint>][,ro]]
 //!          [--io-board netlist|model]
 //!          [--machine cadr|quux]
 //!          [--main-memory netlist|model] [--main-memory-boards <n>]
@@ -1002,6 +1003,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--debuggee-terminal [<endpoint>]]
             [--disk-controller netlist|model|block-disk] [--disk-multiplexor]
             [--disk-pack <image>[,<unit>][,ro]]
+            [--file-root [<name>=]<folder>[,ro]]
             [--glass-tty [<endpoint>][,ro]]
             [--io-board netlist|model] [--keyboard-boot <keys>]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
@@ -1234,6 +1236,17 @@ A simulator of the MIT CADR Lisp Machine.
                                which. [default: unit 0; no pack unless one
                                is named, which is a drive with no pack in it
                                and a boot that waits on it for ever]
+  --file-root [<name>=]<folder>[,ro]
+                               QUUX: a host folder its file device serves.
+                               A folder alone is HOST's /, holding sys/,
+                               site/ and home/<user>/; <name>=<folder> is
+                               the top-level directory <name>, over the
+                               default folder's entry of that name. ro
+                               refuses every write under it. Repeatable, a
+                               name once and one default folder; with no
+                               default folder / holds the mounts alone and
+                               is read-only. The start lists them.
+                               [default: none; / is empty]
   --glass-tty [<endpoint>][,ro]
                                a glass TTY: the screen as text over
                                telnet, and what is typed there back into
@@ -2147,10 +2160,16 @@ fn machine(
     memory_boards: usize,
     (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
-    (geometry, block_disk, rtc): (muir::machine::Geometry, bool, muir::machine::Rtc),
+    (geometry, block_disk, rtc, file_roots): (
+        muir::machine::Geometry,
+        bool,
+        muir::machine::Rtc,
+        &muir::file_device::Mounts,
+    ),
 ) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
     m.geometry = geometry;
+    m.file_device.mounts = file_roots.clone();
     // Counted from the machine's clock at power-on, which is now.
     m.rtc = match rtc {
         muir::machine::Rtc::Counted { start, .. } => {
@@ -3562,6 +3581,12 @@ fn stdin_is_foreground() -> bool {
 
 /// Writes the engine and its machine to `path` and says how big it came.
 fn write_checkpoint<E: Engine>(name: &str, e: &E, path: &Path) {
+    // QUUX's file device with a handle open or a command queued holds state
+    // on the host that no checkpoint carries (contract Q9).
+    if let Some(why) = e.machine().checkpoint_refusal() {
+        eprintln!("checkpoint: {} not written: {why}", path.display());
+        return;
+    }
     let mut w = muir::checkpoint::Writer::new();
     e.save(&mut w);
     match muir::checkpoint::write(path, name, e.machine().memory_boards(), &w.finish()) {
@@ -4752,6 +4777,10 @@ fn main() {
     // from; whether the flag was given, to refuse it on the CADR.
     let mut rtc = muir::machine::Rtc::Host;
     let mut rtc_given = false;
+    // QUUX's file device's folders (contract Q9), and whether the flag was
+    // given, to refuse it on the CADR.
+    let mut file_roots = muir::file_device::Mounts::default();
+    let mut file_root_given = false;
     let mut geometry = muir::machine::Geometry::CADR;
     // The color TV, the second display board: off unless `--color-tv`
     // fits it, because a CADR has one screen unless somebody plugged a
@@ -5055,6 +5084,14 @@ fn main() {
                     _ => usage("--disk-controller wants netlist, model or block-disk"),
                 }
             }
+            (None, "--file-root") => {
+                const WANTS: &str = "--file-root wants <folder>[,ro] or <name>=<folder>[,ro]";
+                file_root_given = true;
+                let v = args.next().unwrap_or_else(|| usage(WANTS));
+                if let Err(e) = file_roots.add(&v) {
+                    usage(&format!("--file-root {v}: {e}"));
+                }
+            }
             (None, "--io-board") => match args.next().as_deref() {
                 Some("netlist") => io = true,
                 Some("model") => io = false,
@@ -5332,6 +5369,10 @@ fn main() {
     // CADR's page.
     if rtc_given && !geometry.rtc {
         usage("--rtc is QUUX's, and this run is the CADR: --machine quux");
+    }
+    // So is the file device: the CADR's files are a Chaosnet host's.
+    if file_root_given && !geometry.file_device {
+        usage("--file-root is QUUX's, and this run is the CADR: --machine quux");
     }
     // QUUX's main memory is on its own port and `rtl` times it.
     if memory_timing.is_some() && geometry == muir::machine::Geometry::CADR {
@@ -5905,7 +5946,7 @@ fn main() {
         if geometry == muir::machine::Geometry::QUUX {
             writeln!(
                 s,
-                "machine: quux, revision 9: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, clocks in the processor (a 60 Hz tick, an interval timer and a microsecond clock), the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, its devices reached by their registers, and a real-time clock"
+                "machine: quux, revision 9: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, clocks in the processor (a 60 Hz tick, an interval timer and a microsecond clock), the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, its devices reached by their registers, a real-time clock and a file device"
             )
             .unwrap();
         }
@@ -5915,6 +5956,18 @@ fn main() {
                 muir::machine::Rtc::Counted { start, .. } => {
                     writeln!(s, "rtc: from {start}, counting machine time").unwrap()
                 }
+            }
+        }
+        if geometry.file_device {
+            writeln!(
+                s,
+                "file device: {} us a command and {} us a KiB",
+                muir::file_device::COMMAND_NS / 1000,
+                muir::file_device::KIB_NS / 1000
+            )
+            .unwrap();
+            for line in file_roots.describe() {
+                writeln!(s, "file device: {line}").unwrap();
             }
         }
         let chosen = pack_choice(packs);
@@ -6181,7 +6234,7 @@ fn main() {
                 boards,
                 (tv_board, mono_tv_size),
                 color_tv,
-                (geometry, block_disk, rtc),
+                (geometry, block_disk, rtc, &file_roots),
             );
             m.chaos = chaos.clone();
             m.plug_chaos(0);
@@ -6230,7 +6283,7 @@ fn main() {
                 boards,
                 (tv_board, mono_tv_size),
                 color_tv,
-                (geometry, block_disk, rtc),
+                (geometry, block_disk, rtc, &file_roots),
             );
             // The Chaosnet, as under chip: the interface on the I/O board
             // and, if a link was bound, the network on its cable.

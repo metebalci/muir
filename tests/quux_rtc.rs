@@ -112,13 +112,14 @@ fn the_cadr_has_no_rtc() {
     assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "the read timed out");
 }
 
-/// **Feature word 15 says the RTC is there**, `<0>`; the CADR has no page.
+/// **Feature word 15 says the RTC is there**, `<0>`, beside the file
+/// device, `<1>` (`tests/quux_file_device.rs`); the CADR has no page.
 #[test]
 fn feature_word_15_announces_it() {
-    assert_eq!(Geometry::QUUX.feature_word(PAGE + 0o15), Some(1));
+    assert_eq!(Geometry::QUUX.feature_word(PAGE + 0o15), Some(3));
     assert_eq!(Geometry::CADR.feature_word(PAGE + 0o15), None);
     let mut m = quux();
-    assert_eq!(m.bus_read(PAGE + 0o15), 1);
+    assert_eq!(m.bus_read(PAGE + 0o15), 3);
     let id = Geometry::QUUX.machine_id.unwrap();
     assert_eq!((id >> 4) & 0o7777, 9, "revision 9");
 }

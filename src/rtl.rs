@@ -211,6 +211,14 @@ impl Bus {
             Bus::Quux(p) => p.invalidate_cache(),
         }
     }
+    /// When QUUX's write buffer is next empty; the CADR has none of its
+    /// own to wait for.
+    fn write_buffer_empty_at(&self) -> u64 {
+        match self {
+            Bus::Cadr(_) => 0,
+            Bus::Quux(p) => p.write_buffer_empty_at(),
+        }
+    }
     fn cache(&self) -> Option<&crate::cache::Cache> {
         match self {
             Bus::Cadr(b) => b.cache(),
@@ -1697,6 +1705,9 @@ impl Rtl {
         }
         if now >= at {
             self.m.ns = at;
+            // When the write buffer is empty, for the file device's producer
+            // index (contract Q9).
+            self.m.write_buffer_empty_at = self.bus.write_buffer_empty_at();
             let data = if mode { self.bus_data & !pulses } else { self.bus_data };
             self.m.bus_write(self.bus_addr, data);
             self.bus_written = true;
@@ -2734,6 +2745,10 @@ impl Rtl {
             d.advance(self.ns);
         }
         self.m.ioboard.advance(self.ns);
+        // QUUX's file device completes what is due by this edge, before the
+        // microcycle begins (contract Q9); what it wrote in main memory
+        // invalidates the cache before the next bus cycle's lookup.
+        self.m.advance_file_device();
         // A stall resolves within the bus timeout, `busint::TIMEOUT_NS`, so a
         // microcycle that never starts is a bug in this engine rather than
         // something the board would do. Say so loudly.

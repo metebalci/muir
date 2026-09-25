@@ -260,6 +260,9 @@ impl Micro {
         // machine's periods and `MEMORY_ACCESS_NS`, not the measured
         // waits, so the board's clock runs a little fast against `rtl`'s.
         self.m.ioboard.advance(self.m.ns);
+        // QUUX's file device completes what is due at this edge, before
+        // the next microcycle begins (contract Q9).
+        self.m.advance_file_device();
         let boot = std::mem::take(&mut self.m.prog_boot);
         let reset = std::mem::take(&mut self.m.prog_reset) || boot;
         if reset {
