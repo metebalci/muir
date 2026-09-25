@@ -54,6 +54,19 @@ pub trait Engine {
     /// Where the next microinstruction will be fetched from.
     fn pc(&self) -> u16;
 
+    /// Whether [`Engine::pc`] holds a control-store write's address rather
+    /// than where the program is. On the board the microcycle after
+    /// `WRITE-I-MEM` writes the control store at the address the PC has
+    /// moved to (`-IWEA`, `NAND(WP5A, IWRITEDA)` at ICTL 1B13), takes its
+    /// instruction from `IWR` rather than from the PC, nopped and returning
+    /// with a `POPJ` (`-POPJ = AND(-IPOPJ, -IWRITED)` at CONTRL 3D21;
+    /// `IWRITED` among the terms of `N` at the 74S64 3E25), so the program
+    /// never runs there. `rtl` keeps that microcycle; `micro` writes within
+    /// `WRITE-I-MEM`'s own and never moves the PC to the address.
+    fn pc_is_a_write(&self) -> bool {
+        false
+    }
+
     /// The location counter, [`crate::machine::LC_COUNTER`]: the byte
     /// address the next macroinstruction comes from, `LC<25:2>` being the
     /// word `VMA` takes at a fetch.

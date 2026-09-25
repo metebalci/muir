@@ -98,13 +98,14 @@ has the commands; in short:
     dd if=<name>.part of=quux-disk.img bs=512 seek=<first> conv=notrunc     # MCR1, MCR2, LOD1
     qemu-img convert -f raw -O vpc -o subformat=fixed,force_size=on   quux-disk.img quux-disk-fixed.vhd
     qemu-img convert -f raw -O vpc -o subformat=dynamic,force_size=on quux-disk.img quux-disk-dynamic.vhd
-    qemu-io -f vpc -c "write -P 0x4c 2686976 1024" -c "write -P 0x50 3735552 4096" -c "write -P 0x46 4784128 8192" <copy of quux-disk-dynamic.vhd>
+    qemu-io -f vpc -c "write -P 0x4c 2621440 1024" -c "write -P 0x50 3670016 4096" -c "write -P 0x46 4718592 8192" <copy of quux-disk-dynamic.vhd>
     qemu-io -f raw (the same three writes) <copy of quux-disk.img>
 
-The partitions, in sectors: TEMP 2048-2175, MCR1 `MCR1 UCADR 1000` 2176-2687
-(bit 48), MCR2 `MCR2 UCADR 999` 2688-3199, LOD1 `LOD1 System 1002.1`
-3200-5247 (bit 48), LOD2 `LOD2 A comment that is 31 characters` 5248-7295,
-PAGE 7296-9343, FILE 9344-16349, each with Q8's type GUID. MCR1's first 20
+The partitions, in sectors: MCR1 `MCR1 UCADR 1000` 2048-2559 (bit 48), MCR2
+`MCR2 UCADR 999` 2560-3071, LOD1 `LOD1 System 1002.1` 3072-5119 (bit 48),
+LOD2 `LOD2 A comment that is 31 characters` 5120-7167, PAGE 7168-9215, FILE
+9216-16349, each with Q8's type GUID. There is no TEMP partition, as Q8 has
+none. MCR1's first 20
 blocks, MCR2's first 4 and LOD1's first 64 each hold `<name> block <nnnn> `
 sixty-four times; everything else is zero. Every GUID is given, so the raw
 files come out the same byte for byte each time the script runs (measured);
@@ -112,11 +113,11 @@ the VHD footers carry qemu's timestamp and a random UUID, which do not.
 
 | File | What it is |
 |---|---|
-| `quux-disk.img` | the disk, raw, 8,388,608 bytes. SHA-256 `a2bec3e6fa1a2f2d10c1d3824b4e79dcd5801524ebf8af0ae03d086ddbe454c4` |
-| `quux-disk-fixed.vhd` | the same as a fixed VHD: the raw bytes, then the footer. SHA-256 `052938dfa14572590ebb926d0ddf76c0c435476ae24e32c02f810fef3ccd9741` |
-| `quux-disk-dynamic.vhd` | the same as a dynamic VHD, its 2 MiB blocks 0 and 3 allocated, 1 and 2 not. SHA-256 `afde9cda0b411acf8a2bad18350f622d2e0c8c5b21e0a7cd0ed68903d8dd1d66` |
-| `quux-disk-dynamic-grown.vhd` | `quux-disk-dynamic.vhd` after the three qemu-io writes, which allocated blocks 1 and 2. SHA-256 `77c669672409525bc994455078a501211a875d8514e5b08d7b7d1980f01399bf` |
-| `quux-disk-grown.img` | `quux-disk.img` after the same three writes: the grown VHD's raw twin. SHA-256 `a58ba44ece7ed4804fce60d29f84e7a56b12da17ea449903d7ede7d322b6e80b` |
+| `quux-disk.img` | the disk, raw, 8,388,608 bytes. SHA-256 `98c642de36ad6b7347e286a5cae4a66d74eeac6fb52db425618821ad89f5fe6b` |
+| `quux-disk-fixed.vhd` | the same as a fixed VHD: the raw bytes, then the footer. SHA-256 `35a4b689afd737137198124fb8d3c76356b65055787aa1a1be2566aec65b0e3c` |
+| `quux-disk-dynamic.vhd` | the same as a dynamic VHD, its 2 MiB blocks 0 and 3 allocated, 1 and 2 not. SHA-256 `ef2c346f8dc155647ca6a8a1708b054dbdc96ed2ec67d5559ee49f150e0cbff7` |
+| `quux-disk-dynamic-grown.vhd` | `quux-disk-dynamic.vhd` after the three qemu-io writes, which allocated blocks 1 and 2. SHA-256 `1060aa958b3eeac66f64a2912496fc433a6e4ecadd595ecd794654bc3c3bf612` |
+| `quux-disk-grown.img` | `quux-disk.img` after the same three writes: the grown VHD's raw twin. SHA-256 `33e0c0e8c3cd8781666f677bcf3173194acae871b0e0089dbaa15b43385c5f98` |
 
 The script ends by having `qemu-img compare` say each VHD holds its raw
 twin. `tests/quux_disk.rs` reads each through muir as its raw twin block for

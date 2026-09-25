@@ -671,6 +671,18 @@ impl Machine {
         }
     }
 
+    /// Whether the program at `pc` is the boot PROM's rather than the
+    /// microcode's, as a run's stops and its last word count it: on the
+    /// CADR while `PROMDISABLE` is clear, the PROM lying over control store
+    /// 0 up until it is set; on QUUX at the PROM's own addresses,
+    /// [`QUUX_PROM_BASE`] up, which have no disable (contract Q2).
+    pub fn in_prom(&self, pc: u16) -> bool {
+        match self.geometry.prom_base {
+            Some(base) => pc >= base,
+            None => !self.mode.prom_disable,
+        }
+    }
+
     /// Where the boot starts: 0 on the CADR, the PROM's base on QUUX.
     pub fn reset_pc(&self) -> u16 {
         self.geometry.prom_base.unwrap_or(0)

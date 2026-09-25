@@ -149,9 +149,9 @@ fn footer_is_good(vhd: &[u8], what: &str) {
 }
 
 /// The writes `tools/quux-disk-fixtures.sh` makes with qemu-io, as blocks:
-/// 1,024 bytes of 0x4c at sector 5248, 4,096 of 0x50 at 7296 and 8,192 of
-/// 0x46 at 9344.
-const QEMU_IO_WRITES: [(u32, u32, u8); 3] = [(2624, 1, 0x4c), (3648, 4, 0x50), (4672, 8, 0x46)];
+/// 1,024 bytes of 0x4c at sector 5120, 4,096 of 0x50 at 7168 and 8,192 of
+/// 0x46 at 9216: the first sectors of LOD2, PAGE and FILE.
+const QEMU_IO_WRITES: [(u32, u32, u8); 3] = [(2560, 1, 0x4c), (3584, 4, 0x50), (4608, 8, 0x46)];
 
 /// **A write to an unallocated block of a dynamic VHD allocates it**: a
 /// sector bitmap and a 2 MiB block where the footer was, the footer after
@@ -469,27 +469,32 @@ const MICROCODE: &str = "9e318cf5-a95b-4b3b-b2ad-9ae306b0e2da";
 const BAND: &str = "a3b30470-c5d4-41c1-87a8-d26590424cb8";
 const PAGE: &str = "4652bea5-06af-4bd9-b2bb-3541370151c8";
 const FILE: &str = "7afa9532-75de-409f-8dc8-fef9763511d5";
-const TEMP: &str = "445976f2-34e4-4583-b750-75d28a080cba";
+/// Retired with the TEMP partition Q8 dropped: no partition may carry it.
+const RETIRED_TEMP: &str = "445976f2-34e4-4583-b750-75d28a080cba";
 
 /// **The fixtures' GPT is Q8's**, read through each of muir's three
 /// readers: our type GUIDs, names of a four-character name and a comment of
 /// up to 31, bit 48 on the current microcode and band only, and every
 /// partition whole blocks --- first LBA even, last odd --- and its contents
-/// where the table says, each block saying which it is.
+/// where the table says, each block saying which it is. There is no TEMP
+/// partition, and no partition carries its retired type GUID.
 #[test]
 fn the_fixtures_gpt_is_q8_s() {
     let want = [
-        (TEMP, 2048, 2175, "TEMP", false),
-        (MICROCODE, 2176, 2687, "MCR1 UCADR 1000", true),
-        (MICROCODE, 2688, 3199, "MCR2 UCADR 999", false),
-        (BAND, 3200, 5247, "LOD1 System 1002.1", true),
-        (BAND, 5248, 7295, "LOD2 A comment that is 31 characters", false),
-        (PAGE, 7296, 9343, "PAGE", false),
-        (FILE, 9344, 16349, "FILE", false),
+        (MICROCODE, 2048, 2559, "MCR1 UCADR 1000", true),
+        (MICROCODE, 2560, 3071, "MCR2 UCADR 999", false),
+        (BAND, 3072, 5119, "LOD1 System 1002.1", true),
+        (BAND, 5120, 7167, "LOD2 A comment that is 31 characters", false),
+        (PAGE, 7168, 9215, "PAGE", false),
+        (FILE, 9216, 16349, "FILE", false),
     ];
     for file in ["quux-disk.img", "quux-disk-fixed.vhd", "quux-disk-dynamic.vhd"] {
         let mut d = Disk::open(data(file)).unwrap();
         let got = partitions(&mut d);
+        for e in &got {
+            assert_ne!(e.kind, RETIRED_TEMP, "{file}: {}: the retired TEMP type", e.name);
+            assert!(!e.name.starts_with("TEMP"), "{file}: {}: no TEMP partition", e.name);
+        }
         assert_eq!(got.len(), want.len(), "{file}: {got:?}");
         for (e, (kind, first, last, name, current)) in got.iter().zip(want) {
             assert_eq!(
@@ -503,7 +508,7 @@ fn the_fixtures_gpt_is_q8_s() {
             assert!(comment.is_empty() || comment.starts_with(' '), "{name}");
             assert!(comment.chars().count() <= 32, "{name}: a comment of at most 31");
         }
-        for (e, filled) in got.iter().zip([0, 20, 4, 64, 0, 0, 0]) {
+        for (e, filled) in got.iter().zip([20, 4, 64, 0, 0, 0]) {
             let lisp = &e.name[..4];
             for k in 0..filled.max(1) {
                 let block = d.read_block((e.first / 2) as u32 + k).unwrap();
