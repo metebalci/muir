@@ -1458,9 +1458,13 @@ fn chip_agrees_with_rtl() {
                 eprintln!(
                     "  rtl at {} ns cycle {cycle}: memory twin {:?}",
                     r.ns(),
-                    r.busint().memory_board(0)
+                    r.busint().unwrap().memory_board(0)
                 );
-                eprintln!("  rtl at {} ns cycle {cycle}: I/O twin {:?}", r.ns(), r.busint().io);
+                eprintln!(
+                    "  rtl at {} ns cycle {cycle}: I/O twin {:?}",
+                    r.ns(),
+                    r.busint().unwrap().io
+                );
                 if far.xbus.boards.is_empty() {
                     eprintln!(
                         "  far end at {} ns cycle {cycle}: memory twin {:?}",
@@ -1547,14 +1551,14 @@ fn chip_agrees_with_rtl() {
                 Some(b) => b.net(time_for_refresh) == Level::High,
                 None => far.buses.memory[0].time_for_refresh(clk.time_ns()),
             };
-            let twin_time = r.busint().memory_board(0).time_for_refresh(r.ns());
+            let twin_time = r.busint().unwrap().memory_board(0).time_for_refresh(r.ns());
             assert_eq!(
                 board_time,
                 twin_time,
                 "microcycle {cycle}: TIME FOR REFRESH on the board at {} ns against rtl's twin at {} ns: {:?}; the far end's twin {:?}",
                 clk.time_ns(),
                 r.ns(),
-                r.busint().memory_board(0),
+                r.busint().unwrap().memory_board(0),
                 far.buses.memory[0]
             );
         }
@@ -2410,14 +2414,14 @@ fn chip_and_rtl_reboot_on_the_mode_registers_boot_bit() {
                 rtl_requests = r.bus_cycles();
                 eprintln!("rtl step {k}: request at the edge {} ns", r.ns() - r0);
             }
-            let a = r.busint().answered_at();
+            let a = r.busint().unwrap().answered_at();
             if a != rtl_answered {
                 if let Some(a) = a {
                     eprintln!(
                         "rtl step {k}: cycle granted, register strobe at {} ns (now {}), holds the Unibus: {}",
                         a - r0,
                         r.ns() - r0,
-                        r.busint().holds_the_unibus()
+                        r.busint().unwrap().holds_the_unibus()
                     );
                 }
                 rtl_answered = a;
@@ -3021,7 +3025,7 @@ fn chip_and_rtl_answer_the_debug_cable_alike() {
     let halted_at = c.bus(&n, "PC", 14) as u16;
     assert_eq!(halted_at, r.pc(), "halted at the same PC");
     assert!(far.board.net(cable.watch[6].1) == Level::High, "the processor holds the Unibus");
-    assert!(r.busint().holds_the_unibus());
+    assert!(r.busint().unwrap().holds_the_unibus());
     eprintln!("both halted at PC {halted_at:o}");
 
     // The wire timeline of the first debug cycle is printed.
@@ -4747,7 +4751,7 @@ fn chip_and_rtl_hold_an_unanswered_cycle_under_the_timeout_inhibit_alike() {
         }
         assert_eq!(far.board.net(msyn), Level::Low, "the board's cycle is out on its Unibus");
         assert_eq!(far.board.net(memrq), Level::Low, "and the processor's request stands");
-        assert!(r.busint().busy(), "and rtl's is open");
+        assert!(r.busint().unwrap().busy(), "and rtl's is open");
         assert_eq!(far.board.net(nxm), Level::Low, "no NXM on the board");
         assert_eq!(r.machine().bus_error, 0, "nor on rtl");
         let hung_at = c.bus(&n, "PC", 14);
@@ -4771,7 +4775,7 @@ fn chip_and_rtl_hold_an_unanswered_cycle_under_the_timeout_inhibit_alike() {
         assert_eq!(r.machine().bus_error, bus_error::UNIBUS_NXM, "and on rtl");
         assert_eq!(far.board.net(msyn), Level::High, "the board's cycle over");
         assert_eq!(far.board.net(memrq), Level::High, "the request answered");
-        assert!(!r.busint().busy(), "and rtl's over");
+        assert!(!r.busint().unwrap().busy(), "and rtl's over");
         eprintln!(
             "given up on and run on alike from the lift at {lifted} ns; both at PC {:o} at {} ns",
             r.pc(),
@@ -4964,7 +4968,7 @@ fn chip_and_rtl_run_on_alike_after_a_unibus_cycle_nothing_answers() {
             let before = r.ns();
             r.step().unwrap();
             if rtl_timed_out_at.is_none() {
-                rtl_timed_out_at = r.busint().answered_at();
+                rtl_timed_out_at = r.busint().unwrap().answered_at();
             }
             if r.ns() - before > 300 {
                 eprintln!("  rtl step {before} -> {} ns PC {:o}", r.ns(), r.pc());

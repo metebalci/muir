@@ -830,14 +830,23 @@ Default: `cadr` on the CADR, `sync` on QUUX.
 
 ### `--cache <words>`
 
-**rtl, QUUX:** a memory cache of `<words>`, a power of two: [QUUX's
-cache](quux.md), unified and write-through, by physical address, main memory
-only, in lines of 4 words, 2-way, a hit in 20 ns, with a one-word write
-buffer. It changes when the machine's reads and writes are answered and
-never what they read. The start says it and a checkpoint carries it.
-Refused on the CADR and on `micro` and `chip`.
+**rtl, QUUX:** the size of QUUX's memory cache, `<words>`, a power of two:
+[QUUX's cache](quux.md), always fitted, unified and write-through, by
+physical address, main memory only, in lines of 4 words, 2-way, a hit in
+20 ns, with a one-word write buffer. It changes when the machine's reads
+and writes are answered and never what they read. The start says it and a
+checkpoint carries it. Refused on the CADR and on `micro` and `chip`.
 
-Default: none.
+Default: 4096.
+
+### `--memory-timing <read>,<write>`
+
+**rtl, QUUX:** main memory's timing on [QUUX's memory port](quux.md): a line
+fill and a write, in ns, or `arty` or `de25` for the two boards' own
+figures. The start says it and a checkpoint carries it. Refused on the
+CADR and on `micro` and `chip`.
+
+Default: 380,290, the slower board's.
 
 ### `--sync-cycle-ticks <k>`
 
