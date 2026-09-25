@@ -235,6 +235,58 @@ fn a_resume_has_the_checkpoint_s_machine() {
     }
 }
 
+/// **A checkpoint carries the RTC's setting** (contract Q9): a run under
+/// `--rtc <s>` resumes counting from the same start and the same base, and
+/// a resume whose `--rtc` says otherwise --- another second, or the host's
+/// clock --- is refused by the flag's name, as `--machine` is. A live
+/// checkpoint resumes live.
+#[test]
+fn a_resume_has_the_checkpoint_s_rtc() {
+    let dir = scratch("checkpoint-rtc");
+    for engine in ["--micro", "--rtl"] {
+        let chk = dir.join(format!("{}.chk", &engine[2..]));
+        let quux = [engine, "--machine", "quux"];
+        let out = muir()
+            .args(quux)
+            .args(["--rtc", "1700000000", "--stop-after", "100", "--checkpoint"])
+            .arg(&chk)
+            .run();
+        assert!(out.status.success(), "{engine}: the first run failed:\n{}", text(&out));
+        let out = muir()
+            .args(quux)
+            .args(["--rtc", "1700000000", "--stop-after", "10", "--resume"])
+            .arg(&chk)
+            .run();
+        assert!(out.status.success(), "{engine}: the resumed run failed:\n{}", text(&out));
+        for other in [&["--rtc", "1700000001"][..], &["--rtc", "host"], &[]] {
+            let out = muir()
+                .args(quux)
+                .args(other)
+                .args(["--stop-after", "10", "--resume"])
+                .arg(&chk)
+                .run();
+            let t = text(&out);
+            assert_eq!(out.status.code(), Some(2), "{engine} {other:?}: not a usage error:\n{t}");
+            assert!(
+                t.contains("an RTC from 1700000000, and --rtc here is"),
+                "{engine} {other:?}: {t}"
+            );
+        }
+        let out = muir().args(quux).args(["--stop-after", "100", "--checkpoint"]).arg(&chk).run();
+        assert!(out.status.success(), "{engine}: the live run failed:\n{}", text(&out));
+        let out = muir().args(quux).args(["--stop-after", "10", "--resume"]).arg(&chk).run();
+        assert!(out.status.success(), "{engine}: live resumes live:\n{}", text(&out));
+        let out = muir()
+            .args(quux)
+            .args(["--rtc", "5", "--stop-after", "10", "--resume"])
+            .arg(&chk)
+            .run();
+        let t = text(&out);
+        assert_eq!(out.status.code(), Some(2), "{engine}: not a usage error:\n{t}");
+        assert!(t.contains("the host's clock, and --rtc here is 5"), "{engine}: {t}");
+    }
+}
+
 /// **An engine's checkpoint carries the display board too**, and a resume
 /// onto the other board is refused by the flag's name, as a `chip`
 /// checkpoint's header refuses one.  The board is not in the header here

@@ -758,6 +758,17 @@ on the backplane have to be the checkpoint's too.
 The boot button is not pressed: what it would set is what the checkpoint
 replaces. The stops count from here.
 
+### `--rtc <unix-seconds>|host`
+
+**QUUX:** its [real-time clock](quux.md#the-real-time-clock), register page
+word 103. `host` reads the host's clock at each read. A second, 0 to
+4294967295, starts the clock there at power-on and counts the machine's own
+time from it, holding at 4294967295, so that a run repeats; a larger one is
+refused. The start says which. A checkpoint carries it, and a resume under
+another `--rtc` is refused. Refused on the CADR.
+
+Default: `host`.
+
 ### `--serial <endpoint>`
 
 Where the serial port at J9 --- the Signetics 2651 at IOBSER 0A12 --- is

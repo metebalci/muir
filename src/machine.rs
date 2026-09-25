@@ -115,6 +115,9 @@ pub struct Geometry {
     /// page 37000 up answers nothing, a read or a write timing out as an
     /// empty Xbus address does, and its devices are on the register page.
     pub unibus: bool,
+    /// Whether the machine has QUUX's real-time clock (contract Q9,
+    /// revision 9): register page word 103, [`Rtc`].
+    pub rtc: bool,
 }
 
 impl Geometry {
@@ -130,9 +133,11 @@ impl Geometry {
         hangs: true,
         prom_base: None,
         unibus: true,
+        rtc: false,
     };
 
-    /// QUUX's, revision 8: main memory and the frame buffer on its own port
+    /// QUUX's, revision 9: a real-time clock on the register page (contract
+    /// Q9, [`Rtc`]); main memory and the frame buffer on its own port
     /// through its cache, with no bus interface (contract Q6), and its
     /// devices reached by their registers alone, with no bus (contract Q7,
     /// [`crate::memory_port`]); its boot
@@ -153,13 +158,13 @@ impl Geometry {
     /// 31:16, the hardware revision in 15:4 --- 5: the six-bit map, then the
     /// 16K PDL buffer, then the multiply and divide, then the tick, then the
     /// clocks of contract Q1, then Q2's register page and PROM, then Q6's
-    /// memory port, then Q7's device registers --- and
+    /// memory port, then Q7's device registers, then Q9's real-time clock --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
         l1_bits: 6,
         pdl_bits: 14,
-        machine_id: Some((0x5155 << 16) | (8 << 4) | 4),
+        machine_id: Some((0x5155 << 16) | (9 << 4) | 4),
         muldiv: true,
         tick: true,
         speed_bits: false,
@@ -167,6 +172,7 @@ impl Geometry {
         hangs: false,
         prom_base: Some(QUUX_PROM_BASE),
         unibus: false,
+        rtc: true,
     };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
@@ -205,7 +211,10 @@ impl Geometry {
     /// words, the control store's, A memory's and dispatch memory's, and
     /// which of `MUL` (bit 0) and `DIV` (bit 1) it has, and whether it has
     /// the tick (1); words 11 to 13, the main screen, are the display's
-    /// ([`Machine::bus_read`]); every other word 0.
+    /// ([`Machine::bus_read`]); word 14 the interval timer and the
+    /// microsecond clock; word 15 the devices of revision 9 by bits, `<0>`
+    /// the real-time clock; every other word 0. Below revision 9 word 15
+    /// reads 0, as every unused word does.
     /// Read-only.
     pub fn feature_word(self, phys: u32) -> Option<u32> {
         let id = self.machine_id?;
@@ -224,7 +233,63 @@ impl Geometry {
             0o10 => self.tick as u32,
             // The interval timer and the microsecond clock (revision 5).
             0o14 => self.tick as u32,
+            // The devices of revision 9, by bits (contract Q9): `<0>` the
+            // real-time clock.
+            0o15 => self.rtc as u32,
             _ => 0,
+        })
+    }
+}
+
+/// **QUUX's real-time clock** (contract Q9, revision 9): register page word
+/// 103, the real time in whole seconds since 1970-01-01 UTC, unsigned 32
+/// bits, good to 2106. Read-only to the machine: a write goes nowhere, as a
+/// write of any read-only word on the page does, and the host keeps the
+/// time. Finer time is the microsecond clock's ([`Tick::microseconds`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Rtc {
+    /// Live, the default: the host's clock at each read, as a real RTC keeps
+    /// real time on its own crystal whatever the processor does.
+    #[default]
+    Host,
+    /// `--rtc <start>`, for runs that repeat: `start` when the machine's
+    /// clock read `base_ns`, and a second more for each 10^9 ns of the
+    /// machine's own time since. It holds at 2^32-1 rather than wrap to 0,
+    /// which would read as no RTC at all.
+    Counted { start: u32, base_ns: u64 },
+}
+
+impl Rtc {
+    /// The word 103 reads when the machine's clock is at `ns`.
+    pub fn seconds(self, ns: u64) -> u32 {
+        let s = match self {
+            Rtc::Host => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            Rtc::Counted { start, base_ns } => {
+                start as u64 + ns.saturating_sub(base_ns) / 1_000_000_000
+            }
+        };
+        s.min(u32::MAX as u64) as u32
+    }
+
+    pub fn save(self, w: &mut crate::checkpoint::Writer) {
+        w.opt(
+            match self {
+                Rtc::Host => None,
+                Rtc::Counted { start, base_ns } => Some((start, base_ns)),
+            },
+            |w, (start, base_ns)| {
+                w.u32(start);
+                w.u64(base_ns);
+            },
+        );
+    }
+
+    pub fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<Rtc> {
+        Ok(match r.bool()? {
+            false => Rtc::Host,
+            true => Rtc::Counted { start: r.u32()?, base_ns: r.u64()? },
         })
     }
 }
@@ -538,6 +603,9 @@ pub struct Machine {
     pub ns: u64,
     /// QUUX's tick, where the geometry has one.
     pub tick: Tick,
+    /// QUUX's real-time clock's setting, where the geometry has one
+    /// ([`Geometry::rtc`]): live, or counted from `--rtc`'s start.
+    pub rtc: Rtc,
     /// The disk controller has been written since the engine last looked,
     /// and may have written main memory: what invalidates QUUX's memory
     /// cache ([`crate::cache`]).
@@ -599,6 +667,7 @@ impl Machine {
             dispatch_constant: 0,
             geometry: Geometry::CADR,
             tick: Tick::new(),
+            rtc: Rtc::Host,
             dma_written: false,
             block_disk: None,
             store_log: None,
@@ -1247,6 +1316,8 @@ impl Machine {
                 0o100 => self.interrupt_sources(),
                 0o101 => self.bus_error as u32,
                 0o102 => self.mode.errstop as u32,
+                // The real-time clock (contract Q9).
+                0o103 if self.geometry.rtc => self.rtc.seconds(self.ns),
                 // The network (contract Q4): the Chaosnet interface's
                 // registers, word 140 + k being Unibus `764140` + 2k.
                 k @ 0o140..=0o147 => {
@@ -1311,7 +1382,8 @@ impl Machine {
         }
         // QUUX's register page (contract Q2): a write of word 101 clears the
         // bus errors, as a write of `766044` does, and word 102 `<0>` is
-        // error stop; the features and the reserved words ignore writes.
+        // error stop; the features, the real-time clock (word 103) and the
+        // reserved words ignore writes.
         if self.geometry.feature_word(phys).is_some() {
             match phys & 0o377 {
                 0o101 => self.bus_error = 0,
@@ -1454,6 +1526,7 @@ impl Machine {
             dispatch_constant,
             geometry,
             tick,
+            rtc,
             dma_written,
             block_disk,
             store_log: _,
@@ -1505,6 +1578,7 @@ impl Machine {
         w.bool(geometry.muldiv);
         w.bool(geometry.tick);
         tick.save(w);
+        rtc.save(w);
         w.bool(*dma_written);
         w.u32s(l2_map);
         w.u32(self.memory_boards() as u32);
@@ -1585,6 +1659,7 @@ impl Machine {
         let (l1_bits, pdl_bits, muldiv) = (r.u8()? as u32, r.u8()? as u32, r.bool()?);
         let tick = r.bool()?;
         self.tick = Tick::load(r)?;
+        self.rtc = Rtc::load(r)?;
         self.dma_written = r.bool()?;
         // The CADR, or a QUUX with a PDL buffer of 1K to 16K words.
         self.geometry = match (l1_bits, pdl_bits, muldiv, tick) {
