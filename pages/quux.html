@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QUUX — the CADR, evolved</title>
-<meta name="description" content="QUUX is the MIT CADR Lisp Machine evolved: a wider map, a 16K-word PDL buffer, one-instruction multiply and divide, clocks in the processor, a monochrome frame buffer, a disk of numbered blocks, a synchronous microcycle and a memory cache. muir models it beside the CADR.">
+<meta name="description" content="QUUX is the MIT CADR Lisp Machine evolved: a wider map, a 16K-word PDL buffer, one-instruction multiply and divide, clocks in the processor, a synchronous microcycle, main memory on its own port behind a cache, its devices reached by their registers alone, no Unibus, and a disk in standard formats. muir models it beside the CADR.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -62,7 +62,7 @@
       <div class="masthead-text">
         <span class="eyebrow">The CADR, evolved &middot; under development</span>
         <h1 class="title t-xl">QUUX</h1>
-        <p class="lede">QUUX is the CADR, evolved: the same processor, buses and boards, changed where a change pays for itself. muir models both, side by side: <code>--machine cadr</code>, the default, MIT&rsquo;s machine as built, and <code>--machine quux</code>.</p>
+        <p class="lede">QUUX is the CADR, evolved: the same microinstruction and the same way of running Lisp, with the processor, its memory and its devices rebuilt where a change pays for itself. muir models both, side by side: <code>--machine cadr</code>, the default, MIT&rsquo;s machine as built, and <code>--machine quux</code>.</p>
         <p class="small"><b>Under development.</b> QUUX is not finished: its changes land one at a time, and what this page describes may still change.</p>
         <div class="actions">
           <a class="key" href="https://github.com/metebalci/muir/blob/main/docs/quux.md">The manual&rsquo;s QUUX</a>
@@ -79,14 +79,102 @@
         </svg>
       </div>
       <div class="panel">
-        <p class="say">I&rsquo;m still CADR inside. QUUX keeps my microinstruction, my two buses and my way of running Lisp, and changes the parts that held me back.</p>
+        <p class="say">I&rsquo;m still CADR inside. QUUX keeps my microinstruction and my way of running Lisp, and changes the parts that held me back.</p>
         <p class="small">Three projects make it: <b>muir</b> models each change and holds it to tests; <b>muir-sys</b> writes the microcode and builds the Lisp system for it; <b>muir-fpga</b> is the machine on an FPGA board, where the same flag chooses it. The CADR stays MIT&rsquo;s machine; QUUX runs muir-sys&rsquo;s microcode 1000 and System 1002.</p>
       </div>
     </div>
 
     <footer class="wholine">
       <div class="label">muir &middot; QUUX</div>
-      <div class="bar"><span>09/24/26</span><span>USER:</span><span>Machine Type QUUX</span><span>01</span></div>
+      <div class="bar"><span>09/25/26</span><span>USER:</span><span>Machine Type QUUX</span><span>01</span></div>
+    </footer>
+  </section>
+
+  <!-- ------------------------------------------------------ the machine -->
+  <section id="machine" aria-label="The CADR and QUUX, drawn">
+    <div class="panel bare">
+      <span class="eyebrow">Drawn</span>
+      <h2 class="title t-l">The CADR and QUUX</h2>
+      <p class="small" style="margin-top:0.4rem;">The CADR puts everything behind its bus interface: main memory, the disk and the display on the Xbus, and the keyboard, mouse, clocks and network on the Unibus through the I/O board. QUUX&rsquo;s processor has its clocks inside, reaches main memory and the frame buffer on a port of its own through a cache, and its devices&rsquo; registers through its register decode; the devices move bulk data to and from memory themselves. There is no Unibus, no bus interface and no debug cable.</p>
+    </div>
+
+    <figure class="panel">
+      <p class="cap">The CADR</p>
+      <div class="scroll">
+        <svg viewBox="0 0 900 250" role="img" aria-label="The CADR: the processor and control store connect over flat cables to the bus interface, which also has the debug cable to another CADR. The bus interface drives two buses: the Xbus, with main memory, the disk controller and the TV, and the Unibus, with the I/O board, which has the keyboard, the mouse, the clocks, the serial port and the Chaosnet.">
+          <rect class="d-box" x="20" y="20" width="220" height="64"/>
+          <text class="d-t" x="130" y="47" text-anchor="middle">processor</text>
+          <text class="d-s" x="130" y="65" text-anchor="middle">and control store</text>
+          <line class="d-line" x1="240" y1="52" x2="320" y2="52"/>
+          <text class="d-s" x="280" y="44" text-anchor="middle">cables</text>
+          <rect class="d-box" x="320" y="20" width="180" height="64"/>
+          <text class="d-t" x="410" y="47" text-anchor="middle">bus interface</text>
+          <text class="d-s" x="410" y="65" text-anchor="middle">arbitration, Unibus map</text>
+          <line class="d-line" x1="500" y1="52" x2="720" y2="52"/>
+          <text class="d-s" x="610" y="44" text-anchor="middle">debug cable</text>
+          <rect class="d-dash" x="720" y="20" width="160" height="64"/>
+          <text class="d-t" x="800" y="57" text-anchor="middle">another CADR</text>
+          <path class="d-line" d="M370,84 L370,136"/>
+          <path class="d-line" d="M450,84 L450,110 L660,110 L660,136"/>
+          <line class="d-bus" x1="20" y1="136" x2="520" y2="136"/>
+          <text class="d-s" x="20" y="128">Xbus</text>
+          <line class="d-bus" x1="580" y1="136" x2="880" y2="136"/>
+          <text class="d-s" x="880" y="128" text-anchor="end">Unibus</text>
+          <path class="d-line" d="M100,136 L100,166 M260,136 L260,166 M420,136 L420,166 M730,136 L730,166"/>
+          <rect class="d-box" x="30" y="166" width="140" height="64"/>
+          <text class="d-t" x="100" y="193" text-anchor="middle">main memory</text>
+          <text class="d-s" x="100" y="211" text-anchor="middle">memory boards</text>
+          <rect class="d-box" x="190" y="166" width="140" height="64"/>
+          <text class="d-t" x="260" y="193" text-anchor="middle">disk controller</text>
+          <text class="d-s" x="260" y="211" text-anchor="middle">cylinders, heads</text>
+          <rect class="d-box" x="350" y="166" width="140" height="64"/>
+          <text class="d-t" x="420" y="193" text-anchor="middle">TV</text>
+          <text class="d-s" x="420" y="211" text-anchor="middle">sync program</text>
+          <rect class="d-box" x="600" y="166" width="260" height="64"/>
+          <text class="d-t" x="730" y="193" text-anchor="middle">I/O board</text>
+          <text class="d-s" x="730" y="211" text-anchor="middle">keyboard, mouse, clocks, serial, Chaosnet</text>
+        </svg>
+      </div>
+    </figure>
+
+    <figure class="panel">
+      <p class="cap">QUUX</p>
+      <div class="scroll">
+        <svg viewBox="0 0 900 250" role="img" aria-label="QUUX: the processor, with its clocks, multiply and divide, the 16K-word PDL buffer and the boot PROM in its control store, reaches main memory and the frame buffer through its own memory port and a 4K-word cache on the memory bus, and the registers of its devices through its register decode: MONO TV, block-disk, with its disk file a VHD with a GPT partition table, and the register page, with the keyboard and mouse, the Chaosnet and the interrupt status. MONO TV and block-disk reach memory themselves, by direct memory access.">
+          <rect class="d-box" x="20" y="20" width="260" height="80"/>
+          <text class="d-t" x="150" y="45" text-anchor="middle">processor and control store</text>
+          <text class="d-s" x="150" y="63" text-anchor="middle">clocks, MUL and DIV, 16K PDL</text>
+          <text class="d-s" x="150" y="79" text-anchor="middle">the boot PROM at 36000</text>
+          <line class="d-line" x1="280" y1="60" x2="400" y2="60"/>
+          <text class="d-s" x="340" y="52" text-anchor="middle">memory port</text>
+          <rect class="d-box" x="400" y="28" width="150" height="64"/>
+          <text class="d-t" x="475" y="55" text-anchor="middle">cache</text>
+          <text class="d-s" x="475" y="73" text-anchor="middle">4K words</text>
+          <line class="d-bus" x1="550" y1="60" x2="700" y2="60"/>
+          <text class="d-s" x="625" y="52" text-anchor="middle">memory bus</text>
+          <rect class="d-box" x="700" y="28" width="180" height="64"/>
+          <text class="d-t" x="790" y="55" text-anchor="middle">main memory</text>
+          <text class="d-s" x="790" y="73" text-anchor="middle">and the frame buffer</text>
+          <path class="d-line" d="M150,100 L150,122 M100,122 L540,122 M100,122 L100,166 M300,122 L300,166 M540,122 L540,166"/>
+          <text class="d-s" x="160" y="116">register decode</text>
+          <path class="d-dash" d="M790,92 L790,146 L130,146 M130,146 L130,166 M330,146 L330,166"/>
+          <text class="d-s" x="780" y="140" text-anchor="end">direct memory access</text>
+          <rect class="d-box" x="30" y="166" width="140" height="64"/>
+          <text class="d-t" x="100" y="193" text-anchor="middle">MONO TV</text>
+          <text class="d-s" x="100" y="211" text-anchor="middle">two registers</text>
+          <rect class="d-box" x="220" y="166" width="160" height="64"/>
+          <text class="d-t" x="300" y="193" text-anchor="middle">block-disk</text>
+          <text class="d-s" x="300" y="211" text-anchor="middle">VHD, GPT</text>
+          <rect class="d-box" x="420" y="166" width="240" height="64"/>
+          <text class="d-t" x="540" y="193" text-anchor="middle">register page</text>
+          <text class="d-s" x="540" y="211" text-anchor="middle">keyboard, mouse, Chaosnet, interrupts</text>
+        </svg>
+      </div>
+    </figure>
+
+    <footer class="wholine">
+      <div class="label">muir &middot; The CADR and QUUX</div>
+      <div class="bar"><span>09/25/26</span><span>USER:</span><span>Machine Type QUUX</span><span>02</span></div>
     </footer>
   </section>
 
@@ -95,7 +183,7 @@
     <div class="panel bare">
       <span class="eyebrow">What</span>
       <h2 class="title t-l">What QUUX changes</h2>
-      <p class="small" style="margin-top:0.4rem;">The first four are revisions of the processor, 1 to 4, which it reports in a word only QUUX answers, its <b>MACHINE-ID</b>. Software reads that word first, then a page of Xbus I/O space that lists the machine&rsquo;s sizes.</p>
+      <p class="small" style="margin-top:0.4rem;">QUUX reports its hardware revision, 1 to 8, in a word only it answers, its <b>MACHINE-ID</b>; each revision contains the last. Software reads that word first, then a page of device registers that lists the machine&rsquo;s sizes.</p>
     </div>
 
     <div class="panels three">
@@ -130,7 +218,7 @@
         <p class="cap">MONO TV</p>
         <p class="big-number">1280&times;1024</p>
         <p class="small"><b>one bit a pixel, by default</b></p>
-        <p class="small">A plain frame buffer and one register in place of the CADR&rsquo;s TV boards: no sync program, no color map, no interrupt. muir gives it any size, and System 1002 sizes its screen from the feature page.</p>
+        <p class="small">A plain frame buffer and one register in place of the CADR&rsquo;s TV boards: no sync program, no color map, no interrupt. It can be any size up to 1920 by 1080, and System 1002 sizes its screen from the feature page.</p>
       </div>
       <div class="panel">
         <p class="cap">Block-disk</p>
@@ -138,11 +226,35 @@
         <p class="small"><b>blocks, addressed by number</b></p>
         <p class="small">The CADR disk controller&rsquo;s registers and command lists with the drive&rsquo;s cylinders, heads and sectors taken out: read or write a numbered block of 256 words. It is QUUX&rsquo;s only disk, and muir-sys&rsquo;s boot PROM, microcode and System 1002 boot from it.</p>
       </div>
+      <div class="panel">
+        <p class="cap">No Unibus</p>
+        <p class="big-number">0</p>
+        <p class="small"><b>Unibus cycles, and no I/O board</b></p>
+        <p class="small">The keyboard and mouse, the Chaosnet interface and the interrupt and error status moved to QUUX&rsquo;s register page and the clocks into the processor; the serial port was dropped, and the Unibus went with them. The debug cable, a Unibus master, went too: the console&rsquo;s registers are the host&rsquo;s port alone.</p>
+      </div>
+      <div class="panel">
+        <p class="cap">The memory port</p>
+        <p class="big-number">4K</p>
+        <p class="small"><b>words of cache, always</b></p>
+        <p class="small">Main memory is off the Xbus it shared with the devices: the processor reaches it, and the frame buffer, on a port of its own through a write-through cache, a line fill no sooner than 380&nbsp;ns and a write 290&nbsp;ns, the slower of the two FPGA boards&rsquo; memories. The CADR&rsquo;s bus interface has nothing left to do, and QUUX has none.</p>
+      </div>
+      <div class="panel">
+        <p class="cap">Device registers</p>
+        <p class="big-number">2</p>
+        <p class="small"><b>microcycles a register, and no bus</b></p>
+        <p class="small">The processor reaches its devices&rsquo; registers through its own register decode, at their old addresses: the display&rsquo;s, block-disk&rsquo;s and the register page. Registers carry control and small data; bulk data moves between a device and memory by itself. An address nothing answers fails at once, where the CADR&rsquo;s Xbus waits microseconds for a timeout.</p>
+      </div>
+      <div class="panel">
+        <p class="cap">A standard disk</p>
+        <p class="big-number">VHD</p>
+        <p class="small"><b>with a GPT partition table</b></p>
+        <p class="small">QUUX&rsquo;s disk is a fixed or dynamic VHD, partitioned by GPT: made with <code>qemu-img</code>, partitioned with <code>gdisk</code>, and filled with <code>dd</code>. A partition&rsquo;s GPT name is its own four-character name, <code>LOD4</code>, a space and its comment; the current microcode and band are marked by attribute bits. The CADR keeps MIT&rsquo;s pack and label.</p>
+      </div>
     </div>
 
     <footer class="wholine">
       <div class="label">muir &middot; What QUUX changes</div>
-      <div class="bar"><span>09/24/26</span><span>USER:</span><span>Machine Type QUUX</span><span>02</span></div>
+      <div class="bar"><span>09/25/26</span><span>USER:</span><span>Machine Type QUUX</span><span>03</span></div>
     </footer>
   </section>
 
@@ -151,7 +263,7 @@
     <div class="panel bare">
       <span class="eyebrow">How fast</span>
       <h2 class="title t-l">A 40&nbsp;ns microcycle and a cache</h2>
-      <p class="small" style="margin-top:0.4rem;">The CADR takes a microcycle as a string of delay-line phases, 145&nbsp;ns at its normal speed, and its memory board answers a request 458&nbsp;ns later. QUUX drops the delay lines: every microcycle is a fixed number of 10&nbsp;ns ticks, four by default, and a cache stands in front of memory. Nothing the microcode sees changes but the time.</p>
+      <p class="small" style="margin-top:0.4rem;">The CADR takes a microcycle as a string of delay-line phases, 145&nbsp;ns at its normal speed, and its memory board answers a request 458&nbsp;ns later. QUUX drops the delay lines: every microcycle is a fixed number of 10&nbsp;ns ticks, four by default, and a cache stands in front of memory. Nothing the microcode sees changes but the time. QUUX&rsquo;s own main memory is timed as the slower board&rsquo;s, the last row.</p>
     </div>
 
     <div class="panels two">
@@ -174,13 +286,13 @@
       </div>
       <div class="panel tone">
         <p class="say r">That&rsquo;s the same microcode doing the same work. The memory times are measured on the two FPGA boards; the rest is muir&rsquo;s model of them.</p>
-        <p class="small">Modeled in muir, on <code>rtl</code>. Four ticks, 40&nbsp;ns, meets timing on both boards in muir-fpga&rsquo;s fits: the Arty Z7-20 with +0.461&nbsp;ns to spare and the DE25-Nano with +0.180&nbsp;ns, both with every change on this page but the cache. The cache&rsquo;s 20&nbsp;ns hit is <b>unverified</b>. Past 4K words the cache gains little: 16K words gives 3.90&times; where 4K gives 3.84&times;, both without the write buffer.</p>
+        <p class="small">Modeled in muir, on <code>rtl</code>, with System 1001 and muir-sys&rsquo;s microcode for revision 4. Four ticks, 40&nbsp;ns, meets timing on both boards in muir-fpga&rsquo;s fits: the Arty Z7-20 with +0.461&nbsp;ns to spare and the DE25-Nano with +0.180&nbsp;ns. The cache&rsquo;s 20&nbsp;ns hit is <b>unverified</b>. Past 4K words the cache gains little: 16K words gives 3.90&times; where 4K gives 3.84&times;, both without the write buffer.</p>
       </div>
     </div>
 
     <footer class="wholine">
       <div class="label">muir &middot; How fast</div>
-      <div class="bar"><span>09/24/26</span><span>USER:</span><span>Machine Type QUUX</span><span>03</span></div>
+      <div class="bar"><span>09/25/26</span><span>USER:</span><span>Machine Type QUUX</span><span>04</span></div>
     </footer>
   </section>
 
@@ -198,22 +310,28 @@
           <thead><tr><th>Change</th><th>The CADR</th><th>QUUX</th></tr></thead>
           <tbody>
             <tr><td><b>Level-1 map entry</b></td><td>Five bits: 32 blocks of level-2 entries, 1,024 in all, block 37 the invalid one, so 31 regions of 8K words mapped at once</td><td>Six bits: 64 blocks, 2,048 entries, block 77 invalid, 63 regions. The sixth bit reads back in <code>MAP(MD)&lt;29&gt;</code>, always 0 on the CADR, and is written from <code>VMA&lt;24&gt;</code>, which reaches no map write on the CADR. Revision 1</td></tr>
-            <tr><td><b>MACHINE-ID</b>, functional source 16</td><td>Unassigned: nothing drives the M bus, and it reads all ones (<b>unverified</b> on a real CADR)</td><td>One microinstruction, no bus cycle: the signature <code>0x5155</code> in bits 31:16, the hardware revision in 15:4, processor type 4 in 3:0. Revisions 1 the six-bit map, 2 the 16K PDL buffer, 3 multiply and divide, 4 the tick, 5 the clocks, each containing the last</td></tr>
-            <tr><td><b>The feature page</b>, <code>17377000</code>&ndash;<code>17377377</code></td><td>Nothing answers: a read times out and sets the Xbus NXM bit</td><td>Read-only, through the map. Word 0 the MACHINE-ID; 1 to 7 the level-1 entry&rsquo;s 6 bits, 2,048 level-2 entries, 16,384 PDL words, 16,384 control-store words, 1,024 A-memory words, 2,048 dispatch words, and multiply and divide, 3; 10 the tick, 1; 11 to 13 the main screen&rsquo;s width and height, bits a pixel and words a line, and first address; 14 the interval timer and microsecond clock, 1; the rest 0. Software reads source 16 first and the page only on QUUX</td></tr>
+            <tr><td><b>MACHINE-ID</b>, functional source 16</td><td>Unassigned: nothing drives the M bus, and it reads all ones (<b>unverified</b> on a real CADR)</td><td>One microinstruction, no bus cycle: the signature <code>0x5155</code> in bits 31:16, the hardware revision in 15:4, processor type 4 in 3:0. Revisions 1 the six-bit map, 2 the 16K PDL buffer, 3 multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, each containing the last</td></tr>
+            <tr><td><b>The feature page</b>, <code>17377000</code>&ndash;<code>17377377</code></td><td>Nothing answers: a read times out and sets the Xbus NXM bit</td><td>Read-only device registers, through the map. Word 0 the MACHINE-ID; 1 to 7 the level-1 entry&rsquo;s 6 bits, 2,048 level-2 entries, 16,384 PDL words, 16,384 control-store words, 1,024 A-memory words, 2,048 dispatch words, and multiply and divide, 3; 10 the tick, 1; 11 to 13 the main screen&rsquo;s width and height, bits a pixel and words a line, and first address; 14 the interval timer and microsecond clock, 1; the rest 0. Software reads source 16 first and the page only on QUUX</td></tr>
             <tr><td><b>PDL buffer</b></td><td>1K words, pointer and index 10 bits</td><td>16K words, 14 bits, read back whole in functional sources 2 and 3. Revision 2</td></tr>
-            <tr><td><b>Boot PROM</b></td><td>MIT&rsquo;s version 9. It stops copying A memory in when the PDL index wraps to 0, which a 10-bit index does after 2000 words</td><td>Version 1000: stops after 2000 words by count, so a PDL buffer of any width from 1K up boots, and clears QUUX&rsquo;s 64 blocks. It boots the CADR too</td></tr>
+            <tr><td><b>The register page</b>, the feature page&rsquo;s words 100 up</td><td>Its registers are the I/O board&rsquo;s and the bus interface&rsquo;s, on the Unibus</td><td>Word 100 the interrupt status, a bit for each source: the tick, the interval timer, block-disk, the keyboard, the mouse, the Chaosnet; 101 the error status, a write clearing it; 102 <code>ERRSTOP</code>; 120 to 123 the keyboard and mouse; 140 to 147 the Chaosnet interface. Revision 6</td></tr>
+            <tr><td><b>Boot PROM</b></td><td>MIT&rsquo;s version 9, over control store 0 until the microcode turns it off with <code>PROMDISABLE</code>. It stops copying A memory in when the PDL index wraps to 0, which a 10-bit index does after 2000 words</td><td>muir-sys&rsquo;s version 1000, 1K words at control store 36000 of its own, read only and never overlaid, so there is nothing to turn off; the machine resets to 36000. It boots from block-disk. Revision 6</td></tr>
             <tr><td><b>Multiply and divide</b></td><td>A step per bit: <code>MUS</code>, <code>DVS1</code>, <code>DVS</code> and <code>DVREM</code>, ALU functions 40, 51, 41 and 45. Functions 42 and 43 are the 74S181&rsquo;s own</td><td><code>MUL</code>, 42: 32 multiply steps in one ordinary microcycle. <code>DIV</code>, 43: the first divide step and 31 more, held by a <code>-WAIT</code> of QUUX&rsquo;s own until 330&nbsp;ns after it entered <code>IR</code>, nine 40&nbsp;ns microcycles. Each bit for bit the step sequence; <code>DIVIDE-LAST-STEP</code> and <code>DVREM</code> stay separate. Revision 3</td></tr>
             <tr><td><b>Clocks in the processor</b></td><td>No clock in the processor: the clock is the display&rsquo;s vertical interrupt, and the microsecond clock and interval timer are on the I/O board, on the Unibus. Functional destinations 3 to 7 write only M; sources 15 and 17 read all ones</td><td>Destination 3 the control: <code>&lt;0&gt;</code> the tick&rsquo;s enable, <code>&lt;1&gt;</code> its clear, <code>&lt;2&gt;</code> the interval timer&rsquo;s enable, <code>&lt;3&gt;</code> its clear; destination 4 the interval timer&rsquo;s period in &micro;s; source 17 both flags and enables; source 15 the microseconds since power-on, 32 bits. The tick fixed at 60&nbsp;Hz. While enabled, each flag is ORed into the interrupt pending that jump conditions 5 and 6 test. Revision 5</td></tr>
             <tr><td><b>Speed</b></td><td><code>SPEED1</code> and <code>SPEED0</code> in the mode register choose the read tap, extra slow to fast. Reset leaves extra slow, 220&nbsp;ns, until the microcode asks for normal, 145&nbsp;ns</td><td>No speed bits: a write of bits 1 and 0 goes nowhere, and every microcycle is the same from the boot on</td></tr>
             <tr><td><b>No delay lines</b></td><td>The read tap and a 60&nbsp;ns restart: 145&nbsp;ns at normal speed</td><td>A fixed K ticks of 10&nbsp;ns, always, <code>--sync-cycle-ticks</code>, 4, 40&nbsp;ns, met on both boards in muir-fpga&rsquo;s fits; the CADR&rsquo;s timings refused on QUUX. Only the length of a microcycle changes</td></tr>
-            <tr><td><b>Memory cache</b></td><td>None: every read is the memory board&rsquo;s cycle, 458&nbsp;ns from the request to <code>XACK</code></td><td><code>--cache &lt;words&gt;</code>, on <code>rtl</code>: unified and write-through, by physical address, main memory only; lines of 4 words, 2-way, the least recently used line going; a hit in 20&nbsp;ns (<b>unverified</b>); a one-word write buffer; the whole cache invalidated by a disk transfer</td></tr>
-            <tr><td><b>Memory timing</b></td><td>The CADR&rsquo;s memory board, 458&nbsp;ns</td><td>Measured by muir-fpga on its two boards: the Arty Z7-20 read 220&nbsp;ns and write 120&nbsp;ns, the DE25-Nano read 380&nbsp;ns and write 290&nbsp;ns in muir. A line fill&rsquo;s time is <b>unverified</b></td></tr>
-            <tr><td><b>Display</b></td><td>The TV board: 768 by 963 at 24 words a line, a sync program, a color map and the vertical interrupt</td><td>MONO TV, <code>--tv-board mono-tv</code>: 1280 by 1024, one bit a pixel, 40 words a line at <code>17000000</code>, or the size <code>--mono-tv-size</code> gives, the width a multiple of 32 and the buffer at most 130,560 words. Registers 0, the mode, bit 2 black-on-white, and 4, the color map&rsquo;s write kept for a color display to come; 1 to 3 and 5 to 7 time out with NXM. No interrupt. The CADR&rsquo;s TV boards are refused on QUUX</td></tr>
-            <tr><td><b>Disk</b></td><td>The disk controller: cylinder, head, sector and unit; ten commands; the drive&rsquo;s seeks and rotation</td><td>Block-disk, <code>--disk-controller block-disk</code>: the same registers and command list, the disk address a block number in <code>&lt;27:0&gt;</code>, 256 words a block; read and write only; one pack, unit 0; 100&nbsp;&micro;s a block (<b>unverified</b>). The pack image and its label&rsquo;s format are the CADR&rsquo;s. QUUX&rsquo;s only disk: the CADR&rsquo;s controller is refused on QUUX</td></tr>
+            <tr><td><b>Main memory</b></td><td>Memory boards on the Xbus, 458&nbsp;ns from the request to <code>XACK</code>, behind the bus interface</td><td>On the processor&rsquo;s own memory port, off the bus: a line fill no sooner than 380&nbsp;ns and a write 290&nbsp;ns, the DE25-Nano&rsquo;s, the slower board&rsquo;s; a board slower on an access waits. <code>--memory-timing</code> sets other figures, <code>arty</code> the Arty Z7-20&rsquo;s 220 and 120. A line fill&rsquo;s time is <b>unverified</b>. Revision 7</td></tr>
+            <tr><td><b>Memory cache</b></td><td>None</td><td>Always fitted, 4K words, <code>--cache &lt;words&gt;</code> another size: unified and write-through, by physical address, main memory and the frame buffer only, nothing past either&rsquo;s end; lines of 4 words, 2-way, the least recently used line going; a hit in 20&nbsp;ns (<b>unverified</b>); a one-word write buffer; a disk transfer leaves no line holding a word it wrote over</td></tr>
+            <tr><td><b>The bus interface</b></td><td>The board between the processor and both buses: arbitration, the Unibus map and its buffers, the interrupt control and error status, the debug cable</td><td>None: main memory and the frame buffer are on the memory port, the devices&rsquo; registers reached through the processor&rsquo;s register decode, and each register it had is on the register page or gone</td></tr>
+            <tr><td><b>Device registers</b></td><td>On the Xbus, 32 bits, shared with memory and the frame buffer; an address nothing answers times out after 4.25 to 5.1&nbsp;&micro;s</td><td>No bus: the processor&rsquo;s register decode reaches MONO TV&rsquo;s, block-disk&rsquo;s and the register page&rsquo;s registers at their addresses, never cached, in two microcycles; an address nothing answers fails at once, reads 0 and sets the NXM bit in word 101. Revision 8</td></tr>
+            <tr><td><b>The Unibus and the I/O board</b></td><td>The Unibus, 16 bits, with the I/O board: keyboard, mouse, clocks, the serial port and the Chaosnet interface</td><td>None. The keyboard is a FIFO of 64 key words and the mouse its counts on the register page; the clocks are in the processor; the Chaosnet interface is on the register page, its registers in the I/O board&rsquo;s order; the serial port is dropped</td></tr>
+            <tr><td><b>Debugging</b></td><td>The console&rsquo;s registers on the Unibus, and a debug cable from one machine&rsquo;s bus interface to another&rsquo;s: MIT&rsquo;s CC</td><td>The console&rsquo;s registers are the host&rsquo;s port alone: muir&rsquo;s prompt and checkpoints, the FPGA board&rsquo;s Linux. No debug cable</td></tr>
+            <tr><td><b>Display</b></td><td>The TV board: 768 by 963 at 24 words a line, a sync program, a color map and the vertical interrupt</td><td>MONO TV, its frame buffer on the memory bus and cached, the display reading it from memory by direct memory access, <code>--tv-board mono-tv</code>: 1280 by 1024, one bit a pixel, 40 words a line at <code>17000000</code>, or the size <code>--mono-tv-size</code> gives, the width a multiple of 32, at most 1920 by 1080. Registers 0, the mode, bit 2 black-on-white, and 4, the color map&rsquo;s write kept for a color display to come; 1 to 3 and 5 to 7 answer nothing, with NXM. No interrupt. The CADR&rsquo;s TV boards are refused on QUUX</td></tr>
+            <tr><td><b>Disk</b></td><td>The disk controller: cylinder, head, sector and unit; ten commands; the drive&rsquo;s seeks and rotation</td><td>Block-disk, QUUX&rsquo;s only disk: the same registers and command list, the disk address a block number in <code>&lt;27:0&gt;</code>, 256 words a block; read and write only; one pack, unit 0; 100&nbsp;&micro;s a block (<b>unverified</b>). The CADR&rsquo;s controller is refused on QUUX</td></tr>
+            <tr><td><b>The disk file</b></td><td>MIT&rsquo;s pack: the blocks one after another, the label in block 0 naming up to 18 partitions, with the drive&rsquo;s geometry</td><td>A fixed or dynamic VHD with a GPT partition table, made and filled with standard tools. A partition&rsquo;s GPT name is its four-character name, a space and a comment of up to 31 characters; the current microcode and band are attribute bits. No geometry, no pack name</td></tr>
             <tr><td><b>Reading a RAM as it is written</b></td><td>The RAM&rsquo;s output floats while written, and the answer is a race</td><td>QUUX&rsquo;s definition: the dispatch word a dispatch writes, or the map word right after a map store, reads as it was before the write. Microcode 323 and 1000 never read either</td></tr>
-            <tr><td><b>Microcode</b></td><td>MIT&rsquo;s 323</td><td>muir-sys&rsquo;s 1000, for both machines: reads source 16 at boot; on QUUX the six-bit read, the two-deposit write and invalid block 77; the reverse first-level map moved to system communication area words 640 to 737 and the swap-out CCWs to 440 to 457; <code>MUL</code> and <code>DIV</code> in <code>MPY</code>, <code>DIV</code> and <code>BIDIV</code>&rsquo;s quotient; for revision 4 the run light in MONO TV&rsquo;s buffer. MIT&rsquo;s 323 does not run on QUUX&rsquo;s 16K PDL buffer</td></tr>
-            <tr><td><b>Lisp system</b></td><td>MIT&rsquo;s System 100</td><td>muir-sys&rsquo;s System 1002: <code>PROCESSOR-TYPE-CODE</code> 4, and the main screen sized from the feature page&rsquo;s words 11 to 13. System 1001 runs on QUUX but draws its screen wrong on MONO TV</td></tr>
-            <tr><td><b>Engines</b></td><td><code>micro</code>, <code>rtl</code> and <code>chip</code></td><td><code>micro</code> and <code>rtl</code>; the synchronous microcycle and the cache on <code>rtl</code> alone. <code>chip</code> is the CADR&rsquo;s boards, netlist for netlist, and a run asking for it on QUUX is refused</td></tr>
+            <tr><td><b>Microcode</b></td><td>MIT&rsquo;s 323</td><td>muir-sys&rsquo;s 1000: reads source 16 at boot; the six-bit read, the two-deposit write and invalid block 77; the reverse first-level map moved to system communication area words 640 to 737 and the swap-out CCWs to 440 to 457; <code>MUL</code> and <code>DIV</code> in <code>MPY</code>, <code>DIV</code> and <code>BIDIV</code>&rsquo;s quotient; the clocks, the register page and block-disk. MIT&rsquo;s 323 does not run on QUUX</td></tr>
+            <tr><td><b>Lisp system</b></td><td>MIT&rsquo;s System 100</td><td>muir-sys&rsquo;s System 1002: <code>PROCESSOR-TYPE-CODE</code> 4, the main screen sized from the feature page&rsquo;s words 11 to 13, its devices on the register page and its partitions found by GPT. QUUX runs muir-sys&rsquo;s latest System 1002 and nothing older</td></tr>
+            <tr><td><b>Engines</b></td><td><code>micro</code>, <code>rtl</code> and <code>chip</code></td><td><code>micro</code> and <code>rtl</code>; the memory port&rsquo;s timing and the cache on <code>rtl</code> alone. <code>chip</code> is the CADR&rsquo;s boards, netlist for netlist, and a run asking for it on QUUX is refused</td></tr>
           </tbody>
         </table>
       </div>
@@ -221,7 +339,7 @@
 
     <footer class="wholine">
       <div class="label">muir &middot; Everything QUUX changes</div>
-      <div class="bar"><span>09/24/26</span><span>USER:</span><span>Machine Type QUUX</span><span>04</span></div>
+      <div class="bar"><span>09/25/26</span><span>USER:</span><span>Machine Type QUUX</span><span>05</span></div>
     </footer>
   </section>
 
@@ -230,11 +348,11 @@
     <div class="panel bare">
       <span class="eyebrow">Do it</span>
       <h2 class="title t-m">Running QUUX in muir</h2>
-      <p class="small" style="margin-top:0.4rem;"><code>--machine quux</code> chooses it, with its own boot PROM and MONO TV; its microcycle is 40&nbsp;ns, always, and on the <code>rtl</code> engine <code>--cache 4096</code> gives it the cache. It needs microcode written for it, from <a href="https://github.com/metebalci/muir-sys">muir-sys</a>: MIT&rsquo;s own will not run on it. Every difference, what each reached in the boot PROM, the microcode and the Lisp system, and what is still unverified, is in <a href="https://github.com/metebalci/muir/blob/main/docs/quux.md">the manual&rsquo;s QUUX</a>.</p>
+      <p class="small" style="margin-top:0.4rem;"><code>--machine quux</code> chooses it, with its own boot PROM, MONO TV and block-disk; its microcycle is 40&nbsp;ns, always, and on the <code>rtl</code> engine its cache and main memory are timed as the slower board&rsquo;s. Its disk is a VHD with a GPT partition table. It needs microcode and a band written for it, from <a href="https://github.com/metebalci/muir-sys">muir-sys</a>: MIT&rsquo;s own will not run on it. Every difference, what each reached in the boot PROM, the microcode and the Lisp system, and what is still unverified, is in <a href="https://github.com/metebalci/muir/blob/main/docs/quux.md">the manual&rsquo;s QUUX</a>.</p>
     </div>
     <footer class="wholine">
       <div class="label">muir &middot; Running QUUX</div>
-      <div class="bar"><span>09/24/26</span><span>USER:</span><span>Machine Type QUUX</span><span>05</span></div>
+      <div class="bar"><span>09/25/26</span><span>USER:</span><span>Machine Type QUUX</span><span>06</span></div>
     </footer>
   </section>
 
