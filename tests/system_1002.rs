@@ -4,7 +4,7 @@
 //! System 1002 on QUUX with MONO TV: muir-sys's development band, which
 //! sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-1002-dev8` (muir-sys `bf5ce57`, contract Q4, with its Q5 microcode `ucode-q4b`): boot
+//! It is in the gitignored `ref/band-1002-dev9` (muir-sys `0bddeb0`, contract Q5, no Unibus): boot
 //! PROM 1000 and microcode 1000 for block-disk, a pack whose Lisp addresses
 //! the disk by block, and the tree it was built from. No TV sync program,
 //! no speed bits, and no CADR disk controller: QUUX's disk is block-disk.
@@ -27,34 +27,21 @@ const CHAOS: (u16, u16) = (0o177201, 0o177200);
 /// A copy of the pack and the served tree, in a scratch directory.
 fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND);
-    if !from.join("pack-1002-dev8.img").exists() {
+    if !from.join("pack-1002-dev9.img").exists() {
         eprintln!("skipped: {} is not present", from.display());
         return None;
     }
     let dir = support::scratch(name);
     let pack = dir.join("pack.img");
-    std::fs::copy(from.join("pack-1002-dev8.img"), &pack).unwrap();
+    std::fs::copy(from.join("pack-1002-dev9.img"), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev8.tar.gz"))
+        .arg(from.join("tree-1002-dev9.tar.gz"))
         .arg("-C")
         .arg(dir.path())
         .status()
         .unwrap();
     assert!(untar.success(), "the tree unpacks");
-    // Q5's microcode, muir-sys's `ucode-1000-q4b` (committed as Q5's, the
-    // same bytes), made current in MCR2 with its error table served: the
-    // band's own MCR1 still reaches the Unibus, which QUUX no longer has.
-    {
-        use muir::diskpack::{Command, Pack};
-        let ucode = from.join("ucode-q4b");
-        let (mut p, _) = Pack::open(&pack);
-        p.run(Command::Load { partition: "MCR2".into(), file: Some(ucode.join("ucadr.mcr")) })
-            .unwrap();
-        p.run(Command::Microload("MCR2".into())).unwrap();
-        std::fs::copy(ucode.join("ucadr.tbl"), dir.join("release-1002/sys/ubin/ucadr.tbl"))
-            .unwrap();
-    }
     let root = dir.join("root");
     std::fs::create_dir_all(root.join("lispm")).unwrap();
     for part in ["sys", "site"] {
@@ -64,9 +51,9 @@ fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
 }
 
 /// The band, muir-sys's hand-over.
-const BAND: &str = "ref/band-1002-dev8";
+const BAND: &str = "ref/band-1002-dev9";
 
-/// The size `band-1002-dev8` was built at; it takes whatever size the
+/// The size `band-1002-dev9` was built at; it takes whatever size the
 /// feature page says at boot ([`system_1002_sizes_its_screen_at_boot`]).
 const BAND_SIZE: (usize, usize) = (1280, 1024);
 
