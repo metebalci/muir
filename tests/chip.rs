@@ -41,7 +41,7 @@ struct Chosen {
 }
 
 /// What this harness builds when the environment says nothing, which is
-/// what CI runs. `muir --chip` builds the same machine but for the
+/// what CI runs. `cadr --chip` builds the same machine but for the
 /// display, and [`muir_builds_this_harnesss_machine_but_for_the_display`]
 /// is what holds the two together.
 const HARNESS: Chosen =
@@ -56,7 +56,7 @@ const HARNESS: Chosen =
 /// timing being the board's either way.
 ///
 /// `MUIR_TV` is the model by default, and that is one of the two boards
-/// this harness does not run as `muir --chip` runs it --- the disk
+/// this harness does not run as `cadr --chip` runs it --- the disk
 /// controller below is the other: `rtl` has no timing twin
 /// for the display as it has for memory and the I/O board, so with the
 /// display netlist on the backplane the two machines stop keeping the same
@@ -111,7 +111,7 @@ const HARNESS: Chosen =
 /// TV.
 ///
 /// `MUIR_DISK_CONTROLLER` is the model by default, and **that is the
-/// second board this harness keeps from `muir --chip`**, which has run the
+/// second board this harness keeps from `cadr --chip`**, which has run the
 /// netlist controller since a boot through it was run to the end (issue
 /// 40). The reason is the comparison itself: `rtl` has no netlist disk, so
 /// a netlist controller here would be comparing two machines rather than
@@ -162,7 +162,7 @@ fn far_end(n: &netlist::Netlist, machine: muir::machine::Machine) -> FarEnd {
     far
 }
 
-/// `muir --chip` and this harness must build the same machine, or the
+/// `cadr --chip` and this harness must build the same machine, or the
 /// difference must be one this file has written down with its reason.
 ///
 /// They differ over one board: the display, and [`chosen`] says why. Every
@@ -173,7 +173,7 @@ fn far_end(n: &netlist::Netlist, machine: muir::machine::Machine) -> FarEnd {
 /// a bisect.
 ///
 /// **Two boards are exceptions, and both for the comparison's sake.** The
-/// display is one; the disk controller is the other, `muir --chip` running
+/// display is one; the disk controller is the other, `cadr --chip` running
 /// its netlist since a boot through it was run to the end (issue 40) while
 /// this file keeps the behavioral one, because what it compares `chip`
 /// against is `rtl`, which has no netlist disk to compare with.
@@ -191,12 +191,12 @@ fn far_end(n: &netlist::Netlist, machine: muir::machine::Machine) -> FarEnd {
 /// of its defaults in step: `--stop-after 0` prints the banner and stops,
 /// and the `memory:` and `boards:` lines of it are the machine the binary
 /// actually assembled. `MUIR_RC` points at a file that is not there, so
-/// that a `.muirrc` in the directory or the home one cannot answer for it.
+/// that a `.cadrrc` in the directory or the home one cannot answer for it.
 #[test]
 fn muir_builds_this_harnesss_machine_but_for_the_display() {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_muir"))
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_cadr"))
         .args(["--chip", "--stop-after", "0"])
-        .env("MUIR_RC", "/nonexistent/.muirrc")
+        .env("MUIR_RC", "/nonexistent/.cadrrc")
         .output()
         .expect("muir did not run");
     // The banner is on stderr, the run's own lines on stdout.
@@ -250,7 +250,7 @@ fn muir_builds_this_harnesss_machine_but_for_the_display() {
 
     let same = |what: &str| {
         format!(
-            "muir --chip and tests/chip.rs disagree over the {what}, and nothing here says \
+            "cadr --chip and tests/chip.rs disagree over the {what}, and nothing here says \
              they should.\n  muir:    {muirs:?}\n  harness: {HARNESS:?}\nEither follow \
              muir in HARNESS, or write the reason for the difference into `chosen` and \
              into this test beside the display's."
@@ -260,20 +260,20 @@ fn muir_builds_this_harnesss_machine_but_for_the_display() {
     assert_eq!(muirs.io, HARNESS.io, "{}", same("I/O board"));
     assert_eq!(muirs.tv_board, HARNESS.tv_board, "{}", same("kind of TV board"));
     // **The disk controller is the second exception, for the same kind of
-    // reason as the display.**  `muir --chip` runs the netlist controller
+    // reason as the display.**  `cadr --chip` runs the netlist controller
     // since a boot through it was run to the end (issue 40), and this file
     // compares `chip` against `rtl`, which has the behavioral one ---
     // so a netlist controller here would be comparing two machines rather
     // than two models of one.  `MUIR_DISK_CONTROLLER=netlist` is how the
     // netlist board is asked for, and then nothing is being compared.
-    assert!(muirs.disk, "muir --chip runs the netlist controller: issue 40");
+    assert!(muirs.disk, "cadr --chip runs the netlist controller: issue 40");
     assert_ne!(
         muirs.disk, HARNESS.disk,
         "the disk controller is this file's second exception, beside the display: muir runs the \n          netlist board and the harness keeps the model, there being no netlist disk on rtl to \n          compare it with. If muir has gone back to the model, the exception is over and both \n          this and `chosen` should say so."
     );
     assert!(
         !boards.contains("multiplexor"),
-        "muir --chip now puts a DISK MULTIPLEXOR on by default and this harness does not: \
+        "cadr --chip now puts a DISK MULTIPLEXOR on by default and this harness does not: \
          `{boards}`"
     );
     assert!(
@@ -856,7 +856,7 @@ fn cpu_clock(n: &netlist::Netlist) -> netlist::NetId {
 /// a timeout a hang. Time is what the bound was always about.
 const HANG_BOUND_NS: u64 = 60_000;
 
-/// Writes a checkpoint, in the one format `muir --chip --checkpoint`
+/// Writes a checkpoint, in the one format `cadr --chip --checkpoint`
 /// writes: [`muir::cable::write_checkpoint`]. So a file this harness makes
 /// is one the binary can resume, and the other way round --- which is what
 /// lets `vendor/run/chk/at-535000.chk` come out of an ordinary run instead
@@ -1135,7 +1135,7 @@ fn chip_agrees_with_rtl() {
     // it, and no unit test replaces that run. So the default is unchanged
     // and this is what you ask for instead.
     //
-    // What it buys is the machine `muir --chip` actually builds. `rtl`
+    // What it buys is the machine `cadr --chip` actually builds. `rtl`
     // idealises the timing of every device it does not model
     // (`busint::IDEAL_DEVICE_NS` is 0 and its doc says every figure
     // depending on it is a lower bound), so a netlist peripheral on the
@@ -5551,7 +5551,7 @@ fn two_display_boards_answer_at_their_own_straps() {
     let n = netlist::parse(NETLIST).unwrap();
     let mut m = muir::machine::Machine::new();
     // The model of the second board, which is fitted beside the netlist
-    // one exactly as `muir --chip --color-tv netlist` fits it: the picture
+    // one exactly as `cadr --chip --color-tv netlist` fits it: the picture
     // is read off the model whichever board drew it.
     m.fit_color_tv();
     m.amem[3] = 0o123456;

@@ -798,7 +798,7 @@ fn a_packet_does_not_move_an_endpoint_a_flag_named() {
 #[test]
 fn a_datagram_reaches_a_running_muirs_cable() {
     let (peer, peer_at) = peer_socket();
-    let child = support::muir()
+    let child = support::cadr()
         .args(["--micro", "--stop-after", "4000000000"])
         // The address has to be given: the default is subnet 376's and no
         // band's, so a run that wants this machine at [`ME`] says so. It
@@ -892,7 +892,7 @@ fn a_running_machines_own_frame_reaches_a_peer() {
     let Some(pack) = support::pack_100() else { return };
     let (peer, peer_at) = peer_socket();
     peer.set_read_timeout(Some(Duration::from_secs(1))).expect("a timeout");
-    let child = support::muir()
+    let child = support::cadr()
         .args(["--micro", "--stop-after", "4000000000"])
         .args(["--chaos-address", &format!("{ME:o}")])
         .args(["--chaos-udp", "127.0.0.1:0"])

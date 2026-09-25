@@ -13,7 +13,8 @@
 //!
 //!     cargo run --release --example profile -- [micro|rtl] [cadr|quux|quux-4k|quux-16k] [workload ...]
 //!
-//! The machine is the CADR unless `quux` is named: QUUX, `--machine quux`.
+//! The machine is the CADR unless `quux` is named: QUUX, as the `quux`
+//! executable runs it.
 //! `quux-4k` and `quux-16k` are QUUX with a PDL buffer of 4K or 16K words,
 //! the sizes being measured for its next revision.
 //! With no workloads named, all of them run, in the order below. For each,

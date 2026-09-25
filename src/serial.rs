@@ -13,7 +13,7 @@
 //! with. [`OnCable`], the far end of the cable for the netlist board,
 //! a bit at a time on the EIA wires, which `tests/serial_cable.rs` holds
 //! the chip's own model in `src/part.rs` to. And [`Endpoint`], the route
-//! out of the process: the TCP endpoint `muir --serial` opens, which plugs
+//! out of the process: the TCP endpoint `cadr --serial` opens, which plugs
 //! whatever connects to it into either far end.
 //!
 //! **What the board wires.** Page IOBSER of `data/CADRIO.netlist`: the

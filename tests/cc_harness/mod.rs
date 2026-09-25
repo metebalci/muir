@@ -419,7 +419,7 @@ pub fn boot_and_login_with(debuggee_pack: bool) -> Option<Cc> {
     if debuggee_pack {
         b.disk.attach(0, Unit::open(&pack, Geometry::T300).expect("the release's pack"));
     }
-    // B's own Chaosnet, as `muir --debug-in-process` gives it: its own
+    // B's own Chaosnet, as `cadr --debug-in-process` gives it: its own
     // cable, since one cable carries one machine.  The harness puts a
     // server of its own on it, with the same fixed time as A's, so its
     // band asks the network for the date rather than the screen, and

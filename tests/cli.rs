@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `muir`'s command line: what it refuses, and that it says why rather
-//! than starting a machine it cannot build; the boot PROM a flag puts in
-//! the machine; and the flags it reads from a file before it.
+//! The command lines of `cadr` and `quux`: what each refuses, and that it
+//! says why rather than starting a machine it cannot build; which flags are
+//! whose, the executable being the machine; the boot PROM a flag puts in
+//! the machine; and the flags each reads from a file before it.
 
 mod support;
 
@@ -11,29 +12,31 @@ use std::io::Write;
 
 use std::path::{Path, PathBuf};
 
-use support::{Run, Scratch, muir, muir_default, scratch, text};
+use support::{Run, Scratch, cadr, cadr_default, executable, quux, scratch, text};
 
-/// A usage error: exit status 2, and the flag named on stderr.
-fn refused(args: &[&str], flag: &str) {
-    let out = muir().args(args).run();
+/// A usage error from `exe`, `cadr` or `quux`: exit status 2, and the
+/// flag named on stderr.
+fn refused(exe: &str, args: &[&str], flag: &str) {
+    let out = executable(exe).args(args).run();
     let err = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(2), "{args:?}: not a usage error:\n{err}");
+    assert_eq!(out.status.code(), Some(2), "{exe} {args:?}: not a usage error:\n{err}");
     // The refusal, not the first line: the version and any file of flags
     // are written before anything is parsed, so they come before it.
+    let prefix = format!("{exe}: ");
     assert!(
-        err.lines().find(|l| l.starts_with("muir: ")).is_some_and(|l| l.contains(flag)),
-        "{args:?}: the refusal names {flag}:\n{err}"
+        err.lines().find(|l| l.starts_with(&prefix)).is_some_and(|l| l.contains(flag)),
+        "{exe} {args:?}: the refusal names {flag}:\n{err}"
     );
 }
 
 /// A usage error whose message says something in particular, for the
 /// refusals that name the engine or the other flag rather than the one
 /// that was given.
-fn refused_saying(args: &[&str], says: &str) {
-    let out = muir().args(args).run();
+fn refused_saying(exe: &str, args: &[&str], says: &str) {
+    let out = executable(exe).args(args).run();
     let err = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(2), "{args:?}: not a usage error:\n{err}");
-    assert!(err.contains(says), "{args:?}: the refusal says {says:?}:\n{err}");
+    assert_eq!(out.status.code(), Some(2), "{exe} {args:?}: not a usage error:\n{err}");
+    assert!(err.contains(says), "{exe} {args:?}: the refusal says {says:?}:\n{err}");
 }
 
 /// **The memory board count is one to sixty, on every engine.** The
@@ -45,12 +48,13 @@ fn refused_saying(args: &[&str], says: &str) {
 fn the_memory_board_count_is_one_to_sixty() {
     for n in ["0", "61", "65"] {
         refused(
+            "cadr",
             &["--chip", "--main-memory-boards", n, "--stop-after", "1"],
             "--main-memory-boards",
         );
     }
     for (engine, n) in [("--micro", "4"), ("--rtl", "60"), ("--micro", "1")] {
-        let out = muir().args([engine, "--main-memory-boards", n, "--stop-after", "1"]).run();
+        let out = cadr().args([engine, "--main-memory-boards", n, "--stop-after", "1"]).run();
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(out.status.success(), "{engine} with {n} boards:\n{err}");
     }
@@ -71,7 +75,7 @@ fn the_memory_board_count_is_one_to_sixty() {
 #[test]
 fn the_disk_controller_is_netlist_unless_the_memory_is_the_model() {
     let start = |args: &[&str]| {
-        let out = muir().args(args).run();
+        let out = cadr().args(args).run();
         let t = text(&out);
         assert!(out.status.success(), "{args:?}:\n{t}");
         t
@@ -94,6 +98,7 @@ fn the_disk_controller_is_netlist_unless_the_memory_is_the_model() {
 
     // Asked for by name against the model memory, it is refused.
     refused(
+        "cadr",
         &["--chip", "--main-memory", "model", "--disk-controller", "netlist", "--stop-after", "1"],
         "--disk-controller netlist",
     );
@@ -133,20 +138,24 @@ fn the_disk_controller_is_netlist_unless_the_memory_is_the_model() {
 fn a_window_address_is_rtls_and_the_debuggers_and_a_multiple_of_four() {
     for engine in ["--micro", "--chip"] {
         refused_saying(
+            "cadr",
             &[engine, "--debug-cable-connect", "0x80000080", "--stop-after", "1"],
             if engine == "--micro" { "no timing model" } else { "the board's DBGIN only" },
         );
     }
     refused(
+        "cadr",
         &["--rtl", "--debug-cable-listen", "0x80000080", "--stop-after", "1"],
         "--debug-cable-listen",
     );
     refused_saying(
+        "cadr",
         &["--rtl", "--debug-cable-listen", "--debug-cable-connect", "0x80000080"],
         "one lashup at a time",
     );
     for bad in ["0x80000082", "0x80000081", "0xnothex", "0x"] {
         refused(
+            "cadr",
             &["--rtl", "--debug-cable-connect", bad, "--stop-after", "1"],
             "--debug-cable-connect",
         );
@@ -154,17 +163,18 @@ fn a_window_address_is_rtls_and_the_debuggers_and_a_multiple_of_four() {
     // An argument that is not 0x is still an endpoint, and a bad one is
     // refused as an endpoint.
     refused(
+        "cadr",
         &["--rtl", "--debug-cable-connect", "300000", "--stop-after", "1"],
         "--debug-cable-connect",
     );
     // And a window this build cannot map at all.
     let out =
-        muir().args(["--rtl", "--debug-cable-connect", "0x80000080", "--stop-after", "1"]).run();
+        cadr().args(["--rtl", "--debug-cable-connect", "0x80000080", "--stop-after", "1"]).run();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "a window muir cannot reach is no run:\n{err}");
     assert!(
         err.lines()
-            .find(|l| l.starts_with("muir: "))
+            .find(|l| l.starts_with("cadr: "))
             .is_some_and(|l| l.contains("--debug-cable-connect")),
         "the refusal names the flag:\n{err}"
     );
@@ -180,6 +190,7 @@ fn a_window_address_is_rtls_and_the_debuggers_and_a_multiple_of_four() {
 #[test]
 fn a_debuggee_pack_needs_the_lashup() {
     refused(
+        "cadr",
         &["--rtl", "--debuggee-disk-pack", "nothing.img", "--stop-after", "1"],
         "--debuggee-disk-pack",
     );
@@ -193,9 +204,13 @@ fn a_debuggee_pack_needs_the_lashup() {
 /// one machine, and the port is its.
 #[test]
 fn the_serial_port_is_not_the_lashups() {
-    refused(&["--rtl", "--debug-in-process", "--serial", "0", "--stop-after", "1"], "--serial");
+    refused(
+        "cadr",
+        &["--rtl", "--debug-in-process", "--serial", "0", "--stop-after", "1"],
+        "--serial",
+    );
     let t = text(
-        &muir()
+        &cadr()
             .args(["--rtl", "--serial", "0", "--debug-cable-listen", "127.0.0.1:0"])
             .args(["--stop-after", "1"])
             .run(),
@@ -216,7 +231,7 @@ fn the_serial_port_is_not_the_lashups() {
 /// says so rather than nothing.
 #[test]
 fn dbgin_listens_by_default() {
-    let t = text(&muir_default().args(["--rtl", "--stop-after", "1"]).run());
+    let t = text(&cadr_default().args(["--rtl", "--stop-after", "1"]).run());
     assert!(t.contains("ran out at 1"), "the run did not wait for a debugger:\n{t}");
     let line = t.lines().find(|l| l.starts_with("debug cable: ")).expect("a debug cable line");
     assert!(
@@ -225,31 +240,35 @@ fn dbgin_listens_by_default() {
         "the default connector, or why not:\n{t}"
     );
     let t =
-        text(&muir_default().args(["--rtl", "--no-debug-cable-listen", "--stop-after", "1"]).run());
+        text(&cadr_default().args(["--rtl", "--no-debug-cable-listen", "--stop-after", "1"]).run());
     assert!(
         t.contains("debug cable: none --- --no-debug-cable-listen"),
         "left empty, and said:\n{t}"
     );
     let t = text(
-        &muir_default()
+        &cadr_default()
             .args(["--rtl", "--no-debug-cable-listen", "--debug-cable-listen", "127.0.0.1:0"])
             .args(["--stop-after", "1"])
             .run(),
     );
     assert!(t.contains("debug cable: DBGIN listening at 127.0.0.1:"), "the last wins:\n{t}");
     let t = text(
-        &muir_default()
+        &cadr_default()
             .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--no-debug-cable-listen"])
             .args(["--stop-after", "1"])
             .run(),
     );
     assert!(t.contains("debug cable: none --- --no-debug-cable-listen"), "either way:\n{t}");
-    let t = text(&muir_default().args(["--micro", "--stop-after", "1"]).run());
+    let t = text(&cadr_default().args(["--micro", "--stop-after", "1"]).run());
     assert!(
         t.contains("debug cable: none --- micro has no timing model"),
         "micro says why it has none:\n{t}"
     );
-    refused_saying(&["--micro", "--debug-cable-listen", "--stop-after", "1"], "no timing model");
+    refused_saying(
+        "cadr",
+        &["--micro", "--debug-cable-listen", "--stop-after", "1"],
+        "no timing model",
+    );
 }
 
 /// **What wants a machine on its own leaves the connector empty, and says
@@ -266,17 +285,19 @@ fn flags_that_want_a_machine_on_its_own_leave_the_connector_empty() {
     let gif = dir.join("alone.gif");
     for (flag, path) in [("--checkpoint", &chk), ("--tv-capture", &gif)] {
         let path = path.to_str().unwrap();
-        let t = text(&muir_default().args(["--rtl", flag, path, "--stop-after", "1"]).run());
+        let t = text(&cadr_default().args(["--rtl", flag, path, "--stop-after", "1"]).run());
         assert!(t.contains(&format!("debug cable: none --- {flag}")), "{flag}: said:\n{t}");
         refused(
+            "cadr",
             &["--rtl", flag, path, "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1"],
             flag,
         );
     }
     let t =
-        text(&muir_default().args(["--chip", "--watch", "0-1:PC/14", "--stop-after", "1"]).run());
+        text(&cadr_default().args(["--chip", "--watch", "0-1:PC/14", "--stop-after", "1"]).run());
     assert!(t.contains("debug cable: none --- --watch"), "--watch: said:\n{t}");
     refused(
+        "cadr",
         &[
             "--chip",
             "--watch",
@@ -297,12 +318,12 @@ fn flags_that_want_a_machine_on_its_own_leave_the_connector_empty() {
 /// one process and the debugger's end still refuse it.
 #[test]
 fn a_held_start_goes_with_the_connector() {
-    let out = muir().args(["--rtl", "--no-auto-boot", "--debug-cable-listen", "127.0.0.1:0"]).run();
+    let out = cadr().args(["--rtl", "--no-auto-boot", "--debug-cable-listen", "127.0.0.1:0"]).run();
     let t = text(&out);
     assert!(out.status.success(), "held, stdin ended, and the run ended:\n{t}");
     assert!(t.contains("start: held"), "held:\n{t}");
     assert!(t.contains("debug cable: DBGIN listening at 127.0.0.1:"), "and listening:\n{t}");
-    refused(&["--rtl", "--debug-in-process", "--no-auto-boot"], "--no-auto-boot");
+    refused("cadr", &["--rtl", "--debug-in-process", "--no-auto-boot"], "--no-auto-boot");
 }
 
 /// **The netlist machine runs with its connector listening**, to its stop,
@@ -311,7 +332,7 @@ fn a_held_start_goes_with_the_connector() {
 #[test]
 fn the_netlist_machine_runs_with_its_connector_listening() {
     let t = text(
-        &muir().args(["--chip", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1"]).run(),
+        &cadr().args(["--chip", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1"]).run(),
     );
     assert!(t.contains("debug cable: DBGIN listening at 127.0.0.1:"), "listening:\n{t}");
     assert!(t.contains("ran out at 1"), "and ran to its stop:\n{t}");
@@ -325,9 +346,9 @@ fn the_netlist_machine_runs_with_its_connector_listening() {
 #[test]
 fn a_watch_that_is_not_a_range_and_nets_is_refused() {
     for spec in ["PC/14", "x-3:PC/14", "9-3:PC/14", "3:", "3:PC/0", "3:PC/14,", "-:PC/14"] {
-        refused(&["--chip", "--watch", spec, "--stop-after", "1"], "--watch");
+        refused("cadr", &["--chip", "--watch", spec, "--stop-after", "1"], "--watch");
     }
-    refused(&["--chip", "--stop-after", "1", "--watch"], "--watch");
+    refused("cadr", &["--chip", "--stop-after", "1", "--watch"], "--watch");
 }
 
 /// **A net `--watch` names has to be on a board this run has**, and the
@@ -345,7 +366,7 @@ fn a_watch_on_a_net_the_machine_has_not_got_is_refused() {
         ("0-1:cpu:PC/15", "cpu has no PC14 --- a bus is PC0 up"),
         ("0-1:disk:NOSUCH", "no net NOSUCH on disk"),
     ] {
-        let out = muir().args(["--chip", "--watch", spec, "--stop-after", "1"]).run();
+        let out = cadr().args(["--chip", "--watch", spec, "--stop-after", "1"]).run();
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(
             out.status.code(),
@@ -359,7 +380,7 @@ fn a_watch_on_a_net_the_machine_has_not_got_is_refused() {
     // `disk` is a board this run has because the controller is a netlist.
     // Asked for against its model there is no such board, and the refusal
     // names the boards there are.
-    let out = muir()
+    let out = cadr()
         .args(["--chip", "--disk-controller", "model", "--watch", "0-1:disk:NEW CCW"])
         .args(["--stop-after", "1"])
         .run();
@@ -376,7 +397,7 @@ fn a_watch_on_a_net_the_machine_has_not_got_is_refused() {
 #[test]
 fn a_watch_on_the_other_engines_is_said_to_be_ignored() {
     for engine in ["--micro", "--rtl"] {
-        let out = muir().args([engine, "--watch", "0-1:PC/14", "--stop-after", "1"]).run();
+        let out = cadr().args([engine, "--watch", "0-1:PC/14", "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}: not refused:\n{t}");
         assert!(t.contains("warning: --watch is chip, and this run is"), "{engine}: said:\n{t}");
@@ -391,7 +412,7 @@ fn a_watch_on_the_other_engines_is_said_to_be_ignored() {
 #[test]
 fn the_display_board_is_named_on_every_engine() {
     for engine in ["--micro", "--rtl"] {
-        let out = muir().args([engine, "--tv-board", "lispm-tv", "--stop-after", "1"]).run();
+        let out = cadr().args([engine, "--tv-board", "lispm-tv", "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}:\n{t}");
         assert!(t.contains("tv: model lispm-tv"), "{engine}: the start says the board:\n{t}");
@@ -399,14 +420,14 @@ fn the_display_board_is_named_on_every_engine() {
     }
     // The board a run has with nothing said is the SIMPLE TV, System 100's
     // own.
-    let out = muir().args(["--rtl", "--stop-after", "1"]).run();
+    let out = cadr().args(["--rtl", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("tv: model simple-tv"), "the default board:\n{t}");
 
     // `chip` says it in its boards line, where it always has, and the
     // model on `chip` takes the flag as the netlist does.
-    let out = muir()
+    let out = cadr()
         .args(["--chip", "--main-memory-boards", "4", "--tv", "model"])
         .args(["--tv-board", "lispm-tv", "--stop-after", "1"])
         .run();
@@ -415,140 +436,126 @@ fn the_display_board_is_named_on_every_engine() {
     assert!(t.contains("TV model lispm-tv"), "chip with the model board:\n{t}");
 }
 
-/// **MONO TV is QUUX's, and QUUX's only**: `--tv-board mono-tv` runs on
-/// QUUX and says so, is QUUX's display when none is named, and is refused
-/// on the CADR; the CADR's boards are refused on QUUX.
+/// **MONO TV is QUUX's, and QUUX's only**: it is QUUX's display, always,
+/// and the start says so; `--tv-board` is the CADR's choice between its
+/// two boards and not a flag of `quux`, and `mono-tv` is refused as a word
+/// of it on `cadr`.
 #[test]
 fn mono_tv_is_quux_s() {
-    refused_saying(&["--rtl", "--tv-board", "mono-tv"], "--tv-board mono-tv is QUUX's");
+    refused_saying("cadr", &["--rtl", "--tv-board", "mono-tv"], "mono-tv is quux's");
     for engine in ["--micro", "--rtl"] {
-        let out = muir()
-            .args([engine, "--machine", "quux", "--tv-board", "mono-tv", "--stop-after", "1"])
-            .run();
+        let out = quux().args([engine, "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}:\n{t}");
         assert!(t.contains("tv: model mono-tv"), "{engine}: the start says the board:\n{t}");
     }
-    // It is QUUX's display, and the CADR's boards are refused on QUUX.
-    let out = muir().args(["--rtl", "--machine", "quux", "--stop-after", "1"]).run();
-    assert!(text(&out).contains("tv: model mono-tv"), "QUUX's default:\n{}", text(&out));
-    for board in ["simple-tv", "lispm-tv"] {
-        refused_saying(
-            &["--rtl", "--machine", "quux", "--tv-board", board],
-            &format!("--tv-board {board} is the CADR's"),
-        );
+    for board in ["simple-tv", "lispm-tv", "mono-tv"] {
+        refused_saying("quux", &["--rtl", "--tv-board", board], "--tv-board is cadr's, not quux's");
     }
     // Its size is a flag of its own, and says so.
-    let out = muir()
-        .args(["--rtl", "--machine", "quux", "--mono-tv-size", "1920x1080", "--stop-after", "1"])
-        .run();
+    let out = quux().args(["--rtl", "--mono-tv-size", "1920x1080", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("tv: model mono-tv, 1920x1080"), "the start says the size:\n{t}");
     refused_saying(
-        &["--machine", "quux", "--mono-tv-size", "2560x1440"],
+        "quux",
+        &["--mono-tv-size", "2560x1440"],
         "--mono-tv-size: 2560 by 1440 is past 1920 by 1080",
     );
+    refused_saying("quux", &["--mono-tv-size", "1921x1080"], "--mono-tv-size: a width of 1921");
+    refused_saying("quux", &["--mono-tv-size", "wide"], "--mono-tv-size wants");
     refused_saying(
-        &["--machine", "quux", "--mono-tv-size", "1921x1080"],
-        "--mono-tv-size: a width of 1921",
+        "cadr",
+        &["--mono-tv-size", "1920x1080"],
+        "--mono-tv-size is quux's, not cadr's",
     );
-    refused_saying(&["--machine", "quux", "--mono-tv-size", "wide"], "--mono-tv-size wants");
-    refused_saying(&["--mono-tv-size", "1920x1080"], "--mono-tv-size is MONO TV's");
 }
 
 /// **QUUX drops the delay lines: its timing is `sync`, always.** A QUUX run
 /// is on `sync` of four 10 ns ticks without asking, on `rtl` and `micro`
 /// alike, and the start says so, the pace too; `--sync-cycle-ticks` sets
-/// the ticks on QUUX alone; the CADR's `cadr` and `fpga` are refused on
-/// QUUX, and `sync` and its ticks on the CADR, which keeps its delay lines.
+/// the ticks, and is `quux`'s alone; `--timing-model` is the CADR's choice
+/// between its delay lines and muir-fpga's grid, and not a flag of `quux`;
+/// `sync` is no word of it on `cadr`, which keeps its delay lines.
 #[test]
 fn quux_runs_on_sync_alone() {
     for engine in ["--rtl", "--micro"] {
-        let out = muir().args([engine, "--machine", "quux", "--pace", "--stop-after", "1"]).run();
+        let out = quux().args([engine, "--pace", "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}: {t}");
         assert!(t.contains("timing: sync, 4 ticks of 10 ns, 40 ns a microcycle"), "{engine}:\n{t}");
         assert!(t.contains("40 ns a microcycle; the run waits"), "{engine}: the pace:\n{t}");
     }
-    let out = muir()
-        .args(["--rtl", "--machine", "quux", "--sync-cycle-ticks", "3"])
-        .args(["--stop-after", "1"])
-        .run();
+    let out = quux().args(["--rtl", "--sync-cycle-ticks", "3", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("timing: sync, 3 ticks of 10 ns, 30 ns a microcycle"), "{t}");
-    let out = muir()
-        .args(["--rtl", "--machine", "quux", "--timing-model", "sync", "--stop-after", "1"])
-        .run();
-    assert!(out.status.success(), "saying it is harmless: {}", text(&out));
-    for cadr in ["cadr", "fpga"] {
+    for model in ["sync", "cadr", "fpga"] {
         refused_saying(
-            &["--rtl", "--machine", "quux", "--timing-model", cadr],
-            "QUUX drops the delay lines",
+            "quux",
+            &["--rtl", "--timing-model", model],
+            "--timing-model is cadr's, not quux's",
         );
     }
-    refused_saying(&["--rtl", "--timing-model", "sync"], "--timing-model sync is QUUX's");
-    refused_saying(&["--rtl", "--sync-cycle-ticks", "3"], "--sync-cycle-ticks is QUUX's");
-    refused_saying(&["--micro", "--machine", "quux", "--timing-model", "sync"], "is rtl's");
+    refused_saying("cadr", &["--rtl", "--timing-model", "sync"], "sync is quux's");
     refused_saying(
-        &["--rtl", "--machine", "quux", "--sync-cycle-ticks", "0"],
-        "--sync-cycle-ticks wants",
+        "cadr",
+        &["--rtl", "--sync-cycle-ticks", "3"],
+        "--sync-cycle-ticks is quux's, not cadr's",
     );
-    let out = muir().args(["--rtl", "--pace", "--stop-after", "1"]).run();
+    refused_saying("quux", &["--rtl", "--sync-cycle-ticks", "0"], "--sync-cycle-ticks wants");
+    let out = cadr().args(["--rtl", "--pace", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(t.contains("timing: cadr, the board's delay lines"), "the CADR's:\n{t}");
     assert!(t.contains("145 ns a microcycle; the run waits"), "the CADR's pace:\n{t}");
 }
 
 /// **`--cache` is QUUX's and `rtl`'s**: it runs there and the start says
-/// the cache, and it is refused on the CADR, on `micro`, and at a size that
+/// the cache, and it is refused on `cadr`, on `micro`, and at a size that
 /// is not a power of two.
 #[test]
 fn the_cache_is_quux_s_and_rtl_s() {
-    let out =
-        muir().args(["--rtl", "--machine", "quux", "--cache", "4096", "--stop-after", "1"]).run();
+    let out = quux().args(["--rtl", "--cache", "4096", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("cache: 4096 words, lines of 4, 2-way"), "the start says it:\n{t}");
-    refused_saying(&["--rtl", "--cache", "4096"], "--cache is QUUX's");
-    refused_saying(&["--micro", "--machine", "quux", "--cache", "4096"], "--cache is rtl's");
-    refused_saying(&["--rtl", "--machine", "quux", "--cache", "3000"], "--cache:");
+    refused_saying("cadr", &["--rtl", "--cache", "4096"], "--cache is quux's, not cadr's");
+    refused_saying("quux", &["--micro", "--cache", "4096"], "--cache is rtl's");
+    refused_saying("quux", &["--rtl", "--cache", "3000"], "--cache:");
 }
 
 /// **QUUX's main memory is on its own port** (contract Q6): the start
 /// says the port's timing and the cache, fitted without `--cache`;
-/// `--memory-timing` sets other figures there, and is refused on the CADR,
+/// `--memory-timing` sets other figures there, and is refused on `cadr`,
 /// on `micro`, and with a figure that is not one.
 #[test]
 fn quux_s_memory_port_and_its_timing() {
-    let out = muir().args(["--rtl", "--machine", "quux", "--stop-after", "1"]).run();
+    let out = quux().args(["--rtl", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("memory port: a line fill in 380 ns, a write in 290"), "{t}");
     assert!(t.contains("cache: 4096 words, lines of 4, 2-way"), "always fitted:\n{t}");
-    let out = muir()
-        .args(["--rtl", "--machine", "quux", "--memory-timing", "arty", "--stop-after", "1"])
-        .run();
+    let out = quux().args(["--rtl", "--memory-timing", "arty", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(t.contains("memory port: a line fill in 220 ns, a write in 120"), "{t}");
-    refused_saying(&["--rtl", "--memory-timing", "300,200"], "--memory-timing is QUUX's");
     refused_saying(
-        &["--micro", "--machine", "quux", "--memory-timing", "300,200"],
-        "--memory-timing is rtl's",
+        "cadr",
+        &["--rtl", "--memory-timing", "300,200"],
+        "--memory-timing is quux's, not cadr's",
     );
-    refused_saying(&["--rtl", "--machine", "quux", "--memory-timing", "fast"], "--memory-timing");
+    refused_saying("quux", &["--micro", "--memory-timing", "300,200"], "--memory-timing is rtl's");
+    refused_saying("quux", &["--rtl", "--memory-timing", "fast"], "--memory-timing");
 }
 
 /// **`--rtc` is QUUX's** (contract Q9): the real-time clock is the host's
 /// by default, and `--rtc <s>` starts it at Unix second `s` and counts the
 /// machine's time from there; the start says which. A second past 2^32-1,
 /// which the 32-bit word cannot hold, is refused, and so is anything that
-/// is not a second, and the flag on the CADR, which has no RTC.
+/// is not a second, and the flag on `cadr`, the CADR having no RTC.
 #[test]
 fn the_rtc_is_quux_s() {
     for engine in ["--micro", "--rtl"] {
-        let out = muir().args([engine, "--machine", "quux", "--stop-after", "1"]).run();
+        let out = quux().args([engine, "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}: {t}");
         assert!(t.contains("rtc: the host's clock"), "{engine}: the start says it:\n{t}");
@@ -557,31 +564,29 @@ fn the_rtc_is_quux_s() {
             ("4294967295", "rtc: from 4294967295, counting machine time"),
             ("host", "rtc: the host's clock"),
         ] {
-            let out = muir()
-                .args([engine, "--machine", "quux", "--rtc", flag, "--stop-after", "1"])
-                .run();
+            let out = quux().args([engine, "--rtc", flag, "--stop-after", "1"]).run();
             let t = text(&out);
             assert!(out.status.success(), "{engine} --rtc {flag}: {t}");
             assert!(t.contains(said), "{engine} --rtc {flag}: the start says it:\n{t}");
         }
     }
-    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "1"]).run();
     assert!(!text(&out).contains("rtc:"), "the CADR has none:\n{}", text(&out));
     // Each with a stop, so that one wrongly taken ends rather than runs on.
-    let quux = ["--micro", "--stop-after", "1", "--machine", "quux"];
-    refused_saying(&[&quux[..], &["--rtc", "4294967296"]].concat(), "--rtc 4294967296");
-    refused_saying(&[&quux[..], &["--rtc", "4294967296"]].concat(), "past 4294967295");
-    refused(&[&quux[..], &["--rtc", "-1"]].concat(), "--rtc");
-    refused(&[&quux[..], &["--rtc", "soon"]].concat(), "--rtc");
-    refused(&[&quux[..], &["--rtc"]].concat(), "--rtc");
-    refused_saying(&["--micro", "--stop-after", "1", "--rtc", "5"], "--rtc is QUUX's");
+    let run = ["--micro", "--stop-after", "1"];
+    refused_saying("quux", &[&run[..], &["--rtc", "4294967296"]].concat(), "--rtc 4294967296");
+    refused_saying("quux", &[&run[..], &["--rtc", "4294967296"]].concat(), "past 4294967295");
+    refused("quux", &[&run[..], &["--rtc", "-1"]].concat(), "--rtc");
+    refused("quux", &[&run[..], &["--rtc", "soon"]].concat(), "--rtc");
+    refused("quux", &[&run[..], &["--rtc"]].concat(), "--rtc");
+    refused_saying("cadr", &[&run[..], &["--rtc", "5"]].concat(), "--rtc is quux's, not cadr's");
 }
 
 /// **`--file-root` is QUUX's** (contract Q9): the start lists the file
 /// device's folders --- HOST's `/` from a folder alone, a named mount from
 /// `<name>=<folder>`, each read-write or `,ro` --- and its time; with none
 /// `/` is empty. A name mounted twice, a second default folder, a folder
-/// that is not there, a missing value and the flag on the CADR are refused.
+/// that is not there, a missing value and the flag on `cadr` are refused.
 #[test]
 fn the_file_root_is_quux_s() {
     let dir = scratch("file-root");
@@ -620,9 +625,8 @@ fn the_file_root_is_quux_s() {
         ),
     ];
     for engine in ["--micro", "--rtl"] {
-        let quux = [engine, "--machine", "quux", "--stop-after", "1"];
         for (flags, said) in &cases {
-            let out = muir().args(quux).args(flags).run();
+            let out = quux().args([engine, "--stop-after", "1"]).args(flags).run();
             let t = text(&out);
             assert!(out.status.success(), "{engine} {flags:?}: {t}");
             for line in said {
@@ -633,37 +637,51 @@ fn the_file_root_is_quux_s() {
             }
         }
     }
-    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "1"]).run();
     assert!(!text(&out).contains("file device"), "the CADR has none:\n{}", text(&out));
-    let quux = ["--micro", "--stop-after", "1", "--machine", "quux"];
+    let run = ["--micro", "--stop-after", "1"];
     let twice = format!("sys={f}");
     refused_saying(
-        &[&quux[..], &["--file-root", &twice, "--file-root", &twice]].concat(),
+        "quux",
+        &[&run[..], &["--file-root", &twice, "--file-root", &twice]].concat(),
         "sys is mounted twice",
     );
-    refused_saying(&[&quux[..], &["--file-root", &f, "--file-root", &sys]].concat(), "one default");
+    refused_saying(
+        "quux",
+        &[&run[..], &["--file-root", &f, "--file-root", &sys]].concat(),
+        "one default",
+    );
     let none = format!("{f}/none");
-    refused(&[&quux[..], &["--file-root", &none]].concat(), "--file-root");
-    refused(&[&quux[..], &["--file-root"]].concat(), "--file-root");
-    refused_saying(&["--micro", "--stop-after", "1", "--file-root", &f], "--file-root is QUUX's");
+    refused("quux", &[&run[..], &["--file-root", &none]].concat(), "--file-root");
+    refused("quux", &[&run[..], &["--file-root"]].concat(), "--file-root");
+    refused_saying(
+        "cadr",
+        &[&run[..], &["--file-root", &f]].concat(),
+        "--file-root is quux's, not cadr's",
+    );
 }
 
-/// **`--disk-controller block-disk` is QUUX's**: it runs on `micro` and
-/// `rtl` and the start says it, without the warning that the flag is
-/// `chip`'s, and it is refused on the CADR and on `chip`.
+/// **Block-disk is QUUX's disk, and the only one**: a `quux` run has it
+/// without asking and the start says it, on `micro` and `rtl`;
+/// `--disk-controller` is the CADR's choice between MIT's controller's
+/// netlist and its model, and not a flag of `quux`; `block-disk` is no word
+/// of it on `cadr`.
 #[test]
-fn block_disk_is_quux_s() {
+fn quux_s_disk_is_block_disk_only() {
     for engine in ["--micro", "--rtl"] {
-        let out = muir()
-            .args([engine, "--machine", "quux", "--disk-controller", "block-disk"])
-            .args(["--stop-after", "1"])
-            .run();
+        let out = quux().args([engine, "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}: {t}");
         assert!(t.contains("disk: block-disk"), "{engine}: the start says it:\n{t}");
-        assert!(!t.contains("warning: --disk-controller"), "{engine}: not ignored:\n{t}");
+        for word in ["block-disk", "netlist", "model"] {
+            refused_saying(
+                "quux",
+                &[engine, "--disk-controller", word],
+                "--disk-controller is cadr's, not quux's",
+            );
+        }
     }
-    refused_saying(&["--rtl", "--disk-controller", "block-disk"], "block-disk is QUUX's");
+    refused_saying("cadr", &["--rtl", "--disk-controller", "block-disk"], "block-disk is quux's");
 }
 
 /// **QUUX's `--prom` is a PROM assembled at 36000, in partition order**
@@ -672,12 +690,12 @@ fn block_disk_is_quux_s() {
 #[test]
 fn quux_s_prom_is_assembled_at_36000() {
     let own = concat!(env!("CARGO_MANIFEST_DIR"), "/data/quux-promh.mcr");
-    let out = muir().args(["--rtl", "--machine", "quux", "--prom", own, "--stop-after", "1"]).run();
+    let out = quux().args(["--rtl", "--prom", own, "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("QUUX's own word for word"), "the start says it:\n{t}");
     let mits = concat!(env!("CARGO_MANIFEST_DIR"), "/mit/sys/ubin/promh.mcr");
-    refused_saying(&["--rtl", "--machine", "quux", "--prom", mits], "the file is in MIT's order");
+    refused_saying("quux", &["--rtl", "--prom", mits], "the file is in MIT's order");
 }
 
 /// A disk QUUX's PROM boots: `data/quux-disk.img`, the GPT disk sgdisk
@@ -725,23 +743,27 @@ fn quux_s_stops_are_the_microcode_s_and_the_prom_s() {
     // Inside the PROM, and outside it, each refused where it cannot fire.
     for pc in ["6", "43", "35777"] {
         refused_saying(
-            &["--machine", "quux", "--stop-at-prom", pc],
+            "quux",
+            &["--stop-at-prom", pc],
             &format!("--stop-at-prom {pc} is not in QUUX's boot PROM, 36000-37777"),
         );
     }
     refused_saying(
-        &["--machine", "quux", "--stop-at", "36043"],
+        "quux",
+        &["--stop-at", "36043"],
         "--stop-at 36043 is in QUUX's boot PROM, 36000-37777: --stop-at-prom",
     );
-    refused_saying(&["--stop-at-prom", "36043"], "--stop-at-prom wants a PC in octal, below 1000");
+    refused_saying(
+        "cadr",
+        &["--stop-at-prom", "36043"],
+        "--stop-at-prom wants a PC in octal, below 1000",
+    );
 
     let dir = scratch("quux-stops");
     let pack = quux_pack(&dir);
     for engine in ["--micro", "--rtl"] {
         // `36000` is `JUMP GO`, and `GO` is at `36043`.
-        let out = muir()
-            .args([engine, "--machine", "quux", "--stop-after", "100", "--stop-at-prom", "36043"])
-            .run();
+        let out = quux().args([engine, "--stop-after", "100", "--stop-at-prom", "36043"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}:\n{t}");
         assert!(t.contains("stopped at PC 36043 in the PROM after "), "{engine}:\n{t}");
@@ -749,10 +771,8 @@ fn quux_s_stops_are_the_microcode_s_and_the_prom_s() {
         let copy = dir.join(format!("{engine}.img"));
         std::fs::copy(&pack, &copy).unwrap();
         let run = |stops: &[&str]| {
-            let out = muir()
-                .args([engine, "--machine", "quux", "--disk-pack", copy.to_str().unwrap()])
-                .args(stops)
-                .run();
+            let out =
+                quux().args([engine, "--disk-pack", copy.to_str().unwrap()]).args(stops).run();
             let t = text(&out);
             assert!(out.status.success(), "{engine}:\n{t}");
             (ended_at(&t), t)
@@ -772,17 +792,17 @@ fn quux_s_stops_are_the_microcode_s_and_the_prom_s() {
     // The same on the CADR: MIT's PROM never runs its 400, but `rtl`'s PC
     // passes 400 while the PROM clears the control store, 412,631
     // microcycles in (measured), and that stops nothing.
-    let out = muir().args(["--rtl", "--stop-after", "500000", "--stop-at-prom", "400"]).run();
+    let out = cadr().args(["--rtl", "--stop-after", "500000", "--stop-at-prom", "400"]).run();
     let t = text(&out);
     assert!(t.contains("stop not reached in 500000"), "{t}");
 }
 
 /// **QUUX has no debug cable** (contract Q5): the cable is a Unibus master
-/// and QUUX has no Unibus, so a QUUX run has no DBGIN connector and says
-/// so, and the cable's flags and the lashup are refused on it.
+/// and QUUX has no Unibus, so a `quux` run has no DBGIN connector and says
+/// so, and the cable's flags and the lashup are not flags of `quux`.
 #[test]
 fn quux_has_no_debug_cable() {
-    let out = muir().args(["--rtl", "--machine", "quux", "--stop-after", "1"]).run();
+    let out = quux().args(["--rtl", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("debug cable: none --- QUUX has no Unibus"), "{t}");
@@ -791,29 +811,11 @@ fn quux_has_no_debug_cable() {
         &["--debug-cable-listen"][..],
         &["--debug-cable-connect", "127.0.0.1:1"][..],
         &["--debug-in-process"][..],
+        &["--no-debug-cable-listen"][..],
     ] {
-        let mut args = vec!["--rtl", "--machine", "quux"];
+        let mut args = vec!["--rtl"];
         args.extend_from_slice(flags);
-        refused_saying(&args, "QUUX has no Unibus, and so no debug cable");
-    }
-}
-
-/// **QUUX's disk is block-disk and nothing else**: without
-/// `--disk-controller` a QUUX run has block-disk, and the CADR's
-/// controller, the netlist's or the model's, is refused on it.
-#[test]
-fn quux_s_disk_is_block_disk_only() {
-    for engine in ["--micro", "--rtl"] {
-        let out = muir().args([engine, "--machine", "quux", "--stop-after", "1"]).run();
-        let t = text(&out);
-        assert!(out.status.success(), "{engine}: {t}");
-        assert!(t.contains("disk: block-disk"), "{engine}: the default:\n{t}");
-        for cadr in ["netlist", "model"] {
-            refused_saying(
-                &[engine, "--machine", "quux", "--disk-controller", cadr],
-                "is the CADR's, and this run is QUUX",
-            );
-        }
+        refused_saying("quux", &args, &format!("{} is cadr's, not quux's", flags[0]));
     }
 }
 
@@ -828,8 +830,8 @@ fn quux_s_disk_is_raw_or_a_vhd_of_any_size() {
         ("quux-disk-dynamic.vhd", "a dynamic VHD, 8192 blocks"),
     ] {
         let path = format!("{}/data/{file}", env!("CARGO_MANIFEST_DIR"));
-        let out = muir()
-            .args(["--micro", "--machine", "quux", "--disk-pack", &format!("{path},ro")])
+        let out = quux()
+            .args(["--micro", "--disk-pack", &format!("{path},ro")])
             .args(["--stop-after", "1"])
             .run();
         let t = text(&out);
@@ -847,25 +849,27 @@ fn quux_s_disk_is_raw_or_a_vhd_of_any_size() {
 /// run that asks for the grid on either is refused by the engine's name.
 #[test]
 fn the_timing_model_is_cadr_or_fpga_and_fpga_is_rtls() {
-    refused(&["--timing-model", "fast"], "--timing-model");
-    refused(&["--timing-model"], "--timing-model");
+    refused("cadr", &["--timing-model", "fast"], "--timing-model");
+    refused("cadr", &["--timing-model"], "--timing-model");
     for engine in ["--micro", "--chip"] {
-        refused_saying(&[engine, "--timing-model", "fpga"], "--timing-model fpga is rtl's");
+        refused_saying("cadr", &[engine, "--timing-model", "fpga"], "--timing-model fpga is rtl's");
     }
 }
 
-/// **`--machine` is `cadr` or `quux`, and QUUX has no netlist.** The flag
-/// chooses which machine is modeled, the same flag in muir-fpga and
-/// muir-sys: the CADR by default, or QUUX, the evolved one, whose map
-/// differs. `chip` is the CADR's boards as MIT drew them, so QUUX on it is
-/// refused; on the other two it runs and says so.
+/// **The executable is the machine, and `quux` has no netlist.** `cadr`
+/// is MIT's machine as built and `quux` the CADR evolved, whose map
+/// differs; each says which it is. `--machine` is a flag of neither, and
+/// `--chip` is `cadr`'s alone, being the CADR's boards as MIT drew them.
 #[test]
-fn the_machine_is_cadr_or_quux_and_quux_has_no_netlist() {
-    refused(&["--machine", "cons"], "--machine");
-    refused(&["--machine"], "--machine");
-    refused_saying(&["--chip", "--machine", "quux"], "--machine quux has no netlist");
+fn the_executable_is_the_machine_and_quux_has_no_netlist() {
+    for exe in ["cadr", "quux"] {
+        for words in [&["--machine", "quux"][..], &["--machine", "cadr"], &["--machine"]] {
+            refused_saying(exe, words, &format!("--machine is not a flag of {exe}"));
+        }
+    }
+    refused_saying("quux", &["--chip"], "--chip is cadr's, not quux's");
     for engine in ["--micro", "--rtl"] {
-        let out = muir().args([engine, "--machine", "quux", "--stop-after", "1"]).run();
+        let out = quux().args([engine, "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}: {t}");
         assert!(t.contains("machine: quux"), "{engine} says which machine:\n{t}");
@@ -873,6 +877,128 @@ fn the_machine_is_cadr_or_quux_and_quux_has_no_netlist() {
             t.contains("QUUX's data/quux-promh.mcr, version 1000"),
             "{engine}: QUUX's PROM:\n{t}"
         );
+        let out = cadr().args([engine, "--stop-after", "1"]).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}: {t}");
+        assert!(!t.contains("machine: quux"), "{engine}: the CADR is not QUUX:\n{t}");
+        assert!(t.contains("System 100's own sys/ubin/promh.mcr"), "{engine}: MIT's PROM:\n{t}");
+    }
+}
+
+/// The flags each executable takes, each once, as its `--help` lists them.
+/// Shared first, then each machine's own. **This list is the contract**:
+/// a flag added to either executable is added here, and the tests below
+/// hold each executable's refusals and help to it.
+const SHARED: &[&str] = &[
+    "--micro",
+    "--rtl",
+    "--chaos-address",
+    "--chaos-trace",
+    "--chaos-udp",
+    "--chaos-udp-default-peer",
+    "--chaos-udp-peer",
+    "--checkpoint",
+    "--config",
+    "--disk-pack",
+    "--glass-tty",
+    "--keyboard-boot",
+    "--keyboard-mapping",
+    "--keyboard-mapping-dump",
+    "--keyboard-mapping-trace",
+    "--main-memory-boards",
+    "--no-auto-boot",
+    "--no-pace",
+    "--pace",
+    "--prom",
+    "--resume",
+    "--stop-after",
+    "--stop-at",
+    "--stop-at-prom",
+    "--terminal",
+    "--tv-capture",
+    "--tv-capture-no-time",
+    "--help",
+    "--version",
+];
+const CADR_ONLY: &[&str] = &[
+    "--chip",
+    "--color-terminal",
+    "--color-tv",
+    "--color-tv-capture",
+    "--debug-cable-connect",
+    "--debug-cable-listen",
+    "--debug-in-process",
+    "--debuggee-chaos-address",
+    "--debuggee-disk-pack",
+    "--debuggee-terminal",
+    "--disk-controller",
+    "--disk-multiplexor",
+    "--io-board",
+    "--main-memory",
+    "--no-debug-cable-listen",
+    "--serial",
+    "--timing-model",
+    "--tv",
+    "--tv-board",
+    "--watch",
+];
+const QUUX_ONLY: &[&str] =
+    &["--cache", "--file-root", "--memory-timing", "--mono-tv-size", "--rtc", "--sync-cycle-ticks"];
+
+/// **A flag of the other executable is refused by name, saying whose it
+/// is**, before anything it takes is read: `--cache is quux's, not
+/// cadr's`. A flag of neither is not a flag of this one. Each is a usage
+/// error, exit status 2, and none of them starts a machine.
+#[test]
+fn a_flag_of_the_other_executable_says_whose_it_is() {
+    for (exe, other, theirs) in [("cadr", "quux", QUUX_ONLY), ("quux", "cadr", CADR_ONLY)] {
+        for flag in theirs {
+            refused_saying(
+                exe,
+                &[flag, "--stop-after", "1"],
+                &format!("{flag} is {other}'s, not {exe}'s"),
+            );
+        }
+        refused_saying(exe, &["--no-such-flag"], &format!("--no-such-flag is not a flag of {exe}"));
+        refused_saying(exe, &["stray"], &format!("stray is not a flag of {exe}"));
+    }
+}
+
+/// **`--help` lists the executable's own flags and no other's**: every
+/// flag it takes has an entry, and no word of it that looks like a flag is
+/// a flag the executable refuses. The usage line starts with the
+/// executable's name.
+#[test]
+fn the_help_lists_only_the_executable_s_own_flags() {
+    for (exe, own, theirs) in [("cadr", CADR_ONLY, QUUX_ONLY), ("quux", QUUX_ONLY, CADR_ONLY)] {
+        let out = executable(exe).arg("--help").run();
+        let t = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(out.status.success(), "{exe} --help:\n{}", text(&out));
+        assert!(t.starts_with(&format!("usage: {exe} ")), "{exe}: the usage first:\n{t}");
+        let named: std::collections::BTreeSet<String> = t
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .filter(|w| w.starts_with("--") && w.len() > 2 && !w.starts_with("---"))
+            .map(str::to_string)
+            .collect();
+        for flag in SHARED.iter().chain(own) {
+            let entry = t.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{flag} "))
+                    || l.starts_with(&format!("{flag}\n"))
+                    || l == *flag
+                    || l.contains(&format!(", {flag}"))
+                    || l.contains(&format!("| {flag}"))
+            });
+            assert!(entry, "{exe} --help has no entry for {flag}:\n{t}");
+        }
+        for flag in &named {
+            assert!(
+                SHARED.contains(&flag.as_str()) || own.contains(&flag.as_str()),
+                "{exe} --help names {flag}, which is not a flag of {exe}:\n{t}"
+            );
+            assert!(!theirs.contains(&flag.as_str()), "{exe} --help names {flag}:\n{t}");
+        }
+        assert!(!named.contains("--machine"), "{exe} --help names --machine:\n{t}");
     }
 }
 
@@ -890,7 +1016,7 @@ fn the_color_tv_is_a_netlist_on_chip_and_a_model_elsewhere() {
     let models = ["--main-memory", "model", "--io-board", "model", "--disk-controller", "model"];
 
     // The bare flag on `chip`: the board on the backplane.
-    let out = muir().args(["--chip", "--color-tv"]).args(models).args(["--stop-after", "1"]).run();
+    let out = cadr().args(["--chip", "--color-tv"]).args(models).args(["--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("color TV netlist"), "the boards line says which board:\n{t}");
@@ -898,7 +1024,7 @@ fn the_color_tv_is_a_netlist_on_chip_and_a_model_elsewhere() {
 
     // And `model` on `chip`, which is what the board was before there was
     // a netlist of it.
-    let out = muir()
+    let out = cadr()
         .args(["--chip", "--color-tv", "model"])
         .args(models)
         .args(["--stop-after", "1"])
@@ -911,8 +1037,12 @@ fn the_color_tv_is_a_netlist_on_chip_and_a_model_elsewhere() {
     // `netlist` on an engine with no backplane is refused by the engine's
     // name, and `model` is taken there.
     for engine in ["--micro", "--rtl"] {
-        refused_saying(&[engine, "--color-tv", "netlist", "--stop-after", "1"], "--color-tv");
-        let out = muir().args([engine, "--color-tv", "model", "--stop-after", "1"]).run();
+        refused_saying(
+            "cadr",
+            &[engine, "--color-tv", "netlist", "--stop-after", "1"],
+            "--color-tv",
+        );
+        let out = cadr().args([engine, "--color-tv", "model", "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine} with the model board:\n{t}");
         assert!(t.contains("color tv: model lispm-tv"), "{engine}:\n{t}");
@@ -920,18 +1050,18 @@ fn the_color_tv_is_a_netlist_on_chip_and_a_model_elsewhere() {
 
     // A word that is neither is refused by the flag's name, and the flag
     // with nothing after it is still the bare flag.
-    refused(&["--rtl", "--color-tv", "both", "--stop-after", "1"], "--color-tv");
-    let out = muir().args(["--rtl", "--color-tv", "--stop-after", "1"]).run();
+    refused("cadr", &["--rtl", "--color-tv", "both", "--stop-after", "1"], "--color-tv");
+    let out = cadr().args(["--rtl", "--color-tv", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("color tv: model lispm-tv"), "the bare flag off chip is the model:\n{t}");
 }
 
-/// A `.muirrc` of its own for one test, in a directory of its own: the
+/// A `.cadrrc` of its own for one test, in a directory of its own: the
 /// directory, and the file's path under it.
-fn muirrc(name: &str, text: &str) -> (Scratch, PathBuf) {
+fn cadrrc(name: &str, text: &str) -> (Scratch, PathBuf) {
     let dir = scratch(&format!("rc-{name}"));
-    let path = dir.join(".muirrc");
+    let path = dir.join(".cadrrc");
     std::fs::write(&path, text).unwrap();
     (dir, path)
 }
@@ -947,18 +1077,18 @@ fn muirrc(name: &str, text: &str) -> (Scratch, PathBuf) {
 /// parsed, and an error follows them rather than standing alone.
 #[test]
 fn the_version_and_the_file_are_said_before_anything_is_parsed() {
-    let (_dir, rc) = muirrc("flags", "--chaos-address 3050,3060\n");
-    let out = muir().env("MUIR_RC", &rc).args(["--stop-after", "1"]).run();
+    let (_dir, rc) = cadrrc("flags", "--chaos-address 3050,3060\n");
+    let out = cadr().env("MUIR_RC", &rc).args(["--stop-after", "1"]).run();
     let t = text(&out);
     assert_eq!(out.status.code(), Some(2), "the run is refused:\n{t}");
     let lines: Vec<&str> = t.lines().collect();
     assert!(lines[0].starts_with("muir 0.1.0"), "the version is the first line:\n{t}");
     assert!(lines[1].contains(&rc.display().to_string()), "the file of flags is the second:\n{t}");
-    let why = lines.iter().position(|l| l.starts_with("muir: ")).expect("a refusal");
+    let why = lines.iter().position(|l| l.starts_with("cadr: ")).expect("a refusal");
     assert!(why > 1, "and the refusal comes after both:\n{t}");
 
     // A run that starts says them once and not twice.
-    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert_eq!(t.matches("muir 0.1.0").count(), 1, "the version once:\n{t}");
@@ -968,7 +1098,7 @@ fn the_version_and_the_file_are_said_before_anything_is_parsed() {
     // written before there is a machine to describe, and the prompt has
     // them all the same.
     let mut child =
-        muir().args(["--micro", "--no-auto-boot"]).stdin(std::process::Stdio::piped()).start();
+        cadr().args(["--micro", "--no-auto-boot"]).stdin(std::process::Stdio::piped()).start();
     let mut stdin = child.stdin();
     write!(stdin, "info\nquit\n").expect("muir took the lines");
     drop(stdin);
@@ -986,31 +1116,31 @@ fn the_version_and_the_file_are_said_before_anything_is_parsed() {
 ///
 /// A file outlives the flags it holds. `--chaos-address 3050,3060` was
 /// the spelling until the Chaosnet server left muir, and a file still
-/// holding it is refused --- rightly, for a run. But `muir --version`
+/// holding it is refused --- rightly, for a run. But `cadr --version`
 /// asks what this build is, and a build that cannot say so because of a
 /// file it was not asked to use leaves a person with no way to report
 /// which muir they have.
 #[test]
 fn the_version_and_the_help_are_answered_whatever_the_file_holds() {
-    let (_dir, rc) = muirrc("flags", "--chaos-address 3050,3060\n");
+    let (_dir, rc) = cadrrc("flags", "--chaos-address 3050,3060\n");
     // The file really is refused for a run, or this test proves nothing.
-    let out = muir().env("MUIR_RC", &rc).args(["--stop-after", "1"]).run();
+    let out = cadr().env("MUIR_RC", &rc).args(["--stop-after", "1"]).run();
     let t = text(&out);
     assert_eq!(out.status.code(), Some(2), "the file is refused for a run:\n{t}");
     assert!(t.contains("--chaos-address"), "by name:\n{t}");
 
     for flag in ["--version", "-V"] {
-        let out = muir().env("MUIR_RC", &rc).arg(flag).run();
+        let out = cadr().env("MUIR_RC", &rc).arg(flag).run();
         let t = text(&out);
         assert!(out.status.success(), "{flag} is answered all the same:\n{t}");
         assert!(t.starts_with("muir "), "{flag} says what this build is:\n{t}");
         assert!(!t.contains("usage:"), "{flag} is no run:\n{t}");
     }
     for flag in ["--help", "-h"] {
-        let out = muir().env("MUIR_RC", &rc).arg(flag).run();
+        let out = cadr().env("MUIR_RC", &rc).arg(flag).run();
         let t = text(&out);
         assert!(out.status.success(), "{flag} is answered all the same:\n{t}");
-        assert!(t.contains("usage: muir"), "{flag} prints the usage:\n{t}");
+        assert!(t.contains("usage: cadr"), "{flag} prints the usage:\n{t}");
     }
 }
 
@@ -1021,14 +1151,14 @@ fn the_flags_in_the_file_are_the_runs() {
     // A directory with a space in its name, for the rest of the line.
     let dir = scratch("rc root");
     let gif = dir.join("a recording.gif");
-    let (_rc_dir, rc) = muirrc(
+    let (_rc_dir, rc) = cadrrc(
         "flags",
         &format!(
             "# what every run of mine wants\n\n--rtl\n--stop-after 10\n--tv-capture {}\n",
             gif.display()
         ),
     );
-    let out = muir().env("MUIR_RC", &rc).run();
+    let out = cadr().env("MUIR_RC", &rc).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("engine: rtl"), "the engine came from the file:\n{t}");
@@ -1046,8 +1176,8 @@ fn the_flags_in_the_file_are_the_runs() {
 /// another, so the file's is dropped rather than refused.
 #[test]
 fn the_command_line_replaces_the_file() {
-    let (_dir, rc) = muirrc("replaced", "--rtl\n--stop-after 10\n");
-    let out = muir().env("MUIR_RC", &rc).args(["--micro", "--stop-after", "3"]).run();
+    let (_dir, rc) = cadrrc("replaced", "--rtl\n--stop-after 10\n");
+    let out = cadr().env("MUIR_RC", &rc).args(["--micro", "--stop-after", "3"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("engine: micro"), "the command line's engine:\n{t}");
@@ -1060,7 +1190,7 @@ fn the_command_line_replaces_the_file() {
 #[test]
 fn no_file_is_no_error() {
     let out =
-        muir().env("MUIR_RC", "/no/such/.muirrc").args(["--micro", "--stop-after", "3"]).run();
+        cadr().env("MUIR_RC", "/no/such/.cadrrc").args(["--micro", "--stop-after", "3"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(!t.contains("flags:"), "{t}");
@@ -1071,16 +1201,16 @@ fn no_file_is_no_error() {
 /// meant to have.
 #[test]
 fn config_names_the_file() {
-    let (_dir, rc) = muirrc("named", "--micro\n--stop-after 7\n");
+    let (_dir, rc) = cadrrc("named", "--micro\n--stop-after 7\n");
     for flag in ["--config", "-c"] {
-        let out = muir().args([flag]).arg(&rc).run();
+        let out = cadr().args([flag]).arg(&rc).run();
         let t = text(&out);
         assert!(out.status.success(), "{flag}:\n{t}");
         assert!(t.contains("stop: after 7 microcycles"), "{flag}:\n{t}");
         assert!(t.contains(&format!("from {}", rc.display())), "{flag}:\n{t}");
     }
-    refused(&["--config", "/no/such/.muirrc"], "--config");
-    refused(&["--config"], "--config");
+    refused("cadr", &["--config", "/no/such/.cadrrc"], "--config");
+    refused("cadr", &["--config"], "--config");
 }
 
 /// **The directory muir was run from comes before the home directory, and
@@ -1088,11 +1218,11 @@ fn config_names_the_file() {
 /// them.
 #[test]
 fn the_run_directory_comes_before_the_home_one() {
-    let (home, _) = muirrc("home", "--micro\n--stop-after 11\n");
-    let (here, _) = muirrc("here", "--micro\n--stop-after 22\n");
-    let (_named_dir, named) = muirrc("named-first", "--micro\n--stop-after 33\n");
+    let (home, _) = cadrrc("home", "--micro\n--stop-after 11\n");
+    let (here, _) = cadrrc("here", "--micro\n--stop-after 22\n");
+    let (_named_dir, named) = cadrrc("named-first", "--micro\n--stop-after 33\n");
     let run = |args: &[&Path]| {
-        let mut c = muir();
+        let mut c = cadr();
         c.env_remove("MUIR_RC").env("HOME", home.path()).current_dir(here.path());
         for a in args {
             c.arg("--config").arg(a);
@@ -1105,10 +1235,83 @@ fn the_run_directory_comes_before_the_home_one() {
     assert!(t.contains("stop: after 33 microcycles"), "--config before either:\n{t}");
     // With nothing in the run directory, the home one is what is left.
     let empty = scratch("rc-empty");
-    let mut c = muir();
+    let mut c = cadr();
     c.env_remove("MUIR_RC").env("HOME", home.path()).current_dir(&empty);
     let t = text(&c.run());
     assert!(t.contains("stop: after 11 microcycles"), "the home directory:\n{t}");
+}
+
+/// **Each executable reads its own file of flags**: `cadr` `.cadrrc` and
+/// `quux` `.quuxrc`, in the directory it was run from or else the home
+/// directory, and never the other's, nor `.muirrc`, which neither reads.
+#[test]
+fn each_executable_reads_its_own_file() {
+    let home = scratch("rc-own-home");
+    let here = scratch("rc-own-here");
+    std::fs::write(home.join(".cadrrc"), "--micro\n--stop-after 11\n").unwrap();
+    std::fs::write(home.join(".quuxrc"), "--micro\n--stop-after 22\n").unwrap();
+    std::fs::write(home.join(".muirrc"), "--micro\n--stop-after 33\n").unwrap();
+    // The other's file in the run directory is not this one's.
+    std::fs::write(here.join(".quuxrc"), "--micro\n--stop-after 44\n").unwrap();
+    let run = |exe: &str| {
+        let mut c = executable(exe);
+        c.env_remove("MUIR_RC").env("HOME", home.path()).current_dir(here.path());
+        let out = c.run();
+        let t = text(&out);
+        assert!(out.status.success(), "{exe}:\n{t}");
+        t
+    };
+    let t = run("cadr");
+    assert!(t.contains("stop: after 11 microcycles"), "cadr reads ~/.cadrrc:\n{t}");
+    assert!(t.contains(".cadrrc"), "and says so:\n{t}");
+    let t = run("quux");
+    assert!(t.contains("stop: after 44 microcycles"), "quux reads ./.quuxrc first:\n{t}");
+    std::fs::remove_file(here.join(".quuxrc")).unwrap();
+    let t = run("quux");
+    assert!(t.contains("stop: after 22 microcycles"), "then ~/.quuxrc:\n{t}");
+    // `.muirrc` alone is no file of flags for either.
+    std::fs::remove_file(home.join(".cadrrc")).unwrap();
+    std::fs::remove_file(home.join(".quuxrc")).unwrap();
+    for exe in ["cadr", "quux"] {
+        let mut c = executable(exe);
+        c.env_remove("MUIR_RC").env("HOME", home.path()).current_dir(here.path());
+        let t = text(&c.args(["--micro", "--stop-after", "1"]).run());
+        assert!(!t.contains("flags:"), "{exe} reads no .muirrc:\n{t}");
+        assert!(!t.contains("after 33"), "{exe} reads no .muirrc:\n{t}");
+    }
+}
+
+/// **A flag of the other machine's in a file of flags is refused as it is
+/// on the command line, naming the file**: the file is the executable's
+/// own, so a flag in it that the executable does not take is the file's
+/// mistake, and the refusal says which file to mend.
+#[test]
+fn a_flag_of_the_other_machine_in_the_file_is_refused_naming_it() {
+    let home = scratch("rc-other-home");
+    let here = scratch("rc-other-here");
+    for (exe, file, line, says) in [
+        ("cadr", ".cadrrc", "--cache 4096", "--cache is quux's, not cadr's"),
+        ("quux", ".quuxrc", "--chip", "--chip is cadr's, not quux's"),
+        ("cadr", ".cadrrc", "--machine quux", "--machine is not a flag of cadr"),
+    ] {
+        let path = home.join(file);
+        std::fs::write(&path, format!("--micro\n{line}\n")).unwrap();
+        for by_env in [false, true] {
+            let mut c = executable(exe);
+            c.env("HOME", home.path()).current_dir(here.path());
+            if by_env {
+                c.env("MUIR_RC", &path);
+            } else {
+                c.env_remove("MUIR_RC");
+            }
+            let out = c.args(["--stop-after", "1"]).run();
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{exe} {line}: a usage error:\n{err}");
+            let want = format!("{exe}: {}: {says}", path.display());
+            assert!(err.contains(&want), "{exe} {line}: {want:?}:\n{err}");
+        }
+        std::fs::remove_file(&path).unwrap();
+    }
 }
 
 /// **A file of flags cannot name another.** Which file to read is the
@@ -1116,8 +1319,8 @@ fn the_run_directory_comes_before_the_home_one() {
 /// point at itself.
 #[test]
 fn a_file_cannot_name_another() {
-    let (_dir, rc) = muirrc("recursive", "--micro\n--config /somewhere/else\n");
-    let out = muir().arg("--config").arg(&rc).run();
+    let (_dir, rc) = cadrrc("recursive", "--micro\n--config /somewhere/else\n");
+    let out = cadr().arg("--config").arg(&rc).run();
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "a usage error:\n{err}");
     assert!(err.contains("cannot name another"), "{err}");
@@ -1129,8 +1332,8 @@ fn a_file_cannot_name_another() {
 /// refused with the flag named, not begun on 512 zero words.
 #[test]
 fn a_prom_that_cannot_be_read_is_refused() {
-    refused(&["--rtl", "--prom", "nothing.mcr", "--stop-after", "1"], "--prom");
-    refused(&["--rtl", "--prom", "README.md", "--stop-after", "1"], "--prom");
+    refused("cadr", &["--rtl", "--prom", "nothing.mcr", "--stop-after", "1"], "--prom");
+    refused("cadr", &["--rtl", "--prom", "README.md", "--stop-after", "1"], "--prom");
 }
 
 /// **A checkpoint carries the PROM it ran**, all 512 words of it, so
@@ -1138,7 +1341,11 @@ fn a_prom_that_cannot_be_read_is_refused() {
 /// the checkpoint's would win silently. Refused instead.
 #[test]
 fn a_prom_and_a_checkpoint_to_resume_do_not_go_together() {
-    refused(&["--rtl", "--prom", "mit/sys/ubin/promh.mcr", "--resume", "nothing.chk"], "--prom");
+    refused(
+        "cadr",
+        &["--rtl", "--prom", "mit/sys/ubin/promh.mcr", "--resume", "nothing.chk"],
+        "--prom",
+    );
 }
 
 /// **The PROM the machine runs is the file `--prom` names**, on all three
@@ -1166,7 +1373,7 @@ fn the_prom_the_machine_runs_is_the_file_named() {
     // reaching the chips, not the rest of the backplane.
     let models = ["--main-memory", "model", "--io-board", "model", "--tv", "model"];
     for engine in ["--micro", "--rtl", "--chip"] {
-        let mut c = muir();
+        let mut c = cadr();
         c.args([engine, "--prom", path.to_str().unwrap()]);
         if engine == "--chip" {
             c.args(models);
@@ -1178,28 +1385,30 @@ fn the_prom_the_machine_runs_is_the_file_named() {
     }
 
     // And MIT's own, which the flag is standing in for, does not.
-    let out = muir().args(["--micro", "--stop-after", "100", "--stop-at-prom", "400"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "100", "--stop-at-prom", "400"]).run();
     let t = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(t.contains("stop not reached in 100"), "MIT's own does not go to 400:\n{t}");
 }
 
-/// **`--version` says what this build is**, and says it on stdout so a
-/// script can read it. The name, the crate's version, and whether it was
+/// **`--version` says what this build is**, `cadr`'s and `quux`'s alike,
+/// both being one muir, and says it on stdout so a script can read it. The name, the crate's version, and whether it was
 /// built with optimizations off --- a run says the same line first, so a
 /// report of a run says which muir made it.
 #[test]
 fn version_says_what_this_build_is() {
-    for flag in ["--version", "-V"] {
-        let out = muir().arg(flag).run();
-        assert!(out.status.success(), "{}", text(&out));
-        let said = String::from_utf8_lossy(&out.stdout);
-        let said = said.trim();
-        let want = format!("muir {}-", env!("CARGO_PKG_VERSION"));
-        assert!(said.starts_with(&want), "{flag}: {said:?}");
-        assert!(
-            said.ends_with("-dev") || said.ends_with("-release"),
-            "{flag}: the build kind: {said:?}"
-        );
+    for exe in ["cadr", "quux"] {
+        for flag in ["--version", "-V"] {
+            let out = executable(exe).arg(flag).run();
+            assert!(out.status.success(), "{exe}: {}", text(&out));
+            let said = String::from_utf8_lossy(&out.stdout);
+            let said = said.trim();
+            let want = format!("muir {}-", env!("CARGO_PKG_VERSION"));
+            assert!(said.starts_with(&want), "{exe} {flag}: {said:?}");
+            assert!(
+                said.ends_with("-dev") || said.ends_with("-release"),
+                "{exe} {flag}: the build kind: {said:?}"
+            );
+        }
     }
 }
 
@@ -1227,7 +1436,7 @@ fn version_says_what_this_build_is() {
 fn a_drive_past_unit_0_wants_the_multiplexor_named() {
     const FITTED: &str = "with a multiplexor";
     let start =
-        |args: &[&str]| String::from_utf8_lossy(&muir().args(args).run().stderr).into_owned();
+        |args: &[&str]| String::from_utf8_lossy(&cadr().args(args).run().stderr).into_owned();
     let netlist =
         ["--chip", "--main-memory", "netlist", "--disk-controller", "netlist", "--stop-after", "1"];
     let with = |extra: &[&'static str]| -> Vec<&'static str> {
@@ -1278,16 +1487,18 @@ fn the_multiplexor_is_the_netlist_controllers_board() {
     // On `chip` the controller is a netlist, so the board has one to hang
     // off and is fitted; asked for against the model controller, or on an
     // engine that has no netlist at all, it is refused.
-    let out = muir().args(["--chip", "--disk-multiplexor", "--stop-after", "1"]).run();
+    let out = cadr().args(["--chip", "--disk-multiplexor", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "chip has a netlist controller to hang it off:\n{t}");
     assert!(t.contains("with a multiplexor"), "and it is fitted:\n{t}");
     refused(
+        "cadr",
         &["--chip", "--disk-controller", "model", "--disk-multiplexor", "--stop-after", "1"],
         "--disk-multiplexor",
     );
-    refused(&["--micro", "--disk-multiplexor", "--stop-after", "1"], "--disk-multiplexor");
+    refused("cadr", &["--micro", "--disk-multiplexor", "--stop-after", "1"], "--disk-multiplexor");
     refused(
+        "cadr",
         &["--micro", "--disk-pack", "a.img,1", "--disk-pack", "b.img,1", "--stop-after", "1"],
         "--disk-pack",
     );
@@ -1326,7 +1537,7 @@ fn a_running_chip_says_where_it_is_when_asked() {
     // which on a loaded machine is longer than any sleep worth writing.
     // The run's own start line says when it is armed.
     let child =
-        muir().args(["--chip", "--main-memory-boards", "4", "--stop-after", "6000"]).start();
+        cadr().args(["--chip", "--main-memory-boards", "4", "--stop-after", "6000"]).start();
     child.stderr().wait_until(|t| t.contains("where: kill -USR1"), "muir says it is listening");
     let pid = child.id().to_string();
     let killed = std::process::Command::new("kill")
@@ -1357,8 +1568,13 @@ fn a_running_chip_says_where_it_is_when_asked() {
 /// that does not exist.
 #[test]
 fn the_chudp_flags_need_the_link() {
-    refused(&["--chaos-udp-peer", "3040@127.0.0.1:42043", "--stop-after", "1"], "--chaos-udp-peer");
     refused(
+        "cadr",
+        &["--chaos-udp-peer", "3040@127.0.0.1:42043", "--stop-after", "1"],
+        "--chaos-udp-peer",
+    );
+    refused(
+        "cadr",
         &["--chaos-udp-default-peer", "127.0.0.1:42043", "--stop-after", "1"],
         "--chaos-udp-default-peer",
     );
@@ -1374,7 +1590,7 @@ fn the_chudp_flags_need_the_link() {
 #[test]
 fn the_default_peer_is_an_endpoint_and_no_address() {
     let link = ["--chaos-udp", "127.0.0.1:0"];
-    let out = muir()
+    let out = cadr()
         .args(link)
         .args(["--chaos-udp-default-peer", "127.0.0.1"])
         .args(["--micro", "--stop-after", "1"])
@@ -1385,7 +1601,7 @@ fn the_default_peer_is_an_endpoint_and_no_address() {
     for bad in ["3060@127.0.0.1:42043", "127.0.0.1:not-a-port"] {
         let args =
             [link.as_slice(), &["--chaos-udp-default-peer", bad], &["--stop-after", "1"]].concat();
-        refused(&args, "--chaos-udp-default-peer");
+        refused("cadr", &args, "--chaos-udp-default-peer");
     }
 }
 
@@ -1404,23 +1620,23 @@ fn a_peer_is_one_endpoint_and_not_this_machines_own() {
         &["--stop-after", "1"],
     ]
     .concat();
-    refused(&twice, "--chaos-udp-peer");
+    refused("cadr", &twice, "--chaos-udp-peer");
     // The cable's own with no --chaos-address: `chaos::Config`'s default,
     // 177001, which is no band's.
     let own =
         [link.as_slice(), &["--chaos-udp-peer", "177001@127.0.0.1:42043"], &["--stop-after", "1"]]
             .concat();
-    refused(&own, "--chaos-udp-peer");
+    refused("cadr", &own, "--chaos-udp-peer");
     // 177002 was the old server's address, and is now a peer like any
     // other: nothing on this cable answers there.
-    let out = muir()
+    let out = cadr()
         .args(link)
         .args(["--chaos-udp-peer", "177002@127.0.0.1:42043", "--micro", "--stop-after", "1"])
         .run();
     assert!(out.status.success(), "{}", text(&out));
     // And this machine's own address is a peer when this machine is
     // somewhere else.
-    let out = muir()
+    let out = cadr()
         .args(link)
         .args(["--chaos-address", "4401"])
         .args(["--chaos-udp-peer", "3050@127.0.0.1:42043", "--micro", "--stop-after", "1"])
@@ -1448,10 +1664,10 @@ fn a_peer_is_an_address_and_where_it_lives() {
         "3040@127.0.0.1:not-a-port",
     ] {
         let args = [link.as_slice(), &["--chaos-udp-peer", bad], &["--stop-after", "1"]].concat();
-        refused(&args, "--chaos-udp-peer");
+        refused("cadr", &args, "--chaos-udp-peer");
     }
     // The port may be left off, and the address may be subnet:host.
-    let out = muir()
+    let out = cadr()
         .args(link)
         .args(["--chaos-udp-peer", "6:40@127.0.0.1"])
         .args(["--micro", "--stop-after", "1"])
@@ -1465,7 +1681,7 @@ fn a_peer_is_an_address_and_where_it_lives() {
 /// that reaches nobody says so rather than looking as though it had.
 #[test]
 fn the_start_says_what_the_link_is() {
-    let out = muir()
+    let out = cadr()
         .args(["--micro", "--stop-after", "1", "--chaos-udp", "127.0.0.1:0"])
         .args(["--chaos-udp-peer", "3060@127.0.0.1:42043"])
         .args(["--chaos-udp-default-peer", "127.0.0.1:42044"])
@@ -1480,14 +1696,14 @@ fn the_start_says_what_the_link_is() {
     // A link with no peer named is a run that reaches no file or time
     // host, and the line says so rather than leaving it to be found out
     // at the cold-load debugger.
-    let out = muir().args(["--micro", "--stop-after", "1", "--chaos-udp", "127.0.0.1:0"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "1", "--chaos-udp", "127.0.0.1:0"]).run();
     let t = text(&out);
     let line =
         t.lines().find(|l| l.starts_with("chaosnet over udp:")).unwrap_or_else(|| panic!("{t}"));
     assert!(line.contains("no peer named, so no file or time host"), "{line}");
     // And with no cable the line says the cable is not there, since a
     // missing line says nothing about which of the two is missing.
-    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(t.contains("chaosnet over udp: disabled"), "{t}");
 }
@@ -1496,17 +1712,17 @@ fn the_start_says_what_the_link_is() {
 /// the refusal says where the host went.** muir has no file or time server
 /// in it any more --- a CADR had none --- so `--chaos-file-root`,
 /// `--chaos-file-peers` and `--debuggee-chaos-file-root` configure
-/// nothing. A run whose `.muirrc` still names one would otherwise boot
+/// nothing. A run whose `.cadrrc` still names one would otherwise boot
 /// quietly to the cold-load debugger asking for the date, so it is stopped
 /// with the answer in the first line: the host is another program on the
 /// network, `ozd`, named with `--chaos-udp-peer`.
 #[test]
 fn the_file_server_flags_are_gone_and_say_where_the_host_went() {
     for flag in ["--chaos-file-root", "--chaos-file-peers", "--debuggee-chaos-file-root"] {
-        let out = muir().args([flag, ".", "--stop-after", "1"]).run();
+        let out = cadr().args([flag, ".", "--stop-after", "1"]).run();
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(2), "{flag}: not a usage error:\n{err}");
-        let first = err.lines().find(|l| l.starts_with("muir: ")).unwrap_or("");
+        let first = err.lines().find(|l| l.starts_with("cadr: ")).unwrap_or("");
         assert!(first.contains(flag), "{flag}: the refusal names it:\n{err}");
         assert!(first.contains("--chaos-udp-peer"), "{flag}: and what replaced it:\n{err}");
         assert!(first.contains("ozd"), "{flag}: and which host that is:\n{err}");
@@ -1520,20 +1736,20 @@ fn the_file_server_flags_are_gone_and_say_where_the_host_went() {
 #[test]
 fn the_chaos_address_is_one_address() {
     for arg in ["3050,3060", "4401,4403", "3050,"] {
-        refused(&["--chaos-address", arg, "--stop-after", "1"], "--chaos-address");
+        refused("cadr", &["--chaos-address", arg, "--stop-after", "1"], "--chaos-address");
     }
     // And what is refused says where the host is named instead.
-    let out = muir().args(["--chaos-address", "3050,3060", "--stop-after", "1"]).run();
+    let out = cadr().args(["--chaos-address", "3050,3060", "--stop-after", "1"]).run();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         err.lines()
-            .find(|l| l.starts_with("muir: "))
+            .find(|l| l.starts_with("cadr: "))
             .is_some_and(|l| l.contains("--chaos-udp-peer")),
         "{err}"
     );
     // One address is taken, in octal or subnet:host.
     for arg in ["3050", "6:50"] {
-        let out = muir()
+        let out = cadr()
             .args(["--micro", "--stop-after", "1", "--chaos-address", arg])
             .args(["--chaos-udp", "127.0.0.1:0"])
             .run();
@@ -1555,7 +1771,7 @@ fn the_chaos_address_is_one_address() {
 #[test]
 fn the_cable_is_chaos_udp_and_an_address_alone_is_no_cable() {
     let line = |args: &[&str]| {
-        let out = muir().args(args).run();
+        let out = cadr().args(args).run();
         let t = text(&out);
         assert!(out.status.success(), "{args:?}:\n{t}");
         t
@@ -1587,7 +1803,7 @@ fn the_cable_is_chaos_udp_and_an_address_alone_is_no_cable() {
     ] {
         let mut args = vec!["--micro", "--stop-after", "1"];
         args.extend_from_slice(extra);
-        refused(&args, "--chaos-udp");
+        refused("cadr", &args, "--chaos-udp");
     }
 }
 
@@ -1596,7 +1812,7 @@ fn the_cable_is_chaos_udp_and_an_address_alone_is_no_cable() {
 /// the four.**
 #[test]
 fn keyboard_boot_takes_four_spellings_and_names_them_to_the_rest() {
-    let out = muir()
+    let out = cadr()
         .args(["--micro", "--keyboard-boot", "meta,meta,ctrl,ctrl", "--stop-after", "10"])
         .run();
     let t = text(&out);
@@ -1605,14 +1821,14 @@ fn keyboard_boot_takes_four_spellings_and_names_them_to_the_rest() {
         t.contains("boot sequence ctrl,ctrl,meta,meta with Rubout or Return"),
         "the setup says what the run's boot sequence needs, spelled its own way:\n{t}"
     );
-    let out = muir().args(["--micro", "--stop-after", "10"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "10"]).run();
     let t = text(&out);
     assert!(t.contains("boot sequence ctrl,meta with Rubout or Return"), "the default:\n{t}");
     for bad in ["ctrl,alt,delete", "ctrl", "ctrl,ctrl,ctrl,meta", "control,meta"] {
-        refused_saying(&["--keyboard-boot", bad], "ctrl,ctrl,meta,meta");
-        refused(&["--keyboard-boot", bad], "--keyboard-boot");
+        refused_saying("cadr", &["--keyboard-boot", bad], "ctrl,ctrl,meta,meta");
+        refused("cadr", &["--keyboard-boot", bad], "--keyboard-boot");
     }
-    refused(&["--keyboard-boot"], "--keyboard-boot");
+    refused("cadr", &["--keyboard-boot"], "--keyboard-boot");
 }
 
 /// A viewer of our own: RFC 6143's opening exchange as far as `ServerInit`,
@@ -1659,7 +1875,7 @@ fn rfb_screen(addr: &str) -> (u16, u16) {
 #[test]
 fn the_color_tv_is_fitted_on_every_engine() {
     for engine in ["--micro", "--rtl"] {
-        let out = muir().args([engine, "--color-tv", "--stop-after", "1"]).run();
+        let out = cadr().args([engine, "--color-tv", "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}:\n{t}");
         assert!(t.contains("color tv: model lispm-tv at 17200000"), "{engine}: the board:\n{t}");
@@ -1667,7 +1883,7 @@ fn the_color_tv_is_fitted_on_every_engine() {
         assert!(t.contains("pixels only"), "{engine}: which has no keyboard:\n{t}");
         assert!(!t.contains("warning: --color-tv"), "{engine}: and is not ignored:\n{t}");
     }
-    let out = muir()
+    let out = cadr()
         .args(["--chip", "--main-memory-boards", "4", "--tv", "model"])
         .args(["--color-tv", "--stop-after", "1"])
         .run();
@@ -1678,7 +1894,7 @@ fn the_color_tv_is_fitted_on_every_engine() {
 
     // Off unless it is asked for: a CADR has one screen unless somebody
     // plugged a second board in.
-    let out = muir().args(["--rtl", "--stop-after", "1"]).run();
+    let out = cadr().args(["--rtl", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(!t.contains("color tv:"), "no second board unasked:\n{t}");
@@ -1689,11 +1905,11 @@ fn the_color_tv_is_fitted_on_every_engine() {
 /// flag without the board is refused, as is the main screen's endpoint.
 #[test]
 fn the_color_terminal_serves_the_color_screen() {
-    refused(&["--rtl", "--color-terminal", "--stop-after", "1"], "--color-terminal");
+    refused("cadr", &["--rtl", "--color-terminal", "--stop-after", "1"], "--color-terminal");
 
     // Both displays on ports the host picks, each said on stderr as it is
     // bound.  The run is killed once the color screen has answered.
-    let run = muir()
+    let run = cadr()
         .args(["--rtl", "--color-tv", "--terminal", "127.0.0.1:0"])
         .args(["--color-terminal", "127.0.0.1:0", "--stop-after", "400000000"])
         .start();
@@ -1731,8 +1947,13 @@ fn the_color_tv_capture_records_the_color_screen() {
     let gif = dir.join("color.gif");
     let path = gif.to_str().unwrap();
     // The board is what there is to record: the refusal names both flags.
-    refused(&["--rtl", "--color-tv-capture", path, "--stop-after", "1"], "--color-tv-capture");
+    refused(
+        "cadr",
+        &["--rtl", "--color-tv-capture", path, "--stop-after", "1"],
+        "--color-tv-capture",
+    );
     refused_saying(
+        "cadr",
         &["--rtl", "--color-tv-capture", path, "--stop-after", "1"],
         "it needs --color-tv",
     );
@@ -1757,7 +1978,7 @@ fn the_color_tv_capture_records_the_color_screen() {
         )
     };
 
-    let out = muir()
+    let out = cadr()
         .args(["--micro", "--color-tv", "--color-tv-capture", path])
         .args(["--stop-after", "200"])
         .run();
@@ -1770,7 +1991,7 @@ fn the_color_tv_capture_records_the_color_screen() {
     // The one flag turns the clocks off, on this recording as on the main
     // screen's: there is no second one for it.
     let bare = dir.join("no-clocks.gif");
-    let out = muir()
+    let out = cadr()
         .args(["--micro", "--color-tv", "--color-tv-capture", bare.to_str().unwrap()])
         .args(["--tv-capture-no-time", "--stop-after", "200"])
         .run();
@@ -1783,13 +2004,14 @@ fn the_color_tv_capture_records_the_color_screen() {
     // A machine on its own, as `--tv-capture` is: over the cable the two
     // machines are two clocks.
     let t = text(
-        &muir_default()
+        &cadr_default()
             .args(["--rtl", "--color-tv", "--color-tv-capture", path])
             .args(["--stop-after", "1"])
             .run(),
     );
     assert!(t.contains("debug cable: none --- --color-tv-capture"), "said:\n{t}");
     refused(
+        "cadr",
         &[
             "--rtl",
             "--color-tv",
@@ -1818,12 +2040,12 @@ fn the_pace_is_one_machine_at_its_own_speed() {
         &["--rtl", "--pace", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1"][..],
         &["--rtl", "--pace", "--debug-cable-connect", "127.0.0.1:65500", "--stop-after", "1"][..],
     ] {
-        refused(args, "--pace");
+        refused("cadr", args, "--pace");
     }
     // The machine on its own takes it, on the engines that can outrun the
     // hardware and on the one that cannot.
     for engine in ["--micro", "--rtl"] {
-        let out = muir().args([engine, "--pace", "--stop-after", "1"]).run();
+        let out = cadr().args([engine, "--pace", "--stop-after", "1"]).run();
         assert!(out.status.success(), "{engine} --pace:\n{}", text(&out));
     }
     // Not asked for, the pace `rtl` takes by default is left off a lashup
@@ -1832,7 +2054,7 @@ fn the_pace_is_one_machine_at_its_own_speed() {
         &["--rtl", "--debug-in-process", "--no-debug-cable-listen", "--stop-after", "1"][..],
         &["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1"][..],
     ] {
-        let out = muir_default().args(args).run();
+        let out = cadr_default().args(args).run();
         let t = text(&out);
         assert!(out.status.success(), "{args:?}:\n{t}");
         assert!(!t.contains("pace:"), "{args:?} is not paced:\n{t}");

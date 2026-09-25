@@ -798,7 +798,7 @@ fn the_sync_prom_is_fetched_out_of_reset() {
 /// does: `ADR15` went unknown, the comparator could not match `DEVADR 15`,
 /// and the board answered nothing here at all. The microcode's `INTRX0`
 /// reads the TV control register, finds the vertical flag set and writes
-/// it back to clear it, and `muir --chip` halted on that write at
+/// it back to clear it, and `cadr --chip` halted on that write at
 /// 2,340,964 microcycles.
 ///
 /// So the frame buffer is checked beside the registers: it was answered

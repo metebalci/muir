@@ -44,7 +44,7 @@ and start it in a shell of its own, serving System 100's sources:
 Then start the machine. System 100's host table puts the machine at 3050 and
 its host at 3060; ozd has UDP port 42042, so the machine takes 42043.
 
-    target/release/muir --disk-pack vendor/run/disk-sys-100-0.img \
+    target/release/cadr --disk-pack vendor/run/disk-sys-100-0.img \
         --chaos-address 3050 --chaos-udp 42043 --chaos-udp-peer 3060@127.0.0.1:42042
 
 It says where its terminal is and boots. Point any VNC viewer at
@@ -59,7 +59,7 @@ when a boot with no host stops to ask for the date.
 | | |
 |---|---|
 | [The manual](docs/manual.md) | Running muir: what a run says, every flag, flags in a file, the prompt, the terminal, what a run can write, the Chaosnet and the two-machine lashup |
-| [Making a pack](docs/diskpack.md) | `diskpack`, the second binary: a pack of one's own, its partitions, and bands loaded and dumped |
+| [Making a pack](docs/diskpack.md) | `diskpack`, the third binary: a pack of one's own, its partitions, and bands loaded and dumped |
 | [How the engines work](docs/engines.md) | `micro`, `rtl` and `chip`: what each computes, how fast each runs, and what each models board by board |
 | [The machine it models](docs/machine.md) | The processor, the bus interface, the two buses and every board on them |
 | [Where the netlists come from](docs/netlists.md) | MIT's drawings and wire lists, how a board becomes a netlist, and what each is checked against |
@@ -76,7 +76,8 @@ when a boot with no host stops to ask for the date.
     data/      what is made from mit/ by a script in tools/, each
                cross-checked or labeled: the eight netlists, the disk
                controller's microcode, the cable tables. data/README.md
-    src/       the simulator, the muir binary and diskpack
+    src/       the simulator, its two executables cadr and quux, and
+               diskpack
     tests/     the checks
     examples/  development tools; none is part of the simulator.
                examples/README.md

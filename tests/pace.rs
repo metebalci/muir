@@ -15,7 +15,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use support::{Run, muir, muir_default, text};
+use support::{Run, cadr, cadr_default, text};
 
 /// **A paced run takes about the machine's own time**, and this holds it to
 /// a third of that.
@@ -40,7 +40,7 @@ fn a_paced_run_waits_for_the_machine_it_is_running_ahead_of() {
     let least = Duration::from_nanos(MICROCYCLES * 145) / 3;
 
     let began = Instant::now();
-    let out = muir().args(["--micro", "--pace", "--stop-after", "4000000"]).run();
+    let out = cadr().args(["--micro", "--pace", "--stop-after", "4000000"]).run();
     let took = began.elapsed();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
@@ -65,7 +65,7 @@ fn a_paced_run_waits_for_the_machine_it_is_running_ahead_of() {
 fn micro_is_the_engine_that_is_not_paced_unless_told_to() {
     let models = ["--main-memory", "model", "--io-board", "model", "--disk-controller", "model"];
     let paced = |args: &[&str]| {
-        let out = muir_default()
+        let out = cadr_default()
             .arg("--no-debug-cable-listen")
             .args(args)
             .args(["--stop-after", "1"])

@@ -678,7 +678,7 @@ fn lzw_decode(data: &[u8], min: u32, n: usize) -> Vec<u8> {
 /// file, in the layout `muir::mcr` reads. Written out here so that a
 /// boot PROM this repository has no file of --- one word too long, one
 /// carrying a bit the chips cannot hold, one that jumps somewhere else
-/// --- can still be handed to the reader, or to `muir --prom`.
+/// --- can still be handed to the reader, or to `cadr --prom`.
 pub fn mcr(words: &[u64]) -> Vec<u8> {
     /// 32 bits in PDP-11 word order, as `mcr`'s reader takes them.
     fn u32_pdp(b: &mut Vec<u8>, v: u32) {
@@ -724,7 +724,7 @@ pub fn cadrio() -> Netlist {
     muir::netlist::parse(include_str!("../../data/CADRIO.netlist")).unwrap()
 }
 
-/// The five boards `muir --chip` boots, each parsed from `data/`: the
+/// The five boards `cadr --chip` boots, each parsed from `data/`: the
 /// processor, the bus interface, memory, the I/O board and the display.
 pub struct Netlists {
     pub cpu: Netlist,
@@ -745,7 +745,7 @@ pub fn netlists() -> Netlists {
     }
 }
 
-/// The board as `muir --chip` runs it, `benchmark::chip` over
+/// The board as `cadr --chip` runs it, `benchmark::chip` over
 /// [`netlists`]: the processor chip, its clock and the far end of its
 /// cables.
 pub fn chip(n: &Netlists) -> (Chip, Behavioral, FarEnd) {
@@ -900,38 +900,65 @@ pub fn type_at<E: Engine>(e: &mut E, k: &mut Keyboard, text: &str) {
     }
 }
 
-// --- muir as a child of the tests: the command, what it writes, a deadline ---
-// --- on it, and a directory of the test's own -------------------------------
+// --- cadr and quux as children of the tests: the command, what they write, ---
+// --- a deadline on it, and a directory of the test's own --------------------
 
-/// `muir` itself, the binary Cargo built for these tests, with stdin closed
-/// and no flags from the developer's own `~/.muirrc`: `MUIR_RC` names an
+/// `cadr` itself, the binary Cargo built for these tests, with stdin closed
+/// and no flags from the developer's own `~/.cadrrc`: `MUIR_RC` names an
 /// empty file, so the run is the flags the test gives and nothing else ---
 /// and no debug cable connector at the host's shared port, which the tests
 /// running beside each other would fight over and a real debugger on the
 /// host could find: `--no-debug-cable-listen`.  A test that wants the
 /// connector gives `--debug-cable-listen 127.0.0.1:0` after it, the last
-/// of the two winning; [`muir_default`] is the run as a person gets it.
+/// of the two winning; [`cadr_default`] is the run as a person gets it.
 /// And as fast as the host goes, `--no-pace`, where a person's `rtl` or
 /// `chip` would be paced; a test that wants pacing gives `--pace` after it.  A
 /// test that types at the prompt opens stdin as a pipe instead.
-pub fn muir() -> std::process::Command {
-    let mut c = muir_default();
+pub fn cadr() -> std::process::Command {
+    let mut c = cadr_default();
     c.arg("--no-debug-cable-listen");
     c.arg("--no-pace");
     c
 }
 
-/// `muir` as a person runs it: [`muir`] without the flag that leaves the
+/// `cadr` as a person runs it: [`cadr`] without the flag that leaves the
 /// debug cable connector empty, for the tests of that default.
-pub fn muir_default() -> std::process::Command {
+pub fn cadr_default() -> std::process::Command {
     // At run time, so that an example that takes this module in (as
     // `examples/profile.rs` does) builds: Cargo gives the binary's path to
     // test targets alone.
-    let muir = match option_env!("CARGO_BIN_EXE_muir") {
-        Some(path) => path,
-        None => panic!("only a test binary is told where muir is"),
-    };
-    let mut c = std::process::Command::new(muir);
+    built(option_env!("CARGO_BIN_EXE_cadr"), "cadr")
+}
+
+/// `quux` itself, as [`cadr`] is `cadr`: stdin closed, no file of flags,
+/// and as fast as the host goes, `--no-pace`. QUUX has no debug cable, so
+/// there is no connector to leave empty.
+pub fn quux() -> std::process::Command {
+    let mut c = quux_default();
+    c.arg("--no-pace");
+    c
+}
+
+/// `quux` as a person runs it: [`quux`] without `--no-pace`.
+pub fn quux_default() -> std::process::Command {
+    built(option_env!("CARGO_BIN_EXE_quux"), "quux")
+}
+
+/// [`cadr`] or [`quux`] by the executable's name, for the tests that ask
+/// both the same thing.
+pub fn executable(name: &str) -> std::process::Command {
+    match name {
+        "cadr" => cadr(),
+        "quux" => quux(),
+        _ => panic!("no executable {name}: cadr or quux"),
+    }
+}
+
+/// The binary at `path`, with stdin closed and `MUIR_RC` naming an empty
+/// file.
+fn built(path: Option<&str>, name: &str) -> std::process::Command {
+    let Some(path) = path else { panic!("only a test binary is told where {name} is") };
+    let mut c = std::process::Command::new(path);
     c.stdin(std::process::Stdio::null());
     c.env("MUIR_RC", "/dev/null");
     c

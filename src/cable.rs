@@ -884,7 +884,7 @@ impl FarEnd {
     /// not: that writes the boards, and a machine picked up from it needs
     /// what is behind them too --- the machine's model with the drive and
     /// the display on it, the memory twins, and the cycle in flight,
-    /// [`Buses::save`].  `muir --checkpoint` on `chip` writes this;
+    /// [`Buses::save`].  `cadr --checkpoint` on `chip` writes this;
     /// `tests/chip.rs` writes the boards alone, because there the machine
     /// behind them is `rtl`'s and is replayed rather than stored.
     ///
@@ -927,7 +927,7 @@ impl FarEnd {
 // --- A netlist machine's checkpoint ------------------------------------------
 
 /// **A netlist machine's whole state, in the one format both roads
-/// write.** `muir --chip --checkpoint` writes it and `--resume` reads it;
+/// write.** `cadr --chip --checkpoint` writes it and `--resume` reads it;
 /// `tests/chip.rs` writes it at the microcycles `MUIR_CHECKPOINT_AT`
 /// names and reads it back at `MUIR_RESUME`; `tests/cables.rs` reads the
 /// front of one. Before this there were two shapes --- the harness's

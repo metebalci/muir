@@ -402,7 +402,7 @@ fn on_chip_a_popj_that_writes_its_own_dispatch_word_uses_the_new_word() {
     }
 }
 
-/// `m` as QUUX: the same program and memories on `--machine quux`.
+/// `m` as QUUX: the same program and memories on `quux`.
 fn as_quux(m: &Machine) -> Machine {
     let mut m = m.clone();
     m.geometry = muir::machine::Geometry::QUUX;
@@ -1310,7 +1310,7 @@ fn quux_hung_popj_one_word(pre: usize, n: usize, i: usize, xl: bool) -> (Machine
 }
 
 /// **On QUUX a `POPJ` in a dispatch write takes the old word, waiting for
-/// `MD` or not**: the same shapes on `--machine quux`, the dispatch writing
+/// `MD` or not**: the same shapes on `quux`, the dispatch writing
 /// and reading one word ([`quux_hung_popj_one_word`]). Among them are
 /// microcycles that wait for the word read where the CADR's would hang;
 /// QUUX runs them once, whole, after the wait.

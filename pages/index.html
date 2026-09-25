@@ -238,7 +238,7 @@ cargo build --release</pre>
 
     <div class="panel">
         <div class="step-head"><span class="step-num">4</span><h3>Run System 100</h3></div>
-<pre class="term cmd">target/release/muir --disk-pack vendor/run/disk-sys-100-0.img \
+<pre class="term cmd">target/release/cadr --disk-pack vendor/run/disk-sys-100-0.img \
     --chaos-address 3050 --chaos-udp 42043 --chaos-udp-peer 3060@127.0.0.1:42042</pre>
         <p class="small">The everyday engine, <code>rtl</code>, booting the pack. The <b>Chaosnet</b> is the machine&rsquo;s network, and this band expects to be machine 3050 on it and to ask host 3060 for the date and for its files. It prints where its screen is: point any VNC viewer there.</p>
         <p class="say quiet" style="margin-top:0.35rem;">The file and time host at 3060 is not me. A CADR had no such server in it, so it is a program of its own on the network &mdash; <a href="https://github.com/metebalci/ozd">ozd</a>.</p>
@@ -263,7 +263,7 @@ cargo build --release</pre>
     </div>
 
     <div class="panel">
-      <p class="small">The fetched pack is not the only one. <code>diskpack</code>, built beside <code>muir</code>, makes a pack of your own and edits its label: partitions added, grown, zeroed and deleted, microcode and bands loaded and dumped. This makes one with microcode 323 and the System&nbsp;100 band, the fetched pack&rsquo;s <code>LOD2</code>, to boot with <code>--disk-pack mine.img</code>:</p>
+      <p class="small">The fetched pack is not the only one. <code>diskpack</code>, built beside <code>cadr</code> and <code>quux</code>, makes a pack of your own and edits its label: partitions added, grown, zeroed and deleted, microcode and bands loaded and dumped. This makes one with microcode 323 and the System&nbsp;100 band, the fetched pack&rsquo;s <code>LOD2</code>, to boot with <code>--disk-pack mine.img</code>:</p>
 <pre class="term cmd">target/release/diskpack mine.img initialize
 target/release/diskpack mine.img load MCR1
 target/release/diskpack mine.img load-from LOD1 vendor/run/disk-sys-100-0.img LOD2</pre>

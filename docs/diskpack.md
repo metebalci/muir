@@ -47,7 +47,7 @@ is two microloads and four bands of 153 cylinders, about 48 MiB each, filling
 the pack exactly. A band is never bigger than the paging area, since a cold
 boot copies the band into it; a layout that would make one bigger, or ask for
 more than nine of either, is refused and no pack is made. It is the only drive
-there is here: `muir` attaches every pack as a T-300, and a pack that could
+there is here: `cadr` attaches every pack as a T-300, and a pack that could
 not be booted would be a pack for nothing.
 
 `partition <name> <size>` adds one, on the end where there is room; `modify`

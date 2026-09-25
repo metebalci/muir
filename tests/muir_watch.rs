@@ -12,7 +12,7 @@ mod support;
 use std::io::Write;
 use std::process::Stdio;
 
-use support::{Run, muir, text};
+use support::{Run, cadr, text};
 
 /// One line of the record: the time in nanoseconds, the microcycle, and
 /// each net as `name=value`, in the order the spec named them.
@@ -90,7 +90,7 @@ fn boundaries(t: &str) -> Vec<(u64, u64)> {
 /// the values the range began at.
 #[test]
 fn the_pc_is_recorded_over_the_range_at_the_values_the_run_reports() {
-    let mut child = muir()
+    let mut child = cadr()
         .args(["--chip", "--no-auto-boot", "--watch", "2-4:PC/14", "--stop-after", "20"])
         .stdin(Stdio::piped())
         .start();
@@ -133,7 +133,7 @@ fn the_pc_is_recorded_over_the_range_at_the_values_the_run_reports() {
 /// replaces the first, as does one over a `--watch` still to come.
 #[test]
 fn the_prompts_watch_records_the_next_microcycles_from_here() {
-    let mut child = muir()
+    let mut child = cadr()
         .args(["--chip", "--no-auto-boot", "--stop-after", "30"])
         .stdin(Stdio::piped())
         .start();
@@ -170,7 +170,7 @@ fn the_prompts_watch_records_the_next_microcycles_from_here() {
 #[test]
 fn watch_is_the_chip_engines_at_the_prompt() {
     let mut child =
-        muir().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
+        cadr().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
     let mut stdin = child.stdin();
     write!(stdin, "watch 5 PC/14\nquit\n").unwrap();
     drop(stdin);
@@ -192,7 +192,7 @@ fn watch_is_the_chip_engines_at_the_prompt() {
 /// the boot PROM having nothing that changes `TPTSE` any other way.
 #[test]
 fn a_pulse_inside_a_microcycle_is_recorded() {
-    let out = muir().args(["--chip", "--watch", "2-3:cpu:TPTSE", "--stop-after", "10"]).run();
+    let out = cadr().args(["--chip", "--watch", "2-3:cpu:TPTSE", "--stop-after", "10"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     let lines = record(&t);
@@ -240,7 +240,7 @@ fn the_drives_sector_pulses_reach_the_disk_controller_from_the_start() {
     // Two sector pulses' worth of microcycles at the boot's 220 ns, and
     // some over.
     const TO: u64 = 10_000;
-    let child = muir()
+    let child = cadr()
         .args(["--chip", "--disk-controller", "netlist", "--tv", "model", "--io-board", "model"])
         .arg("--disk-pack")
         .arg(format!("{},ro", pack.display()))

@@ -388,7 +388,7 @@ const SIMPLETV: &str = include_str!("../data/SIMPLETV.netlist");
 /// of cells to compare.
 const BOARDS: usize = 4;
 
-/// A netlist machine as `muir --chip` builds one, with the boot PROM in the
+/// A netlist machine as `cadr --chip` builds one, with the boot PROM in the
 /// processor and the boards `--chip` runs by default on the backplane ---
 /// the memory, the I/O board and the display as netlists, the disk
 /// controller as the machine's model. `press` is the boot button: a run

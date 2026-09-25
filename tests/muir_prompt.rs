@@ -11,7 +11,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use support::{Child, Run, listening, muir, scratch, text};
+use support::{Child, Run, cadr, listening, scratch, text};
 
 /// `hold` holds the machine, `step` moves it so far and holds again,
 /// `checkpoint` writes it, a line that is no command is said to be none,
@@ -21,7 +21,7 @@ fn the_prompt_holds_steps_checkpoints_and_quits() {
     let dir = scratch("prompt");
     let chk = dir.join("held.chk");
     let mut child =
-        muir().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
+        cadr().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
     let mut stdin = child.stdin();
     write!(stdin, "pc\nhold\nstep 7\ncheckpoint {}\nbogus\nq\n", chk.display()).unwrap();
     drop(stdin);
@@ -50,7 +50,7 @@ fn after(pc_line: &str) -> u64 {
 #[test]
 fn registers_and_memories_are_dumped() {
     let mut child =
-        muir().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
+        cadr().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
     let mut stdin = child.stdin();
     write!(stdin, "hold\nreg\namem 0 4\nmmem\nspc 100\nquit\n").unwrap();
     drop(stdin);
@@ -76,7 +76,7 @@ fn registers_and_memories_are_dumped() {
 #[test]
 fn a_count_past_the_end_of_a_memory_is_the_rest_of_it() {
     let mut child =
-        muir().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
+        cadr().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
     let mut stdin = child.stdin();
     write!(stdin, "hold\namem 10 1777777777777777777777\nquit\n").unwrap();
     drop(stdin);
@@ -94,7 +94,7 @@ fn a_count_past_the_end_of_a_memory_is_the_rest_of_it() {
 /// not what starts one, and `boot` presses the button and runs it.
 #[test]
 fn no_auto_boot_waits_for_the_boot_command() {
-    let mut child = muir()
+    let mut child = cadr()
         .args(["--micro", "--no-auto-boot", "--stop-after", "1000"])
         .stdin(Stdio::piped())
         .start();
@@ -124,7 +124,7 @@ fn no_auto_boot_waits_for_the_boot_command() {
 /// `continue` will ever come, and muir stops rather than sitting there.
 #[test]
 fn a_hold_no_one_can_end_ends_the_run() {
-    let out = muir().args(["--micro", "--no-auto-boot", "--stop-after", "1000"]).run();
+    let out = cadr().args(["--micro", "--no-auto-boot", "--stop-after", "1000"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("held, and stdin has ended"), "it says why it stopped:\n{t}");
@@ -143,7 +143,7 @@ fn the_screen_is_written_and_the_display_recorded() {
     // file without a path, and were it to start a recording after all,
     // the file would land here and not in the directory the test is run
     // from.
-    let mut child = muir()
+    let mut child = cadr()
         .args(["--micro", "--stop-after", "1000000000"])
         .current_dir(&dir)
         .stdin(Stdio::piped())
@@ -188,7 +188,7 @@ fn the_screen_is_written_and_the_display_recorded() {
 /// test says what it skipped.
 #[test]
 fn a_held_machine_gets_the_prompt() {
-    let exe = env!("CARGO_BIN_EXE_muir");
+    let exe = env!("CARGO_BIN_EXE_cadr");
     let args = ["--micro", "--stop-after", "1000000000"];
     let line = format!("{exe} {}", args.join(" "));
     let mut c = Command::new("script");
@@ -200,7 +200,7 @@ fn a_held_machine_gets_the_prompt() {
         c.args(["-q", "-e", "-c", &line, "/dev/null"]);
     }
     // muir under script has script's environment: no flags from the
-    // developer's own `~/.muirrc` here either.
+    // developer's own `~/.cadrrc` here either.
     c.env("MUIR_RC", "/dev/null");
     c.stdin(Stdio::piped());
     let Ok(mut child) = Child::spawn(&mut c) else {
@@ -250,7 +250,7 @@ fn a_held_machine_gets_the_prompt() {
 #[test]
 fn help_lists_the_commands_and_the_end_of_stdin_ends_nothing() {
     let mut child =
-        muir().args(["--micro", "--stop-after", "20000000"]).stdin(Stdio::piped()).start();
+        cadr().args(["--micro", "--stop-after", "20000000"]).stdin(Stdio::piped()).start();
     let mut stdin = child.stdin();
     writeln!(stdin, "help").unwrap();
     drop(stdin);
@@ -279,7 +279,7 @@ fn pc_lines(t: &str) -> usize {
 fn control_c_holds_at_the_prompt_and_again_quits() {
     let dir = scratch("interrupt");
     let chk = dir.join("at-c.chk");
-    let mut child = muir()
+    let mut child = cadr()
         .args(["--micro", "--stop-after", "1000000000", "--checkpoint"])
         .arg(&chk)
         .stdin(Stdio::piped())
@@ -317,7 +317,7 @@ fn control_c_holds_at_the_prompt_and_again_quits() {
 #[test]
 fn mem_reads_a_physical_address_while_the_machine_runs() {
     let mut child =
-        muir().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
+        cadr().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
     let mut stdin = child.stdin();
     let said = child.stdout();
     let line = |head: &'static str| move |t: &str| t.lines().any(|l| l.starts_with(head));
@@ -354,7 +354,7 @@ fn mem_reads_a_physical_address_while_the_machine_runs() {
 /// the address is on it either way.
 #[test]
 fn chip_reads_a_word_of_a_memory_board_at_the_prompt() {
-    let mut child = muir()
+    let mut child = cadr()
         .args(["--chip", "--main-memory-boards", "1", "--stop-after", "100"])
         .stdin(Stdio::piped())
         .start();
@@ -389,7 +389,7 @@ fn chip_reads_a_word_of_a_memory_board_at_the_prompt() {
 #[test]
 fn control_c_with_no_prompt_quits() {
     let mut child =
-        muir().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
+        cadr().args(["--micro", "--stop-after", "1000000000"]).stdin(Stdio::piped()).start();
     // One line, and the end of stdin right behind it.  The answer says the
     // run has begun and takes ^C for its own, as in the test above; the end
     // of stdin, read by muir's own thread as soon as the line is, is what
@@ -416,12 +416,12 @@ fn control_c_with_no_prompt_quits() {
 /// where the host says, the debugger connected to it, stdin a pipe on
 /// both and a window long enough to be typed at.
 fn pair() -> (Child, Child) {
-    let debuggee = muir()
+    let debuggee = cadr()
         .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
         .stdin(Stdio::piped())
         .start();
     let addr = listening(&debuggee);
-    let debugger = muir()
+    let debugger = cadr()
         .args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "1000000000"])
         .stdin(Stdio::piped())
         .start();
@@ -488,7 +488,7 @@ fn both_ends_of_the_cable_over_tcp_have_the_prompt() {
     assert!(ta.contains("quit at PC"), "the debugger ended by quit:\n{ta}");
     assert!(tb.contains("quit at PC"), "and so did the debuggee:\n{tb}");
     assert!(
-        !ta.contains("muir: the debug cable") && !tb.contains("muir: the debug cable"),
+        !ta.contains("cadr: the debug cable") && !tb.contains("cadr: the debug cable"),
         "the two agreed to stop rather than one finding the other gone:\n{ta}\n{tb}"
     );
 }
@@ -503,7 +503,7 @@ fn both_ends_of_the_cable_over_tcp_have_the_prompt() {
 /// came and its run ended when the debugger went.
 #[test]
 fn the_debuggee_runs_before_the_debugger_comes_and_after_it_goes() {
-    let mut debuggee = muir()
+    let mut debuggee = cadr()
         .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
         .stdin(Stdio::piped())
         .start();
@@ -517,7 +517,7 @@ fn the_debuggee_runs_before_the_debugger_comes_and_after_it_goes() {
     b.wait_until(|t| pc_lines(t) >= 2, "and again");
     let mut texts = Vec::new();
     for k in 1..=2 {
-        let mut debugger = muir()
+        let mut debugger = cadr()
             .args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "1000000000"])
             .stdin(Stdio::piped())
             .start();
@@ -552,7 +552,7 @@ fn the_debuggee_runs_before_the_debugger_comes_and_after_it_goes() {
     assert!(after(pcs[1]) > after(pcs[0]), "and the machine ran with nobody on the cable:\n{tb}");
     assert!(tb.contains("quit at PC"), "the debuggee ended by quit:\n{tb}");
     for t in texts.iter().chain([&tb]) {
-        assert!(!t.contains("muir: the debug cable"), "nobody found the other end gone:\n{t}");
+        assert!(!t.contains("cadr: the debug cable"), "nobody found the other end gone:\n{t}");
     }
 }
 
@@ -585,7 +585,7 @@ fn control_c_holds_the_debugger_over_tcp_and_again_quits() {
     assert_eq!(ta.matches("held at ^C").count(), 2, "held twice, run on once between:\n{ta}");
     assert!(ta.contains("quit at PC") && tb.contains("quit at PC"), "{ta}\n{tb}");
     assert!(
-        !ta.contains("muir: the debug cable") && !tb.contains("muir: the debug cable"),
+        !ta.contains("cadr: the debug cable") && !tb.contains("cadr: the debug cable"),
         "the two agreed to stop:\n{ta}\n{tb}"
     );
 }

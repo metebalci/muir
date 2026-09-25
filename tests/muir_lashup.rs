@@ -19,15 +19,15 @@ use std::time::{Duration, Instant};
 use muir::capture::PAIR_RULE;
 use muir::tv::WIDTH;
 
-use support::{Run, listening, muir, scratch, text};
+use support::{Run, cadr, listening, scratch, text};
 
 /// `--debug-in-process`: two `rtl` machines in one process, the second on the
 /// first's debug cable, both run for the window and both reported.
 #[test]
 fn a_debuggee_runs_beside_the_debugger_in_one_process() {
-    let out = muir().args(["--rtl", "--debug-in-process", "--stop-after", "3000"]).run();
+    let out = cadr().args(["--rtl", "--debug-in-process", "--stop-after", "3000"]).run();
     let t = text(&out);
-    assert!(out.status.success(), "muir --debug-in-process failed:\n{t}");
+    assert!(out.status.success(), "cadr --debug-in-process failed:\n{t}");
     assert!(t.contains("rtl, debugger"), "the debugger reported:\n{t}");
     assert!(t.contains("debuggee:") && t.contains("microcycles to"), "the debuggee reported:\n{t}");
     assert!(t.contains("0 debug cycles on the cable"), "no debug cycles without CC:\n{t}");
@@ -46,13 +46,13 @@ fn a_debuggee_runs_beside_the_debugger_in_one_process() {
 /// says the debugger came and went and it listens again.
 #[test]
 fn a_debuggee_and_a_debugger_meet_over_tcp() {
-    let mut debuggee = muir()
+    let mut debuggee = cadr()
         .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
         .stdin(Stdio::piped())
         .start();
     let addr = listening(&debuggee);
     let debugger =
-        muir().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "3000"]).start();
+        cadr().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "3000"]).start();
     let a = debugger.wait();
     let ta = text(&a);
     assert!(a.status.success(), "the debugger failed:\n{ta}");
@@ -72,7 +72,7 @@ fn a_debuggee_and_a_debugger_meet_over_tcp() {
     assert!(tb.contains("quit at PC"), "the debuggee ended by quit:\n{tb}");
     assert!(tb.contains("0 debug cycles on the cable"), "no debug cycles without CC:\n{tb}");
     assert!(
-        !ta.contains("muir: the debug cable") && !tb.contains("muir: the debug cable"),
+        !ta.contains("cadr: the debug cable") && !tb.contains("cadr: the debug cable"),
         "the two agreed to stop:\n{ta}\n{tb}"
     );
 }
@@ -116,7 +116,7 @@ fn the_lashup_serves_both_displays() {
     // bound: port 0 twice is two ports, and `muir` takes it so.  The window
     // is long; the lashup is killed once both have answered, or by the
     // drop if either does not.
-    let lashup = muir()
+    let lashup = cadr()
         .args([
             "--rtl",
             "--debug-in-process",
@@ -159,12 +159,12 @@ fn the_lashup_serves_both_displays() {
 /// between, the attempt is made on another.
 #[test]
 fn a_debuggee_terminal_wants_the_lashup() {
-    let out = muir().args(["--rtl", "--debuggee-terminal", "--stop-after", "1"]).run();
+    let out = cadr().args(["--rtl", "--debuggee-terminal", "--stop-after", "1"]).run();
     assert!(!out.status.success());
     assert!(text(&out).contains("needs --debug-in-process"), "{}", text(&out));
     for _ in 0..5 {
         let p = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port().to_string();
-        let out = muir()
+        let out = cadr()
             .args(["--rtl", "--debug-in-process", "--terminal", &p, "--debuggee-terminal", &p])
             .run();
         let t = text(&out);
@@ -185,7 +185,7 @@ fn a_debuggee_terminal_wants_the_lashup() {
 /// The flag is the other machine's, so it wants the lashup.
 #[test]
 fn the_debuggee_has_a_chaosnet_of_its_own() {
-    let out = muir().args(["--rtl", "--debug-in-process", "--stop-after", "100"]).run();
+    let out = cadr().args(["--rtl", "--debug-in-process", "--stop-after", "100"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(
@@ -193,7 +193,7 @@ fn the_debuggee_has_a_chaosnet_of_its_own() {
         "the debugger's address, and nothing else on the cable:\n{t}"
     );
 
-    let out = muir()
+    let out = cadr()
         .args(["--rtl", "--debug-in-process", "--debuggee-chaos-address", "3051"])
         .args(["--stop-after", "100"])
         .run();
@@ -205,7 +205,7 @@ fn the_debuggee_has_a_chaosnet_of_its_own() {
         "this machine's is its own, and here its default:\n{t}"
     );
 
-    let out = muir().args(["--rtl", "--debuggee-chaos-address", "3051", "--stop-after", "1"]).run();
+    let out = cadr().args(["--rtl", "--debuggee-chaos-address", "3051", "--stop-after", "1"]).run();
     assert!(!out.status.success(), "{}", text(&out));
     assert!(text(&out).contains("needs --debug-in-process"), "{}", text(&out));
 }
@@ -216,14 +216,14 @@ fn the_debuggee_has_a_chaosnet_of_its_own() {
 /// run out, having said the debugger came and went.
 #[test]
 fn a_chip_debuggee_and_an_rtl_debugger_meet_over_tcp() {
-    let mut debuggee = muir()
+    let mut debuggee = cadr()
         .args(["--chip", "--main-memory", "model", "--io-board", "model", "--tv", "model"])
         .args(["--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
         .stdin(Stdio::piped())
         .start();
     let addr = listening(&debuggee);
     let debugger =
-        muir().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "300"]).start();
+        cadr().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "300"]).start();
     let a = debugger.wait();
     let ta = text(&a);
     assert!(a.status.success(), "the debugger failed:\n{ta}");
@@ -257,7 +257,7 @@ fn a_chip_debuggee_and_an_rtl_debugger_meet_over_tcp() {
 fn the_lashup_records_both_displays_on_one_canvas() {
     let dir = scratch("lashup-capture");
     let gif = dir.join("lashup.gif");
-    let out = muir()
+    let out = cadr()
         .args(["--rtl", "--debug-in-process", "--stop-after", "5000", "--tv-capture"])
         .arg(&gif)
         .run();
@@ -283,7 +283,7 @@ fn the_lashup_records_both_displays_on_one_canvas() {
 fn the_lashups_color_recording_is_the_debuggers_screen() {
     let dir = scratch("lashup-color-capture");
     let (gif, color) = (dir.join("lashup.gif"), dir.join("color.gif"));
-    let out = muir()
+    let out = cadr()
         .args(["--rtl", "--debug-in-process", "--color-tv", "--stop-after", "5000"])
         .args(["--tv-capture", gif.to_str().unwrap()])
         .args(["--color-tv-capture", color.to_str().unwrap()])
@@ -322,7 +322,7 @@ fn the_debuggees_terminal_defaults_to_one_port_above() {
             }
             p
         };
-        let out = muir()
+        let out = cadr()
             .args([
                 "--rtl",
                 "--debug-in-process",

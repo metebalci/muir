@@ -38,7 +38,7 @@ use muir::rtl::Rtl;
 // --- The window with MIT's own DBGIN behind it -------------------------------
 
 /// The netlist board as the debuggee: the processor with the boot PROM,
-/// started from the button as `muir --chip` starts it, the interface board
+/// started from the button as `cadr --chip` starts it, the interface board
 /// on its cables and a bare backplane behind it, as
 /// [`muir::cable::DebugIn`] runs them --- `tests/lashup.rs` builds the
 /// same board for the cable over TCP.

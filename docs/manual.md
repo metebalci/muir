@@ -6,7 +6,7 @@ underneath. The front page, with the pictures and the short way in, is at
 
 This file is the program itself. Beside it:
 
-- [Making a pack](diskpack.md) --- `diskpack`, the second binary: a pack of
+- [Making a pack](diskpack.md) --- `diskpack`, the third binary: a pack of
   one's own, its partitions, and bands loaded and dumped
 - [The machine it models](machine.md) --- the boards, the two buses, and
   what each one reaches outside muir
@@ -52,9 +52,12 @@ own README says.
 
 ## Running it
 
-muir builds to one binary. Run it with no flags and it starts an `rtl`
-machine, presses the boot button, and runs the boot PROM with no pack in the
-drive, which the boot waits on for ever. A pack is named: `--disk-pack
+muir builds to two executables that are machines: `cadr`, MIT's CADR as
+built, and [`quux`](#quux), the CADR evolved. **The executable is the
+machine**: each takes only the flags that mean something on its own. Run
+`cadr` with no flags and it starts an `rtl` machine, presses the boot
+button, and runs the boot PROM with no pack in the drive, which the boot
+waits on for ever. A pack is named: `--disk-pack
 vendor/run/disk-sys-100-0.img`, where `tools/fetch-system-100.sh` puts the
 System 100 pack, and with it `--chaos-address 3050`, which is that band's
 own address, `--chaos-udp`, which is the cable, and `--chaos-udp-peer
@@ -63,7 +66,7 @@ date. ozd has the protocol's own port, 42042, so a machine on the same
 computer takes another.
 
 ```text
-target/release/muir
+target/release/cadr
 ```
 
 One engine at a time: `--micro`, `--rtl` or `--chip`, and `--rtl` is what
@@ -74,7 +77,7 @@ on stderr. Nothing here is hidden state: if a run behaves oddly, the reason
 is usually in this block.
 
 ```text
-$ muir --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050 \
+$ cadr --disk-pack vendor/run/disk-sys-100-0.img --chaos-address 3050 \
        --chaos-udp 42043 --chaos-udp-peer 3060@127.0.0.1:42042 --stop-after 2000000
 engine: rtl
 memory: 32 boards, 2 MW
@@ -137,16 +140,39 @@ rtl      2000000 microcycles    0.194 s     10328518 microcycles/s    1.50x hard
 Addresses in the flags and in what muir prints are octal, as MIT writes
 them.
 
+### `quux`
+
+`quux` is QUUX, the CADR evolved. QUUX's level-1 map entry is six bits
+where the CADR's is five, so it maps 63 regions of 8K words at once to the
+CADR's 31; its PDL buffer is 16K words to the CADR's 1K; and ALU functions
+42 and 43 multiply and divide in one instruction each, where the CADR takes
+a step per bit; and its processor has its clocks, a 60 Hz tick, an interval
+timer and a microsecond clock, where the CADR's clock is the display's
+vertical interrupt and the others are on the I/O board. The rest of it is
+the CADR's. It boots from its own PROM and needs microcode that knows it.
+[QUUX](quux.md) has the whole of the difference.
+
+It runs on `micro` and `rtl`: `chip` is the CADR's boards as MIT drew them.
+A checkpoint carries its machine, and the other executable refuses it,
+naming the one that resumes it --- `cadr: --resume q.chk is quux's, not
+cadr's: quux --resume q.chk`. The start block says `machine: quux`.
+
 ## The command line
 
-Every flag muir takes, in the order `muir --help` lists them: the engine
-first, then the rest by name. A flag that only means something on some
-engines says which.
+Every flag `cadr` and `quux` take, in the order their `--help` lists them:
+the engine first, then the rest by name. Most are both executables', with
+the same meaning on each. **A flag that is one machine's alone says whose**,
+`cadr` only or `quux` only, and the other executable refuses it by name,
+saying which takes it --- `quux: --chip is cadr's, not quux's` --- as it
+refuses a flag of neither: `cadr: --foo is not a flag of cadr`. Each
+`--help` lists its own flags and no other's. A flag that only means
+something on some engines says which.
 
 ### `--micro | --rtl | --chip`
 
 The engine: microinstruction, register transfer, or chip level. [How the
-engines work](engines.md) says what each computes.
+engines work](engines.md) says what each computes. `--chip` is `cadr` only:
+it is the CADR's boards as MIT drew them, and QUUX has no netlist.
 
 Default: `--rtl`.
 
@@ -265,6 +291,8 @@ machine. muir says so, and why, and the run goes on.
 
 ### `--color-terminal [<endpoint>]`
 
+`cadr` only.
+
 Where the color TV's screen is served, as `--terminal` is the main screen's:
 a port, an address or address:port.
 
@@ -277,6 +305,8 @@ It needs `--color-tv`. Default: the display above the last one bound, which
 in a run with one machine is the main screen's.
 
 ### `--color-tv [netlist|model]`
+
+`cadr` only.
 
 Fit **the color TV**, the second display board: a LISPM TV strapped to the
 other addresses MIT's own `cadrtv/lmtv.order` gives --- the frame buffer at
@@ -305,6 +335,8 @@ netlist on `chip` and the model elsewhere.
 
 ### `--color-tv-capture <gif>`
 
+`cadr` only.
+
 Record the color TV's screen to the file as the run goes, as `--tv-capture`
 records the main screen and to a file of its own: 576 by 454, each frame the
 rectangle that changed since the last, timed by the machine's own clock.
@@ -325,11 +357,13 @@ where the two machines are two clocks. The clocks below it are
 ### `-c, --config <file>`
 
 The file of flags to read before the command line, which must be there.
-Without it muir reads `.muirrc` in the directory it was run from, or failing
-that `.muirrc` in the home directory. [Flags in a file](#flags-in-a-file)
-has the rest.
+Without it `cadr` reads `.cadrrc` and `quux` `.quuxrc`, in the directory it
+was run from, or failing that in the home directory. [Flags in a
+file](#flags-in-a-file) has the rest.
 
 ### `--debug-cable-connect [<endpoint>|0x<address>]`
+
+`cadr` only.
 
 The CADR's: refused on QUUX, which has no Unibus and so no debug cable.
 
@@ -355,6 +389,8 @@ Default: `127.0.0.1:7661`.
 
 ### `--debug-cable-listen [<endpoint>]`
 
+`cadr` only.
+
 The CADR's: refused on QUUX, which has no Unibus and so no debug cable.
 
 **rtl, chip:** where this machine's DBGIN listens for a debugger's cable
@@ -376,6 +412,8 @@ muir.
 
 ### `--debug-in-process`
 
+`cadr` only.
+
 The CADR's: refused on QUUX, which has no Unibus and so no debug cable.
 
 **rtl:** the two-machine lashup in one process. A second machine runs beside
@@ -390,6 +428,8 @@ Neither machine has [the prompt](#the-prompt).
 
 ### `--debuggee-chaos-address <address>`
 
+`cadr` only.
+
 **rtl:** the other machine's Chaosnet address, as `--chaos-address` is this
 machine's. The other machine has a cable of its own, since muir's cable
 carries one machine: the two cannot hear each other over it, and the only
@@ -401,9 +441,13 @@ the two cables never meeting.
 
 ### `--debuggee-disk-pack <image>[,<unit>][,ro]`
 
+`cadr` only.
+
 **rtl:** the other machine's pack, as `--disk-pack`.
 
 ### `--debuggee-terminal [<endpoint>]`
+
+`cadr` only.
 
 **rtl:** the other machine's terminal --- its display, keyboard and mouse
 over RFB, as `--terminal` is this machine's. In the lashup both machines are
@@ -413,15 +457,13 @@ puts it elsewhere.
 Default: the display above this machine's, `127.0.0.1:5901` when it is at
 :0.
 
-### `--disk-controller netlist|model|block-disk`
+### `--disk-controller netlist|model`
 
-**chip:** the disk controller, as MIT's board or as a model of it.
+`cadr` only.
 
-`block-disk` is QUUX's, on `micro` and `rtl`: [block-disk](quux.md), the same
-registers and command list with blocks by number, read and write only, one
-pack at unit 0, and 100 us a block. Refused on the CADR and on `chip`.
-It is QUUX's only disk: a QUUX run has it without the flag, and
-`--disk-controller netlist` or `model` is refused on QUUX.
+**chip:** the disk controller, as MIT's board or as a model of it. QUUX's
+disk is block-disk, always, and `quux` has no such flag
+([`--disk-pack`](#--disk-pack-imageunitro)).
 
 **The netlist runs the drive's real milliseconds.** Its sequencer waits on
 the drive's clocks and on its own delay lines, so the block it is reading
@@ -447,6 +489,8 @@ the machine at gate level throughout; a board quietly running its model was
 the thing that did not match the name.
 
 ### `--disk-multiplexor`
+
+`cadr` only.
 
 **chip:** a DISK MULTIPLEXOR on the netlist controller's cable, which is
 what gives it eight drive ports instead of one. It hangs off that board, so
@@ -487,15 +531,19 @@ The flag can come more than once, one pack to a unit, up to the eight the
 controller addresses. On the netlist disk controller a second pack, or one
 past unit 0, wants `--disk-multiplexor`.
 
-On QUUX the pack is block-disk's one disk, and it is a file of any size,
-raw, a fixed VHD or a dynamic VHD, told apart by the VHD footer; the start
-says which and how many blocks. [QUUX's disk](#quuxs-disk) says how to make
-one. The CADR's pack is MIT's raw Trident image, exactly a T-300's size.
+On `quux` the pack is [block-disk](quux.md)'s one disk: the same registers
+and command list as the CADR's controller with blocks by number, read and
+write only, one pack at unit 0, and 100 us a block. It is a file of any
+size, raw, a fixed VHD or a dynamic VHD, told apart by the VHD footer; the
+start says which and how many blocks. [QUUX's disk](#quuxs-disk) says how
+to make one. The CADR's pack is MIT's raw Trident image, exactly a T-300's size.
 
 Default: unit 0; no pack unless one is named, which is a drive with no pack
 in it and a boot that waits on it for ever.
 
 ### `--file-root [<name>=]<folder>[,ro]`
+
+`quux` only.
 
 **QUUX:** a host folder its [file device](quux.md#the-file-device) serves
 under the pathname host `HOST`. A folder alone is HOST's `/`, holding
@@ -505,11 +553,13 @@ a named mount when the text before its first `=` is a name's component.
 `,ro` refuses every write under it, answering ATF. The flag can come more
 than once, each name once and one default folder; the folder must be one.
 With no default folder `/` holds the mounts alone and is read-only. The
-start lists them, with the device's time. Refused on the CADR.
+start lists them, with the device's time.
 
 Default: none; `/` is empty.
 
 ### `--io-board netlist|model`
+
+`cadr` only.
 
 **chip:** the I/O board.
 
@@ -556,7 +606,7 @@ The keyboard itself is MIT's and is not a choice --- its key positions are
 MIT's own tables --- and the mapping is what this names.
 
 Default: `.muirkeys` in the directory muir was run from, else `.muirkeys` in
-the home directory, as `.muirrc` is looked for; `MUIR_KEYS` in the
+the home directory, as `.cadrrc` and `.quuxrc` are looked for; `MUIR_KEYS` in the
 environment names a file in place of the two. Without one the built-in
 mapping stands.
 
@@ -569,9 +619,9 @@ in unedited it changes nothing, so it is a copy to edit rather than a
 report.
 
 ```text
-muir --keyboard-mapping-dump > my.keys
+cadr --keyboard-mapping-dump > my.keys
 # edit my.keys
-muir --keyboard-mapping my.keys
+cadr --keyboard-mapping my.keys
 ```
 
 ### `--keyboard-mapping-trace`
@@ -622,27 +672,9 @@ newest event is the one that matters and that one is always kept.
 
 Default: off --- and the first loss is said anyway.
 
-### `--machine cadr|quux`
-
-Which machine: the CADR, or QUUX, the CADR evolved. QUUX's level-1 map entry
-is six bits where the CADR's is five, so it maps 63 regions of 8K words at
-once to the CADR's 31; its PDL buffer is 16K words to the CADR's 1K; and ALU
-functions 42 and 43 multiply and divide in one instruction each, where the
-CADR takes a step per bit; and its processor has its clocks, a 60 Hz tick,
-an interval timer and a microsecond clock, where the CADR's clock is the
-display's vertical interrupt and the others are on the I/O board. The rest of it is the
-CADR's. It boots from its own PROM and needs microcode that
-knows it. [QUUX](quux.md) has the
-whole of the difference. The same flag chooses the machine in muir-fpga and
-muir-sys.
-
-Refused on `chip`, which is the CADR's boards as MIT drew them. A checkpoint
-carries the machine, and a resume under the other is refused. The start block
-says `machine: quux` when it is QUUX.
-
-Default: `cadr`.
-
 ### `--main-memory netlist|model`
+
+`cadr` only.
 
 **chip:** main memory as MIT's board or as `rtl`'s model of it.
 
@@ -674,6 +706,8 @@ Nothing else starts it: `continue` and `step` say so.
 Default: muir presses the button for you.
 
 ### `--no-debug-cable-listen`
+
+`cadr` only.
 
 **rtl, chip:** no connector for a debugger's cable, so that this machine
 cannot be debugged from another. Of this and `--debug-cable-listen` the last
@@ -759,7 +793,7 @@ of their 454 words, and nothing about a copy announces which it is.
 Default: MIT's own, built in --- System 100's `sys/ubin/promh.mcr`, version
 9.
 
-On `--machine quux` the file is QUUX's own kind: an MCR file in **partition
+On `quux` the file is QUUX's own kind: an MCR file in **partition
 order**, MIT's with the two 16-bit halves of every 32-bit word swapped, as
 muir-sys's builder writes QUUX's PROM and microcode, with the program
 assembled at `36000`, where QUUX's PROM sits. A file in MIT's order is
@@ -778,16 +812,20 @@ replaces. The stops count from here.
 
 ### `--rtc <unix-seconds>|host`
 
+`quux` only.
+
 **QUUX:** its [real-time clock](quux.md#the-real-time-clock), register page
 word 103. `host` reads the host's clock at each read. A second, 0 to
 4294967295, starts the clock there at power-on and counts the machine's own
 time from it, holding at 4294967295, so that a run repeats; a larger one is
 refused. The start says which. A checkpoint carries it, and a resume under
-another `--rtc` is refused. Refused on the CADR.
+another `--rtc` is refused.
 
 Default: `host`.
 
 ### `--serial <endpoint>`
+
+`cadr` only.
 
 Where the serial port at J9 --- the Signetics 2651 at IOBSER 0A12 --- is
 reached: a TCP port, or address:port. Attach with `nc <host> <port>` or with
@@ -855,7 +893,9 @@ needs no password. [The terminal](#the-terminal) has the rest.
 Default: `127.0.0.1:5900`, VNC's display :0, or the first free display above
 it.
 
-### `--timing-model cadr|fpga|sync`
+### `--timing-model cadr|fpga`
+
+`cadr` only.
 
 **rtl:** whose time the processor and its boards keep. `cadr` is the board's
 own nanoseconds. `fpga` is the 10 ns grid muir-fpga's fabric runs on, so that
@@ -866,54 +906,63 @@ the first tick at or after it. A microcycle at normal speed is 150 ns there
 rather than 145. [What each engine models](engines.md#what-each-engine-models)
 says which delays and clocks those are.
 
-`sync` is QUUX's microcycle, and QUUX's only one: QUUX drops the delay
-lines. The same grid, with every microcycle `--sync-cycle-ticks` ticks long
-in place of the CADR's delay-line taps. Registers are still clocked at the
-one edge, and the bus keeps its own time, so only the length of a
-microcycle changes. A QUUX run has it without the flag; `cadr` and `fpga`
-are refused on QUUX, and `sync` on the CADR. [QUUX](quux.md) has it.
+QUUX drops the delay lines, and its one timing is `sync`: the same grid,
+with every microcycle [`--sync-cycle-ticks`](#--sync-cycle-ticks-k) ticks
+long in place of the CADR's delay-line taps. Registers are still clocked at
+the one edge, and the bus keeps its own time, so only the length of a
+microcycle changes. A `quux` run has it without asking, and `sync` is no
+word of this flag. [QUUX](quux.md) has it.
 
-The flag is refused on `micro` and `chip`, which keep the board's time;
-`micro` on QUUX counts `sync`'s ticks without it. A checkpoint carries it,
-and a resume under another is refused.
+`fpga` is refused on `micro` and `chip`, which keep the board's time. A
+checkpoint carries the timing, and a resume under another is refused.
 
-Default: `cadr` on the CADR, `sync` on QUUX.
+Default: `cadr`.
 
 ### `--cache <words>`
+
+`quux` only.
 
 **rtl, QUUX:** the size of QUUX's memory cache, `<words>`, a power of two:
 [QUUX's cache](quux.md), always fitted, unified and write-through, by
 physical address, main memory only, in lines of 4 words, 2-way, a hit in
 20 ns, with a one-word write buffer. It changes when the machine's reads
 and writes are answered and never what they read. The start says it and a
-checkpoint carries it. Refused on the CADR and on `micro` and `chip`.
+checkpoint carries it. Refused on `micro`.
 
 Default: 4096.
 
 ### `--memory-timing <read>,<write>`
 
+`quux` only.
+
 **rtl, QUUX:** main memory's timing on [QUUX's memory port](quux.md): a line
 fill and a write, in ns, or `arty` or `de25` for the two boards' own
-figures. The start says it and a checkpoint carries it. Refused on the
-CADR and on `micro` and `chip`.
+figures. The start says it and a checkpoint carries it. Refused on
+`micro`.
 
 Default: 380,290, the slower board's.
 
 ### `--sync-cycle-ticks <k>`
 
-**QUUX, rtl and micro:** a microcycle's length in 10 ns ticks, 1 to 255. It
-is a board's: the number its fit proves its longest path settles in.
-Refused on the CADR.
+`quux` only.
+
+**rtl and micro:** a microcycle's length in 10 ns ticks, 1 to 255, QUUX's
+`sync` timing. It is a board's: the number its fit proves its longest path
+settles in.
 
 Default: 4, the Arty Z7-20's.
 
 ### `--tv netlist|model`
 
+`cadr` only.
+
 **chip:** the display.
 
 Default: `netlist`.
 
-### `--tv-board simple-tv|lispm-tv|mono-tv`
+### `--tv-board simple-tv|lispm-tv`
+
+`cadr` only.
 
 Which display board, **on every engine**: the SIMPLE TV that System 100
 drives, or the LISPM TV that replaced it in December 1980. One model serves
@@ -926,16 +975,18 @@ and a checkpoint carries it.
 The two program alike but for mode bit 7, which reads the sync enable back
 on the LISPM TV and zero on the SIMPLE TV, where an ECO grounds it.
 
-`mono-tv` is QUUX's display, [MONO TV](quux.md): 1280 by 1024, one bit a
-pixel, with no sync program and no interrupt. It is refused on the CADR, and
-the CADR's two boards are refused on QUUX.
+QUUX's display is [MONO TV](quux.md), always, and `quux` has no such flag.
 
-Default: `simple-tv` on the CADR, `mono-tv` on QUUX, its only one.
+Default: `simple-tv`.
 
 ### `--mono-tv-size <width>x<height>`
 
-MONO TV's size, for `--tv-board mono-tv`: the width a multiple of 32, and at
-most 1920 by 1080, the largest QUUX supports.
+`quux` only.
+
+The size of MONO TV, QUUX's display: 1280 by 1024 unless this says
+otherwise, one bit a pixel, with no sync program and no interrupt. The
+width a multiple of 32, and at most 1920 by 1080, the largest QUUX
+supports.
 The start says it, the feature page gives it to the software, and a
 checkpoint carries it; a resume at another size is refused.
 
@@ -949,22 +1000,24 @@ colors and LZW, timed by the machine's own clock so it plays at the
 machine's speed. It stays small while the screen stays still. There is no
 default path; one must be given.
 
-In the lashup it is both machines on one canvas, the debugger's screen at
+On `cadr`, in the lashup it is both machines on one canvas, the debugger's screen at
 the left and the debuggee's at the right with a rule between them, so that a
 frame is one instant on both: the two machines are one clock there, which
 two files could not keep. Not over the debug cable, where they are two.
 
-The main screen: the color TV's is `--color-tv-capture`'s.
+The main screen: the color TV's is `cadr`'s `--color-tv-capture`.
 
 ### `--tv-capture-no-time`
 
-Leave the clocks off the recordings, the color screen's as much as the main
-screen's: there is one flag for the two. By default a line below the screen,
+Leave the clocks off the recordings, `cadr`'s color screen's as much as the
+main screen's: there is one flag for the two. By default a line below the screen,
 hiding no part of the display, shows the machine's simulated time at the
 left and the wall clock, the local time of day, at the right, each hh:mm:ss;
 this drops that line.
 
 ### `--watch <from>[-<to>]:<net>,<net>,...`
+
+`cadr` only.
 
 **chip:** record the named nets over microcycles `from` to `to`, or from
 `from` to the end of the run when there is no `to`, counted as
@@ -990,7 +1043,7 @@ bit of it is undriven --- once as the range begins and then at every change,
 and nothing while nothing changes. Outside the range the run pays nothing.
 
 ```text
-$ muir --chip --disk-controller netlist --disk-pack vendor/run/disk-sys-100-0.img,ro \
+$ cadr --chip --disk-controller netlist --disk-pack vendor/run/disk-sys-100-0.img,ro \
     --watch '530000-:disk:NEW CCW,disk:CCW CLK,disk:-CHAN.MASTER,disk:-LAST CCW,disk:XBAO/22' \
     --stop-after 700000 2>&1 | grep '^watch:'
 watch: 116600440 ns, microcycle 530000: disk:NEW CCW=High disk:CCW CLK=Low disk:-CHAN.MASTER=High disk:-LAST CCW=Low disk:XBAO/22=0
@@ -1010,7 +1063,8 @@ steps are the debugger's.
 
 ### `-V, --version`
 
-What this build calls itself, on stdout: the name, the version, the commit
+What this build calls itself, on stdout, the same from `cadr` and `quux`,
+both being one muir: the name, the version, the commit
 it was built from --- with `-dirty` after it where the tree had uncommitted
 work, since the commit alone would name something that was never built ---
 and whether it was built with optimizations off: `muir
@@ -1022,7 +1076,8 @@ report of a run says which muir made it.
 
 ### `-h, --help`
 
-The usage, then every flag with its default.
+The usage, then every flag with its default: the executable's own flags,
+and no other's.
 
 ## Flags in a file
 
@@ -1038,12 +1093,20 @@ is a comment.
 --disk-pack /Users/me/lispm packs/system-100.img
 ```
 
-The file is the one `--config` names, or `.muirrc` in the directory muir was
-run from, or `.muirrc` in the home directory: **the first of the three
-there, not all of them**, so a file beside the work is the whole of a run's
-flags rather than an addition to the home one. A file named with `--config`
-must be there; the two that are looked for need not be, and most runs have
-neither. `MUIR_RC` in the environment names a file in place of the two.
+**Each executable has its own file**: `.cadrrc` for `cadr` and `.quuxrc`
+for `quux`, and neither reads the other's; `.muirrc` is read by neither.
+The file is the one `--config` names, or the executable's own in the
+directory it was run from, or its own in the home directory: **the first of
+the three there, not all of them**, so a file beside the work is the whole
+of a run's flags rather than an addition to the home one. A file named with
+`--config` must be there; the two that are looked for need not be, and most
+runs have neither. `MUIR_RC` in the environment names a file in place of
+the two, for either executable, which is how muir's own tests keep a
+developer's files out of their runs.
+
+A flag of the other machine's in the file is refused as it is on the
+command line, with the file named: `cadr: /Users/me/.cadrrc: --cache is
+quux's, not cadr's`.
 
 It is read before the command line, so **the command line wins**: a flag
 given there replaces the one in the file, and an engine named there replaces
@@ -1056,7 +1119,7 @@ What came from the file is the first thing a run says, so that the lines
 under it are never a mystery.
 
 ```text
-flags: --rtl --terminal, from /Users/me/.muirrc
+flags: --rtl --terminal, from /Users/me/.cadrrc
 engine: rtl
 ```
 
@@ -1212,7 +1275,7 @@ So a machine can be looked at before it has done anything, and started by
 hand:
 
 ```text
-$ muir --micro --no-auto-boot
+$ cadr --micro --no-auto-boot
 engine: micro
 memory: 32 boards, 2 MW
 pack: vendor/run/disk-sys-100-0.img in unit 0
@@ -1241,8 +1304,8 @@ works the machine. Only None security is offered, so a viewer needs no
 password; keep it on the loopback unless you mean to let another machine in.
 
 ```text
-muir                       # then point a viewer at 127.0.0.1:5900
-muir --terminal 5901       # or wherever you say
+cadr                       # then point a viewer at 127.0.0.1:5900
+cadr --terminal 5901       # or wherever you say
 ```
 
 The display is VNC's :0 unless `--terminal` says another, and the start says
@@ -1323,7 +1386,7 @@ sgdisk \
 sgdisk -i 2 quux.img                        # First sector: 4096
 dd if=band.lod of=quux.img bs=512 seek=4096 conv=notrunc
 qemu-img convert -f raw -O vpc -o subformat=dynamic,force_size=on quux.img quux.vhd
-muir --machine quux --disk-pack quux.vhd
+quux --disk-pack quux.vhd
 ```
 
 - **A partition is whole blocks**: 1,024 bytes, two sectors, its first
@@ -1451,7 +1514,7 @@ above it when another muir has that one, and the start says where. The
 machine runs on its own until a debugger connects, in step with it while one
 is on the cable, and on its own again when the debugger is done or goes
 away, listening again; a second debugger while one is on is refused.
-`--debug-cable-connect` in another muir is the debugger, meeting it at
+`--debug-cable-connect` in another `cadr` is the debugger, meeting it at
 `127.0.0.1:7661` unless told otherwise. The listener may be a `--chip`
 machine, and then the netlist board's own DBGIN answers the debugger, an
 event at a time, at the netlist's pace.

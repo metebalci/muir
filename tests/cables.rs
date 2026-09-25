@@ -93,9 +93,9 @@ fn resume(label: &str) -> Option<(Chip, Behavioral, u64)> {
 /// What writes `vendor/run/chk/at-535000.chk`, which no fetch produces:
 /// an ordinary run of the binary, with the System 100 pack fetched, in
 /// about five minutes. `--tv model` because that is the one board this
-/// harness and `muir --chip` differ over, and a checkpoint carries which
+/// harness and `cadr --chip` differ over, and a checkpoint carries which
 /// boards were on the backplane.
-const MAKES_IT: &str = "`cargo run --release -- --chip --tv model --disk-pack \
+const MAKES_IT: &str = "`cargo run --release --bin cadr -- --chip --tv model --disk-pack \
      vendor/run/disk-sys-100-0.img,ro --stop-after 535000 --checkpoint \
      vendor/run/chk/at-535000.chk` writes it, in about five minutes";
 
@@ -112,7 +112,7 @@ const MAKES_IT: &str = "`cargo run --release -- --chip --tv model --disk-pack \
 /// acknowledged within the window, is the same.
 #[test]
 #[ignore = "needs vendor/run/chk/at-535000.chk, which no fetch produces: `cargo run --release \
-            -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
+            --bin cadr -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
             --checkpoint vendor/run/chk/at-535000.chk` writes it, in about five minutes, with the \
             System 100 pack fetched"]
 fn the_first_bus_cycles_cross_the_cables() {
@@ -243,7 +243,7 @@ fn the_first_bus_cycles_cross_the_cables() {
 /// `parity` says of the word beside it.
 #[test]
 #[ignore = "needs vendor/run/chk/at-535000.chk, which no fetch produces: `cargo run --release \
-            -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
+            --bin cadr -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
             --checkpoint vendor/run/chk/at-535000.chk` writes it, in about five minutes, with the \
             System 100 pack fetched"]
 fn the_interface_writes_the_parity_the_boards_are_filled_with() {
@@ -300,7 +300,7 @@ fn the_interface_writes_the_parity_the_boards_are_filled_with() {
 /// sleep.
 #[test]
 #[ignore = "needs vendor/run/chk/at-535000.chk, which no fetch produces: `cargo run --release \
-            -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
+            --bin cadr -- --chip --tv model --disk-pack vendor/run/disk-sys-100-0.img,ro --stop-after 535000 \
             --checkpoint vendor/run/chk/at-535000.chk` writes it, in about five minutes, with the \
             System 100 pack fetched"]
 fn the_optimizations_are_on_the_same_nets_as_the_slow_way() {

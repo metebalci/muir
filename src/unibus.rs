@@ -223,7 +223,7 @@ pub struct Unibus {
     mouse_nets: Option<crate::terminal::cable::MouseNets>,
     mouse_next: Option<u64>,
     /// The far end of the serial port's null-modem cable on J9, if one is
-    /// on it: [`Unibus::plug_serial`], which only `muir --serial` asks
+    /// on it: [`Unibus::plug_serial`], which only `cadr --serial` asks
     /// for. Its frames are timed, like the ether's edges, so it has a next
     /// time of its own. Without it J9 is empty, which is what a CADR with
     /// nothing plugged into its serial port is.
@@ -409,7 +409,7 @@ impl Unibus {
     /// sit with J9 empty, until [`crate::serial::Endpoint`] plugs a device
     /// in.
     ///
-    /// Only `muir --serial` asks for one. A run without it has no far end
+    /// Only `cadr --serial` asks for one. A run without it has no far end
     /// here and pays nothing for the port at all: no rate to read off the
     /// 2651 and no wires to look at on every transition of the board.
     pub fn plug_serial(&mut self, now: u64) {

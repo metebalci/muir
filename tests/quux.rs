@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! QUUX, the evolved CADR, `--machine quux`: where it differs from the CADR,
-//! on both engines that model it.
+//! QUUX, the evolved CADR, the `quux` executable: where it differs from
+//! the CADR, on both engines that model it.
 //!
 //! Its level-1 map entry is six bits, not five: 64 blocks of 32 level-2
 //! entries, so 63 regions of 8K words can be mapped at once, block 77 being

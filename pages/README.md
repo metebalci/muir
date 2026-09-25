@@ -33,7 +33,7 @@ Hand-written files, no build step and no generator:
                   the screenshot in A Lisp Machine, near the top: System 100 at its
                   Lisp Listener, 768 x 963, which is the machine's own frame
                   buffer and the size the page shows it at. Made by starting
-                  `target/release/muir` as step 4 says, waiting for the boot,
+                  `target/release/cadr` as step 4 says, waiting for the boot,
                   and typing `ss` at the prompt; then recompressed, since
                   `Tv::png` writes stored deflate blocks and zlib -9
                   puts the same pixels in 2.4K rather than 93K.

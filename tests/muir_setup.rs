@@ -10,12 +10,12 @@ mod support;
 use std::io::Write;
 use std::process::Stdio;
 
-use support::{Run, Scratch, listening, muir, text};
+use support::{Run, Scratch, cadr, listening, text};
 
 /// **The start says what the run is**, one line a thing, on every engine.
 #[test]
 fn the_start_says_what_the_run_is() {
-    let out = muir().args(["--micro", "--main-memory-boards", "4", "--stop-after", "10"]).run();
+    let out = cadr().args(["--micro", "--main-memory-boards", "4", "--stop-after", "10"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     for line in [
@@ -36,7 +36,7 @@ fn the_start_says_what_the_run_is() {
         assert!(t.contains(line), "{line}:\n{t}");
     }
 
-    let out = muir().args(["--rtl", "--stop-after", "10", "--stop-at", "23731"]).run();
+    let out = cadr().args(["--rtl", "--stop-after", "10", "--stop-at", "23731"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     for line in [
@@ -49,7 +49,7 @@ fn the_start_says_what_the_run_is() {
     }
     assert!(t.contains("pack: "), "the pack, or none:\n{t}");
 
-    let out = muir()
+    let out = cadr()
         .args([
             "--chip",
             "--main-memory",
@@ -83,13 +83,13 @@ fn the_start_says_what_the_run_is() {
 #[test]
 fn the_start_says_whether_the_run_has_a_prompt() {
     const HAS: &str = "^C holds the machine at the prompt; help lists muir's commands";
-    let mut debuggee = muir()
+    let mut debuggee = cadr()
         .args(["--rtl", "--debug-cable-listen", "127.0.0.1:0", "--stop-after", "1000000000"])
         .stdin(Stdio::piped())
         .start();
     let addr = listening(&debuggee);
     let debugger =
-        muir().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "3000"]).start();
+        cadr().args(["--rtl", "--debug-cable-connect", &addr, "--stop-after", "3000"]).start();
     let a = debugger.wait();
     let ta = text(&a);
     assert!(a.status.success(), "{ta}");
@@ -102,7 +102,7 @@ fn the_start_says_whether_the_run_has_a_prompt() {
     let tb = text(&b);
     assert!(b.status.success(), "{tb}");
 
-    let out = muir().args(["--rtl", "--debug-in-process", "--stop-after", "10"]).run();
+    let out = cadr().args(["--rtl", "--debug-in-process", "--stop-after", "10"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(
@@ -113,7 +113,7 @@ fn the_start_says_whether_the_run_has_a_prompt() {
     // The netlist machine with its connector listening has the prompt as
     // the netlist machine alone does, and runs to its stop with nobody on
     // the cable.
-    let out = muir()
+    let out = cadr()
         .args(["--chip", "--main-memory-boards", "1", "--debug-cable-listen", "127.0.0.1:0"])
         .args(["--stop-after", "1"])
         .run();
@@ -131,12 +131,12 @@ fn paths_under_the_run_directory_are_written_relative() {
     let here = std::env::current_dir().unwrap();
     // Under `target/`, the one place in the repository a test may write.
     let dir = Scratch::at(here.join("target").join(format!("muir-rc-{}", std::process::id())));
-    let rc = dir.join(".muirrc");
+    let rc = dir.join(".cadrrc");
     std::fs::write(&rc, "--stop-after 10\n").unwrap();
-    let out = muir().env("MUIR_RC", &rc).args(["--rtl"]).run();
+    let out = cadr().env("MUIR_RC", &rc).args(["--rtl"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
-    let relative = format!("from target/muir-rc-{}/.muirrc", std::process::id());
+    let relative = format!("from target/muir-rc-{}/.cadrrc", std::process::id());
     assert!(t.contains(&relative), "{relative}:\n{t}");
     assert!(!t.contains(&here.display().to_string()), "and not the whole path:\n{t}");
 
@@ -147,9 +147,9 @@ fn paths_under_the_run_directory_are_written_relative() {
             .unwrap()
             .join(format!("muir-rc-{}", std::process::id())),
     );
-    let rc = elsewhere.join(".muirrc");
+    let rc = elsewhere.join(".cadrrc");
     std::fs::write(&rc, "--stop-after 10\n").unwrap();
-    let out = muir().env("MUIR_RC", &rc).args(["--rtl"]).run();
+    let out = cadr().env("MUIR_RC", &rc).args(["--rtl"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains(&format!("from {}", rc.display())), "{t}");
@@ -165,7 +165,7 @@ fn paths_under_the_run_directory_are_written_relative() {
 /// test failing for want of a scheduler rather than for a reason.
 #[test]
 fn info_says_it_again() {
-    let mut child = muir().args(["--micro", "--no-auto-boot"]).stdin(Stdio::piped()).start();
+    let mut child = cadr().args(["--micro", "--no-auto-boot"]).stdin(Stdio::piped()).start();
     let mut stdin = child.stdin();
     writeln!(stdin, "info").unwrap();
     drop(stdin);
@@ -189,13 +189,13 @@ fn info_says_it_again() {
 /// run on the built-in one says that it is.
 #[test]
 fn the_start_says_which_prom_the_machine_runs() {
-    let out = muir().args(["--micro", "--stop-after", "10"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "10"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(t.contains("prom: built in"), "the built-in PROM says so:\n{t}");
 
     let out =
-        muir().args(["--micro", "--prom", "mit/sys/ubin/promh.mcr", "--stop-after", "10"]).run();
+        cadr().args(["--micro", "--prom", "mit/sys/ubin/promh.mcr", "--stop-after", "10"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(
@@ -213,7 +213,7 @@ fn the_start_says_which_prom_the_machine_runs() {
 /// default, so an unpaced run's start has no line about it at all.
 #[test]
 fn the_start_says_when_the_run_is_paced() {
-    let out = muir().args(["--micro", "--pace", "--stop-after", "1"]).run();
+    let out = cadr().args(["--micro", "--pace", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(
@@ -221,7 +221,7 @@ fn the_start_says_when_the_run_is_paced() {
         "micro says what it is held to:\n{t}"
     );
 
-    let out = muir()
+    let out = cadr()
         .args([
             "--chip",
             "--main-memory",
@@ -244,7 +244,7 @@ fn the_start_says_when_the_run_is_paced() {
         "chip says the flag will not bite:\n{t}"
     );
 
-    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    let out = cadr().args(["--micro", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
     assert!(!t.contains("pace:"), "off by default, and the start says nothing:\n{t}");
