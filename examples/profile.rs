@@ -5,7 +5,7 @@
 //!
 //! Boots System 1001's pack (`tools/fetch-system-1001.sh`) on the CADR, and
 //! muir-sys's latest System 1002 band on QUUX (`MUIR_BAND`, or
-//! `ref/band-1002-dev9`), with the test harness's Chaosnet server at OZ,
+//! `ref/band-1002-dev11`), with the test harness's Chaosnet server at OZ,
 //! logs in, defines a set of workloads at the listener and runs them one at
 //! a time, counting every control-store address the engine executes. Each workload ends by writing a marker
 //! file through the FILE service, which is how the run knows it is over:
@@ -30,10 +30,13 @@
 //!
 //! The microcode is whatever the pack's current microload is; `MUIR_UCODE`
 //! names a directory holding another microcode's `ucadr.mcr`, `.tbl` and
-//! `.sym`, which is loaded into MCR2 of the run's copy of the pack, made
-//! current, and served as the error table and read as the symbols. On
-//! QUUX the `ucadr.mcr` is QUUX's, in partition order, and goes into MCR2
-//! as it is; on the CADR it is MIT's, and `diskpack load` puts it there.
+//! `.sym`, which is loaded into the run's copy of the pack and served as the
+//! error table and read as the symbols. On the CADR it is MIT's, and
+//! `diskpack load` puts it into MCR2 and makes MCR2 current. On QUUX it is
+//! QUUX's, in partition order, and is written as it is over the current
+//! microcode partition (GPT attribute bit 48) of the copy: the machine
+//! never writes the GPT and muir does not edit it (contract Q8), so which
+//! partition is current stays the disk's.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -628,28 +631,28 @@ fn profile<E: Profiled>(
     let on_quux = geometry != muir::machine::Geometry::CADR;
     let dir = support::scratch("profile");
     // QUUX runs only System 1002, muir-sys's latest band: `MUIR_BAND`, or
-    // `ref/band-1002-dev9`, its pack and the tree it was built from. The
-    // CADR runs System 1001's release.
+    // `ref/band-1002-dev11`, its GPT disk (a `.vhd`, or a raw `.img`) and
+    // the tree it was built from. The CADR runs System 1001's release.
     let (pack, sources) = if on_quux {
         let band = std::env::var_os("MUIR_BAND").map(PathBuf::from).unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev9")
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11")
         });
-        let file = |suffix: &str| {
+        let file = |suffixes: &[&str]| {
             std::fs::read_dir(&band)
                 .unwrap_or_else(|e| panic!("{}: {e}", band.display()))
                 .map(|e| e.unwrap().path())
-                .find(|p| p.to_string_lossy().ends_with(suffix))
-                .unwrap_or_else(|| panic!("{}: no *{suffix}", band.display()))
+                .find(|p| suffixes.iter().any(|s| p.to_string_lossy().ends_with(s)))
+                .unwrap_or_else(|| panic!("{}: no *{}", band.display(), suffixes.join(" or *")))
         };
         let untar = std::process::Command::new("tar")
             .arg("xzf")
-            .arg(file(".tar.gz"))
+            .arg(file(&[".tar.gz"]))
             .arg("-C")
             .arg(dir.path())
             .status()
             .unwrap();
         assert!(untar.success(), "the band's tree unpacks");
-        (file(".img"), dir.join("release-1002"))
+        (file(&[".vhd", ".img"]), dir.join("release-1002"))
     } else {
         let (Some(pack), Some(sources)) =
             (support::vendor(&["run", "release-1001-pack.img"]), support::vendor(&["system-1001"]))
@@ -658,7 +661,9 @@ fn profile<E: Profiled>(
         };
         (pack, sources)
     };
-    let copy = dir.join("pack.img");
+    // The copy keeps the disk's extension, `.vhd` or `.img`; muir tells a
+    // VHD by its footer either way.
+    let copy = dir.join("pack").with_extension(pack.extension().unwrap_or_default());
     std::fs::copy(&pack, &copy).unwrap();
     let root = dir.join("root");
     let home = root.join("lispm");
@@ -670,24 +675,33 @@ fn profile<E: Profiled>(
     let ucode = std::env::var_os("MUIR_UCODE").map(PathBuf::from);
     let sym_file = match &ucode {
         Some(u) => {
-            let (mut p, _) = Pack::open(&copy);
             if on_quux {
                 // QUUX's `.mcr` is in partition order (contract Q8): the
-                // file's bytes go into the partition as they are, as `dd`
-                // writes them, where `diskpack load` would swap the CADR's.
-                use std::io::{Seek, SeekFrom, Write};
+                // file's bytes go into the current microcode partition as
+                // they are, as `dd` writes them, through muir's disk layer,
+                // which writes a VHD as well as a raw disk.
                 let mcr = std::fs::read(u.join("ucadr.mcr")).unwrap();
-                let label = muir::band::Label::open(&copy).unwrap();
-                let mcr2 = label.partition("MCR2").expect("MCR2");
-                assert!(mcr.len() <= mcr2.blocks as usize * 1024, "the microcode fits MCR2");
-                let mut f = std::fs::OpenOptions::new().write(true).open(&copy).unwrap();
-                f.seek(SeekFrom::Start(mcr2.start as u64 * 1024)).unwrap();
-                f.write_all(&mcr).unwrap();
+                let mut d = muir::disk_image::Disk::open_rw(&copy).unwrap();
+                let part = support::gpt_partitions(&mut d)
+                    .into_iter()
+                    .find(|p| p.current && p.name.starts_with("MCR"))
+                    .expect("a current microcode partition");
+                assert!(mcr.len() <= part.blocks as usize * 1024, "the microcode fits");
+                for (k, block) in mcr.chunks(1024).enumerate() {
+                    let mut words = [0u32; 256];
+                    for (w, b) in words.iter_mut().zip(block.chunks(4)) {
+                        let mut le = [0u8; 4];
+                        le[..b.len()].copy_from_slice(b);
+                        *w = u32::from_le_bytes(le);
+                    }
+                    assert!(d.write_block(part.first + k as u32, &words), "block {k} written");
+                }
             } else {
+                let (mut p, _) = Pack::open(&copy);
                 p.run(Command::Load { partition: "MCR2".into(), file: Some(u.join("ucadr.mcr")) })
                     .unwrap();
+                p.run(Command::Microload("MCR2".into())).unwrap();
             }
-            p.run(Command::Microload("MCR2".into())).unwrap();
             let sys = root.join("sys");
             std::fs::create_dir_all(sys.join("ubin")).unwrap();
             for entry in std::fs::read_dir(sources.join("sys")).unwrap() {

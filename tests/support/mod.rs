@@ -762,6 +762,95 @@ pub fn machine_with_pack(pack: &Path) -> Machine {
     m
 }
 
+/// A partition of QUUX's GPT (contract Q8), in block-disk's 1024-byte
+/// blocks: `first` its first block, `blocks` how many, `name` the GPT name
+/// (the four-character Lisp name, then a space and a comment), `current`
+/// its attribute bit 48.
+#[derive(Clone, Debug)]
+pub struct GptPartition {
+    pub name: String,
+    pub first: u32,
+    pub blocks: u32,
+    pub current: bool,
+}
+
+/// The primary GPT's partitions, read through muir's disk layer. The
+/// fields are UEFI's: the header's `EFI PART` at LBA 1 with the entry
+/// array's LBA at 72, entry count at 80 and entry size at 84; an entry's
+/// type GUID at 0, first and last LBA at 32 and 40, attributes at 48 and
+/// UTF-16LE name at 56. Q8 makes every partition whole blocks, first LBA
+/// even and last odd, which this asserts.
+pub fn gpt_partitions(d: &mut muir::disk_image::Disk) -> Vec<GptPartition> {
+    let le = |b: &[u8], at: usize, n: usize| {
+        b[at..at + n].iter().rev().fold(0u64, |v, &x| v << 8 | x as u64)
+    };
+    let bytes = |d: &mut muir::disk_image::Disk, n: u32| -> Vec<u8> {
+        d.read_block(n).expect("a block of the disk").iter().flat_map(|w| w.to_le_bytes()).collect()
+    };
+    let header = bytes(d, 0)[512..].to_vec();
+    assert_eq!(&header[..8], b"EFI PART", "the GPT header at LBA 1");
+    let (array, count, size) = (le(&header, 72, 8), le(&header, 80, 4), le(&header, 84, 4));
+    let mut table = Vec::new();
+    for n in (array / 2) as u32..=((array * 512 + count * size - 1) / 1024) as u32 {
+        table.extend(bytes(d, n));
+    }
+    let table = &table[(array as usize % 2) * 512..];
+    (0..count as usize)
+        .map(|k| &table[k * size as usize..(k + 1) * size as usize])
+        .filter(|e| e[..16].iter().any(|&b| b != 0))
+        .map(|e| {
+            let (first, last) = (le(e, 32, 8), le(e, 40, 8));
+            assert_eq!((first % 2, last % 2), (0, 1), "whole blocks");
+            let name: Vec<u16> = e[56..128]
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .take_while(|&u| u != 0)
+                .collect();
+            GptPartition {
+                name: String::from_utf16(&name).unwrap(),
+                first: (first / 2) as u32,
+                blocks: ((last + 1 - first) / 2) as u32,
+                current: le(e, 48, 8) >> 48 & 1 == 1,
+            }
+        })
+        .collect()
+}
+
+/// The GPT partition whose Lisp name is `lisp`, the first four characters
+/// of its GPT name.
+pub fn gpt_partition(d: &mut muir::disk_image::Disk, lisp: &str) -> GptPartition {
+    gpt_partitions(d)
+        .into_iter()
+        .find(|p| p.name.get(..4) == Some(lisp))
+        .unwrap_or_else(|| panic!("no {lisp} in the GPT"))
+}
+
+/// MIT's microcode 323, `mit/sys/ubin/ucadr.mcr`, in partition order and
+/// whole blocks: what `dd` writes into a QUUX microcode partition. The
+/// PROM does not care whose microcode it loads, only about its sections.
+pub fn ucadr_323_partition_order() -> Vec<u8> {
+    let mut mcr = muir::mcr::swap_halves(muir::mcr::UCADR_323).unwrap();
+    mcr.resize(mcr.len().div_ceil(1024) * 1024, 0);
+    mcr
+}
+
+/// A GPT disk QUUX's PROM boots, made from committed files:
+/// `data/quux-disk.img`, made by sgdisk with `MCR1` current, with `mcr`
+/// written at `MCR1`'s first block as `dd` writes it, as `pack.img` in
+/// `dir`. Returns the disk and `MCR1`.
+pub fn quux_gpt_disk(dir: &Path, mcr: &[u8]) -> (PathBuf, GptPartition) {
+    let pack = dir.join("pack.img");
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/data/quux-disk.img"), &pack).unwrap();
+    let mcr1 = gpt_partition(&mut muir::disk_image::Disk::open(&pack).unwrap(), "MCR1");
+    assert!(mcr1.current, "MCR1 is the current microcode");
+    assert!(mcr.len() <= mcr1.blocks as usize * 1024, "the .mcr fits MCR1");
+    let mut bytes = std::fs::read(&pack).unwrap();
+    let at = mcr1.first as usize * 1024;
+    bytes[at..at + mcr.len()].copy_from_slice(mcr);
+    std::fs::write(&pack, &bytes).unwrap();
+    (pack, mcr1)
+}
+
 /// Lit pixels in rows `rows` of the screen.
 pub fn lit_rows<E: Engine>(e: &E, rows: std::ops::Range<usize>) -> usize {
     let tv = &e.machine().tv;
@@ -789,8 +878,19 @@ pub fn type_at<E: Engine>(e: &mut E, k: &mut Keyboard, text: &str) {
             k.key(keysym::SHIFT_L, false);
         }
         let mut waited = 0u64;
-        while k.pending() > 0 || e.machine().ioboard.keyboard_ready() {
-            k.deliver(&mut e.machine_mut().ioboard);
+        // QUUX's keyboard is on the register page (contract Q3), the
+        // CADR's on the I/O board.
+        let on_quux = e.machine().geometry.machine_id.is_some();
+        let waiting = |e: &E| {
+            let m = e.machine();
+            if on_quux { m.quux_input.key_waiting() } else { m.ioboard.keyboard_ready() }
+        };
+        while k.pending() > 0 || waiting(e) {
+            if on_quux {
+                k.deliver(&mut e.machine_mut().quux_input);
+            } else {
+                k.deliver(&mut e.machine_mut().ioboard);
+            }
             for _ in 0..1_000 {
                 e.step().expect("halted while typing");
             }

@@ -116,15 +116,25 @@ fn the_cadr_keeps_the_overlay() {
 
 /// Where 36000's `JUMP GO` goes: `GO`, at 36043 since muir-sys's commit
 /// `8e20b4c` put the halts `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040 and
-/// `ERROR-BUFFER-NOT-LOADED` at 36042 before it. `GO` is not in the PROM's
-/// symbol table, `promh.sym`; the hand-over's README gives it, and the
-/// error table `promh.tbl` has the two halts there
+/// `ERROR-BUFFER-NOT-LOADED` at 36042 before it, and still there in the GPT
+/// PROM: the hand-over's symbol table `promh.sym` says `GO I-MEM 36043`
 /// ([`the_built_in_quux_prom_is_the_hand_over`]).
 const GO: u64 = 0o36043;
 
-/// The PROM's last word: `promh.locs` says `(I-MEM 36555)`, the section's
-/// size, so the code is at 36000-36554.
-const LAST: usize = 0o36554;
+/// The PROM's last word: the GPT PROM's `promh.locs` says `(I-MEM 36637)`,
+/// the section's size, so the code is at 36000-36636, and 36636 is its last
+/// halt, `ERROR-ODD-MICR-START`.
+const LAST: usize = 0o36636;
+
+/// The GPT PROM's own halts, after the disk routines, as its `promh.tbl`
+/// and `promh.sym` put them: no GPT header (or its entry array's LBA past
+/// 32 bits), no current microcode partition, and one whose first LBA is
+/// odd.
+const GPT_HALTS: [(u64, &str); 3] = [
+    (0o36632, "ERROR-NO-GPT"),
+    (0o36634, "ERROR-NO-CURRENT-MICR"),
+    (0o36636, "ERROR-ODD-MICR-START"),
+];
 
 /// **A QUUX PROM file is read from 36000, in partition order** (contracts
 /// Q2 and Q8): the assembler writes the control store section from 0, so
@@ -176,11 +186,12 @@ fn quux_s_prom_is_mit_s_promh_changed() {
 }
 
 /// **The built-in QUUX PROM is muir-sys's hand-over, byte for byte**, where
-/// the hand-over (`ref/prom-1000-q8`) is present; and its symbols and error
-/// table put what [`GO`] and [`LAST`] say where they say.
+/// the hand-over (`ref/band-1002-dev11`, the GPT PROM System 1002 dev11 was
+/// built and tested with) is present; and its symbols and error table put
+/// what [`GO`], [`LAST`] and [`GPT_HALTS`] say where they say.
 #[test]
 fn the_built_in_quux_prom_is_the_hand_over() {
-    let handed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/prom-1000-q8");
+    let handed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11");
     let Ok(bytes) = std::fs::read(handed.join("promh.mcr")) else {
         eprintln!("skipped: {} is not present", handed.display());
         return;
@@ -189,11 +200,18 @@ fn the_built_in_quux_prom_is_the_hand_over() {
     let locs = std::fs::read_to_string(handed.join("promh.locs")).unwrap();
     assert!(locs.contains(&format!("(I-MEM {:o})", LAST + 1)), "{locs}");
     let tbl = std::fs::read_to_string(handed.join("promh.tbl")).unwrap();
-    for halt in [
-        "(36016 ERROR-BAD-LABEL)".to_string(),
-        format!("({:o} ERROR-TWO-MAIN-MEM-SECTIONS)", GO - 3),
-        format!("({:o} ERROR-BUFFER-NOT-LOADED)", GO - 1),
-    ] {
-        assert!(tbl.contains(&halt), "{halt} in promh.tbl");
+    let sym = std::fs::read_to_string(handed.join("promh.sym")).unwrap();
+    assert!(sym.contains(&format!("GO I-MEM {GO:o} ")), "GO in promh.sym");
+    let mut halts = vec![
+        (0o36016, "ERROR-BAD-LABEL"),
+        (GO - 3, "ERROR-TWO-MAIN-MEM-SECTIONS"),
+        (GO - 1, "ERROR-BUFFER-NOT-LOADED"),
+    ];
+    halts.extend(GPT_HALTS);
+    for (at, name) in halts {
+        assert!(tbl.contains(&format!("({at:o} {name})")), "{name} at {at:o} in promh.tbl");
+    }
+    for (at, name) in GPT_HALTS {
+        assert!(sym.contains(&format!("{name} I-MEM {at:o} ")), "{name} at {at:o} in promh.sym");
     }
 }

@@ -1338,9 +1338,16 @@ The traps, each measured with qemu-img 10.2.1 and sgdisk 1.0.10:
   is at the end, where it does not probe. muir tells the formats by the
   footer and says which it found.
 
-The boot PROM and the band muir-sys has handed over so far read MIT's label
-in block 0, not a GPT: muir opens the disk above, and they do not boot it;
-the PROM halts at `ERROR-BAD-LABEL`, 36016.
+**Only the GPT PROM may meet a GPT disk.** QUUX's built-in PROM,
+`data/quux-promh.mcr`, is the GPT PROM: it takes the first microcode
+partition carrying bit 48 and writes no block of the disk, and on a disk
+with no GPT it halts at `ERROR-NO-GPT`, 36632
+([QUUX](quux.md#its-boot-prom-in-its-own-addresses)). An older QUUX PROM
+given with `--prom` does not read the GPT, and one that saves page 0 to
+block 1 before it loads anything, as MIT's does, writes over sectors 2 and
+3, the start of the primary GPT's entry array, and breaks the primary table
+(muir-sys, measured). System 1002's band, dev11, is a disk made this way,
+as a dynamic VHD ([QUUX](quux.md#the-disk-file)).
 
 ## The Chaosnet
 
