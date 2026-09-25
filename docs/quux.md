@@ -81,7 +81,7 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 7 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port | |
+| 15:4 | hardware revision: 8 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
@@ -114,12 +114,12 @@ know the size.
 
 ## The feature page
 
-**QUUX lists its sizes in one page of Xbus I/O space**, physical `17377000`
+**QUUX lists its sizes in one page of device registers**, physical `17377000`
 to `17377377` (page 36776), just below the page the display's control
 registers and the disk controller share. It is read-only and read like any
 device register, through the map:
 
-| Word | QUUX, revision 7 |
+| Word | QUUX, revision 8 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -286,24 +286,29 @@ refusal, `ILONG`'s ticks, the grid, the divider's hold and a checkpoint;
 `system_1002_runs_at_its_ticks` in `tests/system_1002.rs` System 1002 at
 four ticks and at three.
 
-## The memory port
+## The memory port and the device registers
 
-**QUUX's main memory is on the processor's own port** (contract Q6,
-revision 7), not on the Xbus. The address space is main memory and the
-Xbus; a cycle to main memory goes through the cache to the memory
-controller, and one to any other address is an Xbus cycle, to a device ---
-the display, block-disk, the feature and register page --- or, where
-nothing answers, a timeout. QUUX has no bus interface: nothing is left for
-one to do, the Unibus gone (Q5) and the processor the only requester. The
-CADR keeps its own. The boot PROM is not in the address space: it is in the
+**QUUX's main memory and its frame buffer are on the processor's own
+port**, the memory bus (contract Q6, revision 7; the frame buffer from Q7,
+revision 8), and **its devices are reached by their registers alone**
+(contract Q7, revision 8): there is no Xbus and no bus in its place. A
+cycle to main memory or the frame buffer goes through the cache to the
+memory controller; one to a device register goes to the processor's
+register decode; one to any other address fails at once. QUUX has no bus
+interface: the Unibus is gone (Q5) and the processor is the only
+requester. Devices move bulk data to and from memory themselves ---
+block-disk's transfers, the display reading its buffer --- and carry
+control and small data in their registers. The CADR keeps its Xbus, Unibus
+and bus interface. The boot PROM is not in the address space: it is in the
 control store (Q2).
 
 | | |
 |---|---|
 | Main memory | 380 ns a line fill and 290 ns a write (`MemoryTiming::NOMINAL`, the DE25-Nano's, the slower board's), one operation at a time, no setup, deskew or refresh; a floor, a board slower on an access waiting. `--memory-timing <read>,<write>`, `arty` or `de25` sets others, on `rtl` |
+| The frame buffer | `17000000` up to MONO TV's buffer's end: on the memory bus with main memory, cached. The software reads it back (`BITBLT` combines with the destination, scrolling copies), and the display only reads it, which a write-through cache keeps current |
 | The cache | always fitted: 4K words (`--cache <words>` another size) |
-| An Xbus device | answers `busint::SETUP_NS`, 80 ns, after the request, a read deskewed 60 ns more, as a CADR Xbus slave; never cached |
-| Nothing there | a timeout as the CADR's, the free-running oscillator's first rise after the grant and 4,250 ns, word 101's Xbus NXM bit set. Past main memory's end is nothing: a write there does not read back, which the microcode's memory-size probe, `MEM-SIZE-LOOP` in `uc-cold-disk.lisp`, relies on |
+| A device register | MONO TV's at `17377760`, block-disk's at `17377774`, the feature and register page at `17377000`: never cached, taken at the edge and answered a microcycle on, two microcycles in all |
+| Nothing there | past main memory's or the frame buffer's end, between the registers, the old Unibus window: fails at once, in the microcycle, reading 0 and setting word 101's NXM bit, with no timeout. A write there does not read back, which the microcode's memory-size probe, `MEM-SIZE-LOOP` in `uc-cold-disk.lisp`, relies on; nothing in System 1002 depends on how long a failed access takes (muir-sys, read) |
 | Block-disk | its words move at START, and the cache is invalidated; a transfer reads the processor's writes made before START and, after DONE, no read hits a word from before it |
 
 The bus interface's registers all have homes on QUUX already: the
@@ -312,15 +317,18 @@ interrupt control word 100 and the error status word 101 (Q2); the Unibus
 map is gone (Q5).
 
 `tests/quux_memory_port.rs` holds the port in place of the bus interface,
-a miss's line fill against a hit, the Xbus never cached, nothing past main
-memory's end reading back on both engines, the disk's write never hit
-stale, and a checkpoint; `quux_s_memory_port_and_its_timing` in
-`tests/cli.rs` the flag and the start's report.
+a miss's line fill against a hit, a register never cached, nothing past
+main memory's end reading back on both engines, the disk's write never hit
+stale, and a checkpoint; `tests/quux_device_registers.rs` a register a
+microcycle longer than nothing, every empty range failing at once on both
+engines, and the frame buffer through the cache;
+`quux_s_memory_port_and_its_timing` in `tests/cli.rs` the flag and the
+start's report.
 
 ## The memory cache
 
 **QUUX's memory cache** (H2) is unified and write-through, in front of main
-memory, by physical address after the map. The Xbus is not cached. In muir it is `rtl`'s, and
+memory and the frame buffer, by physical address after the map. Device registers are not cached. In muir it is `rtl`'s, and
 it holds tags only: `rtl` takes a word from main memory as a cycle ends,
 and a write-through cache never holds a word memory does not, so the cache
 changes when a cycle is answered and never what it reads.
@@ -492,14 +500,14 @@ boards being refused on QUUX, and refused on the CADR.
 | Pixel | pixel `x` of line `y` is bit `x mod 32` of word `40 y + x / 32` (at the default size), the low bit leftmost, as on the CADR's TV |
 | Mode register, `17377760` | bit 2, black-on-white, reads back; every other bit reads 0 and a write of it is dropped |
 | Register 4, `17377764` | the color map's write, kept for a color display to come: answers, reads 0, and takes no writes yet |
-| Registers 1 to 3 and 5 to 7 | not there: the CADR's sync program and three that did nothing. An access times out and sets the Xbus NXM bit |
+| Registers 1 to 3 and 5 to 7 | not there: the CADR's sync program and three that did nothing. An access fails at once and sets the NXM bit |
 | Interrupt | none |
 
 **Its size is muir's to choose**, `--mono-tv-size <width>x<height>`: the width
 a multiple of 32, and at most **1920 by 1080**, the largest QUUX supports
 (`a_size_is_checked` in `tests/mono_tv.rs`). That is 64,800 words, below the
 color TV's buffer at `17200000` and well below the feature page at
-`17377000`, the most the Xbus I/O space leaves (130,560 words). The feature page's
+`17377000`, the most the address space leaves below the registers (130,560 words). The feature page's
 words 11 to 13 give the size to the software. The table above is the default
 size.
 
@@ -514,7 +522,7 @@ its lines is spread over parts of several. On QUUX's microcode 1000 with the
 tick (`ref/ucode-1000-quux4`) the band reaches its listener on `micro` in
 136 M microcycles, as on the CADR's board, measured by reading the rows the
 listener draws in at 24 words a line; its writes of the sync program's
-registers time out and leave the Xbus NXM bit set, and nothing stops over
+registers fail and leave the NXM bit set, and nothing stops over
 it. System 1002 sizes the main screen from the feature page's words 11 to 13,
 and draws it right: muir-sys's development band (`ref/band-1002-dev2`,
 muir-sys `5427570`, microcode 1000 for revision 4, no sync program and no
@@ -562,7 +570,7 @@ QUUX runs only muir-sys's latest System 1002 band. The PROMs assembled at
 ## The register page
 
 **QUUX's registers share the feature page**, `17377000`-`17377377` (revision
-6, contract Q2): the Xbus I/O space is full, pages 36000-36775 being the
+6, contract Q2): the address space below it is full, pages 36000-36775 being the
 largest MONO TV buffer and 36777 the display's and disk's registers.
 
 | Word | |
@@ -607,8 +615,8 @@ terminal's delivery, the boot word, a checkpoint and both engines' reads.
 
 **QUUX has no Unibus** (contract Q5). Every address of the CADR's Unibus
 window, physical page 37000 and up, answers nothing on QUUX: a read or a
-write times out as an empty Xbus address does, the Xbus NXM bit set in word
-101, and changes nothing. With it go, on QUUX, the I/O board (its keyboard,
+write fails as any empty address does, at once since Q7, the NXM bit set in
+word 101, and changes nothing. With it go, on QUUX, the I/O board (its keyboard,
 mouse, clocks and Chaosnet interface now QUUX's own, contracts Q1-Q4; its
 serial port and general-purpose register dropped), the bus interface's
 Unibus side (the adapter, the Unibus map, its buffers, WRITE-THROUGH, the
@@ -622,7 +630,7 @@ keeps all of it: CC and the two-machine lashup are its acceptance test.
 
 muir-sys's microcode for Q5 makes no Unibus access over a boot and a while
 at the listener, counted on `micro`. `tests/quux_no_unibus.rs` holds the
-window's timeouts on the machine and through both engines' bus, the Unibus
+window's failures on the machine and through both engines' bus, the Unibus
 interrupt not reaching QUUX, and the CADR's Unibus unchanged;
 `quux_has_no_debug_cable` in `tests/cli.rs` the cable.
 

@@ -1,25 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! QUUX's memory port (contract Q6, revision 7), in place of the CADR's bus
-//! interface ([`crate::busint`]), as `rtl` times it.
+//! QUUX's memory port (contract Q6, revision 7) and register decode
+//! (contract Q7, revision 8), in place of the CADR's bus interface
+//! ([`crate::busint`]), as `rtl` times them.
 //!
-//! The processor's cycle goes one of two ways, by its physical address:
+//! The processor's cycle goes one of three ways, by its physical address:
 //!
-//! - **Main memory**, through the cache ([`crate::cache`], always fitted on
-//!   QUUX) to the memory controller. A read hit is answered after the
-//!   cache's hit time; a miss fills its line in [`MemoryTiming::read_ns`]
-//!   and a write takes [`MemoryTiming::write_ns`], one operation at a time,
-//!   the write buffer acknowledging a write after the hit time and running
-//!   it behind the processor. No memory boards, no Xbus setup or deskew, no
-//!   refresh. The nominal timing is a floor: a board slower on an access
-//!   waits, muir answers at it.
-//! - **The Xbus**, which holds only devices, never cached: the display,
-//!   block-disk, the feature and register page. A device answers as an Xbus
-//!   slave does on the CADR --- [`busint::SETUP_NS`] after the request, a
-//!   read deskewed [`busint::XBUS_ACK_NS`] more --- and an address nothing
-//!   answers, past main memory's end or in the old Unibus window among
-//!   them, times out as the CADR's does ([`busint::nxm_timeout_at`]).
+//! - **The memory bus**: main memory, and the frame buffer (Q7), through
+//!   the cache ([`crate::cache`], always fitted on QUUX) to the memory
+//!   controller. A read hit is answered after the cache's hit time; a miss
+//!   fills its line in [`MemoryTiming::read_ns`] and a write takes
+//!   [`MemoryTiming::write_ns`], one operation at a time, the write buffer
+//!   acknowledging a write after the hit time and running it behind the
+//!   processor. No memory boards, no setup or deskew, no refresh. The
+//!   nominal timing is a floor: a board slower on an access waits, muir
+//!   answers at it.
+//! - **A device register**, never cached: the display's, block-disk's, the
+//!   feature and register page. There is no bus: the register decode takes
+//!   the cycle at the edge and answers it a microcycle on, a register
+//!   access taking two microcycles in all.
+//! - **Nothing**, past main memory's or the frame buffer's end, between the
+//!   registers, or in the old Unibus window: a decode miss, failing at
+//!   once, with the NXM bit. No timeout.
 //!
 //! There is nothing to arbitrate: the processor is the only requester in
 //! muir. Block-disk moves its words at START, which its contract allows,
@@ -28,7 +31,7 @@
 //! The words themselves come from [`crate::machine::Machine`], as with the
 //! bus interface; the port says only when.
 
-use crate::busint::{self, Ack, Responder};
+use crate::busint::{Ack, Responder};
 use crate::cache::{Cache, CacheConfig, MemoryTiming};
 use crate::clock::TimingModel;
 
@@ -146,12 +149,14 @@ impl MemoryPort {
         let (at, timed_out) = if self.memory {
             (self.memory_cycle(now), false)
         } else if responder == Responder::Device {
-            let answered = now + busint::SETUP_NS + busint::IDEAL_DEVICE_NS;
-            let ack = if self.write { answered } else { answered + busint::XBUS_ACK_NS };
-            self.state = State::Granted { ack, answered, timed_out: false };
+            // A device register (contract Q7): taken at this edge, and
+            // answered a microcycle on, with no setup or deskew.
+            let cycle = self.model.cycle_ns(crate::clock::Speed::Normal, false) as u64;
+            self.state = State::Granted { ack: now + cycle, answered: now, timed_out: false };
             return;
         } else {
-            (self.model.free_running(busint::nxm_timeout_at(now)), true)
+            // Nothing there: a decode miss, failing at once.
+            (now, true)
         };
         self.state = State::Granted { ack: at, answered: at, timed_out };
     }
