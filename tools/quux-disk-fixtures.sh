@@ -15,15 +15,16 @@
 # so that sgdisk's part of this makes the same bytes every time; the VHD
 # footers carry qemu's timestamp and a random UUID, which differ.
 #
+# There is no TEMP partition: Q8 has none, and its type GUID is retired.
+#
 # What goes where, in sectors:
 #
-#   1 TEMP  2048-2175   empty
-#   2 MCR1  2176-2687   blocks 0-19 "MCR1 block 0000 " ...; current (bit 48)
-#   3 MCR2  2688-3199   blocks 0-3  "MCR2 block 0000 " ...
-#   4 LOD1  3200-5247   blocks 0-63 "LOD1 block 0000 " ...; current (bit 48)
-#   5 LOD2  5248-7295   empty; a comment of the full 31 characters
-#   6 PAGE  7296-9343   empty
-#   7 FILE  9344-16349  empty
+#   1 MCR1  2048-2559   blocks 0-19 "MCR1 block 0000 " ...; current (bit 48)
+#   2 MCR2  2560-3071   blocks 0-3  "MCR2 block 0000 " ...
+#   3 LOD1  3072-5119   blocks 0-63 "LOD1 block 0000 " ...; current (bit 48)
+#   4 LOD2  5120-7167   empty; a comment of the full 31 characters
+#   5 PAGE  7168-9215   empty
+#   6 FILE  9216-16349  empty
 #
 # so everything written is in the VHD's first 2 MiB block, the backup GPT
 # is in its last, and the two between are left unallocated in the dynamic
@@ -49,21 +50,19 @@ microcode=9e318cf5-a95b-4b3b-b2ad-9ae306b0e2da
 band=a3b30470-c5d4-41c1-87a8-d26590424cb8
 page=4652bea5-06af-4bd9-b2bb-3541370151c8
 file=7afa9532-75de-409f-8dc8-fef9763511d5
-temp=445976f2-34e4-4583-b750-75d28a080cba
 
 "$qemu_img" create -q -f raw "$raw" 8M
 sgdisk -a 2 -U 00000000-0000-4000-8000-000000000000 \
-    -n 1:2048:2175 -t 1:$temp -c 1:"TEMP" -u 1:00000000-0000-4000-8000-000000000001 \
-    -n 2:2176:2687 -t 2:$microcode -c 2:"MCR1 UCADR 1000" -A 2:set:48 \
+    -n 1:2048:2559 -t 1:$microcode -c 1:"MCR1 UCADR 1000" -A 1:set:48 \
+    -u 1:00000000-0000-4000-8000-000000000001 \
+    -n 2:2560:3071 -t 2:$microcode -c 2:"MCR2 UCADR 999" \
     -u 2:00000000-0000-4000-8000-000000000002 \
-    -n 3:2688:3199 -t 3:$microcode -c 3:"MCR2 UCADR 999" \
+    -n 3:3072:5119 -t 3:$band -c 3:"LOD1 System 1002.1" -A 3:set:48 \
     -u 3:00000000-0000-4000-8000-000000000003 \
-    -n 4:3200:5247 -t 4:$band -c 4:"LOD1 System 1002.1" -A 4:set:48 \
+    -n 4:5120:7167 -t 4:$band -c 4:"LOD2 A comment that is 31 characters" \
     -u 4:00000000-0000-4000-8000-000000000004 \
-    -n 5:5248:7295 -t 5:$band -c 5:"LOD2 A comment that is 31 characters" \
-    -u 5:00000000-0000-4000-8000-000000000005 \
-    -n 6:7296:9343 -t 6:$page -c 6:"PAGE" -u 6:00000000-0000-4000-8000-000000000006 \
-    -n 7:9344:16349 -t 7:$file -c 7:"FILE" -u 7:00000000-0000-4000-8000-000000000007 \
+    -n 5:7168:9215 -t 5:$page -c 5:"PAGE" -u 5:00000000-0000-4000-8000-000000000005 \
+    -n 6:9216:16349 -t 6:$file -c 6:"FILE" -u 6:00000000-0000-4000-8000-000000000006 \
     "$raw" >/dev/null
 
 # Each block of a filled partition says what it is, sixteen bytes
@@ -79,9 +78,9 @@ fill() { # name blocks first-sector
     done > "$work/$1.part"
     dd if="$work/$1.part" of="$raw" bs=512 seek="$3" conv=notrunc status=none
 }
-fill MCR1 20 2176
-fill MCR2 4 2688
-fill LOD1 64 3200
+fill MCR1 20 2048
+fill MCR2 4 2560
+fill LOD1 64 3072
 sgdisk -v "$raw" | grep -q 'No problems found' || { sgdisk -v "$raw" >&2; exit 1; }
 
 cp "$raw" "$data/quux-disk.img"
@@ -95,9 +94,9 @@ cp "$raw" "$work/grown.img"
 for f in "vpc $work/grown.vhd" "raw $work/grown.img"; do
     set -- $f
     "$qemu_io" -f "$1" \
-        -c "write -P 0x4c $((5248 * 512)) 1024" \
-        -c "write -P 0x50 $((7296 * 512)) 4096" \
-        -c "write -P 0x46 $((9344 * 512)) 8192" \
+        -c "write -P 0x4c $((5120 * 512)) 1024" \
+        -c "write -P 0x50 $((7168 * 512)) 4096" \
+        -c "write -P 0x46 $((9216 * 512)) 8192" \
         "$2" >/dev/null
 done
 cp "$work/grown.vhd" "$data/quux-disk-dynamic-grown.vhd"

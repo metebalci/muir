@@ -572,6 +572,113 @@ fn quux_s_prom_is_assembled_at_36000() {
     refused_saying(&["--rtl", "--machine", "quux", "--prom", mits], "the file is in MIT's order");
 }
 
+/// A pack QUUX's PROM boots: a T-300 label of MIT's own layout with MIT's
+/// microcode 323, `mit/sys/ubin/ucadr.mcr`, in partition order at `MCR1`'s
+/// first block, as `dd` writes it. The PROM finds the microcode through
+/// the label and does not care whose it is.
+fn quux_pack(dir: &Path) -> PathBuf {
+    use muir::band::{self, Label};
+    let pack = dir.join("pack.img");
+    Label::initialize(&pack, &band::T300).write().unwrap();
+    let mut mcr = muir::mcr::swap_halves(muir::mcr::UCADR_323).unwrap();
+    mcr.resize(mcr.len().div_ceil(1024) * 1024, 0);
+    let mcr1 = Label::open(&pack).unwrap().partition("MCR1").unwrap().start;
+    let mut bytes = std::fs::read(&pack).unwrap();
+    let at = mcr1 as usize * 1024;
+    bytes[at..at + mcr.len()].copy_from_slice(&mcr);
+    std::fs::write(&pack, &bytes).unwrap();
+    pack
+}
+
+/// The PC a run ended at and after how many microcycles, from its last
+/// word: `stopped at PC <pc>[ in the PROM] after <n>` or `ran out at <n>;
+/// PC <pc>[ in the PROM]`.
+fn ended_at(t: &str) -> (u16, bool, u64) {
+    let line = t
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("stopped at PC") || l.starts_with("ran out at"))
+        .unwrap_or_else(|| panic!("no end said:\n{t}"));
+    let in_prom = line.contains(" in the PROM");
+    let words: Vec<&str> = line.split([' ', ';']).filter(|w| !w.is_empty()).collect();
+    let after = |w: &str| words[words.iter().position(|x| *x == w).unwrap() + 1];
+    let pc = u16::from_str_radix(after("PC"), 8).unwrap();
+    let n = if line.starts_with("stopped") { after("after") } else { after("at") };
+    (pc, in_prom, n.parse().unwrap())
+}
+
+/// **`--stop-at` and `--stop-at-prom` mean on QUUX what they mean on the
+/// CADR**: the manual's "Stop when the PC reaches this address with the
+/// boot PROM disabled: in microcode loaded into the control store", and
+/// "the same with the PROM enabled: an address in the boot PROM". The
+/// CADR's PROM lies over control store 0 until `PROMDISABLE`; QUUX's has
+/// addresses of its own, 36000-37777, and is never disabled (contract Q2).
+/// So on QUUX `--stop-at` is the microcode's PC outside those, and
+/// `--stop-at-prom` a PC inside them, given as the control-store address
+/// the PC holds, 36043 and not 43, as on the CADR, whose PROM is at 0.
+///
+/// A stop at the microcode's 6 is where the PROM jumps when it is done:
+/// the next microcycle is the microcode's too. `rtl` passes 6 earlier,
+/// while the PROM clears the control store, a write taking its address
+/// through the PC and the PROM running on after it; that is not the
+/// microcode reaching 6.
+#[test]
+fn quux_s_stops_are_the_microcode_s_and_the_prom_s() {
+    // Inside the PROM, and outside it, each refused where it cannot fire.
+    for pc in ["6", "43", "35777"] {
+        refused_saying(
+            &["--machine", "quux", "--stop-at-prom", pc],
+            &format!("--stop-at-prom {pc} is not in QUUX's boot PROM, 36000-37777"),
+        );
+    }
+    refused_saying(
+        &["--machine", "quux", "--stop-at", "36043"],
+        "--stop-at 36043 is in QUUX's boot PROM, 36000-37777: --stop-at-prom",
+    );
+    refused_saying(&["--stop-at-prom", "36043"], "--stop-at-prom wants a PC in octal, below 1000");
+
+    let dir = scratch("quux-stops");
+    let pack = quux_pack(&dir);
+    for engine in ["--micro", "--rtl"] {
+        // `36000` is `JUMP GO`, and `GO` is at `36043`.
+        let out = muir()
+            .args([engine, "--machine", "quux", "--stop-after", "100", "--stop-at-prom", "36043"])
+            .run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}:\n{t}");
+        assert!(t.contains("stopped at PC 36043 in the PROM after "), "{engine}:\n{t}");
+
+        let copy = dir.join(format!("{engine}.img"));
+        std::fs::copy(&pack, &copy).unwrap();
+        let run = |stops: &[&str]| {
+            let out = muir()
+                .args([engine, "--machine", "quux", "--disk-pack", copy.to_str().unwrap()])
+                .args(stops)
+                .run();
+            let t = text(&out);
+            assert!(out.status.success(), "{engine}:\n{t}");
+            (ended_at(&t), t)
+        };
+        let ((pc, in_prom, n), t) = run(&["--stop-after", "5000000", "--stop-at", "6"]);
+        assert_eq!((pc, in_prom), (6, false), "{engine}: stopped at the microcode's 6:\n{t}");
+        assert!(t.contains(&format!("stopped at PC 6 after {n}\n")), "{engine}:\n{t}");
+        eprintln!("{engine}: at the microcode's 6 after {n} microcycles");
+        // One microcycle on, the PC is still the microcode's: the PROM
+        // is done.
+        std::fs::copy(&pack, &copy).unwrap();
+        let ((next, in_prom, m), t) = run(&["--stop-after", &(n + 1).to_string()]);
+        assert_eq!(m, n + 1, "{engine}:\n{t}");
+        assert!(next < 0o36000 && !in_prom, "{engine}: after 6, PC {next:o}:\n{t}");
+    }
+
+    // The same on the CADR: MIT's PROM never runs its 400, but `rtl`'s PC
+    // passes 400 while the PROM clears the control store, 412,631
+    // microcycles in (measured), and that stops nothing.
+    let out = muir().args(["--rtl", "--stop-after", "500000", "--stop-at-prom", "400"]).run();
+    let t = text(&out);
+    assert!(t.contains("stop not reached in 500000"), "{t}");
+}
+
 /// **QUUX has no debug cable** (contract Q5): the cable is a Unibus master
 /// and QUUX has no Unibus, so a QUUX run has no DBGIN connector and says
 /// so, and the cable's flags and the lashup are refused on it.

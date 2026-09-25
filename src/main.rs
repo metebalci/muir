@@ -244,12 +244,15 @@
 //!
 //! A run goes on until a stop, a halt or ^C. `--stop-after` ends it after
 //! that many microcycles, `--stop-at` when the PC reaches an address with
-//! the boot PROM disabled, `--stop-at-prom` with it enabled --- the PROM and
-//! the control store share their low addresses, so a PC alone names two
-//! places. Addresses are octal, as MIT writes them, and whichever stop
-//! comes first wins. The rate reported at the end is over the whole run,
-//! and past the boot the work is cheaper, so a longer run reports a higher
-//! one.
+//! the boot PROM disabled, `--stop-at-prom` with it enabled --- the CADR's
+//! PROM and control store share their low addresses, so a PC alone names
+//! two places. QUUX's PROM is never disabled and has addresses of its own,
+//! 36000-37777: there `--stop-at` is a PC outside them, `--stop-at-prom` a
+//! PC inside them, given as the control-store address. A PC holding a
+//! control-store write's address stops neither. Addresses are octal, as
+//! MIT writes them, and whichever stop comes first wins. The rate reported
+//! at the end is over the whole run, and past the boot the work is
+//! cheaper, so a longer run reports a higher one.
 //!
 //! The boot PROM is MIT's own `mit/sys/ubin/promh.mcr`, so nothing here
 //! needs `vendor/`. `--prom` runs another one instead, out of an MCR
@@ -1399,9 +1402,10 @@ A simulator of the MIT CADR Lisp Machine.
   --stop-at <pc>               stop when the PC reaches this address with
                                the boot PROM disabled: in microcode loaded
                                into the control store. Octal, as MIT writes
-                               it.
+                               it. On QUUX, outside its PROM's 36000-37777.
   --stop-at-prom <pc>          the same with the PROM enabled: an address in
-                               the boot PROM, below 1000. With --stop-after,
+                               the boot PROM, below 1000 on the CADR, in
+                               36000-37777 on QUUX. With --stop-after,
                                whichever comes first.
   --terminal [<endpoint>]      where the display, keyboard and mouse are
                                served over RFB, RFC 6143, for any VNC viewer
@@ -2214,15 +2218,22 @@ struct Stop {
 }
 
 impl Stop {
-    /// Whether the PC, with the PROM as it is, is where the run stops.
-    fn reached(&self, pc: u16, prom_enabled: bool) -> bool {
-        if prom_enabled { self.at_prom == Some(pc) } else { self.at == Some(pc) }
+    /// Whether the PC, with the PROM as it is, is where the run stops. A PC
+    /// that holds a control-store write's address is not where the program
+    /// is ([`Engine::pc_is_a_write`]) and stops nothing.
+    fn reached(&self, (pc, prom_enabled, a_write): (u16, bool, bool)) -> bool {
+        !a_write && if prom_enabled { self.at_prom == Some(pc) } else { self.at == Some(pc) }
     }
 
     /// Says how the run ended, after the rate.
-    fn conclude(&self, ran: u64, pc: u16, prom_enabled: bool, halt: Option<muir::machine::Halt>) {
+    fn conclude(
+        &self,
+        ran: u64,
+        (pc, prom_enabled, a_write): (u16, bool, bool),
+        halt: Option<muir::machine::Halt>,
+    ) {
         let prom = if prom_enabled { " in the PROM" } else { "" };
-        if self.reached(pc, prom_enabled) {
+        if self.reached((pc, prom_enabled, a_write)) {
             println!("       stopped at PC {pc:o}{prom} after {ran}");
         } else if let Some(h) = halt {
             println!("       stopped after {ran}: {h:?}");
@@ -2237,6 +2248,13 @@ impl Stop {
             println!("       ran out at {ran}; PC {pc:o}{prom}");
         }
     }
+}
+
+/// Where an engine's PC is, for [`Stop`]: the PC, whether it is the
+/// PROM's ([`muir::machine::Machine::in_prom`]), and whether it is a
+/// control-store write's ([`Engine::pc_is_a_write`]).
+fn stop_pc<E: Engine>(e: &E) -> (u16, bool, bool) {
+    (e.pc(), e.machine().in_prom(e.pc()), e.pc_is_a_write())
 }
 
 /// The lashup in one process: this machine, the debugger, with the
@@ -2277,7 +2295,7 @@ fn time_lashup(
     let mut interrupts_seen = 0;
     loop {
         let e = &lashup.debugger;
-        if ran >= stop.after || stop.reached(e.pc(), !e.machine().mode.prom_disable) {
+        if ran >= stop.after || stop.reached(stop_pc(e)) {
             break;
         }
         if interrupted(&mut interrupts_seen) {
@@ -2336,13 +2354,13 @@ fn time_lashup(
     }
     report("rtl, debugger", ran, t.elapsed().as_secs_f64(), muir::ioboard::CYCLE_NS);
     let e = &lashup.debugger;
-    stop.conclude(ran, e.pc(), !e.machine().mode.prom_disable, halt);
+    stop.conclude(ran, stop_pc(e), halt);
     println!(
         "       debuggee: {b_cycles} microcycles to {} ns, PC {:o}{}; debugger {a_cycles} to {} ns; \
          {} debug cycles on the cable",
         lashup.debuggee.ns(),
         lashup.debuggee.pc(),
-        if lashup.debuggee.machine().mode.prom_disable { "" } else { " in the PROM" },
+        if lashup.debuggee.machine().in_prom(lashup.debuggee.pc()) { " in the PROM" } else { "" },
         lashup.debugger.ns(),
         lashup.debugger.debug_cycles()
     );
@@ -2567,10 +2585,7 @@ fn time_fabric(
     let mut ran = 0;
     let mut hold = Hold::open(false);
     catch_interrupts();
-    while !hold.quit
-        && ran < stop.after
-        && !stop.reached(run.debugger.pc(), !run.debugger.machine().mode.prom_disable)
-    {
+    while !hold.quit && ran < stop.after && !stop.reached(stop_pc(&run.debugger)) {
         if hold.on {
             std::thread::sleep(TERMINAL_INTERVAL / 4);
         } else {
@@ -2933,10 +2948,10 @@ impl Hold {
     /// stop came.
     fn conclude<E: Engine>(&self, e: &E, stop: &Stop, ran: u64, halt: Option<muir::machine::Halt>) {
         if self.quit {
-            let prom = if e.machine().mode.prom_disable { "" } else { " in the PROM" };
+            let prom = if e.machine().in_prom(e.pc()) { " in the PROM" } else { "" };
             println!("       quit at PC {:o}{prom} after {ran}", e.pc());
         } else {
-            stop.conclude(ran, e.pc(), !e.machine().mode.prom_disable, halt);
+            stop.conclude(ran, stop_pc(e), halt);
         }
     }
 }
@@ -2989,10 +3004,7 @@ fn time_engine<S: Stepper>(
     let mut color_capture = color_capture.map(|(path, time)| (path, ColorRecorder::new(time)));
     let mut hold = Hold::open(held);
     catch_interrupts();
-    while !hold.quit
-        && ran < stop.after
-        && !stop.reached(s.engine().pc(), !s.engine().machine().mode.prom_disable)
-    {
+    while !hold.quit && ran < stop.after && !stop.reached(stop_pc(s.engine())) {
         if hold.on {
             std::thread::sleep(TERMINAL_INTERVAL / 4);
         } else {
@@ -3249,7 +3261,7 @@ fn interrupted(seen: &mut u32) -> bool {
 /// machine is.
 fn say_pc<E: Engine>(e: &E, ran: u64) {
     let m = e.machine();
-    let prom = if m.mode.prom_disable { "" } else { " in the PROM" };
+    let prom = if m.in_prom(e.pc()) { " in the PROM" } else { "" };
     println!("PC {:o}{prom}; {} microcycles, {} ns; {ran} this run", e.pc(), m.cycles, m.ns);
 }
 
@@ -4247,7 +4259,13 @@ fn time_chip(
     let mut asks_seen = 0;
     while !quit && ran < stop.after && {
         let c = &end.machine().cpu;
-        !stop.reached(c.read(&pc_nets) as u16, prom_enabled(c))
+        // `IWRITED` is not read here, so a PC holding a control-store
+        // write's address is taken for the program's, as `rtl`'s is not
+        // (`Engine::pc_is_a_write`). The board's PC nets do pass the
+        // write's address: `--chip --stop-at-prom 400` on MIT's PROM stops
+        // 412,629 microcycles in, while the PROM clears the control store,
+        // where `rtl` and `micro` run on (measured).
+        !stop.reached((c.read(&pc_nets) as u16, prom_enabled(c), false))
     } {
         // Microcycles this turn: one at most on its own, where a turn is a
         // transition of the boards; as many as the debugger's promise
@@ -4580,7 +4598,7 @@ fn time_chip(
             let prom = if prom_enabled(c) { " in the PROM" } else { "" };
             println!("       quit at PC {:o}{prom} after {ran}", c.read(&pc_nets) as u16);
         } else {
-            stop.conclude(ran, c.read(&pc_nets) as u16, prom_enabled(c), None);
+            stop.conclude(ran, (c.read(&pc_nets) as u16, prom_enabled(c), false), None);
         }
     }
     // A debugger on the cable is told the run is over and waited for, as
@@ -5131,8 +5149,13 @@ fn main() {
             }
             (None, "--stop-at-prom") => {
                 match args.next().and_then(|v| u16::from_str_radix(&v, 8).ok()) {
-                    Some(pc) if pc < 512 => stop_at_prom = Some(pc),
-                    _ => usage("--stop-at-prom wants a PC in octal, below 1000"),
+                    // Which PCs are the PROM's is the machine's, known
+                    // once every flag is read.
+                    Some(pc) if pc < 1 << 14 => stop_at_prom = Some(pc),
+                    _ => usage(
+                        "--stop-at-prom wants a PC in octal: below 1000 on the CADR, \
+                         36000-37777 on QUUX",
+                    ),
                 }
             }
             (None, v) => usage(&format!("unknown argument {v}")),
@@ -5140,6 +5163,33 @@ fn main() {
     }
 
     let which = which.unwrap_or(Which::Rtl);
+    // A stop where the PC can never be is refused rather than run out.
+    // The CADR's PROM lies over control store 0-777 until `PROMDISABLE`
+    // (the second bank of `PROM_WORDS` is empty), so a PC names a place
+    // in each; QUUX's has addresses of its own, never left to the RAM
+    // (contract Q2), and a stop is given as the control-store address the
+    // PC holds, the same as on the CADR, whose PROM is at 0.
+    match geometry.prom_base {
+        None => {
+            if stop_at_prom.is_some_and(|pc| pc >= 0o1000) {
+                usage("--stop-at-prom wants a PC in octal, below 1000");
+            }
+        }
+        Some(base) => {
+            if let Some(pc) = stop_at_prom.filter(|&pc| pc < base) {
+                usage(&format!(
+                    "--stop-at-prom {pc:o} is not in QUUX's boot PROM, {base:o}-37777: \
+                     the PROM's PC is its control-store address"
+                ));
+            }
+            if let Some(pc) = stop_at.filter(|&pc| pc >= base) {
+                usage(&format!(
+                    "--stop-at {pc:o} is in QUUX's boot PROM, {base:o}-37777: --stop-at-prom \
+                     stops there"
+                ));
+            }
+        }
+    }
     // `chip` is the CADR's boards, netlist for netlist: QUUX has none.
     if geometry != muir::machine::Geometry::CADR && which == Which::Chip {
         usage("--machine quux has no netlist, and this run is chip");

@@ -3236,6 +3236,10 @@ impl Engine for Rtl {
         self.pc
     }
 
+    fn pc_is_a_write(&self) -> bool {
+        self.iwrited
+    }
+
     /// The 74S169 counters at LC 1A26-2C05, which is where this engine
     /// keeps the location counter: `Machine::lc` is never written here.
     fn lc(&self) -> u32 {

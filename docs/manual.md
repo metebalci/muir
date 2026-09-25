@@ -792,13 +792,23 @@ Default: none; the run goes on until a `--stop-at`, a halt or ^C.
 ### `--stop-at <pc>`
 
 Stop when the PC reaches this address with the boot PROM disabled: in
-microcode loaded into the control store. Octal, as MIT writes it.
+microcode loaded into the control store. Octal, as MIT writes it. On
+QUUX, whose PROM is never disabled, that is a PC outside the PROM's
+`36000`-`37777`, and an address inside them is refused.
 
 ### `--stop-at-prom <pc>`
 
-The same with the PROM enabled: an address in the boot PROM, below `1000`.
-The PROM and the control store share their low addresses, so a PC alone
-names two places.
+The same with the PROM enabled: an address in the boot PROM. On the CADR
+it is below `1000`: the PROM and the control store share their low
+addresses, so a PC alone names two places. On QUUX the PROM has addresses
+of its own, and `<pc>` is the control-store address the PC holds there,
+as on the CADR: `36043`, not `43`. An address outside `36000`-`37777` is
+refused.
+
+Neither stops where the PC holds a control-store write's address: the
+microcycle after `WRITE-I-MEM` writes the control store there and runs
+nothing from it, and the program goes on where it was. `rtl` passes
+through those addresses while a PROM clears the control store.
 
 With `--stop-after`, whichever comes first.
 
@@ -1276,14 +1286,13 @@ A 1 GiB disk:
 ```
 qemu-img create -f raw quux.img 1G          # or: truncate -s 1G quux.img
 sgdisk \
-  -n 1:0:+64K  -t 1:445976f2-34e4-4583-b750-75d28a080cba -c 1:"TEMP" \
-  -n 2:0:+256K -t 2:9e318cf5-a95b-4b3b-b2ad-9ae306b0e2da -c 2:"MCR1 UCADR 1000" -A 2:set:48 \
-  -n 3:0:+100M -t 3:a3b30470-c5d4-41c1-87a8-d26590424cb8 -c 3:"LOD1 System 1002.1" -A 3:set:48 \
-  -n 4:0:+256M -t 4:4652bea5-06af-4bd9-b2bb-3541370151c8 -c 4:"PAGE" \
-  -n 5:0:+600M -t 5:7afa9532-75de-409f-8dc8-fef9763511d5 -c 5:"FILE" \
+  -n 1:0:+256K -t 1:9e318cf5-a95b-4b3b-b2ad-9ae306b0e2da -c 1:"MCR1 UCADR 1000" -A 1:set:48 \
+  -n 2:0:+100M -t 2:a3b30470-c5d4-41c1-87a8-d26590424cb8 -c 2:"LOD1 System 1002.1" -A 2:set:48 \
+  -n 3:0:+256M -t 3:4652bea5-06af-4bd9-b2bb-3541370151c8 -c 3:"PAGE" \
+  -n 4:0:+600M -t 4:7afa9532-75de-409f-8dc8-fef9763511d5 -c 4:"FILE" \
   quux.img
-sgdisk -i 3 quux.img                        # First sector: 6144
-dd if=band.lod of=quux.img bs=512 seek=6144 conv=notrunc
+sgdisk -i 2 quux.img                        # First sector: 4096
+dd if=band.lod of=quux.img bs=512 seek=4096 conv=notrunc
 qemu-img convert -f raw -O vpc -o subformat=dynamic,force_size=on quux.img quux.vhd
 muir --machine quux --disk-pack quux.vhd
 ```
@@ -1297,7 +1306,8 @@ muir --machine quux --disk-pack quux.vhd
 - **The current microcode and band carry bit 48**, `-A <n>:set:48`; sgdisk
   shows it as "Undefined bit #48". The comment after the four-character
   name is up to 31 characters.
-- **TEMP**'s use is being decided; nothing requires one.
+- **There is no TEMP partition.** QUUX's disk has none; the boot PROM
+  saves nothing to the disk ([QUUX](quux.md#the-disk-file)).
 - **At most 8 GiB**, 2^23 blocks: Lisp's block numbers are fixnums.
 - **`dd` writes a band file, or a microcode file written in partition
   order, as it is**, at the partition's first sector (`sgdisk -i`), with

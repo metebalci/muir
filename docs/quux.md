@@ -508,7 +508,7 @@ type GUIDs, whose first 32-bit words all differ:
 | band, `LODn` | `a3b30470-c5d4-41c1-87a8-d26590424cb8` |
 | `PAGE` | `4652bea5-06af-4bd9-b2bb-3541370151c8` |
 | `FILE` | `7afa9532-75de-409f-8dc8-fef9763511d5` |
-| `TEMP` | `445976f2-34e4-4583-b750-75d28a080cba` |
+| retired: once `TEMP`; not to be used | `445976f2-34e4-4583-b750-75d28a080cba` |
 
 - **The name** is the partition's four-character Lisp name, a space and a
   comment of up to 31 characters, `MCR1 UCADR 1000`: 36 characters, which
@@ -521,9 +521,11 @@ type GUIDs, whose first 32-bit words all differ:
   below 2^23. Block-disk's address, `<27:0>`, reaches further, and muir
   opens a larger file; the limit is the software's.
 - **No pack name and no pack comment**: a GPT has neither.
-- **TEMP** holds what the machine saves to disk at boot, which on MIT's
-  pack was blocks 1, 3 and 5 and on a GPT disk is the partition table. Its
-  use is being decided; nothing requires one, and the fixtures have one.
+- **There is no TEMP partition**, and the fixtures have none. MIT's PROM
+  saves page 0 to block 1 of its pack, which on a GPT disk is the
+  partition table; QUUX's saves nothing and writes no block of the disk
+  ([below](#its-boot-prom-in-its-own-addresses)). No fixture partition
+  carries the retired type GUID (`the_fixtures_gpt_is_q8_s`).
 
 `the_fixtures_gpt_is_q8_s` reads the fixtures' GPT through muir's disk
 layer and holds them to all of this. muir reads no partition of QUUX's
