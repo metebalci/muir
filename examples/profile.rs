@@ -5,11 +5,9 @@
 //!
 //! Boots System 1001's pack (`tools/fetch-system-1001.sh`) on the CADR, and
 //! muir-sys's latest System 1002 band on QUUX (`MUIR_BAND`, or
-//! `ref/band-1002-dev8`, whose own microcode still reaches the Unibus: run
-//! it with `MUIR_UCODE=ref/band-1002-dev8/ucode-q4b`, Q5's), with the test
-//! harness's Chaosnet server at OZ, logs in, defines a set of workloads at
-//! the listener and runs them one at a time, counting every control-store
-//! address the engine executes. Each workload ends by writing a marker
+//! `ref/band-1002-dev9`), with the test harness's Chaosnet server at OZ,
+//! logs in, defines a set of workloads at the listener and runs them one at
+//! a time, counting every control-store address the engine executes. Each workload ends by writing a marker
 //! file through the FILE service, which is how the run knows it is over:
 //! nothing here reads the screen.
 //!
@@ -628,11 +626,11 @@ fn profile<E: Profiled>(
     let on_quux = geometry != muir::machine::Geometry::CADR;
     let dir = support::scratch("profile");
     // QUUX runs only System 1002, muir-sys's latest band: `MUIR_BAND`, or
-    // `ref/band-1002-dev8`, its pack and the tree it was built from. The
+    // `ref/band-1002-dev9`, its pack and the tree it was built from. The
     // CADR runs System 1001's release.
     let (pack, sources) = if on_quux {
         let band = std::env::var_os("MUIR_BAND").map(PathBuf::from).unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev8")
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev9")
         });
         let file = |suffix: &str| {
             std::fs::read_dir(&band)

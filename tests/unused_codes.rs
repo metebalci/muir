@@ -81,39 +81,26 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> (Vec<u16>, Vec<u16>) {
 /// **System 1002 uses the clocks' codes only where its microcode says so**,
 /// through its boot to the listener and a moment after on QUUX: no
 /// instruction the OA registers make writes destinations 3 to 7 or reads
-/// sources 15 or 17. Its microcode, 1000 for Q5 (dev8 with ucode-q4b), uses them at
+/// sources 15 or 17. Its microcode, 1000 for Q5 (dev9), uses them at
 /// the tick's own sites.
 #[test]
 fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev8");
-    if !from.join("pack-1002-dev8.img").exists() {
+    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev9");
+    if !from.join("pack-1002-dev9.img").exists() {
         eprintln!("skipped: {} is not present", from.display());
         return;
     }
     let dir = support::scratch("unused-codes-1002");
     let pack = dir.join("pack.img");
-    std::fs::copy(from.join("pack-1002-dev8.img"), &pack).unwrap();
+    std::fs::copy(from.join("pack-1002-dev9.img"), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev8.tar.gz"))
+        .arg(from.join("tree-1002-dev9.tar.gz"))
         .arg("-C")
         .arg(dir.path())
         .status()
         .unwrap();
     assert!(untar.success());
-    // Q5's microcode, muir-sys's `ucode-1000-q4b` (committed as Q5's, the
-    // same bytes), made current in MCR2 with its error table served: the
-    // band's own MCR1 still reaches the Unibus, which QUUX no longer has.
-    {
-        use muir::diskpack::{Command, Pack};
-        let ucode = from.join("ucode-q4b");
-        let (mut p, _) = Pack::open(&pack);
-        p.run(Command::Load { partition: "MCR2".into(), file: Some(ucode.join("ucadr.mcr")) })
-            .unwrap();
-        p.run(Command::Microload("MCR2".into())).unwrap();
-        std::fs::copy(ucode.join("ucadr.tbl"), dir.join("release-1002/sys/ubin/ucadr.tbl"))
-            .unwrap();
-    }
     let root = dir.join("root");
     std::fs::create_dir_all(root.join("lispm")).unwrap();
     for part in ["sys", "site"] {
