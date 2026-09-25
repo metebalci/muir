@@ -92,7 +92,7 @@ fn word_102_is_error_stop() {
 #[test]
 fn the_reserved_words_read_0() {
     let mut m = quux();
-    for w in [0o15, 0o77, 0o103, 0o117, 0o160, 0o377] {
+    for w in [0o16, 0o77, 0o104, 0o117, 0o160, 0o377] {
         m.bus_write(PAGE + w, !0);
         assert_eq!(m.bus_read(PAGE + w), 0, "word {w:o}");
     }

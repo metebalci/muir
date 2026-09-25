@@ -124,7 +124,7 @@ fn quux_answers_its_id_in_source_16() {
         Insn::new(ALU | SETM | src(0o36) | a_dest(0o202)),
         Insn::new(ALU | SETM | src(0o17) | a_dest(0o203)),
     ];
-    let id = (0x5155 << 16) | (8 << 4) | 4;
+    let id = (0x5155 << 16) | (9 << 4) | 4;
     for (geometry, want) in [(Geometry::QUUX, [id, id, 0]), (Geometry::CADR, [!0, !0, !0])] {
         let (e, r) = both(&prom, &|m: &mut Machine| m.geometry = geometry, 30);
         for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
@@ -142,17 +142,18 @@ fn quux_answers_its_id_in_source_16() {
 /// entry's bits, the level-2 map's entries, the PDL buffer's words, and the
 /// control store's, A memory's and dispatch memory's, then which of the
 /// multiply and divide it has (bit 0 `MUL`, bit 1 `DIV`), whether it has
-/// the tick, and, word 14, whether it has the interval timer and the
-/// microsecond clock (revision 5); the rest reads 0. On
+/// the tick, word 14, whether it has the interval timer and the
+/// microsecond clock (revision 5), and word 15, `<0>` the real-time clock
+/// (revision 9); the rest reads 0. On
 /// the CADR nothing answers there, and a read times out as any read of an
 /// empty I/O address does, the Xbus NXM bit set.
 #[test]
 fn quux_lists_its_sizes_in_its_feature_page() {
     use muir::isa::asm::{SRC_MD, START_READ, filler};
     use muir::machine::bus_error;
-    // Virtual page 1 on the feature page; M 1 to M 8 the addresses of words
-    // 0 to 10, 14 and 100 of it, each read into A 200 up.
-    let words = [0u32, 1, 2, 3, 4, 5, 6, 7, 0o10, 0o14, 0o100];
+    // Virtual page 1 on the feature page; M 1 up the addresses of words
+    // 0 to 10, 14, 15, 16 and 100 of it, each read into A 200 up.
+    let words = [0u32, 1, 2, 3, 4, 5, 6, 7, 0o10, 0o14, 0o15, 0o16, 0o100];
     let mut prom = Vec::new();
     for (k, _) in words.iter().enumerate() {
         prom.push(Insn::new(ALU | SETM | m_src(1 + k as u64) | START_READ));
@@ -169,7 +170,7 @@ fn quux_lists_its_sizes_in_its_feature_page() {
         }
     };
     let id = Geometry::QUUX.machine_id.unwrap();
-    let want = [id, 6, 2048, 16384, 16384, 1024, 2048, 3, 1, 1, 0];
+    let want = [id, 6, 2048, 16384, 16384, 1024, 2048, 3, 1, 1, 1, 0, 0];
     let (e, r) = both(&prom, &set(Geometry::QUUX), 400);
     for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
         let got: Vec<u32> = (0..words.len()).map(|k| m.amem[0o200 + k]).collect();

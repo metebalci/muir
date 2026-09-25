@@ -28,6 +28,7 @@ differences, what it needed:
 | No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and 1000 never do either, counted (below) | nothing | nothing |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
 | MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
+| The real-time clock | nothing | nothing | does not read it yet | `--rtc` |
 
 ## What each change measured
 
@@ -81,7 +82,7 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 8 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers | |
+| 15:4 | hardware revision: 9 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, 9 the real-time clock | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
@@ -119,7 +120,7 @@ to `17377377` (page 36776), just below the page the display's control
 registers and the disk controller share. It is read-only and read like any
 device register, through the map:
 
-| Word | QUUX, revision 8 |
+| Word | QUUX, revision 9 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -134,7 +135,11 @@ device register, through the map:
 | 12 | the main screen: bits a pixel in 31:16, words a line in 15:0 |
 | 13 | the main screen: its buffer's first physical address |
 | 14 | the interval timer and the microsecond clock: 1 |
-| 15-377 | 0 |
+| 15 | the devices of revision 9, a bit each: 1, bit 0 the real-time clock |
+| 16-377 | 0 |
+
+Word 15 reads 0 below revision 9, as every unused word does, so software
+decides by it whether the real-time clock is there.
 
 Words 11 to 13 describe whichever display is fitted: MONO TV's 1280 by 1024,
 one bit a pixel, 40 words a line at `17000000`, or, on a QUUX run with a CADR
@@ -763,12 +768,50 @@ largest MONO TV buffer and 36777 the display's and disk's registers.
 | 100 | interrupt status, read only: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's done, `<3>` the keyboard, `<4>` the mouse, `<5>` the network, each under its own enable |
 | 101 | error status: the bus errors, as `766044` gives them; a write clears them |
 | 102 | mode: `<0>` error stop, which the host can set too |
+| 103 | the real-time clock, read only (below) |
 | 120-123 | the keyboard and the mouse (below) |
 | 140-147 | the network (below) |
 | others | reserved: read 0, writes ignored |
 
 On the CADR nothing answers on the page. `tests/quux_registers.rs` holds
 each word, on the machine and through both engines' bus.
+
+## The real-time clock
+
+**QUUX keeps the real time in word 103 of the register page** (contract Q9,
+revision 9): whole seconds since 1970-01-01 00:00 UTC, Unix time, as an
+unsigned 32-bit number, which lasts to 2106. There are no fractions: the
+microsecond clock, functional source 15, counts finer time from power-on.
+Lisp's universal time counts from 1900, so it is the word plus 2,208,988,800,
+a sum a 32-bit count from 1900 could not hold past 2036.
+
+| | |
+|---|---|
+| Read | the seconds, `<31:0>` |
+| Written | nothing: a write goes nowhere and the word reads on unchanged, as a write of any read-only word on the page does. The host keeps the time; the machine never sets it, and the time zone is not the clock's |
+| The CADR | nothing answers on the page: a read times out and sets the NXM bit |
+
+**It is live**: it gives the host's time, kept current by the host, as a
+real clock keeps real time on its own crystal whatever the processor does.
+muir reads the host's clock (`SystemTime`) at every read of the word, so it
+never drifts from the host, however fast or slow the engine runs.
+
+**`--rtc <s>` fixes it for runs that repeat**: the clock reads second `s`
+at power-on and counts the machine's own time from there, a second for each
+10^9 ns of the engine's clock, whatever the host's clock does. It holds at
+2^32-1 and never wraps to 0, which would read as no clock at all; a start
+past 2^32-1 is refused. `--rtc host` is the default. The start says which:
+`rtc: the host's clock` or `rtc: from <s>, counting machine time`. A
+checkpoint carries the setting, the start and the machine time it counts
+from, so a resumed run reads the second the run that wrote it would have;
+a resume under another `--rtc` is refused by the flag's name.
+
+`tests/quux_rtc.rs` holds the live word against the host's clock, the start
+and the count, the hold at 2^32-1, a write changing nothing, the CADR's
+timeout, feature word 15, a checkpoint, and both engines reading a second
+go by in their own time; `the_rtc_is_quux_s` in `tests/cli.rs` the flag,
+its refusals and the start's report; `a_resume_has_the_checkpoint_s_rtc` in
+`tests/muir_checkpoint.rs` the resume.
 
 ## The keyboard and the mouse
 

@@ -540,6 +540,43 @@ fn quux_s_memory_port_and_its_timing() {
     refused_saying(&["--rtl", "--machine", "quux", "--memory-timing", "fast"], "--memory-timing");
 }
 
+/// **`--rtc` is QUUX's** (contract Q9): the real-time clock is the host's
+/// by default, and `--rtc <s>` starts it at Unix second `s` and counts the
+/// machine's time from there; the start says which. A second past 2^32-1,
+/// which the 32-bit word cannot hold, is refused, and so is anything that
+/// is not a second, and the flag on the CADR, which has no RTC.
+#[test]
+fn the_rtc_is_quux_s() {
+    for engine in ["--micro", "--rtl"] {
+        let out = muir().args([engine, "--machine", "quux", "--stop-after", "1"]).run();
+        let t = text(&out);
+        assert!(out.status.success(), "{engine}: {t}");
+        assert!(t.contains("rtc: the host's clock"), "{engine}: the start says it:\n{t}");
+        for (flag, said) in [
+            ("1700000000", "rtc: from 1700000000, counting machine time"),
+            ("4294967295", "rtc: from 4294967295, counting machine time"),
+            ("host", "rtc: the host's clock"),
+        ] {
+            let out = muir()
+                .args([engine, "--machine", "quux", "--rtc", flag, "--stop-after", "1"])
+                .run();
+            let t = text(&out);
+            assert!(out.status.success(), "{engine} --rtc {flag}: {t}");
+            assert!(t.contains(said), "{engine} --rtc {flag}: the start says it:\n{t}");
+        }
+    }
+    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    assert!(!text(&out).contains("rtc:"), "the CADR has none:\n{}", text(&out));
+    // Each with a stop, so that one wrongly taken ends rather than runs on.
+    let quux = ["--micro", "--stop-after", "1", "--machine", "quux"];
+    refused_saying(&[&quux[..], &["--rtc", "4294967296"]].concat(), "--rtc 4294967296");
+    refused_saying(&[&quux[..], &["--rtc", "4294967296"]].concat(), "past 4294967295");
+    refused(&[&quux[..], &["--rtc", "-1"]].concat(), "--rtc");
+    refused(&[&quux[..], &["--rtc", "soon"]].concat(), "--rtc");
+    refused(&[&quux[..], &["--rtc"]].concat(), "--rtc");
+    refused_saying(&["--micro", "--stop-after", "1", "--rtc", "5"], "--rtc is QUUX's");
+}
+
 /// **`--disk-controller block-disk` is QUUX's**: it runs on `micro` and
 /// `rtl` and the start says it, without the warning that the flag is
 /// `chip`'s, and it is refused on the CADR and on `chip`.

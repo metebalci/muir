@@ -24,7 +24,8 @@
 //!          [--machine cadr|quux]
 //!          [--main-memory netlist|model] [--main-memory-boards <n>]
 //!          [--no-debug-cable-listen] [--no-pace] [--pace]
-//!          [--prom <file>] [--resume <file>] [--serial <endpoint>]
+//!          [--prom <file>] [--resume <file>] [--rtc <unix-seconds>|host]
+//!          [--serial <endpoint>]
 //!          [--stop-after <microcycles>]
 //!          [--stop-at <pc>] [--stop-at-prom <pc>] [--terminal [<endpoint>]]
 //!          [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>] [--cache <words>]
@@ -1009,7 +1010,7 @@ const USAGE: &str = "usage: muir [--micro|--rtl|--chip] [--chaos-address <addres
             [--main-memory-boards <n>] [--no-auto-boot]
             [--no-debug-cable-listen] [--no-pace] [--pace]
             [--prom <file>]
-            [--resume <file>] [--serial <endpoint>]
+            [--resume <file>] [--rtc <unix-seconds>|host] [--serial <endpoint>]
             [--stop-after <microcycles>] [--stop-at <pc>]
             [--stop-at-prom <pc>] [--terminal [<endpoint>]]
             [--timing-model cadr|fpga|sync] [--sync-cycle-ticks <k>] [--cache <words>]
@@ -1382,6 +1383,14 @@ A simulator of the MIT CADR Lisp Machine.
                                the boards on the backplane have to be the
                                checkpoint's too. The button is not pressed,
                                and the stops count from here.
+  --rtc <unix-seconds>|host    QUUX: its real-time clock, register page word
+                               103. host reads the host's clock at each
+                               read; a second, 0 to 4294967295, starts it
+                               there at power-on and counts the machine's
+                               own time from it, holding at 4294967295, so
+                               that runs repeat. A checkpoint carries it,
+                               and a resume under another is refused.
+                               [default: host]
   --serial <endpoint>          where the serial port at J9 is reached: a TCP
                                port, or address:port. Attach with `nc <host>
                                <port>` or telnet. A connection is the device
@@ -2138,10 +2147,17 @@ fn machine(
     memory_boards: usize,
     (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
-    (geometry, block_disk): (muir::machine::Geometry, bool),
+    (geometry, block_disk, rtc): (muir::machine::Geometry, bool, muir::machine::Rtc),
 ) -> Machine {
     let mut m = Machine::with_memory_boards(memory_boards);
     m.geometry = geometry;
+    // Counted from the machine's clock at power-on, which is now.
+    m.rtc = match rtc {
+        muir::machine::Rtc::Counted { start, .. } => {
+            muir::machine::Rtc::Counted { start, base_ns: m.ns }
+        }
+        live => live,
+    };
     if block_disk {
         m.block_disk = Some(muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS));
     }
@@ -3653,6 +3669,34 @@ fn resume_chip(
     ran
 }
 
+/// A checkpoint whose real-time clock was counted from another start, or
+/// was live where `--rtc` gives a start, or the reverse, is refused by the
+/// flag's name: a resume under its own `--rtc` reads the second the run
+/// that wrote it would have. The base is the checkpoint's, the machine's
+/// clock at its power-on, and a resume's clock carries on from it.
+fn refuse_rtc(path: &Path, had: muir::machine::Rtc, asked: muir::machine::Rtc) {
+    use muir::machine::Rtc;
+    let same = match (had, asked) {
+        (Rtc::Host, Rtc::Host) => true,
+        (Rtc::Counted { start: a, .. }, Rtc::Counted { start: b, .. }) => a == b,
+        _ => false,
+    };
+    if !same {
+        usage(&format!(
+            "--resume {}: a checkpoint with {}, and --rtc here is {}",
+            path.display(),
+            match had {
+                Rtc::Host => "the host's clock".to_string(),
+                Rtc::Counted { start, .. } => format!("an RTC from {start}"),
+            },
+            match asked {
+                Rtc::Host => "host".to_string(),
+                Rtc::Counted { start, .. } => start.to_string(),
+            }
+        ));
+    }
+}
+
 /// **A resume onto a machine `--color-tv` disagrees with is refused by the
 /// flag's name**, as `--tv-board` is: the second display board is the
 /// backplane's, and a checkpoint of a machine with one is not a
@@ -3787,7 +3831,7 @@ fn resume_engine<E: Engine>(
     e: &mut E,
     (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
-    geometry: muir::machine::Geometry,
+    (geometry, rtc): (muir::machine::Geometry, muir::machine::Rtc),
     resume: &(PathBuf, Checkpoint),
 ) {
     let (path, c) = resume;
@@ -3824,6 +3868,7 @@ fn resume_engine<E: Engine>(
         ));
     }
     refuse_color_tv(path, e.machine().color_tv.is_some(), color_tv.fitted());
+    refuse_rtc(path, e.machine().rtc, rtc);
     let m = e.machine();
     eprintln!(
         "resumed: {} at {} microcycles, {} ns, {} memory boards",
@@ -4703,6 +4748,10 @@ fn main() {
     let mut sync_cycle_ticks: Option<u8> = None;
     let mut cache: Option<muir::cache::CacheConfig> = None;
     let mut memory_timing: Option<muir::cache::MemoryTiming> = None;
+    // QUUX's real-time clock: live unless `--rtc` gives a second to count
+    // from; whether the flag was given, to refuse it on the CADR.
+    let mut rtc = muir::machine::Rtc::Host;
+    let mut rtc_given = false;
     let mut geometry = muir::machine::Geometry::CADR;
     // The color TV, the second display board: off unless `--color-tv`
     // fits it, because a CADR has one screen unless somebody plugged a
@@ -4939,6 +4988,23 @@ fn main() {
                 if memory_timing.is_none() {
                     usage("--memory-timing wants <read>,<write> in ns, arty or de25");
                 }
+            }
+            (None, "--rtc") => {
+                const WANTS: &str = "--rtc wants a Unix second, 0 to 4294967295, or host";
+                rtc_given = true;
+                rtc = match args.next().as_deref() {
+                    Some("host") => muir::machine::Rtc::Host,
+                    Some(v) => match v.parse::<u64>() {
+                        Ok(start) => match u32::try_from(start) {
+                            Ok(start) => muir::machine::Rtc::Counted { start, base_ns: 0 },
+                            Err(_) => usage(&format!(
+                                "--rtc {start} is past 4294967295, 2^32-1, the last second the RTC's 32 bits hold"
+                            )),
+                        },
+                        Err(_) => usage(WANTS),
+                    },
+                    None => usage(WANTS),
+                };
             }
             (None, "--sync-cycle-ticks") => {
                 match args.next().as_deref().and_then(|v| v.parse::<u8>().ok()).filter(|&k| k > 0) {
@@ -5261,6 +5327,11 @@ fn main() {
     }
     if block_disk && which == Which::Chip {
         usage("--disk-controller block-disk has no netlist, and this run is chip");
+    }
+    // The real-time clock is QUUX's (contract Q9): nothing answers on the
+    // CADR's page.
+    if rtc_given && !geometry.rtc {
+        usage("--rtc is QUUX's, and this run is the CADR: --machine quux");
     }
     // QUUX's main memory is on its own port and `rtl` times it.
     if memory_timing.is_some() && geometry == muir::machine::Geometry::CADR {
@@ -5834,9 +5905,17 @@ fn main() {
         if geometry == muir::machine::Geometry::QUUX {
             writeln!(
                 s,
-                "machine: quux, revision 8: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, clocks in the processor (a 60 Hz tick, an interval timer and a microsecond clock), the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, and its devices reached by their registers"
+                "machine: quux, revision 9: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, clocks in the processor (a 60 Hz tick, an interval timer and a microsecond clock), the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, its devices reached by their registers, and a real-time clock"
             )
             .unwrap();
+        }
+        if geometry.rtc {
+            match rtc {
+                muir::machine::Rtc::Host => writeln!(s, "rtc: the host's clock").unwrap(),
+                muir::machine::Rtc::Counted { start, .. } => {
+                    writeln!(s, "rtc: from {start}, counting machine time").unwrap()
+                }
+            }
         }
         let chosen = pack_choice(packs);
         if chosen.is_empty() {
@@ -6102,7 +6181,7 @@ fn main() {
                 boards,
                 (tv_board, mono_tv_size),
                 color_tv,
-                (geometry, block_disk),
+                (geometry, block_disk, rtc),
             );
             m.chaos = chaos.clone();
             m.plug_chaos(0);
@@ -6115,7 +6194,14 @@ fn main() {
                 e.boot();
             }
             if let Some(p) = &resume {
-                resume_engine("micro", &mut e, (tv_board, mono_tv_size), color_tv, geometry, p);
+                resume_engine(
+                    "micro",
+                    &mut e,
+                    (tv_board, mono_tv_size),
+                    color_tv,
+                    (geometry, rtc),
+                    p,
+                );
             }
             let run = Run {
                 stop,
@@ -6144,7 +6230,7 @@ fn main() {
                 boards,
                 (tv_board, mono_tv_size),
                 color_tv,
-                (geometry, block_disk),
+                (geometry, block_disk, rtc),
             );
             // The Chaosnet, as under chip: the interface on the I/O board
             // and, if a link was bound, the network on its cable.
@@ -6216,7 +6302,14 @@ fn main() {
                 eprintln!("debug cable: DBGOUT connected to the debuggee at {addr}");
                 let reader = stream.try_clone().expect("a second handle on the cable");
                 if let Some(p) = &resume {
-                    resume_engine("rtl", &mut e, (tv_board, mono_tv_size), color_tv, geometry, p);
+                    resume_engine(
+                        "rtl",
+                        &mut e,
+                        (tv_board, mono_tv_size),
+                        color_tv,
+                        (geometry, rtc),
+                        p,
+                    );
                     refuse_timing_model(p, e.timing_model(), timing_model);
                 }
                 let run = Run {
@@ -6257,7 +6350,14 @@ fn main() {
                 );
             } else {
                 if let Some(p) = &resume {
-                    resume_engine("rtl", &mut e, (tv_board, mono_tv_size), color_tv, geometry, p);
+                    resume_engine(
+                        "rtl",
+                        &mut e,
+                        (tv_board, mono_tv_size),
+                        color_tv,
+                        (geometry, rtc),
+                        p,
+                    );
                     refuse_timing_model(p, e.timing_model(), timing_model);
                 }
                 let run = Run {
