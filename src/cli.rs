@@ -926,14 +926,33 @@ fn deliver_input(
     }
 }
 
-const NETLIST: &str = include_str!("../data/CADR.netlist");
-const BUSINT: &str = include_str!("../data/BUSINT.netlist");
-const CADRM: &str = include_str!("../data/CADRM.netlist");
-const CADRIO: &str = include_str!("../data/CADRIO.netlist");
-const SIMPLETV: &str = include_str!("../data/SIMPLETV.netlist");
-const LISPMTV: &str = include_str!("../data/LISPMTV.netlist");
-const CADRDC: &str = include_str!("../data/CADRDC.netlist");
-const DM: &str = include_str!("../data/DM.netlist");
+/// The netlists `chip` builds the CADR's boards from: the text of the
+/// eight `data/*.netlist` files, one field each.
+///
+/// **The executable embeds them and hands them to [`run`], not the
+/// library**, so that the library builds without them. `tools/*-netlist.sh`
+/// make those files with `examples/reconcile.rs`, which links the library,
+/// and `tools/check-netlists.sh` deletes the committed ones before it runs
+/// the scripts: a library that embedded them could not be built to make
+/// them. `cadr` passes them; `quux` passes none, `--chip` being `cadr`'s.
+pub struct Netlists {
+    /// `data/CADR.netlist`: the processor, both sections.
+    pub cadr: &'static str,
+    /// `data/BUSINT.netlist`: the bus interface.
+    pub busint: &'static str,
+    /// `data/CADRM.netlist`: a main memory board.
+    pub cadrm: &'static str,
+    /// `data/CADRIO.netlist`: the I/O board.
+    pub cadrio: &'static str,
+    /// `data/SIMPLETV.netlist`: the SIMPLE TV.
+    pub simpletv: &'static str,
+    /// `data/LISPMTV.netlist`: the LISPM TV, main screen or color.
+    pub lispmtv: &'static str,
+    /// `data/CADRDC.netlist`: the disk controller.
+    pub cadrdc: &'static str,
+    /// `data/DM.netlist`: the DISK MULTIPLEXOR.
+    pub dm: &'static str,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Which {
@@ -4323,6 +4342,7 @@ struct ChipMachine {
 
 #[allow(clippy::too_many_arguments)]
 fn chip_machine(
+    nets: &Netlists,
     image: &[u64],
     packs: &[Pack],
     boards: Boards,
@@ -4332,7 +4352,7 @@ fn chip_machine(
     color_tv: ColorTv,
     auto_boot: bool,
 ) -> ChipMachine {
-    let n = netlist::parse(NETLIST).unwrap();
+    let n = netlist::parse(nets.cadr).unwrap();
     let mut c = Chip::new(&n);
     c.power_on();
     c.load_prom(&n, image);
@@ -4354,8 +4374,8 @@ fn chip_machine(
         machine.fit_color_tv();
     }
     machine.chaos = chaos;
-    let bus_n = netlist::parse(BUSINT).unwrap();
-    let mem_n = netlist::parse(CADRM).unwrap();
+    let bus_n = netlist::parse(nets.busint).unwrap();
+    let mem_n = netlist::parse(nets.cadrm).unwrap();
     let mut far = FarEnd::new(&n, &bus_n, &mem_n, boards, 0, machine);
     far.join(&mut c, clk.time_ns());
 
@@ -4535,6 +4555,7 @@ fn attend_serial_chip(far: &mut FarEnd, end: &mut Endpoint) {
 /// `--chip` alone before and after, a transition at a time.
 #[allow(clippy::too_many_arguments)]
 fn time_chip(
+    nets: &Netlists,
     cable: Option<std::net::TcpListener>,
     image: &[u64],
     packs: &[Pack],
@@ -4578,6 +4599,7 @@ fn time_chip(
         // A resume brings the board up but does not press the button: what
         // the button and the power-on set is what the checkpoint replaces.
     } = chip_machine(
+        nets,
         image,
         packs,
         boards,
@@ -4610,7 +4632,7 @@ fn time_chip(
     }
     let mut ran = 0;
     // `MEMRQ`, for the quiet point a checkpoint is taken at.
-    let memrq = netlist::parse(NETLIST).unwrap().by_name_id("MEMRQ").unwrap();
+    let memrq = netlist::parse(nets.cadr).unwrap().by_name_id("MEMRQ").unwrap();
     // The machine behind DBGIN's connector: the board's own, with the
     // processor, its clock and the far end, whether or not a debugger ever
     // comes.  With nobody on the cable the loop below ticks it a
@@ -4661,9 +4683,9 @@ fn time_chip(
     let mut net_netlists: Option<(netlist::Netlist, netlist::Netlist, netlist::Netlist)> = None;
     let parse_netlists = || {
         (
-            netlist::parse(NETLIST).unwrap(),
-            netlist::parse(BUSINT).unwrap(),
-            netlist::parse(CADRM).unwrap(),
+            netlist::parse(nets.cadr).unwrap(),
+            netlist::parse(nets.busint).unwrap(),
+            netlist::parse(nets.cadrm).unwrap(),
         )
     };
     // `--watch`, resolved now that the boards are there: a name no board
@@ -5084,8 +5106,9 @@ fn time_chip(
 /// [`crate::machine::Geometry::CADR`] or [`crate::machine::Geometry::QUUX`]
 /// --- on the command line it was given. A flag of the other machine's is
 /// refused by name, saying which executable takes it, and so is a
-/// checkpoint the other one wrote.
-pub fn run(geometry: crate::machine::Geometry) {
+/// checkpoint the other one wrote. `netlists` are the boards `--chip`
+/// builds, which only `cadr` takes and so only `cadr` passes.
+pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
     let exe = executable_of(geometry);
     let _ = EXECUTABLE.set(exe);
     let mut which: Option<Which> = None;
@@ -6737,11 +6760,14 @@ pub fn run(geometry: crate::machine::Geometry) {
         }
         Which::Chip => {
             let image: Vec<u64> = prom.iter().copied().map(crate::prom::programming).collect();
-            let io_n = io.then(|| netlist::parse(CADRIO).unwrap());
+            // `--chip` is `cadr`'s alone and refused above on `quux`, which
+            // has no netlists to pass.
+            let nets = netlists.expect("chip on an executable with no netlists");
+            let io_n = io.then(|| netlist::parse(nets.cadrio).unwrap());
             let tv_n = tv.then(|| {
                 netlist::parse(match tv_board {
-                    TvBoard::SimpleTv => SIMPLETV,
-                    TvBoard::LispmTv => LISPMTV,
+                    TvBoard::SimpleTv => nets.simpletv,
+                    TvBoard::LispmTv => nets.lispmtv,
                     // Refused with `chip` above: QUUX has no netlist.
                     TvBoard::MonoTv => unreachable!("MONO TV on chip"),
                 })
@@ -6752,18 +6778,18 @@ pub fn run(geometry: crate::machine::Geometry) {
             // multiplexor's to drive.
             let disk_n = disk_controller.then(|| {
                 if use_multiplexor {
-                    netlist::parse_with_multiplexor(CADRDC).unwrap()
+                    netlist::parse_with_multiplexor(nets.cadrdc).unwrap()
                 } else {
-                    netlist::parse(CADRDC).unwrap()
+                    netlist::parse(nets.cadrdc).unwrap()
                 }
             });
-            let dm_n = use_multiplexor.then(|| netlist::parse(DM).unwrap());
+            let dm_n = use_multiplexor.then(|| netlist::parse(nets.dm).unwrap());
             // The second display board, when `--color-tv` asked for the
             // netlist: the LISPM TV, which is the board `lmtv.order`
             // specifies and the only one there is a color strap for,
             // whatever `--tv-board` put at the main screen's addresses.
-            let color_tv_n =
-                (color_tv == ColorTv::Netlist).then(|| netlist::parse_color_tv(LISPMTV).unwrap());
+            let color_tv_n = (color_tv == ColorTv::Netlist)
+                .then(|| netlist::parse_color_tv(nets.lispmtv).unwrap());
             let on_the_buses = Boards {
                 memory: netlist_boards,
                 io: io_n.as_ref(),
@@ -6784,6 +6810,7 @@ pub fn run(geometry: crate::machine::Geometry) {
                 color: color_screen.as_mut(),
             };
             time_chip(
+                nets,
                 cable,
                 &image,
                 packs,
