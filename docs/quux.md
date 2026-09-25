@@ -81,7 +81,7 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 6 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000 | |
+| 15:4 | hardware revision: 7 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
@@ -119,7 +119,7 @@ to `17377377` (page 36776), just below the page the display's control
 registers and the disk controller share. It is read-only and read like any
 device register, through the map:
 
-| Word | QUUX, revision 6 |
+| Word | QUUX, revision 7 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -286,11 +286,41 @@ refusal, `ILONG`'s ticks, the grid, the divider's hold and a checkpoint;
 `system_1002_runs_at_its_ticks` in `tests/system_1002.rs` System 1002 at
 four ticks and at three.
 
+## The memory port
+
+**QUUX's main memory is on the processor's own port** (contract Q6,
+revision 7), not on the Xbus. The address space is main memory and the
+Xbus; a cycle to main memory goes through the cache to the memory
+controller, and one to any other address is an Xbus cycle, to a device ---
+the display, block-disk, the feature and register page --- or, where
+nothing answers, a timeout. QUUX has no bus interface: nothing is left for
+one to do, the Unibus gone (Q5) and the processor the only requester. The
+CADR keeps its own. The boot PROM is not in the address space: it is in the
+control store (Q2).
+
+| | |
+|---|---|
+| Main memory | 380 ns a line fill and 290 ns a write (`MemoryTiming::NOMINAL`, the DE25-Nano's, the slower board's), one operation at a time, no setup, deskew or refresh; a floor, a board slower on an access waiting. `--memory-timing <read>,<write>`, `arty` or `de25` sets others, on `rtl` |
+| The cache | always fitted: 4K words (`--cache <words>` another size) |
+| An Xbus device | answers `busint::SETUP_NS`, 80 ns, after the request, a read deskewed 60 ns more, as a CADR Xbus slave; never cached |
+| Nothing there | a timeout as the CADR's, the free-running oscillator's first rise after the grant and 4,250 ns, word 101's Xbus NXM bit set. Past main memory's end is nothing: a write there does not read back, which the microcode's memory-size probe, `MEM-SIZE-LOOP` in `uc-cold-disk.lisp`, relies on |
+| Block-disk | its words move at START, and the cache is invalidated; a transfer reads the processor's writes made before START and, after DONE, no read hits a word from before it |
+
+The bus interface's registers all have homes on QUUX already: the
+diagnostic registers are the host's (Q5), `ERRSTOP` is word 102, the
+interrupt control word 100 and the error status word 101 (Q2); the Unibus
+map is gone (Q5).
+
+`tests/quux_memory_port.rs` holds the port in place of the bus interface,
+a miss's line fill against a hit, the Xbus never cached, nothing past main
+memory's end reading back on both engines, the disk's write never hit
+stale, and a checkpoint; `quux_s_memory_port_and_its_timing` in
+`tests/cli.rs` the flag and the start's report.
+
 ## The memory cache
 
-**QUUX can have a memory cache** (`--cache <words>`, H2): unified and
-write-through, in front of main memory, by physical address after the map.
-Xbus I/O space and the Unibus are not cached. In muir it is `rtl`'s, and
+**QUUX's memory cache** (H2) is unified and write-through, in front of main
+memory, by physical address after the map. The Xbus is not cached. In muir it is `rtl`'s, and
 it holds tags only: `rtl` takes a word from main memory as a cycle ends,
 and a write-through cache never holds a word memory does not, so the cache
 changes when a cycle is answered and never what it reads.
@@ -298,18 +328,13 @@ changes when a cycle is answered and never what it reads.
 | | |
 |---|---|
 | A read that hits | acknowledged `hit_ns` after the request (20 ns, two ticks of the grid, **unverified** until a fit), with no bus cycle and none of the bus's setup, deskew or release |
-| A read that misses | the memory board's cycle, as without the cache; it fills the line, the set's least recently used line going |
-| A write | allocates nothing. With the write buffer it is acknowledged after `hit_ns`, or when the buffer's last write is done, and the board runs it behind the processor; the word is memory's from the acknowledgement, as a read after it finds it |
+| A read that misses | main memory's line fill; it fills the line, the set's least recently used line going |
+| A write | allocates nothing. With the write buffer it is acknowledged after `hit_ns`, or when the buffer's last write is done, and main memory runs it behind the processor; the word is memory's from the acknowledgement, as a read after it finds it |
 | Shape | lines of 4 words, 2-way, `<words>` in all, a power of two |
 | Coherence | a disk transfer writes main memory behind the processor, and invalidates the whole cache before the next cycle |
 
-Behind the cache is the CADR's memory board, eleven stages of its 24 MHz
-chain, 458 ns, from the request to `XACK` (`MEMORY_CYCLE_STAGES` in
-`src/busint.rs`), unless QUUX's own memory timing is fitted
-(`MemoryTiming`, `Rtl::set_memory_timing`): a read, which behind the cache
-is a line fill, and a write each answered a fixed time after the request,
-off the Xbus, one at a time. muir-fpga measured its two boards, a 1,000,000
-word array loop on System 1001 for 300 s:
+Behind the cache is main memory on the port. muir-fpga measured its two
+boards, a 1,000,000 word array loop on System 1001 for 300 s:
 
 | | Read, average | Write | In muir |
 |---|---|---|---|
@@ -320,7 +345,8 @@ rounded up to the tick, with a tick more on a read for a line fill of four
 words, two 64-bit beats: the machine has only ever made single-word
 accesses, so a fill's time is **unverified**.
 
-Measured with the profile harness (`examples/profile.rs`, `MUIR_CACHE` and
+Measured with main memory as the CADR's memory boards on the Xbus, and as
+the boards' own timings where the table says so, with the profile harness (`examples/profile.rs`, `MUIR_CACHE` and
 `MUIR_SYNC_TICKS`) on `rtl`, System 1001's band on QUUX's microcode 1000
 for revision 4, over ten workloads (compile, two call-heavy, cons, the
 multiply-and-divide, float, array, sort, bignum, intern), in the machine's
@@ -346,8 +372,8 @@ far more than read --- over four in five of its memory cycles are writes
 --- and the write buffer is most of what the cache does for it.
 
 `tests/cache.rs` holds the lines and the replacement, a read loop and a
-write-and-read-back loop leaving the same words with the cache as without
-and sooner, the invalidation, and a checkpoint.
+write-and-read-back loop leaving the same words with the cache as with one
+that saves nothing, and sooner, the invalidation, and a checkpoint.
 
 ## Block-disk
 

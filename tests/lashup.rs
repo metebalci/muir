@@ -192,12 +192,16 @@ fn the_register_strobes_answer_at_once_and_the_status_is_the_error_register() {
     let (at, ack, word) = request(&mut r, DEBUG_ADDRESS, true, 0o123456);
     assert_eq!(ack, at, "the address strobe is acknowledged the instant it is made");
     assert_eq!(word, None, "and drives nothing back");
-    assert_eq!(r.busint().debug_unibus_address(), 0o123456 << 1, "the latch took it when lifted");
+    assert_eq!(
+        r.busint().unwrap().debug_unibus_address(),
+        0o123456 << 1,
+        "the latch took it when lifted"
+    );
 
     let (at, ack, word) = request(&mut r, DEBUG_MODIFIER, true, debug_modifier::ADDRESS_17);
     assert_eq!(ack, at, "the modifier strobe likewise");
     assert_eq!(word, None);
-    assert_eq!(r.busint().debug_unibus_address(), (1 << 17) | (0o123456 << 1));
+    assert_eq!(r.busint().unwrap().debug_unibus_address(), (1 << 17) | (0o123456 << 1));
 
     let (at, ack, status) = request(&mut r, DEBUG_STATUS, false, 0);
     assert_eq!(ack, at, "and the status strobe");
@@ -221,13 +225,16 @@ fn the_register_strobes_answer_at_once_and_the_status_is_the_error_register() {
 #[test]
 fn a_debug_cycle_takes_the_unibus_from_the_processor_and_gives_it_back() {
     let mut r = unibus_reader(0o764120);
-    while r.bus_cycles() < 1 || r.busint().busy() {
+    while r.bus_cycles() < 1 || r.busint().unwrap().busy() {
         r.step().unwrap();
     }
-    assert!(r.busint().holds_the_unibus(), "the processor keeps the Unibus after its first cycle");
+    assert!(
+        r.busint().unwrap().holds_the_unibus(),
+        "the processor keeps the Unibus after its first cycle"
+    );
 
     let (_, pc) = dbg_read(&mut r, unibus(spy::PC));
-    assert!(!r.busint().holds_the_unibus(), "the debug master's SACK took it away");
+    assert!(!r.busint().unwrap().holds_the_unibus(), "the debug master's SACK took it away");
     assert!(pc < 0o400, "a PC in the PROM: {pc:o}");
 
     for _ in 0..250 {
@@ -240,7 +247,7 @@ fn a_debug_cycle_takes_the_unibus_from_the_processor_and_gives_it_back() {
     assert_eq!(m.amem[0o103], spy::OPEN_READ as u32, "register 3");
     assert_eq!(m.amem[0o104], 0xe900, "FLAG-1, running");
     assert_eq!(r.bus_cycles(), 5);
-    assert!(r.busint().holds_the_unibus(), "and the processor has the Unibus again");
+    assert!(r.busint().unwrap().holds_the_unibus(), "and the processor has the Unibus again");
 }
 
 /// **A debug cycle at an address nothing answers is never acknowledged.**
@@ -265,13 +272,13 @@ fn a_debug_cycle_nothing_answers_waits_for_the_debugger_to_give_up() {
         r.step().unwrap();
     }
     assert_eq!(r.debug_ack(), None, "no acknowledgement three timeouts on");
-    assert!(r.busint().debug_master(), "DBUB MASTER holds the bus meanwhile");
+    assert!(r.busint().unwrap().debug_master(), "DBUB MASTER holds the bus meanwhile");
     r.debug_release(r.ns());
     for _ in 0..3 {
         r.step().unwrap();
     }
     assert!(!r.debug_busy(), "lifted, the request is gone");
-    assert!(!r.busint().debug_master());
+    assert!(!r.busint().unwrap().debug_master());
 }
 
 /// **The modifier's reset bit resets the debuggee and halts it.**
@@ -372,12 +379,12 @@ fn the_modifiers_timeout_inhibit_holds_the_processors_nxm_cycle() {
     while r.ns() < started + 2 * busint::TIMEOUT_NS {
         r.step().unwrap();
     }
-    assert!(r.busint().busy(), "the fifth cycle is still open, two timeouts on");
+    assert!(r.busint().unwrap().busy(), "the fifth cycle is still open, two timeouts on");
     assert_eq!(r.machine().bus_error, 0, "and no NXM has been flagged");
 
     request(&mut r, DEBUG_MODIFIER, true, 0);
     let lifted = r.ns();
-    while r.busint().busy() {
+    while r.busint().unwrap().busy() {
         r.step().unwrap();
         assert!(r.ns() < lifted + 2 * busint::TIMEOUT_NS, "the cycle never ended");
     }
@@ -433,25 +440,37 @@ fn a_debug_cycle_the_debuggee_never_answers_times_out_on_the_debugger() {
     let mut lashup = Lashup::new(booted(a.finish()), straight_line());
 
     // The two strobes go by; the cycle's request goes out and waits.
-    while !lashup.debugger.busint().debug_out_pending() {
+    while !lashup.debugger.busint().unwrap().debug_out_pending() {
         lashup.step().unwrap();
         assert!(lashup.debugger.ns() < 30_000, "the request never went out");
     }
     let granted = lashup.debugger.ns();
     eprintln!("the debugger's cycle was granted at about {granted} ns");
     lashup.run_until(granted + 3_000).unwrap();
-    assert!(lashup.debugger.busint().debug_out_pending(), "the request is out, unanswered");
-    assert!(lashup.debuggee.busint().debug_master(), "DBUB MASTER holds the debuggee's Unibus");
+    assert!(
+        lashup.debugger.busint().unwrap().debug_out_pending(),
+        "the request is out, unanswered"
+    );
+    assert!(
+        lashup.debuggee.busint().unwrap().debug_master(),
+        "DBUB MASTER holds the debuggee's Unibus"
+    );
     // The debugger's timeout counter registers its NXM on the fourteenth
     // edge of a clock that has run since power-on, between 11.5 and 12.3
     // microseconds after the grant (`busint::debug_timeout_at`): not yet at
     // 11, and by 13, where the PROM's 26 --- the header's 30 --- would not
     // have come, those being a later board's microseconds.
     lashup.run_until(granted + 11_000).unwrap();
-    assert!(lashup.debugger.busint().debug_out_pending(), "still waiting 11 microseconds on");
+    assert!(
+        lashup.debugger.busint().unwrap().debug_out_pending(),
+        "still waiting 11 microseconds on"
+    );
     assert_eq!(lashup.debugger.machine().amem[0o101], 0, "no word yet");
     lashup.run_until(granted + 13_000).unwrap();
-    assert!(!lashup.debugger.busint().debug_out_pending(), "given up on by 13 microseconds");
+    assert!(
+        !lashup.debugger.busint().unwrap().debug_out_pending(),
+        "given up on by 13 microseconds"
+    );
     let a = lashup.debugger.machine();
     assert_eq!(a.bus_error, bus_error::UNIBUS_NXM, "the debugger's own NXM timeout");
     assert_eq!(a.amem[0o101], 0xffff, "the word of a cycle nothing answered: the open bus");

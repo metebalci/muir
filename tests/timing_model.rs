@@ -153,7 +153,7 @@ fn a_checkpoint_keeps_the_timing_model() {
         back.load(&mut r).unwrap();
         r.done().unwrap();
         assert_eq!(back.timing_model(), model);
-        assert_eq!(back.busint().timing_model(), model, "and the bus interface with it");
+        assert_eq!(back.busint().unwrap().timing_model(), model, "and the bus interface with it");
         assert_eq!(back.machine().disk.timing_model(), model, "and the disk controller");
         assert_eq!(back.ns(), e.ns());
     }
@@ -215,7 +215,7 @@ fn the_bus_interfaces_answers_land_on_the_grid_under_fpga() {
             let (mut seen, mut off_grid) = (0, Vec::new());
             for _ in 0..512 {
                 e.step().unwrap();
-                let b = e.busint();
+                let b = e.busint().unwrap();
                 // `next_change` is an instant and one: the edge that changes
                 // the board comes strictly after it.
                 let refresh = b.memory_boards().first().map(|m| m.next_change().saturating_sub(1));

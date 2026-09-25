@@ -138,7 +138,7 @@ impl Profiled for Rtl {
         self.executed()
     }
     fn bus(&self) -> Option<[u64; 5]> {
-        let (h, m) = self.busint().cache().map_or((0, 0), |c| (c.hits, c.misses));
+        let (h, m) = self.cache().map_or((0, 0), |c| (c.hits, c.misses));
         Some([self.stalled_ns(), self.bus_cycles(), self.ns(), h, m])
     }
     fn fetch_started(&self) -> Option<bool> {

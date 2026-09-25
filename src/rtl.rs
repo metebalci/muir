@@ -58,6 +58,7 @@
 //! `Rtl::after_memack` the two delays.
 
 use crate::busint::{self, Busint, Responder};
+use crate::memory_port::MemoryPort;
 
 /// How long after `-MEMACK` `READ IN PROGRESS` falls, and with it `-HANG`.
 ///
@@ -115,6 +116,169 @@ use crate::machine::{Halt, IMEM_WORDS, Machine};
 use crate::muldiv;
 use crate::spy;
 use crate::ttl;
+
+/// What the processor's cycles go through: the CADR's bus interface, or
+/// QUUX's memory port ([`crate::memory_port`], contract Q6), which has no
+/// Unibus, no debug cable and nothing to arbitrate. The debug cable's
+/// questions answer nothing on QUUX; its actions are the CADR's alone.
+#[derive(Clone)]
+enum Bus {
+    Cadr(Box<Busint>),
+    Quux(Box<MemoryPort>),
+}
+
+impl Bus {
+    fn for_machine(m: &Machine, model: TimingModel) -> Bus {
+        if m.geometry.unibus {
+            Bus::Cadr(Box::new(Busint::with_timing_model(m.memory_boards(), model)))
+        } else {
+            let mut p = MemoryPort::new();
+            p.keep_timing_model(model);
+            Bus::Quux(Box::new(p))
+        }
+    }
+
+    fn cadr(&self) -> Option<&Busint> {
+        match self {
+            Bus::Cadr(b) => Some(b),
+            Bus::Quux(_) => None,
+        }
+    }
+
+    fn cable(&mut self) -> &mut Busint {
+        match self {
+            Bus::Cadr(b) => b,
+            Bus::Quux(_) => panic!("QUUX has no debug cable: it is a Unibus master"),
+        }
+    }
+
+    fn request_at(&mut self, write: bool, phys: u32) {
+        match self {
+            Bus::Cadr(b) => b.request_at(write, phys),
+            Bus::Quux(p) => p.request_at(write, phys),
+        }
+    }
+    fn mclk_edge(&mut self, now: u64, responder: Responder) {
+        match self {
+            Bus::Cadr(b) => b.mclk_edge(now, responder),
+            Bus::Quux(p) => p.mclk_edge(now, responder),
+        }
+    }
+    fn poll(&mut self, now: u64, responder: Responder) -> Option<busint::Ack> {
+        match self {
+            Bus::Cadr(b) => b.poll(now, responder),
+            Bus::Quux(p) => p.poll(now, responder),
+        }
+    }
+    fn released(&mut self, at: u64) {
+        if let Bus::Cadr(b) = self {
+            b.released(at);
+        }
+    }
+    fn finish(&mut self) {
+        match self {
+            Bus::Cadr(b) => b.finish(),
+            Bus::Quux(p) => p.finish(),
+        }
+    }
+    fn granted(&self) -> bool {
+        match self {
+            Bus::Cadr(b) => b.granted(),
+            Bus::Quux(p) => p.granted(),
+        }
+    }
+    fn busy(&self) -> bool {
+        match self {
+            Bus::Cadr(b) => b.busy(),
+            Bus::Quux(p) => p.busy(),
+        }
+    }
+    fn ack_at(&self) -> Option<u64> {
+        match self {
+            Bus::Cadr(b) => b.ack_at(),
+            Bus::Quux(p) => p.ack_at(),
+        }
+    }
+    fn answered_at(&self) -> Option<u64> {
+        match self {
+            Bus::Cadr(b) => b.answered_at(),
+            Bus::Quux(p) => p.answered_at(),
+        }
+    }
+    fn invalidate_cache(&mut self) {
+        match self {
+            Bus::Cadr(b) => b.invalidate_cache(),
+            Bus::Quux(p) => p.invalidate_cache(),
+        }
+    }
+    fn cache(&self) -> Option<&crate::cache::Cache> {
+        match self {
+            Bus::Cadr(b) => b.cache(),
+            Bus::Quux(p) => Some(p.cache()),
+        }
+    }
+    fn memory_timing(&self) -> Option<crate::cache::MemoryTiming> {
+        match self {
+            Bus::Cadr(b) => b.memory_timing(),
+            Bus::Quux(p) => Some(p.memory_timing()),
+        }
+    }
+    fn keep_timing_model(&mut self, model: TimingModel) {
+        match self {
+            Bus::Cadr(b) => b.keep_timing_model(model),
+            Bus::Quux(p) => p.keep_timing_model(model),
+        }
+    }
+    fn unibus_reset(&mut self, now: u64, on: bool) {
+        if let Bus::Cadr(b) = self {
+            b.unibus_reset(now, on);
+        }
+    }
+    fn debug_advance(&mut self, now: u64) {
+        if let Bus::Cadr(b) = self {
+            b.debug_advance(now);
+        }
+    }
+    fn debug_modifier(&self) -> u16 {
+        self.cadr().map_or(0, Busint::debug_modifier)
+    }
+    fn debug_last_request(&self) -> Option<busint::DebugRequest> {
+        self.cadr()?.debug_last_request()
+    }
+    fn debug_pending(&self) -> Option<busint::DebugRequest> {
+        self.cadr()?.debug_pending()
+    }
+    fn debug_answered_at(&self) -> Option<u64> {
+        self.cadr()?.debug_answered_at()
+    }
+    fn debug_ack_at(&self) -> Option<u64> {
+        self.cadr()?.debug_ack_at()
+    }
+    fn debug_strobe_until(&self) -> Option<u64> {
+        self.cadr()?.debug_strobe_until()
+    }
+    fn debug_master(&self) -> bool {
+        self.cadr().is_some_and(Busint::debug_master)
+    }
+    fn debug_in_promise(&self, now: u64) -> u64 {
+        self.cadr().map_or(u64::MAX, |b| b.debug_in_promise(now))
+    }
+    fn debug_out_promise(&self, now: u64) -> u64 {
+        self.cadr().map_or(u64::MAX, |b| b.debug_out_promise(now))
+    }
+    fn debug_out_take(&mut self) -> Option<busint::DebugOut> {
+        match self {
+            Bus::Cadr(b) => b.debug_out_take(),
+            Bus::Quux(_) => None,
+        }
+    }
+    fn debug_unibus_address(&self) -> u32 {
+        self.cadr().map_or(0, Busint::debug_unibus_address)
+    }
+    fn debug_responder(&self) -> Responder {
+        self.cadr().map_or(Responder::NoXbus, Busint::debug_responder)
+    }
+}
 
 pub struct Rtl {
     pub m: Machine,
@@ -220,11 +384,12 @@ pub struct Rtl {
     mbusy: bool,
     rdcyc: bool,
     wrcyc: bool,
-    /// The bus interface at the far end of the cables, and the cycle it is
-    /// running: the address and the word are held by it for the whole cycle,
-    /// which is why they are captured when `MBUSY` rises rather than read
-    /// again when the answer comes back.
-    busint: Busint,
+    /// The bus interface at the far end of the cables on the CADR, QUUX's
+    /// memory port (contract Q6) on QUUX, and the cycle it is running: the
+    /// address and the word are held by it for the whole cycle, which is
+    /// why they are captured when `MBUSY` rises rather than read again when
+    /// the answer comes back.
+    bus: Bus,
     /// `MBUSY.SYNC`, the second flip flop of the 74S175 at VCTL1 1E20:
     /// `MEMRQ` registered on `MCLK1A`. "Since you must wait during the first
     /// half of a clock cycle, the busy condition (MEMRQ) must be
@@ -505,8 +670,8 @@ fn field(v: u64, hi: u32, lo: u32) -> u32 {
 
 impl Rtl {
     pub fn new(m: Machine) -> Self {
-        let memory_boards = m.memory_boards();
         let on_quux = m.geometry.machine_id.is_some();
+        let m_bus = Bus::for_machine(&m, TimingModel::Cadr);
         let mut r = Rtl {
             m,
             trace: [0; 12],
@@ -544,7 +709,7 @@ impl Rtl {
             halted_ns: 0,
             memstart: false,
             mbusy: false,
-            busint: Busint::new(memory_boards),
+            bus: m_bus,
             mbusy_sync: false,
             bus_addr: 0,
             bus_data: 0,
@@ -635,7 +800,7 @@ impl Rtl {
         self.int_enable = false;
         self.sequence_break = false;
         if self.prog_unibus_reset {
-            self.busint.unibus_reset(self.ns, false);
+            self.bus.unibus_reset(self.ns, false);
         }
         self.prog_unibus_reset = false;
         // ACTL 3B26
@@ -728,26 +893,59 @@ impl Rtl {
             model.name()
         );
         self.timing = model;
-        let cache = self.busint.cache().map(|c| c.config);
-        let memory = self.busint.memory_timing();
-        self.busint = Busint::with_timing_model(self.m.memory_boards(), model);
-        self.busint.set_cache(cache);
-        self.busint.set_memory_timing(memory);
+        match &mut self.bus {
+            // The CADR's bus interface keeps the model's time in its
+            // boards' twins, and is built for it.
+            Bus::Cadr(b) => {
+                let cache = b.cache().map(|c| c.config);
+                let memory = b.memory_timing();
+                let mut n = Busint::with_timing_model(self.m.memory_boards(), model);
+                n.set_cache(cache);
+                n.set_memory_timing(memory);
+                **b = n;
+            }
+            Bus::Quux(p) => p.keep_timing_model(model),
+        }
         self.m.disk.set_timing_model(model);
     }
 
-    /// Fits QUUX's memory cache, or takes it out ([`crate::cache`]):
-    /// chosen before the machine runs, like the timing model.
+    /// Another shape of QUUX's memory cache ([`crate::cache`]), which is
+    /// always fitted there (contract Q6): chosen before the machine runs,
+    /// like the timing model. On the CADR, a cache in front of its memory
+    /// boards, or none: a measurement's, not the machine's.
     pub fn set_cache(&mut self, config: Option<crate::cache::CacheConfig>) {
         assert_eq!(self.ns, 0, "a cache is fitted before the machine runs");
-        self.busint.set_cache(config);
+        match &mut self.bus {
+            Bus::Cadr(b) => b.set_cache(config),
+            Bus::Quux(p) => p.set_cache(config.expect("QUUX always has its cache")),
+        }
     }
 
-    /// Times main memory as QUUX's own ([`crate::cache::MemoryTiming`]) or
-    /// as the CADR's boards: chosen before the machine runs.
+    /// Other figures for QUUX's main memory ([`crate::cache::MemoryTiming`],
+    /// [`crate::cache::MemoryTiming::NOMINAL`] unless set): chosen before
+    /// the machine runs. On the CADR, its boards timed so instead, or not.
     pub fn set_memory_timing(&mut self, timing: Option<crate::cache::MemoryTiming>) {
         assert_eq!(self.ns, 0, "a memory is fitted before the machine runs");
-        self.busint.set_memory_timing(timing);
+        match &mut self.bus {
+            Bus::Cadr(b) => b.set_memory_timing(timing),
+            Bus::Quux(p) => p.set_memory_timing(timing.expect("QUUX's memory has a timing")),
+        }
+    }
+
+    /// When the cycle running was answered, if it has been: the slave took
+    /// or gave the word then.
+    pub fn bus_answered_at(&self) -> Option<u64> {
+        self.bus.answered_at()
+    }
+
+    /// The memory cache, if the machine has one: always on QUUX.
+    pub fn cache(&self) -> Option<&crate::cache::Cache> {
+        self.bus.cache()
+    }
+
+    /// Main memory's own timing, if it has one: always on QUUX.
+    pub fn memory_timing(&self) -> Option<crate::cache::MemoryTiming> {
+        self.bus.memory_timing()
     }
 
     /// Whose time this engine keeps.
@@ -1413,7 +1611,7 @@ impl Rtl {
         if self.bus_acked {
             return;
         }
-        let Some(ack) = self.busint.poll(now, self.bus_responder) else { return };
+        let Some(ack) = self.bus.poll(now, self.bus_responder) else { return };
         self.bus_acked = true;
         // The word was made when the device answered, before the
         // acknowledgement: the clocks on the I/O board are read then.
@@ -1451,7 +1649,7 @@ impl Rtl {
         self.mbusy_clear_at = ack.at + release;
         // `-MEMRQ` goes with `MBUSY`, and `-XBUS RQ` with it; a memory
         // board is not idle until then.
-        self.busint.released(self.mbusy_clear_at);
+        self.bus.released(self.mbusy_clear_at);
     }
 
     /// The word of a write reaches its slave when [`Busint::answered_at`]
@@ -1472,7 +1670,7 @@ impl Rtl {
         if !self.wrcyc || self.bus_written {
             return;
         }
-        let Some(at) = self.busint.answered_at() else { return };
+        let Some(at) = self.bus.answered_at() else { return };
         let mode = self.bus_spy.is_some_and(|e| spy::write_strobe(e) == spy::MODE);
         let pulses = (spy::MODE_RESET | spy::MODE_BOOT) as u32;
         if mode && !self.bus_pulsed && now + busint::REGISTER_PULSE_NS >= at {
@@ -1500,7 +1698,7 @@ impl Rtl {
         if let Some(eadr) = self.bus_spy
             && !self.wrcyc
             && !self.bus_sampled
-            && let Some(at) = self.busint.answered_at()
+            && let Some(at) = self.bus.answered_at()
             && now >= at
         {
             self.busint_bus = self.spy_read(eadr) as u32;
@@ -1528,13 +1726,13 @@ impl Rtl {
     /// [`crate::machine::Machine::mapped_read`] and
     /// [`crate::machine::Machine::mapped_write`].
     fn debug_cycle(&mut self, now: u64) {
-        self.busint.debug_advance(now);
+        self.bus.debug_advance(now);
         // `-DEBUGEE RESET`: the interface's `RESET`, which is `-UB INIT` and
         // `-XBUS INIT`, and the cpu's power-on reset over the cables.
-        let reset = self.busint.debug_modifier() & busint::debug_modifier::RESET != 0;
+        let reset = self.bus.debug_modifier() & busint::debug_modifier::RESET != 0;
         if reset != self.debug_reset {
             self.debug_reset = reset;
-            self.busint.unibus_reset(now, reset);
+            self.bus.unibus_reset(now, reset);
             if reset {
                 self.clock_reset();
                 self.m.bus_reset();
@@ -1544,13 +1742,13 @@ impl Rtl {
             // lifted, and `now` is then the start of a cycle.
             self.clock_held = reset;
         }
-        let Some(req) = self.busint.debug_last_request() else { return };
+        let Some(req) = self.bus.debug_last_request() else { return };
         if req.strobe == busint::DEBUG_CYCLE
-            && let Some(at) = self.busint.debug_answered_at()
+            && let Some(at) = self.bus.debug_answered_at()
         {
-            let uaddr = self.busint.debug_unibus_address();
+            let uaddr = self.bus.debug_unibus_address();
             let phys = busint::unibus_physical(uaddr);
-            let responder = self.busint.debug_responder();
+            let responder = self.bus.debug_responder();
             // Through the map: the buffers, the mapped Xbus word, or the
             // refusal that sets `UB MAP ERROR` and answers nothing.
             if let Some(access) = busint::map_access(uaddr) {
@@ -1612,7 +1810,7 @@ impl Rtl {
             }
         }
         if self.debug_answer.is_none()
-            && let Some(ack) = self.busint.debug_ack_at()
+            && let Some(ack) = self.bus.debug_ack_at()
             && now >= ack
         {
             self.debug_answer = Some((ack, self.debug_word));
@@ -1668,7 +1866,7 @@ impl Rtl {
         if now >= self.mbusy_clear_at {
             self.mbusy = false;
             self.mbusy_clear_at = u64::MAX;
-            self.busint.finish();
+            self.bus.finish();
             self.bus_acked = false;
         }
     }
@@ -1692,7 +1890,7 @@ impl Rtl {
     /// warning, and the second `-WAIT` term is the gate that enforces it.
     fn stall(&self, r: &Read) -> Option<Stall> {
         let wait = (r.destmem && self.mbusy_sync)
-            || (r.use_md && self.mbusy && !self.busint.granted())
+            || (r.use_md && self.mbusy && !self.bus.granted())
             || (r.lcinc && r.needfetch && self.mbusy_sync)
             || self.dividing(r);
         if wait {
@@ -1748,7 +1946,7 @@ impl Rtl {
             Stall::Hang => {
                 let cycle = self.timing.cycle_ns(self.speed, r.ilong) as u64;
                 let finish = self
-                    .busint
+                    .bus
                     .ack_at()
                     .map_or(self.rd_finish_at, |ack| ack.saturating_add(RD_FINISH_NS));
                 // Between a read's start and its grant neither is known,
@@ -1828,7 +2026,7 @@ impl Rtl {
         // `None` here without touching the state machine.
         if let Some(at) = speedclk
             && !self.debug_written
-            && self.busint.debug_answered_at().is_some()
+            && self.bus.debug_answered_at().is_some()
         {
             self.debug_cycle(at);
         }
@@ -1842,7 +2040,7 @@ impl Rtl {
         let memstart = self.memstart;
         self.start_bus_cycle(r);
         self.memstart = false;
-        self.busint.mclk_edge(self.ns, self.bus_responder);
+        self.bus.mclk_edge(self.ns, self.bus_responder);
         self.mbusy_sync = (memstart && r.vmaok) || self.mbusy;
         self.mclk_edge();
         self.ns - before
@@ -1884,9 +2082,9 @@ impl Rtl {
                     )
                 };
                 if std::mem::take(&mut self.m.dma_written) {
-                    self.busint.invalidate_cache();
+                    self.bus.invalidate_cache();
                 }
-                self.busint.request_at(self.wrcyc, self.bus_addr);
+                self.bus.request_at(self.wrcyc, self.bus_addr);
                 self.bus_cycles += 1;
                 self.bus_written = false;
                 self.bus_spy = busint::unibus_address(self.bus_addr).and_then(spy::register);
@@ -2048,7 +2246,7 @@ impl Rtl {
                 // and `-UB INIT`: the memory boards are held by it, and the
                 // model I/O boards clear what their reset pins clear,
                 // `Machine::bus_reset`.
-                self.busint.unibus_reset(self.ns, reset);
+                self.bus.unibus_reset(self.ns, reset);
                 if reset {
                     self.m.bus_reset();
                 }
@@ -2131,7 +2329,7 @@ impl Rtl {
         // The master clock edge the bus interface runs on. `MEMRQ` is a level
         // during the cycle and "the bus interface only looks at it towards
         // the end of the cycle", which is here.
-        self.busint.mclk_edge(self.ns, self.bus_responder);
+        self.bus.mclk_edge(self.ns, self.bus_responder);
 
         // page CONTRL / LCC
         // page DSPCTL 3C14/3C15: 25S07s enabled by `-IRDISP` and clocked by
@@ -2224,9 +2422,10 @@ impl Rtl {
 impl Rtl {
     /// The bus interface as this engine has it: what a far end built beside
     /// a resumed board must be given, because the interface keeps state
-    /// between cycles --- it holds the Unibus once it has had it.
-    pub fn busint(&self) -> &Busint {
-        &self.busint
+    /// between cycles --- it holds the Unibus once it has had it. QUUX has
+    /// none (contract Q6).
+    pub fn busint(&self) -> Option<&Busint> {
+        self.bus.cadr()
     }
 
     /// Sets the clock before the machine has run: the instant it is powered
@@ -2264,11 +2463,11 @@ impl Rtl {
         // (`lashup::Lashup::step`); such an event is taken as of now.
         // Anything later than that is a scheduling error.
         let at = Self::recent(at, self.ns, "request")?;
-        self.busint.debug_advance(at);
-        if self.busint.debug_pending().is_some() {
+        self.bus.debug_advance(at);
+        if self.bus.debug_pending().is_some() {
             return Err(format!("a debug request at {at} ns while one is already on the cable"));
         }
-        let uaddr = self.busint.debug_unibus_address();
+        let uaddr = self.bus.debug_unibus_address();
         // Through the Unibus map, the responder is the entry's: the buffer
         // half a register cycle, the Xbus half a cycle at the mapped
         // physical address, a load of `MD` for a write through a page whose
@@ -2295,14 +2494,14 @@ impl Rtl {
         // The 8304 at REQERR 0B15 drives `DBD<7:0>`; the high byte is the
         // open cable, which the debugger's 8304s read as ones.
         self.debug_word = (req.strobe == busint::DEBUG_STATUS)
-            .then(|| 0xff00 | self.m.debug_status(self.busint.busy()));
+            .then(|| 0xff00 | self.m.debug_status(self.bus.busy()));
         self.debug_sampled = false;
         self.debug_written = false;
         self.debug_pulsed = false;
         // A register strobe is acknowledged the instant it is made, the
         // 74S10 at DBGIN 0A14, and the debugger may be told so at once.
         self.debug_answer = (req.strobe != busint::DEBUG_CYCLE).then_some((at, self.debug_word));
-        self.busint.debug_request(at, req, responder);
+        self.bus.cable().debug_request(at, req, responder);
         Ok(())
     }
 
@@ -2325,7 +2524,7 @@ impl Rtl {
     /// as [`Rtl::try_debug_request`] refuses a request.
     pub fn try_debug_release(&mut self, at: u64) -> Result<(), String> {
         let at = Self::recent(at, self.ns, "release")?;
-        self.busint.debug_release(at);
+        self.bus.cable().debug_release(at);
         Ok(())
     }
 
@@ -2343,13 +2542,13 @@ impl Rtl {
 
     /// A request is on the cable, or `DBUB MASTER` is still up after one.
     pub fn debug_busy(&self) -> bool {
-        self.busint.debug_pending().is_some() || self.busint.debug_master()
+        self.bus.debug_pending().is_some() || self.bus.debug_master()
     }
 
     /// What the debuggee's side promises the debugger: no `DEBUG ACK`
     /// before this instant.  [`Busint::debug_in_promise`].
     pub fn debug_in_promise(&self) -> u64 {
-        self.busint.debug_in_promise(self.ns)
+        self.bus.debug_in_promise(self.ns)
     }
 
     // --- DBGOUT: this machine as the debugger ---
@@ -2359,7 +2558,7 @@ impl Rtl {
     /// machine's `DEBUG ACK`, [`Rtl::debug_out_answer`], instead of the
     /// pull-up's.
     pub fn attach_debug_cable(&mut self) {
-        self.busint.attach_debug_cable();
+        self.bus.cable().attach_debug_cable();
     }
 
     /// The event this machine's DBGOUT has put on the cable, if one is
@@ -2369,7 +2568,7 @@ impl Rtl {
     /// after the acknowledgement, as `SELECT DEBUG` drops with `-UB MSYN`
     /// at `SSYN T100`; or the release of a request this side timed out.
     pub fn debug_out_take(&mut self) -> Option<busint::CableEvent> {
-        Some(match self.busint.debug_out_take()? {
+        Some(match self.bus.debug_out_take()? {
             busint::DebugOut::Request { at, strobe } => {
                 if strobe == busint::DEBUG_CYCLE {
                     self.debug_cycles += 1;
@@ -2393,7 +2592,7 @@ impl Rtl {
     /// whether this interface was still waiting for it; after its own
     /// timeout it is not.
     pub fn debug_out_answer(&mut self, ack_at: u64, word: Option<u16>) -> bool {
-        if !self.busint.debug_out_answer(ack_at) {
+        if !self.bus.cable().debug_out_answer(ack_at) {
             return false;
         }
         self.debug_out_word = word.unwrap_or(0xffff);
@@ -2403,7 +2602,7 @@ impl Rtl {
     /// What this machine promises the other about the cable: no request
     /// and no release before this instant.  [`Busint::debug_out_promise`].
     pub fn debug_out_promise(&self) -> u64 {
-        self.busint.debug_out_promise(self.ns)
+        self.bus.debug_out_promise(self.ns)
     }
 }
 
@@ -2432,7 +2631,7 @@ impl Rtl {
         let period = self.timing.cycle_ns(self.speed, false) as u64;
         if self.clock_held {
             let mut to = (self.ns + period).min(self.step_limit.max(self.ns));
-            if let Some(lift) = self.busint.debug_strobe_until()
+            if let Some(lift) = self.bus.debug_strobe_until()
                 && lift > self.ns
             {
                 to = to.min(lift);
@@ -2446,10 +2645,10 @@ impl Rtl {
         // about to run: the ring is cleared then, mid-cycle, and the edge
         // that would have ended the cycle never comes.  The strobe is on
         // the cable already, so its lift is known; go to it and no further.
-        if let Some(lift) = self.busint.debug_strobe_until()
+        if let Some(lift) = self.bus.debug_strobe_until()
             && lift > self.ns
             && lift < self.ns + period
-            && self.busint.debug_pending().is_some_and(|q| {
+            && self.bus.debug_pending().is_some_and(|q| {
                 q.strobe == busint::DEBUG_MODIFIER
                     && q.write
                     && q.dbd & busint::debug_modifier::RESET != 0
@@ -2469,14 +2668,14 @@ impl Rtl {
         // to the load and the next cycle starts there.  The processor's own
         // write of its mode register with the bit is **not** modeled this
         // way; nothing does that.
-        if let Some(at) = self.busint.debug_answered_at()
+        if let Some(at) = self.bus.debug_answered_at()
             && at > busint::REGISTER_PULSE_NS
             && (self.ns..self.ns + period).contains(&(at - busint::REGISTER_PULSE_NS))
             && at > self.ns
-            && self.busint.debug_last_request().is_some_and(|q| {
+            && self.bus.debug_last_request().is_some_and(|q| {
                 q.strobe == busint::DEBUG_CYCLE && q.write && q.dbd & spy::MODE_RESET != 0
             })
-            && spy::register(self.busint.debug_unibus_address())
+            && spy::register(self.bus.debug_unibus_address())
                 .is_some_and(|e| spy::write_strobe(e) == spy::MODE)
             && !self.debug_written
         {
@@ -2588,7 +2787,7 @@ impl Rtl {
                 // does a wait that has carried the clock to the bound, else
                 // a run of waits overran it by a generator cycle each and a
                 // debuggee ran past the debugger's promise.
-                if open || self.busint.ack_at() == Some(u64::MAX) || self.ns >= self.step_limit {
+                if open || self.bus.ack_at() == Some(u64::MAX) || self.ns >= self.step_limit {
                     return Ok(());
                 }
                 stalls += 1;
@@ -2597,7 +2796,7 @@ impl Rtl {
                     "the bus never let go at PC {:o}: {stall:?}, MBUSY {}, granted {}",
                     self.pc,
                     self.mbusy,
-                    self.busint.granted()
+                    self.bus.granted()
                 );
                 continue;
             }
@@ -2612,7 +2811,7 @@ impl Rtl {
             // here as the processor's does; see [`Rtl::master_clock_cycle`].
             if let Some(at) = self.speedclk_at() {
                 self.land_write(at);
-                if !self.debug_written && self.busint.debug_answered_at().is_some() {
+                if !self.debug_written && self.bus.debug_answered_at().is_some() {
                     self.debug_cycle(at);
                 }
             }
@@ -2718,7 +2917,7 @@ impl Engine for Rtl {
             mbusy,
             rdcyc,
             wrcyc,
-            busint,
+            bus,
             mbusy_sync,
             bus_addr,
             bus_data,
@@ -2803,7 +3002,16 @@ impl Engine for Rtl {
         w.bool(*mbusy);
         w.bool(*rdcyc);
         w.bool(*wrcyc);
-        busint.save(w);
+        match bus {
+            Bus::Cadr(b) => {
+                w.u8(0);
+                b.save(w);
+            }
+            Bus::Quux(p) => {
+                w.u8(1);
+                p.save(w);
+            }
+        }
         w.bool(*mbusy_sync);
         w.u32(*bus_addr);
         w.u32(*bus_data);
@@ -2900,7 +3108,19 @@ impl Engine for Rtl {
         self.mbusy = r.bool()?;
         self.rdcyc = r.bool()?;
         self.wrcyc = r.bool()?;
-        self.busint.load(r)?;
+        self.bus = match r.u8()? {
+            0 => {
+                let mut b = Busint::with_timing_model(self.m.memory_boards(), self.timing);
+                b.load(r)?;
+                Bus::Cadr(Box::new(b))
+            }
+            1 => {
+                let mut p = MemoryPort::new();
+                p.load(r)?;
+                Bus::Quux(Box::new(p))
+            }
+            k => return Err(crate::checkpoint::bad(format!("bus kind {k}"))),
+        };
         self.mbusy_sync = r.bool()?;
         self.bus_addr = r.u32()?;
         self.bus_data = r.u32()?;
@@ -2950,7 +3170,7 @@ impl Engine for Rtl {
         self.busint_bus = r.u32()?;
         self.loadmd_at = r.u64()?;
         self.executed = r.opt(Reader::u16)?;
-        self.busint.keep_timing_model(self.timing);
+        self.bus.keep_timing_model(self.timing);
         self.m.disk.set_timing_model(self.timing);
         Ok(())
     }

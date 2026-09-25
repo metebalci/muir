@@ -23,6 +23,11 @@ use muir::rtl::Rtl;
 
 mod support;
 
+/// A cache that saves nothing: one word, no write buffer. QUUX has no
+/// run without its cache (contract Q6), so this is the measure against.
+const NONE: CacheConfig =
+    CacheConfig { words: 1, line_words: 1, ways: 1, hit_ns: 20, write_buffer: false };
+
 /// **Lines, sets and replacement**: a line of 4 fills on its first word's
 /// miss and hits on the other three; a 2-way set keeps the two most
 /// recently used lines; invalidation drops everything.
@@ -78,8 +83,10 @@ fn reader() -> Machine {
     m
 }
 
-/// `reader` on `rtl` for `steps` microcycles, with `cache` fitted.
+/// `reader` on `rtl` for `steps` microcycles, with `cache` fitted, or
+/// [`NONE`].
 fn run(cache: Option<CacheConfig>, model: TimingModel, steps: usize) -> Rtl {
+    let cache = cache.or(Some(NONE));
     let mut e = Rtl::new(reader());
     e.set_timing_model(model);
     e.set_cache(cache);
@@ -106,7 +113,7 @@ fn the_cache_changes_when_and_not_what() {
         let state = |e: &Rtl| (e.machine().amem[3], e.machine().mmem[1], e.pc());
         assert_eq!(state(&with), state(&without), "{model:?}: the same words");
         assert!(with.ns() < without.ns(), "{model:?}: {} ns against {}", with.ns(), without.ns());
-        let c = with.busint().cache().unwrap();
+        let c = with.cache().unwrap();
         let reads = c.hits + c.misses;
         assert!(reads > 50, "{model:?}: {reads} reads");
         assert!(c.hits * 4 >= reads * 3 - 4, "{model:?}: {} hits in {reads}", c.hits);
@@ -123,7 +130,7 @@ fn a_disk_transfer_invalidates_the_cache() {
         TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
         200,
     );
-    let before = e.busint().cache().unwrap().clone();
+    let before = e.cache().unwrap().clone();
     assert!(before.holds(0o1000), "the loop's first line is held");
     e.machine_mut().dma_written = true;
     // Back to the first word: point M 1 at it and let the loop read it.
@@ -131,7 +138,7 @@ fn a_disk_transfer_invalidates_the_cache() {
     for _ in 0..12 {
         e.step().unwrap();
     }
-    let after = e.busint().cache().unwrap();
+    let after = e.cache().unwrap();
     assert!(!e.machine().dma_written, "the engine took the flag");
     assert!(after.misses > before.misses, "the held line missed");
 }
@@ -155,7 +162,7 @@ fn a_checkpoint_keeps_the_cache() {
         e.step().unwrap();
         back.step().unwrap();
     }
-    let (a, b) = (e.busint().cache().unwrap(), back.busint().cache().unwrap());
+    let (a, b) = (e.cache().unwrap(), back.cache().unwrap());
     assert_eq!((a.config, a.hits, a.misses), (b.config, b.hits, b.misses));
     assert_eq!(e.ns(), back.ns());
 }
@@ -198,7 +205,7 @@ fn a_written_word_is_read_back_through_the_buffer() {
         let go = |cache: Option<CacheConfig>| {
             let mut e = Rtl::new(writer());
             e.set_timing_model(model);
-            e.set_cache(cache);
+            e.set_cache(cache.or(Some(NONE)));
             e.boot();
             for _ in 0..4_000 {
                 e.step().unwrap();
@@ -216,19 +223,19 @@ fn a_written_word_is_read_back_through_the_buffer() {
     }
 }
 
-/// **QUUX's own memory timing changes when, not what**: with main memory
-/// answering a fixed time after the request in place of the CADR's boards,
-/// the read loop and the write-and-read-back loop leave the same words, with
-/// and without the cache, and a slower read makes the same run longer.
+/// **QUUX's memory timing changes when, not what**: with main memory at
+/// other figures, the read loop and the write-and-read-back loop leave the
+/// same words, with its cache and with [`NONE`], and a slower read makes
+/// the same run longer.
 #[test]
 fn quux_memory_timing_changes_when_and_not_what() {
     use muir::cache::MemoryTiming;
     let sync = TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 };
-    let go = |make: fn() -> Machine, memory: Option<MemoryTiming>, cache: Option<CacheConfig>| {
+    let go = |make: fn() -> Machine, memory: MemoryTiming, cache: CacheConfig| {
         let mut e = Rtl::new(make());
         e.set_timing_model(sync);
-        e.set_memory_timing(memory);
-        e.set_cache(cache);
+        e.set_memory_timing(Some(memory));
+        e.set_cache(Some(cache));
         e.boot();
         for _ in 0..4_000 {
             e.step().unwrap();
@@ -239,15 +246,15 @@ fn quux_memory_timing_changes_when_and_not_what() {
         let m = e.machine();
         (m.amem[3], m.amem[4], m.mmem[1], m.mmem[2], m.main[0o1000..0o1100].to_vec())
     };
-    let fast = Some(MemoryTiming { read_ns: 200, write_ns: 150 });
-    let slow = Some(MemoryTiming { read_ns: 300, write_ns: 150 });
+    let fast = MemoryTiming { read_ns: 200, write_ns: 150 };
+    let slow = MemoryTiming { read_ns: 300, write_ns: 150 };
     for make in [reader as fn() -> Machine, writer] {
-        let boards = go(make, None, None);
-        for cache in [None, Some(CacheConfig::with_words(1024))] {
+        let nominal = go(make, MemoryTiming::NOMINAL, NONE);
+        for cache in [NONE, CacheConfig::with_words(1024)] {
             let quux = go(make, fast, cache);
-            assert_eq!(state(&quux), state(&boards), "the same words, cache {cache:?}");
+            assert_eq!(state(&quux), state(&nominal), "the same words, cache {cache:?}");
         }
-        let (f, s) = (go(make, fast, None), go(make, slow, None));
+        let (f, s) = (go(make, fast, NONE), go(make, slow, NONE));
         assert!(s.ns() > f.ns(), "a slower read is a longer run: {} against {}", s.ns(), f.ns());
     }
 }

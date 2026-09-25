@@ -308,7 +308,9 @@ fn a_flag_rising_during_a_wait_is_seen_by_the_jump_after() {
         TimingModel::Sync { cycle_ticks: 3, ilong_ticks: 0 },
     ] {
         for p in [1u32, 2] {
-            for f in 0..12usize {
+            // Enough fillers that the read's wait reaches past the first
+            // rise at 1 µs, at QUUX's 380 ns line fill (contract Q6).
+            for f in 0..40usize {
                 let mut prom = vec![
                     Insn::new(ALU | SETM | m_src(6) | INTERRUPT_CONTROL),
                     Insn::new(ALU | SETM | m_src(2) | CLOCK_CONTROL),

@@ -516,6 +516,30 @@ fn the_cache_is_quux_s_and_rtl_s() {
     refused_saying(&["--rtl", "--machine", "quux", "--cache", "3000"], "--cache:");
 }
 
+/// **QUUX's main memory is on its own port** (contract Q6): the start
+/// says the port's timing and the cache, fitted without `--cache`;
+/// `--memory-timing` sets other figures there, and is refused on the CADR,
+/// on `micro`, and with a figure that is not one.
+#[test]
+fn quux_s_memory_port_and_its_timing() {
+    let out = muir().args(["--rtl", "--machine", "quux", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("memory port: a line fill in 380 ns, a write in 290"), "{t}");
+    assert!(t.contains("cache: 4096 words, lines of 4, 2-way"), "always fitted:\n{t}");
+    let out = muir()
+        .args(["--rtl", "--machine", "quux", "--memory-timing", "arty", "--stop-after", "1"])
+        .run();
+    let t = text(&out);
+    assert!(t.contains("memory port: a line fill in 220 ns, a write in 120"), "{t}");
+    refused_saying(&["--rtl", "--memory-timing", "300,200"], "--memory-timing is QUUX's");
+    refused_saying(
+        &["--micro", "--machine", "quux", "--memory-timing", "300,200"],
+        "--memory-timing is rtl's",
+    );
+    refused_saying(&["--rtl", "--machine", "quux", "--memory-timing", "fast"], "--memory-timing");
+}
+
 /// **`--disk-controller block-disk` is QUUX's**: it runs on `micro` and
 /// `rtl` and the start says it, without the warning that the flag is
 /// `chip`'s, and it is refused on the CADR and on `chip`.

@@ -165,7 +165,7 @@ fn a_write_lands_no_earlier_than_its_answer() {
     let mut landed = 0;
     for _ in 0..3_000 {
         let before = e.machine().tv.read_buffer(0);
-        let answer = e.busint().answered_at();
+        let answer = e.bus_answered_at();
         e.step().unwrap();
         if e.machine().tv.read_buffer(0) != before {
             landed += 1;
