@@ -65,11 +65,10 @@ fn quux(pack: &std::path::Path) -> Machine {
 /// on block-disk, and MONO TV at `w` by `h`.
 fn quux_at(pack: &std::path::Path, (w, h): (usize, usize)) -> Machine {
     use muir::block_disk::{BLOCK_NS, BlockDisk};
-    use muir::disk_unit::{Geometry as Pack, Unit};
     let mut m = Machine::new();
     m.load_prom(&muir::prom::quux_boot_prom());
     let mut d = BlockDisk::new(BLOCK_NS);
-    d.attach(Unit::open_rw(pack, Pack::T300).expect("the pack"));
+    d.attach(muir::disk_image::Disk::open_rw(pack).expect("the pack"));
     m.block_disk = Some(d);
     m.geometry = Geometry::QUUX;
     m.tv.set_board(Board::MonoTv);

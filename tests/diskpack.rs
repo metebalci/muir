@@ -788,6 +788,30 @@ fn initialize_does_not_write_over_a_file() {
     assert_eq!(std::fs::read(&path).unwrap(), note, "the file is as it was");
 }
 
+/// **diskpack is the CADR's, and says so of QUUX's disk** (contract Q8):
+/// a QUUX disk, raw or a VHD, has a GPT where a pack has its label, and
+/// diskpack names what the file is and the tool its partitions are made
+/// with, and writes nothing.
+#[test]
+fn quux_s_disk_is_named_and_left_alone() {
+    let dir = scratch("diskpack-quux-disk");
+    for (file, what) in [
+        ("quux-disk.img", "raw with a GPT"),
+        ("quux-disk-fixed.vhd", "a fixed VHD with a GPT"),
+        ("quux-disk-dynamic.vhd", "a dynamic VHD with a GPT"),
+    ] {
+        let path = dir.join(file);
+        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/data/").to_owned() + file, &path)
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let (mut pack, said) = Pack::open(&path);
+        assert!(said.contains(&format!("QUUX's disk, {what}")), "{file}: {said}");
+        assert!(said.contains("sgdisk"), "{file}: {said}");
+        assert!(pack.run(Command::Initialize(Layout::default())).is_err(), "{file}");
+        assert!(std::fs::read(&path).unwrap() == before, "{file}: the file is as it was");
+    }
+}
+
 /// **`initialize` does not replace a pack that is already there.**
 ///
 /// The blocks would survive and the only record of where the bands are would

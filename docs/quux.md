@@ -413,11 +413,10 @@ a failure too.
 
 The words move inside the store to START, and the controller stays busy for
 a block's time each; a transfer writes main memory behind the processor, so
-the memory cache is invalidated. The pack image is the CADR's file, its
-blocks in the same order, and the label's format is unchanged, its partition
-starts and lengths already block numbers. `tests/block_disk.rs` holds the
-read, the write, the end of the pack, the NXM, a command it does not do, the
-registers on QUUX's bus and a checkpoint.
+the memory cache is invalidated. The disk is a file in a standard format,
+[below](#the-disk-file). `tests/block_disk.rs` holds the read, the write,
+the end of the disk, the NXM, a command it does not do, the registers on
+QUUX's bus and a checkpoint.
 
 muir-sys's boot PROM 1000, microcode 1000 and System 1002 address it by
 block: its fourth development band boots on it on `micro`, `rtl` and
@@ -426,6 +425,83 @@ under `sync`, at 1024 by 768, 1280 by 1024 and 1920 by 1080
 against the last block it expected, and reads the command list pointer
 and the disk address after one; it does not read the fourth register,
 where the CADR's controller gave the ECC.
+
+## The disk file
+
+**QUUX's disk is a raw image, a fixed VHD or a dynamic VHD, of any size**
+(contract Q8); the CADR's pack stays MIT's, a raw Trident image exactly a
+T-300's size, and a file of any other size is refused on it as before
+(`the_cadr_refuses_quux_s_disks_as_before` in `tests/quux_disk.rs`).
+Block-disk's block `n` is the file's 512-byte sectors `2n` and `2n + 1`,
+and the disk's size in blocks is the file's size, or a VHD's current size,
+over 1,024; a last half block is not reachable. A VHDX, a differencing VHD
+and a VHD whose footer or dynamic header does not check are refused, saying
+which (`what_muir_does_not_read_is_refused`).
+
+| | raw | fixed VHD | dynamic VHD |
+|---|---|---|---|
+| The file | the disk's bytes | the disk's bytes, then a 512-byte footer | a copy of the footer, a dynamic header, the block allocation table, 2 MiB blocks each after a 512-byte sector bitmap, the footer |
+| Told by | no `conectix` footer | the footer at the end, disk type 2 | the footer at the end, disk type 3; or, with the one at the end lost, its copy at 0 |
+| The disk's size | the file's | the footer's current size, offset 48 | the same |
+| A write | in place | in place, the footer untouched | in place in an allocated block; an unallocated one is allocated where the footer was, its bitmap all ones, then the footer after it, then the table entry |
+
+**The format is the footer's, not the name's**: a fixed VHD called `.img`
+is still a fixed VHD (`the_format_is_the_footer_s_not_the_name`), and
+qemu-img reports a fixed VHD as raw unless told `-f vpc`. The start says
+which of the three a QUUX run's disk is, and its size in blocks
+(`quux_s_disk_is_raw_or_a_vhd_of_any_size` in `tests/cli.rs`).
+
+`data/quux-disk*` are an 8 MiB disk in all three formats and a dynamic VHD
+after three writes into unallocated blocks, with its raw twin, made by
+qemu-img and qemu-io (`tools/quux-disk-fixtures.sh`). Every block of each
+reads through muir as its raw twin (`each_fixture_reads_as_its_raw_twin`);
+muir's own writes of the same bytes into the dynamic VHD make qemu-io's file
+byte for byte, the footer checking and its copy at 0 unchanged
+(`a_write_grows_a_dynamic_vhd_as_qemu_does`); and where qemu-img is installed
+it compares a dynamic VHD muir grew equal to the raw file given the same
+writes (`qemu_reads_what_muir_grew`, skipped without it). A disk opened
+`ro` keeps its writes for the run and a checkpoint, the file untouched
+(`opened_read_only_nothing_reaches_the_file`); a checkpoint carries the
+disk's size in blocks and refuses a disk of another
+(`a_checkpoint_keeps_the_disk`).
+
+**The partition table is a GPT.** A partition's type is one of QUUX's own
+type GUIDs, whose first 32-bit words all differ:
+
+| Partition | Type GUID |
+|---|---|
+| microcode, `MCRn` | `9e318cf5-a95b-4b3b-b2ad-9ae306b0e2da` |
+| band, `LODn` | `a3b30470-c5d4-41c1-87a8-d26590424cb8` |
+| `PAGE` | `4652bea5-06af-4bd9-b2bb-3541370151c8` |
+| `FILE` | `7afa9532-75de-409f-8dc8-fef9763511d5` |
+| `TEMP` | `445976f2-34e4-4583-b750-75d28a080cba` |
+
+- **The name** is the partition's four-character Lisp name, a space and a
+  comment of up to 31 characters, `MCR1 UCADR 1000`: 36 characters, which
+  is what a GPT name holds.
+- **The current microcode and the current band** carry attribute bit 48,
+  the first of the bits a GPT leaves to the partition type.
+- **Whole blocks**: a partition's first LBA is even and its last odd, so it
+  starts and ends on a block.
+- **At most 8 GiB**, 2^23 blocks, because Lisp's fixnums hold block numbers
+  below 2^23. Block-disk's address, `<27:0>`, reaches further, and muir
+  opens a larger file; the limit is the software's.
+- **No pack name and no pack comment**: a GPT has neither.
+- **TEMP** holds what the machine saves to disk at boot, which on MIT's
+  pack was blocks 1, 3 and 5 and on a GPT disk is the partition table. Its
+  use is being decided; nothing requires one, and the fixtures have one.
+
+`the_fixtures_gpt_is_q8_s` reads the fixtures' GPT through muir's disk
+layer and holds them to all of this. muir reads no partition of QUUX's
+disk itself: block-disk moves blocks, and the partitions are the machine's
+software's to find. `diskpack`, MIT's label editor, is the CADR's; given a
+QUUX disk it says what the file is and that its partitions are made with
+sgdisk, and writes nothing (`quux_s_disk_is_named_and_left_alone` in
+`tests/diskpack.rs`). The boot PROM in `data/quux-promh.mcr` and System
+1002's band read MIT's label in block 0, not a GPT.
+
+How to make a disk with standard tools is in
+[the manual](manual.md#quuxs-disk).
 
 ## The single-edge contract
 

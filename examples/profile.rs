@@ -707,7 +707,7 @@ fn profile<E: Profiled>(
         let mut m = muir::machine::Machine::new();
         m.load_prom(&muir::prom::quux_boot_prom());
         let mut d = muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS);
-        d.attach(muir::disk_unit::Unit::open_rw(&copy, muir::disk_unit::Geometry::T300).unwrap());
+        d.attach(muir::disk_image::Disk::open_rw(&copy).unwrap());
         m.block_disk = Some(d);
         m.tv.set_board(muir::tv::Board::MonoTv);
         m

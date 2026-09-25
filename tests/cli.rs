@@ -615,6 +615,30 @@ fn quux_s_disk_is_block_disk_only() {
     }
 }
 
+/// **QUUX's disk is a file of any size, raw or a VHD** (contract Q8): the
+/// 8 MiB fixtures, none of them a T-300's size, each start a QUUX run and
+/// the start says what the footer made each, and its size in blocks.
+#[test]
+fn quux_s_disk_is_raw_or_a_vhd_of_any_size() {
+    for (file, said) in [
+        ("quux-disk.img", "raw, 8192 blocks"),
+        ("quux-disk-fixed.vhd", "a fixed VHD, 8192 blocks"),
+        ("quux-disk-dynamic.vhd", "a dynamic VHD, 8192 blocks"),
+    ] {
+        let path = format!("{}/data/{file}", env!("CARGO_MANIFEST_DIR"));
+        let out = muir()
+            .args(["--micro", "--machine", "quux", "--disk-pack", &format!("{path},ro")])
+            .args(["--stop-after", "1"])
+            .run();
+        let t = text(&out);
+        assert!(out.status.success(), "{file}: {t}");
+        assert!(
+            t.contains(&format!("{file} in unit 0, {said}")),
+            "{file}: the start says it:\n{t}"
+        );
+    }
+}
+
 /// **`--timing-model` is `cadr` or `fpga`, and `fpga` is `rtl`'s.** The
 /// grid is what muir-fpga's fabric runs on, and it is `rtl`'s references
 /// that fabric is held to; `chip` and `micro` keep the board's time, so a

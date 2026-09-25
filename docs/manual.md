@@ -483,6 +483,11 @@ The flag can come more than once, one pack to a unit, up to the eight the
 controller addresses. On the netlist disk controller a second pack, or one
 past unit 0, wants `--disk-multiplexor`.
 
+On QUUX the pack is block-disk's one disk, and it is a file of any size,
+raw, a fixed VHD or a dynamic VHD, told apart by the VHD footer; the start
+says which and how many blocks. [QUUX's disk](#quuxs-disk) says how to make
+one. The CADR's pack is MIT's raw Trident image, exactly a T-300's size.
+
 Default: unit 0; no pack unless one is named, which is a drive with no pack
 in it and a boot that waits on it for ever.
 
@@ -1252,6 +1257,72 @@ through the sixteen colors of the map.
 
 Without a file, all three write `muir-yyyymmdd-hhmmss` with the right
 extension in the current directory.
+
+## QUUX's disk
+
+QUUX's disk is made with standard tools and no muir-specific one: a raw
+file, a GPT written by `sgdisk`, the partitions' contents written by `dd`,
+and, if a VHD is wanted, `qemu-img convert`. What the disk holds is in
+[QUUX](quux.md#the-disk-file): the type GUIDs, the names, the current bit.
+A 1 GiB disk:
+
+```
+qemu-img create -f raw quux.img 1G          # or: truncate -s 1G quux.img
+sgdisk \
+  -n 1:0:+64K  -t 1:445976f2-34e4-4583-b750-75d28a080cba -c 1:"TEMP" \
+  -n 2:0:+256K -t 2:9e318cf5-a95b-4b3b-b2ad-9ae306b0e2da -c 2:"MCR1 UCADR 1000" -A 2:set:48 \
+  -n 3:0:+100M -t 3:a3b30470-c5d4-41c1-87a8-d26590424cb8 -c 3:"LOD1 System 1002.1" -A 3:set:48 \
+  -n 4:0:+256M -t 4:4652bea5-06af-4bd9-b2bb-3541370151c8 -c 4:"PAGE" \
+  -n 5:0:+600M -t 5:7afa9532-75de-409f-8dc8-fef9763511d5 -c 5:"FILE" \
+  quux.img
+sgdisk -i 3 quux.img                        # First sector: 6144
+dd if=band.lod of=quux.img bs=512 seek=6144 conv=notrunc
+qemu-img convert -f raw -O vpc -o subformat=dynamic,force_size=on quux.img quux.vhd
+muir --machine quux --disk-pack quux.vhd
+```
+
+- **A partition is whole blocks**: 1,024 bytes, two sectors, its first
+  sector even and its last odd. sgdisk's default alignment starts each on
+  a 2,048-sector boundary, and a size in K or M ends it on an odd sector.
+  **An end given as 0 or as `-1M`, "to the end", ends on whatever sector
+  the free space ends on**: on this disk that was sector 2,095,070, even,
+  half a block short.
+- **The current microcode and band carry bit 48**, `-A <n>:set:48`; sgdisk
+  shows it as "Undefined bit #48". The comment after the four-character
+  name is up to 31 characters.
+- **TEMP**'s use is being decided; nothing requires one.
+- **At most 8 GiB**, 2^23 blocks: Lisp's block numbers are fixnums.
+- **`dd` writes a band file, or a microcode file written in partition
+  order, as it is**, at the partition's first sector (`sgdisk -i`), with
+  `conv=notrunc` so the rest of the disk stays.
+- The raw file is itself a disk muir takes; `-o subformat=fixed` makes a
+  fixed VHD, the raw bytes and a 512-byte footer, which muir-fpga needs no
+  translation for.
+
+The traps, each measured with qemu-img 10.2.1 and sgdisk 1.0.10:
+
+- **`force_size=on`, always.** Without it qemu rounds the disk up to a
+  cylinder, head and sector geometry: the 1 GiB disk above becomes
+  1,073,995,776 bytes, and the backup GPT sgdisk wrote at the raw file's
+  last sector is no longer at the disk's end, which `sgdisk -v` reports.
+- **Never run sgdisk on a fixed VHD file.** It takes the file's last sector
+  for the disk's and writes its backup header over the VHD footer; qemu-img
+  then calls the file "invalid VPC image" and muir opens it as raw. Change
+  the table on the raw file and convert again, or on a loop device of the
+  data alone.
+- **`losetup -P` needs root.** A raw file or a fixed VHD's data on a loop
+  device (`losetup -P --sizelimit <size without the footer>`) would be
+  partitioned and written through `/dev/loopNpM`; **unverified**, not run
+  here for want of root. A dynamic VHD is not its disk's bytes in order and
+  cannot go on a loop device at all. qemu-io writes into a dynamic VHD
+  without root:
+  `qemu-io -f vpc -c "write -s band.lod <byte offset> <length>" quux.vhd`.
+- **qemu-img reports a fixed VHD as raw** unless given `-f vpc`: the footer
+  is at the end, where it does not probe. muir tells the formats by the
+  footer and says which it found.
+
+The boot PROM and the band muir-sys has handed over so far read MIT's label
+in block 0, not a GPT: muir opens the disk above, and they do not boot it.
 
 ## The Chaosnet
 

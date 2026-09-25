@@ -1224,10 +1224,12 @@ A simulator of the MIT CADR Lisp Machine.
                                read-only, so a written block reaches a
                                checkpoint rather than the file. Once for
                                each pack, one to a unit, up to the eight the
-                               controller addresses. [default: unit 0; no
-                               pack unless one is named, which is a drive
-                               with no pack in it and a boot that waits on
-                               it for ever]
+                               controller addresses. On QUUX it is
+                               block-disk's one disk, raw, a fixed VHD or a
+                               dynamic VHD, of any size, and the start says
+                               which. [default: unit 0; no pack unless one
+                               is named, which is a drive with no pack in it
+                               and a boot that waits on it for ever]
   --glass-tty [<endpoint>][,ro]
                                a glass TTY: the screen as text over
                                telnet, and what is typed there back into
@@ -2052,6 +2054,21 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
                 p.display()
             ));
         }
+        // QUUX's disk is a file of any size, raw or a VHD (contract Q8),
+        // opened as the CADR's is: read-write, or read-only with `ro`, a
+        // written block then kept for the run and a checkpoint.
+        if let Some(d) = m.block_disk.as_mut() {
+            let opened = if read_only {
+                muir::disk_image::Disk::open(&p)
+            } else {
+                muir::disk_image::Disk::open_rw(&p)
+            };
+            match opened {
+                Ok(disk) => d.attach(disk),
+                Err(e) => fail(&e.to_string()),
+            }
+            continue;
+        }
         // A drive writes its pack, so the image is opened read-write and a
         // written block goes into the file. `ro` is the drive's own
         // read-only switch: the file is opened read-only behind it, a
@@ -2068,10 +2085,7 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
             Err(e) => fail(&format!("{}: {e}", p.display())),
         };
         u.read_only = read_only;
-        match m.block_disk.as_mut() {
-            Some(d) => d.attach(u),
-            None => m.disk.attach(unit, u),
-        }
+        m.disk.attach(unit, u);
     }
 }
 
@@ -5779,9 +5793,21 @@ fn main() {
             writeln!(s, "pack: none; the boot waits on a drive that never answers").unwrap();
         }
         for (p, unit, ro) in chosen {
+            // QUUX's disk says what its footer made it and its size, the
+            // two things that are no longer a T-300's (contract Q8).
+            let kind = match block_disk.then(|| muir::disk_image::probe(&p)) {
+                Some(Ok((f, bytes))) => {
+                    format!(
+                        ", {}, {} blocks",
+                        f.name(),
+                        bytes / muir::disk_image::BLOCK_BYTES as u64
+                    )
+                }
+                _ => String::new(),
+            };
             writeln!(
                 s,
-                "pack: {} in unit {unit}{}",
+                "pack: {} in unit {unit}{kind}{}",
                 shown(&p),
                 if ro {
                     ", the read-only switch on: nothing reaches the file"

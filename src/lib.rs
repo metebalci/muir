@@ -24,6 +24,7 @@ pub mod chip;
 pub mod clock;
 pub mod dcmicro;
 pub mod disk_controller;
+pub mod disk_image;
 pub mod disk_unit;
 pub mod diskpack;
 pub mod dm;

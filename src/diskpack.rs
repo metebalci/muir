@@ -519,9 +519,20 @@ impl Pack {
                 // after it always does.
                 // Not "initialize makes one": it will not, over a file that
                 // is there, and saying so here would be an invitation to try.
+                // QUUX's disk is named as what it is (contract Q8): its
+                // partitions are a GPT, made on the host with sgdisk, and
+                // this tool is the CADR's label editor.
                 Err(e) => {
+                    let why = match crate::disk_image::quux_disk(path) {
+                        Some(what) => format!(
+                            "{} is QUUX's disk, {what}: diskpack edits the CADR's packs and \
+                             their label, and QUUX's partitions are made with sgdisk",
+                            path.display()
+                        ),
+                        None => e,
+                    };
                     format!(
-                        "{e}\n{} is not a pack, and nothing here writes over it",
+                        "{why}\n{} is not a pack, and nothing here writes over it",
                         path.display()
                     )
                 }

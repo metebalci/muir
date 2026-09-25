@@ -7,17 +7,19 @@
 //! fixed time a block.
 
 use muir::block_disk::{self, BlockDisk};
-use muir::disk_unit::{BLOCK_WORDS, Geometry, Unit};
+use muir::disk_image::Disk;
+use muir::disk_unit::{BLOCK_WORDS, Geometry};
 use muir::machine::{Geometry as MachineGeometry, Machine, bus_error};
 
-/// A blank pack with block `k` holding `k << 16 | word`.
-fn pack() -> Unit {
-    let mut u = Unit::blank(Geometry::T300);
+/// A blank disk of a T-300's blocks with block `k` holding `k << 16 |
+/// word`.
+fn pack() -> Disk {
+    let mut d = Disk::blank(Geometry::T300.blocks());
     for k in 0..8u32 {
         let block: [u32; BLOCK_WORDS] = std::array::from_fn(|w| k << 16 | w as u32);
-        assert!(u.write_lba(k, &block));
+        assert!(d.write_block(k, &block));
     }
-    u
+    d
 }
 
 /// A disk with `pack` and the command list at 100: pages 1000 and 1400,
@@ -73,9 +75,9 @@ fn a_write_moves_the_pages_to_the_blocks() {
     d.write(block_disk::DA, 100, &mut main);
     d.write(block_disk::COMMAND, WRITE, &mut main);
     d.write(block_disk::START, 0, &mut main);
-    let u = d.unit_mut().unwrap();
-    assert_eq!(u.read_lba(100).unwrap()[7], 0o7000007);
-    assert_eq!(u.read_lba(101).unwrap()[0], 0o7000400);
+    let u = d.disk_mut().unwrap();
+    assert_eq!(u.read_block(100).unwrap()[7], 0o7000007);
+    assert_eq!(u.read_block(101).unwrap()[0], 0o7000400);
 }
 
 /// **Past the end of the pack a transfer stops by error**: the blocks
@@ -156,7 +158,7 @@ fn a_checkpoint_keeps_it() {
     d.save(&mut w);
     let body = w.finish();
     let mut back = BlockDisk::new(block_disk::BLOCK_NS);
-    back.attach(Unit::blank(Geometry::T300));
+    back.attach(Disk::blank(Geometry::T300.blocks()));
     back.load(&mut Reader::new(&body)).unwrap();
     for status_at in [0, 2 * block_disk::BLOCK_NS] {
         d.advance(status_at);
