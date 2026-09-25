@@ -173,3 +173,53 @@ fn the_frame_buffer_is_cached() {
     let c = e.cache().unwrap();
     assert_eq!((c.misses, c.hits), (1, 1), "the buffer's two reads; the register none");
 }
+
+/// **A memory start in the microcycle right after another start waits for
+/// it** (QUUX's own interlock). A write of the MACHINE-ID, which goes
+/// nowhere, then a read of main memory in the next microcycle; the same
+/// after a write of MONO TV's mode register; a write of main memory, then
+/// a read of the mode register in the next. Each first cycle lands, with
+/// its own address, direction and word, and each second reads its own
+/// word, on both engines. On the CADR the board has no interlock there and
+/// the first cycle is lost
+/// (`on_the_board_a_start_right_after_a_start_loses_the_first` in
+/// `tests/chip.rs`).
+#[test]
+fn a_start_right_after_a_start_waits_for_it() {
+    const MODE: u32 = 0o17377760;
+    const WORD: u32 = 0o1000;
+    let read = |m: u64, a: u64| {
+        [
+            Insn::new(ALU | SETM | m_src(m) | START_READ),
+            filler(),
+            Insn::new(ALU | SETM | SRC_MD | a_dest(a)),
+        ]
+    };
+    let mut prom = vec![
+        Insn::new(ALU | SETA | a_src(0o110) | MD),
+        Insn::new(ALU | SETM | m_src(1) | START_WRITE),
+    ];
+    prom.extend(read(3, 0o200));
+    prom.push(Insn::new(ALU | SETM | m_src(2) | START_WRITE));
+    prom.extend(read(3, 0o201));
+    prom.push(Insn::new(ALU | SETA | a_src(0o111) | MD));
+    prom.push(Insn::new(ALU | SETM | m_src(3) | START_WRITE));
+    prom.extend(read(2, 0o202));
+    prom.extend(read(3, 0o203));
+    let setup = || {
+        let mut m = machine(&prom, &[REGISTER, MODE, WORD]);
+        // Black-on-white, the one bit of the mode register that reads back.
+        m.amem[0o110] = 4;
+        m.amem[0o111] = 0o707070;
+        m.main[WORD as usize] = 0o123456;
+        m
+    };
+    let (r, _) = rtl(setup());
+    let (e, _) = run(Micro::new(setup()), |_| 0);
+    for (name, m) in [("rtl", r), ("micro", e)] {
+        let got = [m.amem[0o200], m.amem[0o201], m.amem[0o202], m.amem[0o203]];
+        assert_eq!(got, [0o123456, 0o123456, 4, 0o707070], "{name}: the words read");
+        assert_eq!(m.main[WORD as usize], 0o707070, "{name}: the memory write landed");
+        assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0, "{name}: every cycle answered");
+    }
+}

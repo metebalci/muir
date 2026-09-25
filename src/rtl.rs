@@ -170,6 +170,11 @@ impl Bus {
             Bus::Quux(p) => p.poll(now, responder),
         }
     }
+    /// QUUX's processor holds a memory start in the microcycle right after
+    /// another ([`Rtl::stall`]); the CADR's does not.
+    fn holds_a_start_after_a_start(&self) -> bool {
+        matches!(self, Bus::Quux(_))
+    }
     fn released(&mut self, at: u64) {
         if let Bus::Cadr(b) = self {
             b.released(at);
@@ -1916,8 +1921,25 @@ impl Rtl {
     /// lets the bus interface start the cycle being waited for; `HANG` stops
     /// both, which is why it must not happen before `-MEMGRANT` --- MIT's own
     /// warning, and the second `-WAIT` term is the gate that enforces it.
+    ///
+    /// **No term holds a start in the microcycle right after a start.**
+    /// `MBUSY.SYNC` is `MEMRQ` registered at the edge, and `MEMRQ` is low
+    /// until the edge ending the first start raises `MEMSTART`, so the
+    /// second start runs: at the edge ending it the first cycle goes out
+    /// with the second's direction and `VMA<7:0>`, and it is lost. The
+    /// board does exactly that
+    /// (`on_the_board_a_start_right_after_a_start_loses_the_first`,
+    /// `tests/chip.rs`). **QUUX holds it** instead, a `-WAIT` term of its
+    /// own, `MEMSTART AND MEMOP`: the first cycle goes out at the next
+    /// master clock edge, `MBUSY.SYNC` then holds the second start until
+    /// that cycle ends, and both land as written, as `micro`, which moves
+    /// every word at its start, has them
+    /// (`a_start_right_after_a_start_waits_for_it`,
+    /// `tests/quux_device_registers.rs`). **Unverified** that muir-fpga's
+    /// fabric holds it the same way.
     fn stall(&self, r: &Read) -> Option<Stall> {
         let wait = (r.destmem && self.mbusy_sync)
+            || (r.memop && self.memstart && self.bus.holds_a_start_after_a_start())
             || (r.use_md && self.mbusy && !self.bus.granted())
             || (r.lcinc && r.needfetch && self.mbusy_sync)
             || (self.dividing(r) && !self.md_interlock(r));
@@ -2107,7 +2129,12 @@ impl Rtl {
                 // master to keep them stable from 80 ns before `-XBUS.RQ`
                 // "until the -XBUS.ACK signal drops".  So they are captured
                 // here, at the edge `-MEMRQ` goes out on, not read again when
-                // the answer arrives.
+                // the answer arrives. That edge ends the microcycle after the
+                // start, and `MD` is written above before this runs, so an
+                // `MD` loaded in that microcycle is the word written: the
+                // board's too, `MD` passing through the bus interface with
+                // no latch (`chip_and_rtl_write_the_md_of_the_microcycle_after_the_start`,
+                // `tests/chip.rs`). `micro` writes the `MD` of the start.
                 self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
                 self.bus_data = self.m.md;
                 let frame_buffer = crate::tv::BUFFER..crate::tv::BUFFER + self.m.tv.buffer_words();

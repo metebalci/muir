@@ -298,3 +298,30 @@ fn rtl_shows_the_bus_interface_s_acknowledgement_and_grant() {
     }
     assert!(seen > 0, "a granted cycle was seen");
 }
+
+/// **A write carries the `MD` of the microcycle after its start**, as on
+/// the CADR (`chip_and_rtl_write_the_md_of_the_microcycle_after_the_start`,
+/// `tests/chip.rs`): QUUX's port takes the word at the same edge, and `MD`
+/// loaded a microcycle later is not written. `rtl` alone: `micro` writes
+/// the `MD` of the start.
+#[test]
+fn a_write_carries_the_md_of_the_microcycle_after_its_start() {
+    let prom = [
+        Insn::new(ALU | SETA | a_src(0o110) | MD),
+        Insn::new(ALU | SETM | m_src(1) | START_WRITE),
+        Insn::new(ALU | SETA | a_src(0o111) | MD),
+        filler(),
+        filler(),
+        Insn::new(ALU | SETA | a_src(0o110) | MD),
+        Insn::new(ALU | SETM | m_src(2) | START_WRITE),
+        filler(),
+        Insn::new(ALU | SETA | a_src(0o111) | MD),
+    ];
+    let mut m = machine(Geometry::QUUX, &prom, &[0o1000, 0o1001]);
+    m.amem[0o110] = 0o1111;
+    m.amem[0o111] = 0o2222;
+    let mut r = Rtl::new(m);
+    run(&mut r);
+    assert_eq!(r.machine().main[0o1000], 0o2222, "MD loaded in the microcycle after the start");
+    assert_eq!(r.machine().main[0o1001], 0o1111, "and not a microcycle later");
+}
