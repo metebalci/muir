@@ -272,6 +272,11 @@ impl Micro {
             self.npc = self.m.reset_pc();
             self.inhibit = true;
             self.trap = true;
+            // The trap nops the instruction a pending OA write modified,
+            // and `-RESET` clears `IMODD` at PDLCTL 4C11 (`Rtl::reset`):
+            // no modification outlives the boot, as in `boot` below.
+            self.oal = false;
+            self.oah = false;
         }
         self.ssdone = self.sstep;
         self.sstep = self.m.clock_control.step;
@@ -1220,6 +1225,14 @@ impl Engine for Micro {
         self.npc = self.m.reset_pc();
         self.inhibit = true;
         self.trap = true;
+        // A pending OA write dies with the instruction it modified, the one
+        // the trap nops, as it does in `IR` on the board (page IREG;
+        // `Rtl::clock_edge`); and `-RESET` clears `IMODD` at PDLCTL 4C11
+        // (`Rtl::reset`). Held over, the modification would land on the
+        // PROM's first word and send the boot somewhere else
+        // (`tests/oa_boot.rs`).
+        self.oal = false;
+        self.oah = false;
     }
     fn save(&self, w: &mut crate::checkpoint::Writer) {
         let Micro {
@@ -1459,6 +1472,15 @@ impl Engine for Micro {
         // and the console's `NOP11` kills every one.
         if self.inhibit || self.m.clock_control.nop11 {
             self.inhibit = false;
+            // An OA register write modifies the instruction it is ORed into
+            // and nothing after it: on the board the word goes into `IR` as
+            // `IR` loads (page IREG; `Rtl::clock_edge`), so nopping that
+            // instruction --- a jump's `N`, `NOP11`, the boot's trap ---
+            // throws the modification away with it. Held over, it would
+            // land on whatever runs next, which after a boot is the PROM's
+            // first word (`tests/oa_boot.rs`).
+            self.oal = false;
+            self.oah = false;
             // Nopped, the instruction's misc field decodes to nothing.
             self.halted = false;
             self.land_writes();
