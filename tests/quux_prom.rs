@@ -114,29 +114,86 @@ fn the_cadr_keeps_the_overlay() {
     assert_eq!(m.fetch(0), m.imem[0]);
 }
 
-/// **A QUUX PROM file is read from 36000**: the assembler writes the
-/// control store section from 0, so the reader takes 36000-37777 of it and
-/// refuses a file with anything assembled below 36000, or past 37777.
+/// Where 36000's `JUMP GO` goes: `GO`, at 36043 since muir-sys's commit
+/// `8e20b4c` put the halts `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040 and
+/// `ERROR-BUFFER-NOT-LOADED` at 36042 before it. `GO` is not in the PROM's
+/// symbol table, `promh.sym`; the hand-over's README gives it, and the
+/// error table `promh.tbl` has the two halts there
+/// ([`the_built_in_quux_prom_is_the_hand_over`]).
+const GO: u64 = 0o36043;
+
+/// The PROM's last word: `promh.locs` says `(I-MEM 36555)`, the section's
+/// size, so the code is at 36000-36554.
+const LAST: usize = 0o36554;
+
+/// **A QUUX PROM file is read from 36000, in partition order** (contracts
+/// Q2 and Q8): the assembler writes the control store section from 0, so
+/// the reader takes 36000-37777 of it and refuses a file with anything
+/// assembled below 36000, or past 37777; and the file is QUUX's `.mcr`,
+/// every word's two halves swapped from MIT's order, so a file in MIT's
+/// order is refused saying so.
 #[test]
 fn a_quux_prom_file_is_read_from_36000() {
+    use muir::mcr::swap_halves;
     use muir::prom::parse_quux_mcr;
-    let words = parse_quux_mcr(include_bytes!("../data/quux-promh.mcr")).unwrap();
+    let file = include_bytes!("../data/quux-promh.mcr");
+    let words = parse_quux_mcr(file).unwrap();
     assert_eq!(words.len(), 1024);
-    // 36000 is `JUMP GO`, GO at 36037 (muir-sys's README).
+    // 36000 is `JUMP GO`.
     assert_eq!(words[0].raw() >> 43 & 3, 1, "a jump");
-    assert_eq!(words[0].jump().target, 0o36037);
-    assert!(parse_quux_mcr(include_bytes!("../mit/sys/ubin/promh.mcr")).is_err(), "MIT's, at 0");
+    assert_eq!(words[0].jump().target as u64, GO);
+    let base = 0o36000;
+    assert_ne!(words[LAST - base].raw(), 0, "the last word");
+    assert!(words[LAST - base + 1..].iter().all(|w| w.raw() == 0), "nothing past it");
+    // The same file in MIT's order, and MIT's own PROM, which is in MIT's
+    // order and assembled at 0.
+    let mit_order = swap_halves(file).unwrap();
+    let err = parse_quux_mcr(&mit_order).unwrap_err();
+    assert!(err.contains("MIT's order"), "{err}");
+    let mits = include_bytes!("../mit/sys/ubin/promh.mcr");
+    let err = parse_quux_mcr(mits).unwrap_err();
+    assert!(err.contains("MIT's order"), "{err}");
+    let err = parse_quux_mcr(&swap_halves(mits).unwrap()).unwrap_err();
+    assert!(err.contains("QUUX's PROM is assembled at 36000"), "MIT's, at 0: {err}");
+}
+
+/// **QUUX's PROM file is MIT's `promh.mcr` as muir-sys changed it**, held
+/// to MIT's own file through the half swap: the same four sections in the
+/// same order, the dispatch memory and A memory sections word for word
+/// MIT's, and the main-memory section MIT's size, four blocks. Only the
+/// control store section, the program, is QUUX's.
+#[test]
+fn quux_s_prom_is_mit_s_promh_changed() {
+    use muir::mcr::{parse, parse_partition_order};
+    let quux = parse_partition_order(include_bytes!("../data/quux-promh.mcr")).unwrap();
+    let mits = parse(include_bytes!("../mit/sys/ubin/promh.mcr")).unwrap();
+    assert_eq!((quux.dmem_start, &quux.dmem), (mits.dmem_start, &mits.dmem), "dispatch memory");
+    assert_eq!((quux.amem_start, &quux.amem), (mits.amem_start, &mits.amem), "A memory");
+    assert_eq!(quux.main_memory.map(|m| m.1), Some(4), "four blocks");
+    assert_eq!(mits.main_memory.map(|m| m.1), Some(4), "four blocks");
+    assert_eq!(quux.imem_start, mits.imem_start, "the control store section from 0");
+    assert_ne!(quux.imem, mits.imem, "the program is QUUX's");
 }
 
 /// **The built-in QUUX PROM is muir-sys's hand-over, byte for byte**, where
-/// the hand-over is present.
+/// the hand-over (`ref/prom-1000-q8`) is present; and its symbols and error
+/// table put what [`GO`] and [`LAST`] say where they say.
 #[test]
 fn the_built_in_quux_prom_is_the_hand_over() {
-    let handed =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev7/promh.mcr");
-    let Ok(bytes) = std::fs::read(&handed) else {
+    let handed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/prom-1000-q8");
+    let Ok(bytes) = std::fs::read(handed.join("promh.mcr")) else {
         eprintln!("skipped: {} is not present", handed.display());
         return;
     };
-    assert_eq!(bytes, include_bytes!("../data/quux-promh.mcr"));
+    assert!(bytes == include_bytes!("../data/quux-promh.mcr"), "the hand-over");
+    let locs = std::fs::read_to_string(handed.join("promh.locs")).unwrap();
+    assert!(locs.contains(&format!("(I-MEM {:o})", LAST + 1)), "{locs}");
+    let tbl = std::fs::read_to_string(handed.join("promh.tbl")).unwrap();
+    for halt in [
+        "(36016 ERROR-BAD-LABEL)".to_string(),
+        format!("({:o} ERROR-TWO-MAIN-MEM-SECTIONS)", GO - 3),
+        format!("({:o} ERROR-BUFFER-NOT-LOADED)", GO - 1),
+    ] {
+        assert!(tbl.contains(&halt), "{halt} in promh.tbl");
+    }
 }

@@ -42,6 +42,17 @@ pub const START: u32 = 3;
 /// **Unverified**: an estimate until muir-fpga measures its disk path.
 pub const BLOCK_NS: u64 = 100_000;
 
+/// One block moved, as [`BlockDisk::log`] records it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Transfer {
+    /// A write of the disk; a read otherwise, which writes main memory.
+    pub write: bool,
+    /// The block, from the start of the disk.
+    pub block: u32,
+    /// The first of the 256 words of physical memory it moved to or from.
+    pub page: u32,
+}
+
 /// The block-disk: its registers, its error flags, and its disk.
 #[derive(Clone)]
 pub struct BlockDisk {
@@ -59,6 +70,9 @@ pub struct BlockDisk {
     nxm: bool,
     bad_command: bool,
     disk: Option<Disk>,
+    /// Every block moved, in order, when a test or a trace asks for the
+    /// record by setting it to `Some`. Not kept in a checkpoint.
+    pub log: Option<Vec<Transfer>>,
 }
 
 impl BlockDisk {
@@ -75,6 +89,7 @@ impl BlockDisk {
             nxm: false,
             bad_command: false,
             disk: None,
+            log: None,
         }
     }
 
@@ -206,6 +221,9 @@ impl BlockDisk {
             if !ok {
                 self.past_end = true;
                 break;
+            }
+            if let Some(log) = self.log.as_mut() {
+                log.push(Transfer { write: !read, block, page: page as u32 });
             }
             self.last_memory_address = (page + BLOCK_WORDS - 1) as u32;
             moved += 1;

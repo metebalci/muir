@@ -558,9 +558,9 @@ fn block_disk_is_quux_s() {
     refused_saying(&["--rtl", "--disk-controller", "block-disk"], "block-disk is QUUX's");
 }
 
-/// **QUUX's `--prom` is a PROM assembled at 36000** (contract Q2): its own
-/// file is taken and said to be the built-in word for word, and MIT's,
-/// assembled at 0, is refused by where it is assembled.
+/// **QUUX's `--prom` is a PROM assembled at 36000, in partition order**
+/// (contracts Q2 and Q8): its own file is taken and said to be the built-in
+/// word for word, and MIT's, in MIT's order, is refused saying so.
 #[test]
 fn quux_s_prom_is_assembled_at_36000() {
     let own = concat!(env!("CARGO_MANIFEST_DIR"), "/data/quux-promh.mcr");
@@ -569,10 +569,7 @@ fn quux_s_prom_is_assembled_at_36000() {
     assert!(out.status.success(), "{t}");
     assert!(t.contains("QUUX's own word for word"), "the start says it:\n{t}");
     let mits = concat!(env!("CARGO_MANIFEST_DIR"), "/mit/sys/ubin/promh.mcr");
-    refused_saying(
-        &["--rtl", "--machine", "quux", "--prom", mits],
-        "QUUX's PROM is assembled at 36000",
-    );
+    refused_saying(&["--rtl", "--machine", "quux", "--prom", mits], "the file is in MIT's order");
 }
 
 /// **QUUX has no debug cable** (contract Q5): the cable is a Unibus master
