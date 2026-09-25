@@ -174,7 +174,7 @@
       </div>
       <div class="panel tone">
         <p class="say r">That&rsquo;s the same microcode doing the same work. The memory times are measured on the two FPGA boards; the rest is muir&rsquo;s model of them.</p>
-        <p class="small">Modeled in muir, on <code>rtl</code>. Four ticks, 40&nbsp;ns, meets timing on both boards in muir-fpga&rsquo;s fits: the Arty Z7-20 with +0.404&nbsp;ns to spare and the DE25-Nano with +2.041&nbsp;ns. The cache&rsquo;s 20&nbsp;ns hit is <b>unverified</b>. Past 4K words the cache gains little: 16K words gives 3.90&times; where 4K gives 3.84&times;, both without the write buffer.</p>
+        <p class="small">Modeled in muir, on <code>rtl</code>. Four ticks, 40&nbsp;ns, meets timing on both boards in muir-fpga&rsquo;s fits: the Arty Z7-20 with +0.461&nbsp;ns to spare and the DE25-Nano with +0.180&nbsp;ns, both with every change on this page but the cache. The cache&rsquo;s 20&nbsp;ns hit is <b>unverified</b>. Past 4K words the cache gains little: 16K words gives 3.90&times; where 4K gives 3.84&times;, both without the write buffer.</p>
       </div>
     </div>
 
