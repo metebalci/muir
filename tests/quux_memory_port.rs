@@ -5,10 +5,10 @@
 //! Xbus: the processor reaches it through its own port, through the cache
 //! --- always fitted, 4K words in lines of 4, 2-way, a hit in 20 ns, the
 //! write buffer --- to main memory at one nominal timing, a line fill in
-//! 380 ns and a write in 290. The Xbus holds only devices, never cached; an
-//! address nothing answers, past main memory's end or in the old Unibus
-//! window, times out with the Xbus NXM bit as on the CADR. QUUX has no bus
-//! interface; the CADR keeps its own.
+//! 380 ns and a write in 290. Device registers are never cached; an address
+//! nothing answers, past main memory's end or in the old Unibus window,
+//! fails with the NXM bit (at once since Q7, `tests/quux_device_registers.rs`).
+//! QUUX has no bus interface; the CADR keeps its own.
 
 use muir::cache::{CacheConfig, MemoryTiming};
 use muir::engine::Engine;
@@ -103,10 +103,10 @@ fn a_miss_fills_its_line_at_the_nominal_time() {
     assert!(waits[1] <= 80, "the hit, a microcycle at most: {waits:?}");
 }
 
-/// **The Xbus is never cached**: two reads of the keyboard's data word take
+/// **A device register is never cached**: two reads of the keyboard's data word take
 /// two key words out of the FIFO, and the cache sees neither.
 #[test]
-fn the_xbus_is_never_cached() {
+fn a_device_register_is_never_cached() {
     use muir::quux_input::KeyboardMouse;
     let data = 0o17377121;
     let mut m = reading(Geometry::QUUX, &[data, data]);
@@ -117,11 +117,11 @@ fn the_xbus_is_never_cached() {
     let m = e.machine();
     assert_eq!([m.amem[0o200], m.amem[0o201]], [0o101, 0o102], "each read reached the FIFO");
     let c = e.cache().unwrap();
-    assert_eq!(c.hits + c.misses, 0, "no lookup for the Xbus");
+    assert_eq!(c.hits + c.misses, 0, "no lookup for a register");
 }
 
 /// **Past main memory's end is nothing, and nothing is cached there**: a
-/// write and a read-back at the first word past it are both Xbus timeouts,
+/// write and a read-back at the first word past it both fail with the NXM bit,
 /// and the read gives 0, not the word written --- what the microcode's
 /// memory-size probe (`MEM-SIZE-LOOP`, `uc-cold-disk.lisp`) relies on. On
 /// both engines.
@@ -150,7 +150,7 @@ fn past_main_memory_s_end_nothing_reads_back() {
     run(&mut e);
     for (name, m) in [("rtl", r.machine()), ("micro", e.machine())] {
         assert_eq!(m.amem[0o200], 0, "{name}: the write did not read back");
-        assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "{name}: an Xbus timeout");
+        assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "{name}: the NXM bit");
         assert_eq!(m.bus_error & bus_error::UNIBUS_NXM, 0, "{name}");
     }
     let c = r.cache().unwrap();

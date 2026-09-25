@@ -132,8 +132,10 @@ impl Geometry {
         unibus: true,
     };
 
-    /// QUUX's, revision 7: main memory on its own port through its cache,
-    /// with no bus interface (contract Q6, [`crate::memory_port`]); its boot
+    /// QUUX's, revision 8: main memory and the frame buffer on its own port
+    /// through its cache, with no bus interface (contract Q6), and its
+    /// devices reached by their registers alone, with no bus (contract Q7,
+    /// [`crate::memory_port`]); its boot
     /// PROM at control store 36000 and the register page (contract Q2, [`Geometry::prom_base`],
     /// [`Machine::interrupt_sources`]); clocks in the processor, the tick
     /// fixed at 60 Hz, an interval timer and a microsecond clock ([`Tick`]); `MUL` and
@@ -151,13 +153,13 @@ impl Geometry {
     /// 31:16, the hardware revision in 15:4 --- 5: the six-bit map, then the
     /// 16K PDL buffer, then the multiply and divide, then the tick, then the
     /// clocks of contract Q1, then Q2's register page and PROM, then Q6's
-    /// memory port --- and
+    /// memory port, then Q7's device registers --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
         l1_bits: 6,
         pdl_bits: 14,
-        machine_id: Some((0x5155 << 16) | (7 << 4) | 4),
+        machine_id: Some((0x5155 << 16) | (8 << 4) | 4),
         muldiv: true,
         tick: true,
         speed_bits: false,

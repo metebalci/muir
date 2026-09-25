@@ -2065,8 +2065,16 @@ impl Rtl {
                 // the answer arrives.
                 self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
                 self.bus_data = self.m.md;
-                self.bus_responder = if self.m.geometry.feature_word(self.bus_addr).is_some() {
-                    // QUUX's feature page answers as an Xbus device.
+                let frame_buffer = crate::tv::BUFFER..crate::tv::BUFFER + self.m.tv.buffer_words();
+                self.bus_responder = if !self.m.geometry.unibus
+                    && frame_buffer.contains(&self.bus_addr)
+                {
+                    // QUUX's frame buffer is on the memory bus with main
+                    // memory, through the cache (contract Q7); the port
+                    // reads no board number.
+                    busint::Responder::Memory(0)
+                } else if self.m.geometry.feature_word(self.bus_addr).is_some() {
+                    // QUUX's feature page: device registers.
                     busint::Responder::Device
                 } else if !self.m.geometry.unibus && busint::unibus_address(self.bus_addr).is_some()
                 {
