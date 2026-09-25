@@ -938,6 +938,22 @@ impl Rtl {
         self.bus.answered_at()
     }
 
+    /// When the cycle running is or was acknowledged, `-MEMACK`, if it has
+    /// been granted: on the CADR the bus interface's, on QUUX the memory
+    /// port's --- as it is answered for main memory and an empty address, a
+    /// microcycle after it for a device register.
+    pub fn bus_ack_at(&self) -> Option<u64> {
+        self.bus.ack_at()
+    }
+
+    /// Whether the processor holds a granted cycle, `-MEMGRANT` low: from
+    /// the grant until the processor lets the cycle go, acknowledged or
+    /// not, on the CADR's bus interface or QUUX's memory port (which grants
+    /// at the edge that takes the request).
+    pub fn bus_granted(&self) -> bool {
+        self.bus.granted()
+    }
+
     /// The memory cache, if the machine has one: always on QUUX.
     pub fn cache(&self) -> Option<&crate::cache::Cache> {
         self.bus.cache()
