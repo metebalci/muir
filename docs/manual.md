@@ -259,6 +259,10 @@ The prompt's `checkpoint`, and Home in the terminal, write one as the run
 goes, as `muir-yyyymmdd-hhmmss.chk` in the current directory, and the run
 goes on.
 
+On QUUX none is written while the [file device](quux.md#the-file-device)
+has a handle open or a command queued: its host files are outside the
+machine. muir says so, and why, and the run goes on.
+
 ### `--color-terminal [<endpoint>]`
 
 Where the color TV's screen is served, as `--terminal` is the main screen's:
@@ -490,6 +494,20 @@ one. The CADR's pack is MIT's raw Trident image, exactly a T-300's size.
 
 Default: unit 0; no pack unless one is named, which is a drive with no pack
 in it and a boot that waits on it for ever.
+
+### `--file-root [<name>=]<folder>[,ro]`
+
+**QUUX:** a host folder its [file device](quux.md#the-file-device) serves
+under the pathname host `HOST`. A folder alone is HOST's `/`, holding
+`sys/`, `site/` and `home/<user>/`; `<name>=<folder>` is the top-level
+directory `<name>`, over the default folder's entry of that name. A value is
+a named mount when the text before its first `=` is a name's component.
+`,ro` refuses every write under it, answering ATF. The flag can come more
+than once, each name once and one default folder; the folder must be one.
+With no default folder `/` holds the mounts alone and is read-only. The
+start lists them, with the device's time. Refused on the CADR.
+
+Default: none; `/` is empty.
 
 ### `--io-board netlist|model`
 

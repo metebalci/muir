@@ -577,6 +577,77 @@ fn the_rtc_is_quux_s() {
     refused_saying(&["--micro", "--stop-after", "1", "--rtc", "5"], "--rtc is QUUX's");
 }
 
+/// **`--file-root` is QUUX's** (contract Q9): the start lists the file
+/// device's folders --- HOST's `/` from a folder alone, a named mount from
+/// `<name>=<folder>`, each read-write or `,ro` --- and its time; with none
+/// `/` is empty. A name mounted twice, a second default folder, a folder
+/// that is not there, a missing value and the flag on the CADR are refused.
+#[test]
+fn the_file_root_is_quux_s() {
+    let dir = scratch("file-root");
+    let folder = dir.join("root");
+    std::fs::create_dir_all(folder.join("sys")).unwrap();
+    let f = folder.display().to_string();
+    let sys = format!("{}/sys", f);
+    let cases: [(Vec<String>, Vec<String>); 4] = [
+        (
+            vec![],
+            vec![
+                "a real-time clock and a file device".into(),
+                "file device: 20 us a command and 100 us a KiB".into(),
+                "file device: / is empty and read-only: nothing is mounted".into(),
+            ],
+        ),
+        (vec!["--file-root".into(), f.clone()], vec![format!("file device: / is {f}, read-write")]),
+        (
+            vec!["--file-root".into(), format!("sys={sys},ro")],
+            vec![
+                "file device: / holds the mounts alone, read-only".into(),
+                format!("file device: /sys is {sys}, read-only"),
+            ],
+        ),
+        (
+            vec![
+                "--file-root".into(),
+                format!("{f},ro"),
+                "--file-root".into(),
+                format!("scratch={sys}"),
+            ],
+            vec![
+                format!("file device: / is {f}, read-only"),
+                format!("file device: /scratch is {sys}, read-write"),
+            ],
+        ),
+    ];
+    for engine in ["--micro", "--rtl"] {
+        let quux = [engine, "--machine", "quux", "--stop-after", "1"];
+        for (flags, said) in &cases {
+            let out = muir().args(quux).args(flags).run();
+            let t = text(&out);
+            assert!(out.status.success(), "{engine} {flags:?}: {t}");
+            for line in said {
+                assert!(
+                    t.contains(line.as_str()),
+                    "{engine} {flags:?}: the start says {line:?}:\n{t}"
+                );
+            }
+        }
+    }
+    let out = muir().args(["--micro", "--stop-after", "1"]).run();
+    assert!(!text(&out).contains("file device"), "the CADR has none:\n{}", text(&out));
+    let quux = ["--micro", "--stop-after", "1", "--machine", "quux"];
+    let twice = format!("sys={f}");
+    refused_saying(
+        &[&quux[..], &["--file-root", &twice, "--file-root", &twice]].concat(),
+        "sys is mounted twice",
+    );
+    refused_saying(&[&quux[..], &["--file-root", &f, "--file-root", &sys]].concat(), "one default");
+    let none = format!("{f}/none");
+    refused(&[&quux[..], &["--file-root", &none]].concat(), "--file-root");
+    refused(&[&quux[..], &["--file-root"]].concat(), "--file-root");
+    refused_saying(&["--micro", "--stop-after", "1", "--file-root", &f], "--file-root is QUUX's");
+}
+
 /// **`--disk-controller block-disk` is QUUX's**: it runs on `micro` and
 /// `rtl` and the start says it, without the warning that the flag is
 /// `chip`'s, and it is refused on the CADR and on `chip`.

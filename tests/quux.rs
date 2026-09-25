@@ -144,7 +144,7 @@ fn quux_answers_its_id_in_source_16() {
 /// multiply and divide it has (bit 0 `MUL`, bit 1 `DIV`), whether it has
 /// the tick, word 14, whether it has the interval timer and the
 /// microsecond clock (revision 5), and word 15, `<0>` the real-time clock
-/// (revision 9); the rest reads 0. On
+/// and `<1>` the file device (revision 9); the rest reads 0. On
 /// the CADR nothing answers there, and a read times out as any read of an
 /// empty I/O address does, the Xbus NXM bit set.
 #[test]
@@ -170,7 +170,7 @@ fn quux_lists_its_sizes_in_its_feature_page() {
         }
     };
     let id = Geometry::QUUX.machine_id.unwrap();
-    let want = [id, 6, 2048, 16384, 16384, 1024, 2048, 3, 1, 1, 1, 0, 0];
+    let want = [id, 6, 2048, 16384, 16384, 1024, 2048, 3, 1, 1, 3, 0, 0];
     let (e, r) = both(&prom, &set(Geometry::QUUX), 400);
     for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
         let got: Vec<u32> = (0..words.len()).map(|k| m.amem[0o200 + k]).collect();

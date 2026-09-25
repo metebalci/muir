@@ -123,6 +123,12 @@ impl MemoryPort {
         self.cache.invalidate();
     }
 
+    /// When the write buffer is empty: main memory has done the last write
+    /// it acknowledged early. Before the first write, 0.
+    pub fn write_buffer_empty_at(&self) -> u64 {
+        self.buffer_free_at
+    }
+
     pub fn keep_timing_model(&mut self, model: TimingModel) {
         self.model = model;
     }

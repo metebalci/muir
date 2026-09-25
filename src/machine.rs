@@ -118,6 +118,10 @@ pub struct Geometry {
     /// Whether the machine has QUUX's real-time clock (contract Q9,
     /// revision 9): register page word 103, [`Rtc`].
     pub rtc: bool,
+    /// Whether the machine has QUUX's file device (contract Q9, revision
+    /// 9): register page words 160-171 and word 100 `<6>`,
+    /// [`crate::file_device`].
+    pub file_device: bool,
 }
 
 impl Geometry {
@@ -134,10 +138,11 @@ impl Geometry {
         prom_base: None,
         unibus: true,
         rtc: false,
+        file_device: false,
     };
 
-    /// QUUX's, revision 9: a real-time clock on the register page (contract
-    /// Q9, [`Rtc`]); main memory and the frame buffer on its own port
+    /// QUUX's, revision 9: a real-time clock and a file device on the
+    /// register page (contract Q9, [`Rtc`], [`crate::file_device`]); main memory and the frame buffer on its own port
     /// through its cache, with no bus interface (contract Q6), and its
     /// devices reached by their registers alone, with no bus (contract Q7,
     /// [`crate::memory_port`]); its boot
@@ -158,7 +163,8 @@ impl Geometry {
     /// 31:16, the hardware revision in 15:4 --- 5: the six-bit map, then the
     /// 16K PDL buffer, then the multiply and divide, then the tick, then the
     /// clocks of contract Q1, then Q2's register page and PROM, then Q6's
-    /// memory port, then Q7's device registers, then Q9's real-time clock --- and
+    /// memory port, then Q7's device registers, then Q9's real-time clock and
+    /// file device --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
@@ -173,6 +179,7 @@ impl Geometry {
         prom_base: Some(QUUX_PROM_BASE),
         unibus: false,
         rtc: true,
+        file_device: true,
     };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
@@ -213,8 +220,8 @@ impl Geometry {
     /// the tick (1); words 11 to 13, the main screen, are the display's
     /// ([`Machine::bus_read`]); word 14 the interval timer and the
     /// microsecond clock; word 15 the devices of revision 9 by bits, `<0>`
-    /// the real-time clock; every other word 0. Below revision 9 word 15
-    /// reads 0, as every unused word does.
+    /// the real-time clock and `<1>` the file device; every other word 0.
+    /// Below revision 9 word 15 reads 0, as every unused word does.
     /// Read-only.
     pub fn feature_word(self, phys: u32) -> Option<u32> {
         let id = self.machine_id?;
@@ -234,8 +241,8 @@ impl Geometry {
             // The interval timer and the microsecond clock (revision 5).
             0o14 => self.tick as u32,
             // The devices of revision 9, by bits (contract Q9): `<0>` the
-            // real-time clock.
-            0o15 => self.rtc as u32,
+            // real-time clock, `<1>` the file device.
+            0o15 => self.rtc as u32 | (self.file_device as u32) << 1,
             _ => 0,
         })
     }
@@ -613,6 +620,16 @@ pub struct Machine {
     /// QUUX's block-disk, when it is fitted in the CADR controller's place
     /// ([`crate::block_disk`]).
     pub block_disk: Option<crate::block_disk::BlockDisk>,
+    /// QUUX's file device ([`crate::file_device`]), which answers where the
+    /// geometry has one ([`Geometry::file_device`]).
+    pub file_device: crate::file_device::FileDevice,
+    /// When the processor's write buffer is next empty, on the machine's
+    /// clock: `rtl` sets it before each write it lands, from QUUX's memory
+    /// port; `micro` has no buffer and leaves it 0. The file device takes a
+    /// new command producer index only from then (contract Q9: the device
+    /// reads memory once the processor's writes are out of the buffer). Not
+    /// kept in a checkpoint: it is set afresh before it is read.
+    pub write_buffer_empty_at: u64,
     /// The physical address of every word of main memory a bus cycle
     /// stores, in order, when a test or a trace asks for the record by
     /// setting it to `Some`. A disk transfer's words are not in it: the
@@ -670,6 +687,8 @@ impl Machine {
             rtc: Rtc::Host,
             dma_written: false,
             block_disk: None,
+            file_device: crate::file_device::FileDevice::new(),
+            write_buffer_empty_at: 0,
             store_log: None,
             l1_map: [0; 2048],
             l2_map: [0; L2_MAP_WORDS],
@@ -717,7 +736,8 @@ impl Machine {
     /// tick, `<1>` the interval timer, `<2>` block-disk's done, each under
     /// its own enable; `<3>` the keyboard and `<4>` the mouse
     /// ([`crate::quux_input`]); `<5>` the network, the Chaosnet interface's
-    /// request (contract Q4).
+    /// request (contract Q4); `<6>` the file device, a response waiting
+    /// under its interrupt enable (contract Q9).
     pub fn interrupt_sources(&self) -> u32 {
         let t = self.tick;
         (self.geometry.tick && t.enabled && t.flag(self.ns)) as u32
@@ -726,6 +746,25 @@ impl Machine {
             | if self.geometry.machine_id.is_some() { self.quux_input.interrupts() } else { 0 }
             | (self.ioboard.chaos.as_ref().is_some_and(|c| c.interrupt_request().is_some()) as u32)
                 << 5
+            | ((self.geometry.file_device && self.file_device.interrupt_at(self.ns)) as u32)
+                << crate::file_device::INTERRUPT_BIT
+    }
+
+    /// Runs the file device's commands due by the machine's clock: what
+    /// each engine calls at the edge between two microcycles, so that a
+    /// command completes before the processor's next cycle begins. A command
+    /// that wrote main memory invalidates QUUX's cache before that cycle, as
+    /// a disk transfer does.
+    pub fn advance_file_device(&mut self) {
+        if self.geometry.file_device && self.file_device.advance(self.ns, &mut self.main) {
+            self.dma_written = true;
+        }
+    }
+
+    /// Why a checkpoint of this machine cannot be written now, if it
+    /// cannot: the file device with a handle open or a command queued.
+    pub fn checkpoint_refusal(&self) -> Option<String> {
+        self.geometry.file_device.then(|| self.file_device.checkpoint_refusal()).flatten()
     }
 
     /// Fetches from the control store, honoring the PROM overlay on the
@@ -969,6 +1008,9 @@ impl Machine {
             // only through the Unibus interrupt that 766040 enables.
             || (self.geometry.machine_id.is_some()
                 && self.ioboard.chaos.as_ref().is_some_and(|c| c.interrupt_request().is_some()))
+            // The file device's, word 100's <6> (contract Q9), from its due
+            // times.
+            || (self.geometry.file_device && self.file_device.interrupt_at(now.max(self.ns)))
     }
 
     /// `XBUS INTR IN`: the disk controller's request, or either display's
@@ -1292,6 +1334,9 @@ impl Machine {
         if let Some(d) = self.block_disk.as_mut() {
             d.xbus_init();
         }
+        // QUUX's file device: every machine reset disables it, dropping its
+        // queue and closing its handles (contract Q9).
+        self.file_device.reset();
         self.ioboard.unibus_init();
     }
 
@@ -1318,6 +1363,11 @@ impl Machine {
                 0o102 => self.mode.errstop as u32,
                 // The real-time clock (contract Q9).
                 0o103 if self.geometry.rtc => self.rtc.seconds(self.ns),
+                // The file device (contract Q9), at the machine's clock.
+                k @ 0o160..=0o171 if self.geometry.file_device => {
+                    self.advance_file_device();
+                    self.file_device.read(k, self.ns)
+                }
                 // The network (contract Q4): the Chaosnet interface's
                 // registers, word 140 + k being Unibus `764140` + 2k.
                 k @ 0o140..=0o147 => {
@@ -1388,6 +1438,14 @@ impl Machine {
             match phys & 0o377 {
                 0o101 => self.bus_error = 0,
                 0o102 => self.mode.errstop = value & 1 != 0,
+                // The file device (contract Q9): what was due is done
+                // first, and a producer index is taken from when the write
+                // buffer is empty.
+                k @ 0o160..=0o171 if self.geometry.file_device => {
+                    self.advance_file_device();
+                    let (ns, drained) = (self.ns, self.write_buffer_empty_at);
+                    self.file_device.write(k, value, ns, drained, &self.main);
+                }
                 k @ 0o140..=0o147 => {
                     let u = crate::chaos::interface::CSR + 2 * (k - 0o140);
                     if let Some(r) = ioboard::answers(u, true) {
@@ -1529,6 +1587,8 @@ impl Machine {
             rtc,
             dma_written,
             block_disk,
+            file_device,
+            write_buffer_empty_at: _,
             store_log: _,
             l1_map,
             l2_map,
@@ -1579,6 +1639,7 @@ impl Machine {
         w.bool(geometry.tick);
         tick.save(w);
         rtc.save(w);
+        file_device.save(w);
         w.bool(*dma_written);
         w.u32s(l2_map);
         w.u32(self.memory_boards() as u32);
@@ -1660,6 +1721,7 @@ impl Machine {
         let tick = r.bool()?;
         self.tick = Tick::load(r)?;
         self.rtc = Rtc::load(r)?;
+        self.file_device.load(r)?;
         self.dma_written = r.bool()?;
         // The CADR, or a QUUX with a PDL buffer of 1K to 16K words.
         self.geometry = match (l1_bits, pdl_bits, muldiv, tick) {

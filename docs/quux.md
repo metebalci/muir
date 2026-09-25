@@ -29,6 +29,7 @@ differences, what it needed:
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
 | MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
 | The real-time clock | nothing | nothing | does not read it yet | `--rtc` |
+| The file device | nothing | nothing | does not use it yet | `--file-root` |
 
 ## What each change measured
 
@@ -82,7 +83,7 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 9 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, 9 the real-time clock | |
+| 15:4 | hardware revision: 9 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, 9 the real-time clock and the file device | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
@@ -135,11 +136,11 @@ device register, through the map:
 | 12 | the main screen: bits a pixel in 31:16, words a line in 15:0 |
 | 13 | the main screen: its buffer's first physical address |
 | 14 | the interval timer and the microsecond clock: 1 |
-| 15 | the devices of revision 9, a bit each: 1, bit 0 the real-time clock |
+| 15 | the devices of revision 9, a bit each: 3, bit 0 the real-time clock and bit 1 the file device |
 | 16-377 | 0 |
 
 Word 15 reads 0 below revision 9, as every unused word does, so software
-decides by it whether the real-time clock is there.
+decides by it whether the real-time clock and the file device are there.
 
 Words 11 to 13 describe whichever display is fitted: MONO TV's 1280 by 1024,
 one bit a pixel, 40 words a line at `17000000`, or, on a QUUX run with a CADR
@@ -765,12 +766,13 @@ largest MONO TV buffer and 36777 the display's and disk's registers.
 | Word | |
 |---|---|
 | 0-77 | the feature page, read only |
-| 100 | interrupt status, read only: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's done, `<3>` the keyboard, `<4>` the mouse, `<5>` the network, each under its own enable |
+| 100 | interrupt status, read only: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's done, `<3>` the keyboard, `<4>` the mouse, `<5>` the network, `<6>` the file device, each under its own enable |
 | 101 | error status: the bus errors, as `766044` gives them; a write clears them |
 | 102 | mode: `<0>` error stop, which the host can set too |
 | 103 | the real-time clock, read only (below) |
 | 120-123 | the keyboard and the mouse (below) |
 | 140-147 | the network (below) |
+| 160-171 | the file device (below) |
 | others | reserved: read 0, writes ignored |
 
 On the CADR nothing answers on the page. `tests/quux_registers.rs` holds
@@ -812,6 +814,218 @@ timeout, feature word 15, a checkpoint, and both engines reading a second
 go by in their own time; `the_rtc_is_quux_s` in `tests/cli.rs` the flag,
 its refusals and the start's report; `a_resume_has_the_checkpoint_s_rtc` in
 `tests/muir_checkpoint.rs` the resume.
+
+## The file device
+
+**QUUX reads and writes files on its host through a file device** (contract
+Q9, revision 9): folders of the host served to the machine under one
+pathname host, `HOST`, with commands and responses in two rings in main
+memory and the bytes moved by DMA. The registers carry control and the
+rings' indexes; nothing polls memory for an index. `src/file_device.rs` is
+muir's device.
+
+| Word | | |
+|---|---|---|
+| 160 | control, read and written | `<0>` enable, `<8>` interrupt enable |
+| 161 | status, read only | `<0>` enabled, `<1>` quiet, `<2>` configuration refused, `<3>` index fault, `<8>` a response waiting, `<23:16>` handles open |
+| 162 | command ring base | `<23:0>` a physical word address, `<1:0>` 0 |
+| 163 | command ring size | `<3:0>` the log2 of its entries, 0 to 8 |
+| 164 | command producer, the processor's | `<15:0>` |
+| 165 | command consumer, the device's, read only | `<15:0>` |
+| 166 | response ring base | as 162 |
+| 167 | response ring size | as 163 |
+| 170 | response producer, the device's, read only | `<15:0>` |
+| 171 | response consumer, the processor's | `<15:0>` |
+
+**Configuration.** 162, 163, 166 and 167 are written while the device is
+disabled and ignored while it is enabled. The enable, 160 `<0>` from 0 to 1,
+checks them: a base off a 4-word line, a size over 8, or a ring reaching
+past main memory is refused, status `<2>`, and the device stays disabled.
+While disabled the four indexes read 0 and writes of 164 and 171 go nowhere;
+the enable starts them at 0. A write of 160 clears `<2>` and `<3>`.
+
+**Indexes.** Each counts entries, 16 bits, free-running; an entry's slot is
+the index mod the ring's size. The processor writes a command into slot
+`164 mod size` and then 164 with one more (or n more). A write of 164
+claiming more commands than the ring holds, or fewer than are waiting, and a
+write of 171 past 170, are ignored and set status `<3>`. The device answers
+each command with one response, in command order, so response i answers
+command i, and 165 and 170 always read the same. It takes the next command
+only while the response ring has room, 170 - 171 below its size.
+
+**Entries** are 8 words, command and response alike.
+
+| Word | Command | Response |
+|---|---|---|
+| 0 | `<15:0>` tag, `<23:16>` opcode, `<31:24>` flags | `<15:0>` tag, `<23:16>` status, `<31:24>` opcode |
+| 1 | handle (READ, WRITE, CLOSE) | count: bytes written to B (READ, DIRECTORY, COMPLETE), or taken from A (WRITE) |
+| 2 | buffer A's address, `<23:0>` | handle (OPEN read or write) |
+| 3 | buffer A's length in bytes | the file's length in bytes (OPEN, CLOSE) |
+| 4 | buffer B's address | mtime, Unix seconds (OPEN, CLOSE) |
+| 5 | buffer B's length | flags: `<0>` a directory, `<1>` on a read-only mount, `<2>` COMPLETE: an entry is exactly the completion, `<3>` and it is a directory |
+| 6 | READ, WRITE: the offset in the file; DIRECTORY: the cookie | DIRECTORY: the next cookie, 0 at the end; COMPLETE: the matches |
+| 7 | CLOSE: the date to set, Unix seconds | 0 |
+
+A failed command's response is word 0 alone. A buffer starts on a 4-word
+line, holds at most 65,536 bytes, and lies in main memory; byte k is bits
+`8(k mod 4)+7:8(k mod 4)` of word k/4. A READ of n bytes writes the first
+`ceil(n/4)` words of B, the bytes past n 0, and no other word.
+
+**Commands.**
+
+| Op | | In | Out |
+|---|---|---|---|
+| 1 | OPEN | A the name; flags `<1:0>` 0 read, 1 write, 2 probe; `<3:2>` if it exists (write): 0 supersede, 1 error, 2 append; `<4>` if it does not (write): 0 create, 1 error | handle (none for a probe), length, mtime, flags `<0>` `<1>` |
+| 2 | READ | handle; B where, its length the bytes wanted; offset | count, the wanted or what is left |
+| 3 | WRITE | handle; A the data; offset | count |
+| 4 | CLOSE | handle; flags `<0>` abort, `<1>` set the date from word 7 | length and mtime as closed; 0 after an abort |
+| 5 | DIRECTORY | A a directory, `/` the root; B at least 272 bytes; cookie, 0 to start | count, next cookie |
+| 6 | COMPLETE | A `<directory>/<prefix>`; B | count (the completion in B), matches, flags `<2>` `<3>` |
+| 7 | DELETE | A a file or an empty directory | |
+| 8 | RENAME | A the old name, B the new | |
+| 9 | CREATE-DIRECTORY | A, one level | |
+| 10 | LOG | A a line of at most 1,024 bytes | |
+
+- **The device moves bytes and never interprets them.** There is no
+  character mode or byte size.
+- **OPEN read** keeps the host file open, so a rename or delete on the host
+  does not disturb the handle. There are 64 handles, numbered 1 to 64.
+- **OPEN write** writes a temporary file in the target's folder, named
+  `.quux-write-` and more, which DIRECTORY and COMPLETE never show. CLOSE
+  renames it onto the name, so the file appears or changes whole; until
+  then the name is as it was. Supersede starts it empty, which is also what
+  the Lisp side sends for `:OVERWRITE` and `:TRUNCATE`: "starting at the
+  beginning, and set the file's length to the length of the newly written
+  data" (MIT's `sys/man/files.text`, lines 282-288). Append starts it as a
+  copy of the file, and the reply's length is the copy's. Error answers FAE
+  at OPEN for a name that exists, and at CLOSE for one that appeared
+  meanwhile, discarding the write. A file's permissions carry over.
+- **READ and WRITE are positional**: a READ past the end is short, 0 at the
+  end, FOR past it; a WRITE leaving a hole, or ending past 2^32 - 1, is FOR.
+- **CLOSE** with `<1>` sets the file's modification time before the rename;
+  its reply gives the length and mtime the host then has, which the Lisp
+  side takes as the creation date (a host may keep times to 2 s). With
+  `<0>` the temporary file is removed and the name left as it was.
+- **DIRECTORY** gives records, packed from B's start, whole words each:
+  word 0 `<7:0>` the name's length, `<15:8>` the record's words (3 and the
+  name's), `<16>` a directory, `<17>` on a read-only mount, `<18>` 2^32 bytes
+  or more; word 1 the length (0 for a directory, FFFFFFFF too large); word 2
+  the mtime; then the name. They are sorted bytewise; dot files are listed;
+  `.` and `..`, the temporary files, a symlink that leaves its mount, a name
+  the rules below refuse, and anything neither file nor directory are not.
+  The cookie is the index of the next entry, and each call lists afresh.
+  A missing directory is DNF and a file WKF.
+- **COMPLETE** matches the entries DIRECTORY would list whose names begin
+  with the prefix, case kept; B gets their longest common beginning, word 6
+  their number, and `<2>` (with `<3>` for a directory) says one is exactly
+  that. No match is count 0 and matches 0.
+- **RENAME never overwrites** (REF), atomically on Linux
+  (`renameat2`'s `RENAME_NOREPLACE`), and never across mounts (RAD).
+- **CREATE-DIRECTORY** makes one level: a missing parent is DNF.
+- **LOG** writes `log: ` and the line on muir's standard error, a byte
+  outside 040-176 as a backslash and three octal digits.
+
+**Names** are absolute paths of bytes, at most 1,024, a single trailing `/`
+allowed; each component 1 to 255 bytes in 040-176 other than `/`, and not
+`.` or `..`. Anything else is IPS, and so is a name the host's file system
+refuses (EINVAL). Case is exact: a name that matches only with case ignored
+is not found. muir checks the spelling against the folder when the host
+finds a name's case-flipped twin as the same file, which a case-folding file
+system does; **unverified** on one, muir's tests running on Linux's. A
+symlink is followed when it resolves inside its mount's folder; one that
+leaves it, or loops, is ACC.
+
+**Statuses.**
+
+| Code | | When |
+|---|---|---|
+| 0 | | done |
+| 1 | FNF | the last component does not exist |
+| 2 | DNF | a directory on the way does not exist or is a file; an unmounted name; DIRECTORY of a missing directory |
+| 3 | FAE | OPEN write with if-exists error; CREATE-DIRECTORY on a file |
+| 4 | REF | RENAME onto an existing name |
+| 5 | ACC | the host refuses (EACCES, EPERM); a symlink leaving its mount, or a loop; a mount's own root deleted or renamed |
+| 6 | ATF | a write under a read-only mount (and EROFS) |
+| 7 | DAE | CREATE-DIRECTORY of an existing directory |
+| 8 | DNE | DELETE of a directory not empty |
+| 9 | NMR | the host is full (ENOSPC, EDQUOT) |
+| 10 | IOD | OPEN read or write of a directory |
+| 11 | WKF | neither file nor directory; a file of 2^32 bytes or more; DIRECTORY of a file |
+| 12 | IPS | a name against the rules, or EINVAL |
+| 13 | NER | all 64 handles open |
+| 14 | UOP | an opcode not among the ten |
+| 15 | DAT | the host's I/O error, and any error not named here |
+| 16 | FOR | READ past the end; WRITE leaving a hole or past 2^32 - 1 |
+| 17 | RAD | RENAME across mounts |
+| 64 | | bad handle: not open, or the wrong kind |
+| 65 | | bad buffer: off a line, over 65,536 bytes, or past main memory |
+| 66 | | bad argument: flags out of range, a DIRECTORY buffer under 272 bytes, a LOG line over 1,024 bytes, a completion longer than B |
+
+**Mounts** (`--file-root`). `--file-root <folder>[,ro]` is HOST's `/`, a
+folder holding `sys/`, `site/` and `home/<user>/`, so that one path serves
+`HOST:/sys/...`, `HOST:/site/...` and `HOST:/home/lispm/...`. `--file-root
+<name>=<folder>[,ro]`, once for each name, is the top-level directory
+`<name>`, over the default folder's entry of that name. A value is a named
+mount when the text before its first `=` is a valid component. DIRECTORY of
+`/` lists the top-level directories, each with its mount's read-only bit,
+and every OPEN's reply carries it. A top-level name that is neither mounted
+nor in the default folder is FNF itself and DNF below. With no default
+folder `/` holds the mounts alone and is read-only (a name created there is
+ATF); with no `--file-root` at all it is empty. A read-only mount answers
+every OPEN write, DELETE, RENAME and CREATE-DIRECTORY with ATF, and a mount's
+own root cannot be deleted or renamed (ACC). The start lists them. The CADR
+refuses the flag.
+
+**Disable is the reset.** 160 `<0>` from 1 to 0 drops the commands not yet
+run, with no response and no memory written; closes every handle, a write
+discarded and its temporary file removed; and sets the indexes and the
+interrupt enable to 0. Quiet, 161 `<1>`, is up at once: muir's device is
+never in the middle of a copy, and a command it ran stands, host effect and
+all. The bases and sizes stay, and may be written before the next enable.
+**Every machine reset disables it too**, `PROG.UNIBUS.RESET`, which
+`RESET-MACHINE` pulses at every microcode start, clearing status `<2>` and
+`<3>` with it. Power-on is disabled.
+
+**Word 100 `<6>`** is up while the interrupt enable is on and a response is
+waiting, 170 ≠ 171: a level, cleared by writing 171 up to 170 or by the
+enable going off. Status `<8>` is the same ungated.
+
+**Time.** A command completes at its due time: 20 us, and 100 us a KiB of
+the two buffer lengths its entry names (a length over 65,536 counted as
+65,536), rounded up to the ns, after the latest of its producer write, the
+previous command's completion, and a response slot coming free. Both
+constants are **unverified**: 20 us an estimate of the boards' round trip,
+and 100 us a KiB block-disk's time for a block, itself an estimate, until
+muir-fpga measures its path. At the due time, at the edge before the
+processor's next microcycle and on both engines, the device reads the entry
+and buffer A (and B for RENAME), does the host's operation, writes buffer B
+and the response, and moves 165 and 170; main memory having been written
+behind the processor, the whole memory cache is invalidated before the
+processor's next memory cycle, as after a disk transfer. Nothing completes within the producer write,
+and nothing in memory changes before 170 moves. Given the same host files a
+run is the same.
+
+**Coherence.** The device takes a new 164 only once the processor's write
+buffer is empty: on `rtl` the command's time counts from when main memory
+has done the last write the buffer took. `micro` has no write buffer.
+
+**A checkpoint is refused** while a handle is open or a command is queued,
+saying which: a host file and a command's host effect are outside the
+machine. Otherwise it carries the registers and the rings' indexes; the
+mounts are the flags'.
+
+`tests/quux_file_device.rs` holds it: a scripted driver writing commands into
+the rings against a scratch folder --- each register, the refused enable and
+the index fault, the due time to the nanosecond and nothing before it, the
+order, the wrap at 1, 2 and 256 entries and across 2^16, a full response
+ring, the interrupt, the disable and the machine reset, every command and
+its statuses, the write landing whole with its temporary file never listed,
+the date, the mounts, a read-only mount unchanged, names, symlinks, LOG, the
+checkpoint's refusal and its round trip --- and both engines running a
+program that writes the command and its producer index and reads the
+answer, `rtl`'s cache invalidated and its write buffer waited for.
+`the_file_root_is_quux_s` in `tests/cli.rs` holds the flag. **Not
+produced by a test:** NMR, DAT, and a WRITE past 2^32 - 1.
 
 ## The keyboard and the mouse
 
