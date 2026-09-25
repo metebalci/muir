@@ -115,6 +115,11 @@ impl QuuxInput {
             | ((self.mouse_enable && self.mouse_changed) as u32) << 4
     }
 
+    /// Whether a key word is waiting to be read, word 120's `<0>`.
+    pub fn key_waiting(&self) -> bool {
+        !self.fifo.is_empty()
+    }
+
     /// Whether the keyboard's boot word has come in since this was last
     /// asked, handed out once, as [`crate::ioboard::IoBoard::take_boot`].
     pub fn take_boot(&mut self) -> bool {

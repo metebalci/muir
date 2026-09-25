@@ -297,8 +297,19 @@ fn type_echoed<E: Engine>(e: &mut E, k: &mut Keyboard, text: &str, step: &mut im
             k.key(keysym::SHIFT_L, false);
         }
         let mut waited = 0u64;
-        while k.pending() > 0 || e.machine().ioboard.keyboard_ready() {
-            k.deliver(&mut e.machine_mut().ioboard);
+        // QUUX's keyboard is on the register page (contract Q3); the
+        // CADR's on the I/O board.
+        let on_quux = e.machine().geometry.machine_id.is_some();
+        let waiting = |e: &E| {
+            let m = e.machine();
+            if on_quux { m.quux_input.key_waiting() } else { m.ioboard.keyboard_ready() }
+        };
+        while k.pending() > 0 || waiting(e) {
+            if on_quux {
+                k.deliver(&mut e.machine_mut().quux_input);
+            } else {
+                k.deliver(&mut e.machine_mut().ioboard);
+            }
             for _ in 0..1_000 {
                 step(e);
             }
