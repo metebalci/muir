@@ -31,7 +31,9 @@
 //! The microcode is whatever the pack's current microload is; `MUIR_UCODE`
 //! names a directory holding another microcode's `ucadr.mcr`, `.tbl` and
 //! `.sym`, which is loaded into MCR2 of the run's copy of the pack, made
-//! current, and served as the error table and read as the symbols.
+//! current, and served as the error table and read as the symbols. On
+//! QUUX the `ucadr.mcr` is QUUX's, in partition order, and goes into MCR2
+//! as it is; on the CADR it is MIT's, and `diskpack load` puts it there.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -669,8 +671,22 @@ fn profile<E: Profiled>(
     let sym_file = match &ucode {
         Some(u) => {
             let (mut p, _) = Pack::open(&copy);
-            p.run(Command::Load { partition: "MCR2".into(), file: Some(u.join("ucadr.mcr")) })
-                .unwrap();
+            if on_quux {
+                // QUUX's `.mcr` is in partition order (contract Q8): the
+                // file's bytes go into the partition as they are, as `dd`
+                // writes them, where `diskpack load` would swap the CADR's.
+                use std::io::{Seek, SeekFrom, Write};
+                let mcr = std::fs::read(u.join("ucadr.mcr")).unwrap();
+                let label = muir::band::Label::open(&copy).unwrap();
+                let mcr2 = label.partition("MCR2").expect("MCR2");
+                assert!(mcr.len() <= mcr2.blocks as usize * 1024, "the microcode fits MCR2");
+                let mut f = std::fs::OpenOptions::new().write(true).open(&copy).unwrap();
+                f.seek(SeekFrom::Start(mcr2.start as u64 * 1024)).unwrap();
+                f.write_all(&mcr).unwrap();
+            } else {
+                p.run(Command::Load { partition: "MCR2".into(), file: Some(u.join("ucadr.mcr")) })
+                    .unwrap();
+            }
             p.run(Command::Microload("MCR2".into())).unwrap();
             let sys = root.join("sys");
             std::fs::create_dir_all(sys.join("ubin")).unwrap();

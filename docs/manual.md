@@ -741,6 +741,13 @@ of their 454 words, and nothing about a copy announces which it is.
 Default: MIT's own, built in --- System 100's `sys/ubin/promh.mcr`, version
 9.
 
+On `--machine quux` the file is QUUX's own kind: an MCR file in **partition
+order**, MIT's with the two 16-bit halves of every 32-bit word swapped, as
+muir-sys's builder writes QUUX's PROM and microcode, with the program
+assembled at `36000`, where QUUX's PROM sits. A file in MIT's order is
+refused saying so, and so is one assembled at 0. Default: QUUX's own,
+built in, `data/quux-promh.mcr` ([QUUX](quux.md#its-boot-prom-in-its-own-addresses)).
+
 ### `--resume <file>`
 
 Start from a checkpoint instead of cold: the engine that wrote it, the same
@@ -1322,7 +1329,8 @@ The traps, each measured with qemu-img 10.2.1 and sgdisk 1.0.10:
   footer and says which it found.
 
 The boot PROM and the band muir-sys has handed over so far read MIT's label
-in block 0, not a GPT: muir opens the disk above, and they do not boot it.
+in block 0, not a GPT: muir opens the disk above, and they do not boot it;
+the PROM halts at `ERROR-BAD-LABEL`, 36016.
 
 ## The Chaosnet
 

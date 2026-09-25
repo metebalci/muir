@@ -629,16 +629,57 @@ Unibus `766012`, lets the RAM show through.
 
 The PROM is muir-sys's version 1000 for block-disk (`data/quux-promh.mcr`),
 MIT's `promh.text` changed so that a PDL buffer of any width boots, QUUX's
-64 level-2 blocks are cleared, and the disk is read by block number,
-assembled at 36000. It sets error stop through the register page, not
-`766012`, and halts at `ERROR-MICROCODE-TOO-BIG` if a microcode reaches
-36000. The control store stays 16K words: jump targets are `IR<25:12>`,
-dispatch words carry 14 address bits, and `SPC<14>` is the
+64 level-2 blocks are cleared, the disk is read by block number, and
+nothing is saved (muir-sys's `sys/ucadr/promh.text` at its commit
+`8e20b4c`), assembled at 36000. It sets error stop through the register
+page, not `766012`, and halts at `ERROR-MICROCODE-TOO-BIG` if a microcode
+reaches 36000. The control store stays 16K words: jump targets are
+`IR<25:12>`, dispatch words carry 14 address bits, and `SPC<14>` is the
 macroinstruction-return flag, so 32K waits for a new microinstruction
-format. `tests/quux_prom.rs` holds the start at 36000, the PROM read only,
-the RAM below live with no disable, the CADR's overlay, and the file read
-from 36000; `tests/system_1002.rs` boots System 1002 on it. `--prom` on
-QUUX takes a file assembled at 36000 and refuses one assembled at 0.
+format.
+
+**It saves nothing and writes no block of the disk** (contract Q8). MIT's
+PROM saves main memory's page 0 to block 1 before it loads anything
+(`SAVE-A-PAGE`, `mit/sys/ucadr/promh.text`), and on a GPT disk block 1 is
+the partition table. QUUX's reads every block into its buffer at physical
+page 3, words 1400-1777, and loads the microcode's main-memory section ---
+four blocks, pages 3-6, the microcode symbol area --- last, over the
+buffer. Two halts are its own: `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040, a
+second main-memory section with blocks, and `ERROR-BUFFER-NOT-LOADED` at
+36042, a section that does not cover the buffer (the hand-over's error
+table, `promh.tbl`). 36000 is `JUMP GO`, and `GO` is at 36043; the code
+ends at 36554 (`promh.locs`, `I-MEM 36555`).
+`tests/quux_prom_saves_nothing.rs` boots it on both engines until the
+microcode's location 6 runs, on a pack made from MIT's microcode 323 and
+on System 1002's with microcode 1000, and counts: no block written; the
+only stores are to word 777, the command list word, one a block read; every
+block read goes into pages 3-6; blocks 1, 3 and 5 are byte for byte as
+they were; and pages 3-6 hold the main-memory section's four blocks.
+
+**It still finds the microcode through MIT's label**, `LABL` in block 0,
+not a GPT: on `data/quux-disk.img`, which has no label, it reads block 0
+into page 3 and halts at `ERROR-BAD-LABEL`, 36016, on both engines
+(`quux_s_prom_reads_mit_s_label_not_a_gpt`).
+
+**Its file, like QUUX's microcode's, is in partition order** (contract
+Q8): MIT's `.mcr` with the two 16-bit halves of every 32-bit word swapped,
+so that each word is stored low byte first, as it lies in a microcode
+partition and as block-disk reads it, and a whole number of 1024-byte
+blocks, so that `dd` writes a microcode file into its partition with no
+conversion. muir-sys's `sys/sys/qwmcr.lisp` at `8e20b4c` writes it.
+Swapped back, the PROM's file has MIT's `promh.mcr`'s four sections, its
+dispatch and A memory word for word MIT's, only the program QUUX's
+(`quux_s_prom_is_mit_s_promh_changed`); and a microcode 1000 written into
+System 1002's `MCR1` by `dd` leaves the pack byte for byte as it was, the
+partition having held partition order all along
+(`quux_s_prom_saves_nothing_on_system_1002_s_pack`). The CADR's `.mcr`
+stays MIT's, and so does `diskpack`, which is the CADR's.
+
+`tests/quux_prom.rs` holds the start at 36000, the PROM read only, the RAM
+below live with no disable, the CADR's overlay, and the file read from
+36000 in partition order; `tests/system_1002.rs` boots System 1002 on it.
+`--prom` on QUUX takes a file in partition order assembled at 36000, and
+refuses one in MIT's order or assembled at 0.
 
 QUUX runs only muir-sys's latest System 1002 band. The PROMs assembled at
 0, and System 1001 on QUUX, are retired with it.

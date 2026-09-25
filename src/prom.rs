@@ -59,8 +59,9 @@ pub fn boot_prom() -> Vec<Insn> {
 }
 
 /// QUUX's boot PROM, version 1000, at control store 36000 (contract Q2):
-/// muir-sys's `promh.text`, block-disk only. `data/README.md` has where it
-/// came from; `tests/quux_prom.rs` holds it.
+/// muir-sys's `promh.text`, block-disk only, saving nothing (contract Q8),
+/// in partition order. `data/README.md` has where it came from;
+/// `tests/quux_prom.rs` holds it.
 const QUUX_PROMH: &[u8] = include_bytes!("../data/quux-promh.mcr");
 
 /// QUUX's boot PROM's microinstructions, [`PROM_WORDS`] of them, from
@@ -69,16 +70,17 @@ pub fn quux_boot_prom() -> Vec<Insn> {
     parse_quux_mcr(QUUX_PROMH).expect("data/quux-promh.mcr")
 }
 
-/// A QUUX boot PROM out of an MCR file: [`PROM_WORDS`] words for control
-/// store [`crate::machine::QUUX_PROM_BASE`] up. The assembler writes the
-/// control store section from 0, so the words are taken from the PROM's
-/// base, and a file with anything assembled below it, or past the top of
-/// the control store, is refused; so is a word setting `IR<46>`, as for the
-/// CADR's.
+/// A QUUX boot PROM out of an MCR file in QUUX's partition order
+/// (contract Q8, [`crate::mcr::parse_partition_order`]): [`PROM_WORDS`]
+/// words for control store [`crate::machine::QUUX_PROM_BASE`] up. The
+/// assembler writes the control store section from 0, so the words are
+/// taken from the PROM's base, and a file with anything assembled below
+/// it, or past the top of the control store, is refused; so is a word
+/// setting `IR<46>`, as for the CADR's, and a file in MIT's order.
 pub fn parse_quux_mcr(bytes: &[u8]) -> Result<Vec<Insn>, String> {
     let base = crate::machine::QUUX_PROM_BASE as usize;
-    let mcr = crate::mcr::parse(bytes)
-        .map_err(|e| format!("not an MCR microcode file, as promh.mcr is: {e}"))?;
+    let mcr = crate::mcr::parse_partition_order(bytes)
+        .map_err(|e| format!("not QUUX's MCR microcode file, as promh.mcr is: {e}"))?;
     if mcr.imem_start != 0 {
         return Err(format!("the control store section starts at {:o}, not 0", mcr.imem_start));
     }

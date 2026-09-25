@@ -24,6 +24,16 @@
 //!
 //! The main-memory section's size field is not a count of words in the
 //! file; the note under [`parse`] says what it is.
+//!
+//! **QUUX's `.mcr` is in partition order** (contract Q8): the same sections
+//! with the two 16-bit halves of every 32-bit word swapped, so that each
+//! word is stored little-endian, as it lies in a microcode partition and as
+//! block-disk reads it, and a whole number of 1024-byte blocks, so that
+//! `dd` writes the file into a partition with no conversion. muir-sys's
+//! writer, `sys/sys/qwmcr.lisp` at its commit `8e20b4c`, makes it for both
+//! the microcode and the boot PROM. [`parse_partition_order`] reads it;
+//! [`swap_halves`] turns either order into the other. The CADR's `.mcr`
+//! stays MIT's.
 
 use crate::isa::Insn;
 
@@ -58,6 +68,9 @@ pub struct Mcr {
     pub dmem: Vec<u32>,
     pub amem_start: u32,
     pub amem: Vec<u32>,
+    /// The main-memory section, where the file has one: its relative disk
+    /// block and its number of blocks ([`parse`] says which field is which).
+    pub main_memory: Option<(u32, u32)>,
 }
 
 impl Mcr {
@@ -164,6 +177,7 @@ pub fn parse(bytes: &[u8]) -> Result<Mcr, String> {
             // relative disk block --- not a count of anything in the file.
             3 => {
                 r.u32_pdp()?;
+                mcr.main_memory = Some((size as u32, start));
             }
             // `PROCESS-A-MEM-SECTION` checks `(BYTE-FIELD 22. 10.)` of the
             // start alone, and then pushes every word through the PDL buffer
@@ -182,4 +196,31 @@ pub fn parse(bytes: &[u8]) -> Result<Mcr, String> {
     }
     mcr.trailing_bytes = bytes.len() - r.at;
     Ok(mcr)
+}
+
+/// The file with the two 16-bit halves of every 32-bit word swapped: MIT's
+/// order into QUUX's partition order, or back, the swap being its own
+/// inverse. A file that is not whole words is refused.
+pub fn swap_halves(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if !bytes.len().is_multiple_of(4) {
+        return Err(format!("{} bytes, not a whole number of 32-bit words", bytes.len()));
+    }
+    Ok(bytes.as_chunks::<4>().0.iter().flat_map(|w| [w[2], w[3], w[0], w[1]]).collect())
+}
+
+/// Parses an MCR file in QUUX's partition order ([module docs](self)).
+///
+/// A file that reads in MIT's order and not in partition order is refused
+/// saying so: it is the CADR's kind of file, or QUUX's from before Q8.
+pub fn parse_partition_order(bytes: &[u8]) -> Result<Mcr, String> {
+    let swapped = swap_halves(bytes)?;
+    parse(&swapped).map_err(|e| {
+        if parse(bytes).is_ok() {
+            "the file is in MIT's order; QUUX's .mcr is in partition order, \
+             the two 16-bit halves of every word swapped"
+                .to_string()
+        } else {
+            e
+        }
+    })
 }

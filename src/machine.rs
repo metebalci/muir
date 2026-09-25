@@ -545,6 +545,12 @@ pub struct Machine {
     /// QUUX's block-disk, when it is fitted in the CADR controller's place
     /// ([`crate::block_disk`]).
     pub block_disk: Option<crate::block_disk::BlockDisk>,
+    /// The physical address of every word of main memory a bus cycle
+    /// stores, in order, when a test or a trace asks for the record by
+    /// setting it to `Some`. A disk transfer's words are not in it: the
+    /// block-disk keeps its own record ([`crate::block_disk::BlockDisk::log`]).
+    /// Not kept in a checkpoint.
+    pub store_log: Option<Vec<u32>>,
 }
 
 impl Machine {
@@ -595,6 +601,7 @@ impl Machine {
             tick: Tick::new(),
             dma_written: false,
             block_disk: None,
+            store_log: None,
             l1_map: [0; 2048],
             l2_map: [0; L2_MAP_WORDS],
             main: vec![0; boards << 16],
@@ -1355,6 +1362,9 @@ impl Machine {
         }
         if let Some(a) = self.device(phys) {
             self.main[a] = value;
+            if let Some(log) = self.store_log.as_mut() {
+                log.push(a as u32);
+            }
         }
     }
 }
@@ -1434,6 +1444,7 @@ impl Machine {
             tick,
             dma_written,
             block_disk,
+            store_log: _,
             l1_map,
             l2_map,
             main,
