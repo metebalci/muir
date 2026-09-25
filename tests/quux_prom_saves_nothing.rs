@@ -6,27 +6,29 @@
 //! it writes no block of the disk, and main memory only in physical pages
 //! 3-6 (words 1400-3377) --- its buffer and the microcode's main-memory
 //! section, which it loads last over the buffer --- and word 777, the
-//! command list word of its disk transfers. On a GPT disk blocks 1, 3 and 5
-//! are the partition table. MIT's PROM writes page 0 of memory to block 1
-//! before it loads anything, "In order to not clobber core" (`SAVE-A-PAGE`,
-//! `mit/sys/ucadr/promh.text`); muir-sys's `promh.text` for QUUX drops that
-//! save.
+//! command list word of its disk transfers. On a GPT disk blocks 0 to 16
+//! are the protective MBR, the primary GPT header and its entry array, and
+//! the machine never writes the table (contract Q8, decided 1). MIT's PROM
+//! writes page 0 of memory to block 1 before it loads anything, "In order
+//! to not clobber core" (`SAVE-A-PAGE`, `mit/sys/ucadr/promh.text`);
+//! muir-sys's `promh.text` for QUUX drops that save.
 //!
-//! The PROM is `data/quux-promh.mcr`, muir's built-in QUUX PROM. It still
-//! finds the microcode through MIT's `LABL` label in block 0 (on a GPT disk
-//! with no label it stops at `ERROR-BAD-LABEL`,
-//! [`quux_s_prom_reads_mit_s_label_not_a_gpt`]), so the disk here
-//! is a pack with a label, and its microcode partition holds a `.mcr` in
-//! partition order written there as `dd` would write it, at the
-//! partition's first block and with no conversion.
+//! The PROM is `data/quux-promh.mcr`, muir's built-in QUUX PROM, the GPT
+//! PROM: it finds the microcode through the disk's GPT, the first
+//! microcode partition with attribute bit 48 set, and not through MIT's
+//! `LABL` label, and on a disk with no GPT it stops at `ERROR-NO-GPT`
+//! ([`quux_s_prom_reads_a_gpt_not_mit_s_label`]). The microcode partition
+//! holds a `.mcr` in partition order, as `dd` writes it, at the partition's
+//! first block and with no conversion.
 //!
-//! Two disks. One is made here from committed files and always runs: a
-//! T-300 label of MIT's own layout (`band::T300`) with MIT's microcode 323,
-//! `mit/sys/ubin/ucadr.mcr`, turned into partition order, in `MCR1`. The
-//! PROM does not care whose microcode it loads, only about its sections.
-//! The other is muir-sys's System 1002 pack, `ref/band-1002-dev9`, with its
-//! partition-order microcode `ref/ucode-1000-q8/ucadr.mcr` written into
-//! `MCR1`; it skips when either is not present.
+//! Two disks. One is made here from committed files and always runs:
+//! `data/quux-disk.img`, the GPT disk sgdisk made, with MIT's microcode
+//! 323, `mit/sys/ubin/ucadr.mcr`, turned into partition order, in its
+//! current `MCR1`. The PROM does not care whose microcode it loads, only
+//! about its sections. The other is muir-sys's System 1002 dev11 disk,
+//! `ref/band-1002-dev11/pack-1002-dev11.vhd`, a dynamic VHD whose `MCR1`
+//! holds the hand-over's `ucadr.mcr` as it is; it skips when that is not
+//! present.
 
 use std::path::Path;
 
@@ -115,38 +117,17 @@ fn to_six<E: Engine>(mut e: E, name: &str) -> Run {
     }
 }
 
-/// Blocks 1, 3 and 5, as bytes.
-fn saved_blocks(pack: &Path) -> Vec<Vec<u8>> {
-    let bytes = std::fs::read(pack).unwrap();
-    [1, 3, 5].iter().map(|b| bytes[b * BLOCK_BYTES..(b + 1) * BLOCK_BYTES].to_vec()).collect()
-}
-
-/// Writes something recognizable into blocks 1, 3 and 5, so that a write of
-/// anything there changes them.
-fn mark_saved_blocks(pack: &Path) {
-    use std::io::{Seek, SeekFrom, Write};
-    let mut f = std::fs::OpenOptions::new().write(true).open(pack).unwrap();
-    for b in [1u64, 3, 5] {
-        let text = format!("block {b} is not the PROM's to write. ");
-        let mark: Vec<u8> = text.bytes().cycle().take(BLOCK_BYTES).collect();
-        f.seek(SeekFrom::Start(b * BLOCK_BYTES as u64)).unwrap();
-        f.write_all(&mark).unwrap();
-    }
-}
-
-/// `dd if=<mcr> of=<pack> bs=1024 seek=<MCR1's first block> conv=notrunc`:
-/// the file's bytes as they are, at the partition's first block. Returns
-/// the partition's first block.
-fn dd_into_mcr1(pack: &Path, mcr: &[u8]) -> u32 {
+/// `dd if=<mcr> of=<pack> bs=1024 seek=<MCR1's first block> conv=notrunc`
+/// on a pack with MIT's label: the file's bytes as they are, at the
+/// partition's first block.
+fn dd_into_labl_mcr1(pack: &Path, mcr: &[u8]) {
     use std::io::{Seek, SeekFrom, Write};
     let label = Label::open(pack).expect("the pack's label");
     let p = label.partition("MCR1").expect("MCR1").clone();
-    assert_eq!(mcr.len() % BLOCK_BYTES, 0, "a partition-order .mcr is whole blocks");
     assert!(mcr.len() / BLOCK_BYTES <= p.blocks as usize, "the .mcr fits MCR1");
     let mut f = std::fs::OpenOptions::new().write(true).open(pack).unwrap();
     f.seek(SeekFrom::Start(p.start as u64 * BLOCK_BYTES as u64)).unwrap();
     f.write_all(mcr).unwrap();
-    p.start
 }
 
 /// The main-memory section's data as the microcode partition holds it: its
@@ -171,13 +152,13 @@ fn octal(a: &[u32]) -> String {
 }
 
 /// Boots `pack` on both engines, each on a fresh copy of it, and holds the
-/// run to the PROM's promise.
-fn holds(pack: &Path, mcr: &[u8], dir: &Path) {
-    mark_saved_blocks(pack);
-    let before = saved_blocks(pack);
+/// run to the PROM's promise. `ext` names the copy for what it is; muir
+/// tells a VHD by its footer, not its name.
+fn holds(pack: &Path, ext: &str, mcr: &[u8], dir: &Path) {
+    let before = std::fs::read(pack).unwrap();
     let want_pages = main_memory_data(mcr);
     for name in ["micro", "rtl"] {
-        let copy = dir.join(format!("{name}.img"));
+        let copy = dir.join(format!("{name}.{ext}"));
         std::fs::copy(pack, &copy).unwrap();
         let run = match name {
             "micro" => to_six(Micro::new(quux(&copy)), name),
@@ -211,7 +192,7 @@ fn holds(pack: &Path, mcr: &[u8], dir: &Path) {
         );
         assert!(stray_stores.is_empty(), "{name}: stored at {}", octal(&stray_stores));
         assert!(stray_reads.is_empty(), "{name}: blocks read into {}", octal(&stray_reads));
-        assert_eq!(saved_blocks(&copy), before, "{name}: blocks 1, 3 and 5 unchanged");
+        assert!(std::fs::read(&copy).unwrap() == before, "{name}: the disk file unchanged");
         assert!(
             run.pages == want_pages,
             "{name}: pages 3-6 hold the microcode's main-memory section, loaded last"
@@ -220,85 +201,95 @@ fn holds(pack: &Path, mcr: &[u8], dir: &Path) {
 }
 
 /// **QUUX's PROM writes no block and only pages 3-6 and word 777 of
-/// memory**, on a pack made here with MIT's microcode 323 in partition
-/// order in `MCR1`.
+/// memory**, on a GPT disk made here with MIT's microcode 323 in partition
+/// order in its current `MCR1`.
 #[test]
-fn quux_s_prom_saves_nothing_on_a_pack_made_here() {
+fn quux_s_prom_saves_nothing_on_a_disk_made_here() {
     let dir = support::scratch("quux-prom-saves-nothing");
-    let pack = dir.join("pack.img");
-    Label::initialize(&pack, &band::T300).write().unwrap();
-    let mcr = muir::mcr::swap_halves(muir::mcr::UCADR_323).unwrap();
-    // MIT's file is not whole blocks; dd writes what there is.
-    let mcr = {
-        let mut v = mcr;
-        v.resize(v.len().div_ceil(BLOCK_BYTES) * BLOCK_BYTES, 0);
-        v
-    };
-    dd_into_mcr1(&pack, &mcr);
-    holds(&pack, &mcr, &dir);
+    let mcr = support::ucadr_323_partition_order();
+    let (pack, _) = support::quux_gpt_disk(&dir, &mcr);
+    holds(&pack, "img", &mcr, &dir);
 }
 
-/// **The same on System 1002's pack**, with muir-sys's partition-order
-/// microcode 1000 written into its `MCR1` --- which leaves the pack as it
-/// was: what `diskpack load` put in the partition is partition order.
+/// **The same on System 1002 dev11's disk**, the dynamic VHD as muir-sys
+/// handed it over, whose current `MCR1`, at block 17, holds the hand-over's
+/// partition-order microcode 1000 as `dd` put it there.
 #[test]
-fn quux_s_prom_saves_nothing_on_system_1002_s_pack() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("ref");
-    let (band, ucode) =
-        (root.join("band-1002-dev9/pack-1002-dev9.img"), root.join("ucode-1000-q8/ucadr.mcr"));
-    for p in [&band, &ucode] {
+fn quux_s_prom_saves_nothing_on_system_1002_s_disk() {
+    let band = Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11");
+    let (vhd, ucode) = (band.join("pack-1002-dev11.vhd"), band.join("ucadr.mcr"));
+    for p in [&vhd, &ucode] {
         if !p.exists() {
             eprintln!("skipped: {} is not present", p.display());
             return;
         }
     }
     let dir = support::scratch("quux-prom-saves-nothing-1002");
-    let pack = dir.join("pack.img");
-    std::fs::copy(&band, &pack).unwrap();
+    let pack = dir.join("pack.vhd");
+    std::fs::copy(&vhd, &pack).unwrap();
     let mcr = std::fs::read(&ucode).unwrap();
-    let start = dd_into_mcr1(&pack, &mcr);
-    assert_eq!(start, 17, "MCR1 starts at block 17");
-    assert!(
-        std::fs::read(&pack).unwrap() == std::fs::read(&band).unwrap(),
-        "the dd leaves System 1002's pack as it was"
-    );
-    holds(&pack, &mcr, &dir);
+    let mut d = muir::disk_image::Disk::open(&pack).unwrap();
+    let mcr1 = support::gpt_partition(&mut d, "MCR1");
+    assert_eq!((mcr1.first, mcr1.current), (17, true), "MCR1, current, at block 17");
+    for (k, block) in mcr.chunks(BLOCK_BYTES).enumerate() {
+        let on_disk: Vec<u8> = d
+            .read_block(mcr1.first + k as u32)
+            .unwrap()
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        assert!(on_disk == block, "MCR1's block {k} is the hand-over's ucadr.mcr");
+    }
+    holds(&pack, "vhd", &mcr, &dir);
 }
 
-/// `ERROR-BAD-LABEL`, where the PROM halts when block 0 does not begin
-/// with `LABL` (the hand-over's `promh.tbl`, held by
+/// `ERROR-NO-GPT`, where the GPT PROM halts when block 0's second sector
+/// is not a GPT header (the hand-over's `promh.tbl`, held by
 /// `tests/quux_prom.rs`).
-const ERROR_BAD_LABEL: u16 = 0o36016;
+const ERROR_NO_GPT: u16 = 0o36632;
 
-/// **QUUX's PROM finds the microcode through MIT's label, not a GPT**: on
-/// `data/quux-disk.img`, a GPT disk with no `LABL` in block 0, it reads
-/// block 0 into its buffer at page 3 and halts at `ERROR-BAD-LABEL`,
-/// having written nothing.
+/// **QUUX's PROM finds the microcode through a GPT, not MIT's label**: on a
+/// pack with MIT's `LABL` label in block 0 and no GPT --- a T-300 label of
+/// MIT's own layout with MIT's microcode 323 in partition order in `MCR1`,
+/// what the PROM before the GPT booted --- it reads block 0 into its
+/// buffer at page 3 and halts at `ERROR-NO-GPT`, having written nothing.
 #[test]
-fn quux_s_prom_reads_mit_s_label_not_a_gpt() {
-    let dir = support::scratch("quux-prom-gpt");
+fn quux_s_prom_reads_a_gpt_not_mit_s_label() {
+    let dir = support::scratch("quux-prom-labl");
+    let pack = dir.join("pack.img");
+    Label::initialize(&pack, &band::T300).write().unwrap();
+    dd_into_labl_mcr1(&pack, &support::ucadr_323_partition_order());
+    let before = std::fs::read(&pack).unwrap();
     for name in ["micro", "rtl"] {
         let copy = dir.join(format!("{name}.img"));
-        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/data/quux-disk.img"), &copy).unwrap();
-        fn halt<E: Engine>(mut e: E, name: &str) -> E {
+        std::fs::copy(&pack, &copy).unwrap();
+        fn halt<E: Engine>(mut e: E, name: &str) -> (E, u64) {
             // Halted: the PC there, and staying there.
             e.boot();
             let mut there = 0;
-            for _ in 0..LIMIT {
+            for n in 0..LIMIT {
                 e.step().unwrap();
-                there = if e.pc() == ERROR_BAD_LABEL { there + 1 } else { 0 };
+                there = if e.pc() == ERROR_NO_GPT { there + 1 } else { 0 };
                 if there == 1000 {
-                    return e;
+                    return (e, n - 999);
                 }
             }
-            panic!("{name}: the PC is at {:o}, not at ERROR-BAD-LABEL", e.pc());
+            panic!("{name}: the PC is at {:o}, not at ERROR-NO-GPT", e.pc());
         }
-        let mut m = match name {
-            "micro" => halt(Micro::new(quux(&copy)), name).machine().clone(),
-            _ => halt(Rtl::new(quux(&copy)), name).machine().clone(),
+        let (mut m, n) = match name {
+            "micro" => {
+                let (e, n) = halt(Micro::new(quux(&copy)), name);
+                (e.machine().clone(), n)
+            }
+            _ => {
+                let (e, n) = halt(Rtl::new(quux(&copy)), name);
+                (e.machine().clone(), n)
+            }
         };
+        eprintln!("{name}: at ERROR-NO-GPT after {n} microcycles");
         let log = m.block_disk.as_mut().unwrap().log.take().unwrap();
         assert_eq!(log, [Transfer { write: false, block: 0, page: 0o1400 }], "{name}");
         assert!(m.store_log.unwrap().iter().all(|&a| a == CCW), "{name}: only the command word");
+        assert!(std::fs::read(&copy).unwrap() == before, "{name}: the pack unchanged");
     }
 }

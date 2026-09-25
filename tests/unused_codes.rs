@@ -81,21 +81,23 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> (Vec<u16>, Vec<u16>) {
 /// **System 1002 uses the clocks' codes only where its microcode says so**,
 /// through its boot to the listener and a moment after on QUUX: no
 /// instruction the OA registers make writes destinations 3 to 7 or reads
-/// sources 15 or 17. Its microcode, 1000 for Q5 (dev9), uses them at
+/// sources 15 or 17. Its microcode, 1000 for Q8 (dev11), uses them at
 /// the tick's own sites.
 #[test]
 fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev9");
-    if !from.join("pack-1002-dev9.img").exists() {
+    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11");
+    if !from.join("pack-1002-dev11.vhd").exists() {
         eprintln!("skipped: {} is not present", from.display());
         return;
     }
+    // A copy of the disk, a dynamic VHD booted as it is: the machine
+    // writes it.
     let dir = support::scratch("unused-codes-1002");
-    let pack = dir.join("pack.img");
-    std::fs::copy(from.join("pack-1002-dev9.img"), &pack).unwrap();
+    let pack = dir.join("pack.vhd");
+    std::fs::copy(from.join("pack-1002-dev11.vhd"), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev9.tar.gz"))
+        .arg(from.join("tree-1002-dev11.tar.gz"))
         .arg("-C")
         .arg(dir.path())
         .status()

@@ -572,22 +572,12 @@ fn quux_s_prom_is_assembled_at_36000() {
     refused_saying(&["--rtl", "--machine", "quux", "--prom", mits], "the file is in MIT's order");
 }
 
-/// A pack QUUX's PROM boots: a T-300 label of MIT's own layout with MIT's
-/// microcode 323, `mit/sys/ubin/ucadr.mcr`, in partition order at `MCR1`'s
-/// first block, as `dd` writes it. The PROM finds the microcode through
-/// the label and does not care whose it is.
+/// A disk QUUX's PROM boots: `data/quux-disk.img`, the GPT disk sgdisk
+/// made, with MIT's microcode 323, `mit/sys/ubin/ucadr.mcr`, in partition
+/// order at its current `MCR1`'s first block, as `dd` writes it. The PROM
+/// finds the microcode through the GPT and does not care whose it is.
 fn quux_pack(dir: &Path) -> PathBuf {
-    use muir::band::{self, Label};
-    let pack = dir.join("pack.img");
-    Label::initialize(&pack, &band::T300).write().unwrap();
-    let mut mcr = muir::mcr::swap_halves(muir::mcr::UCADR_323).unwrap();
-    mcr.resize(mcr.len().div_ceil(1024) * 1024, 0);
-    let mcr1 = Label::open(&pack).unwrap().partition("MCR1").unwrap().start;
-    let mut bytes = std::fs::read(&pack).unwrap();
-    let at = mcr1 as usize * 1024;
-    bytes[at..at + mcr.len()].copy_from_slice(&mcr);
-    std::fs::write(&pack, &bytes).unwrap();
-    pack
+    support::quux_gpt_disk(dir, &support::ucadr_323_partition_order()).0
 }
 
 /// The PC a run ended at and after how many microcycles, from its last

@@ -22,7 +22,7 @@ differences, what it needed:
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The clocks in the processor: the 60 Hz tick, the interval timer, the microsecond clock | nothing | none enables the tick yet: the clock handler is still entered from the display's interrupt; the microsecond clock is still read on the Unibus | nothing | nothing |
-| Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002 (dev4): the label, the band and the disk routines by block number | block-disk is QUUX's only disk, the default there; the CADR's controller is refused on QUUX |
+| Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002: the partitions, the band and the disk routines by block number | block-disk is QUUX's only disk, the default there; the CADR's controller is refused on QUUX |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
 | No delay lines: `sync`, always | nothing | nothing | nothing | `--sync-cycle-ticks`; `--timing-model cadr` and `fpga` refused on QUUX |
 | No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and 1000 never do either, counted (below) | nothing | nothing |
@@ -453,9 +453,8 @@ the end of the disk, the NXM, a command it does not do, the registers on
 QUUX's bus and a checkpoint.
 
 muir-sys's boot PROM 1000, microcode 1000 and System 1002 address it by
-block: its fourth development band boots on it on `micro`, `rtl` and
-under `sync`, at 1024 by 768, 1280 by 1024 and 1920 by 1080
-(`tests/system_1002.rs`). Lisp checks the disk address after a transfer
+block: System 1002's band boots on it on `micro`, `rtl` and under `sync`,
+at 1024 by 768, 1280 by 1024 and 1920 by 1080 (`tests/system_1002.rs`). Lisp checks the disk address after a transfer
 against the last block it expected, and reads the command list pointer
 and the disk address after one; it does not read the fourth register,
 where the CADR's controller gave the ECC.
@@ -533,8 +532,30 @@ disk itself: block-disk moves blocks, and the partitions are the machine's
 software's to find. `diskpack`, MIT's label editor, is the CADR's; given a
 QUUX disk it says what the file is and that its partitions are made with
 sgdisk, and writes nothing (`quux_s_disk_is_named_and_left_alone` in
-`tests/diskpack.rs`). The boot PROM in `data/quux-promh.mcr` and System
-1002's band read MIT's label in block 0, not a GPT.
+`tests/diskpack.rs`). The boot PROM in `data/quux-promh.mcr`, the
+microcode and System 1002's band read the GPT; MIT's label in block 0 is
+the CADR's.
+
+**System 1002's band is dev11, on a GPT disk in a dynamic VHD**: muir-sys's
+development band "System 1002 dev11", built from its commit `8942300`, a
+T-300's 263,245 blocks with the current `MCR1` at block 17 holding
+microcode 1000 and the current `LOD4` the band, no FILE and no TEMP.
+QUUX boots the VHD as it is, a copy of it, the disk being written; the
+tests find it in the gitignored `ref/band-1002-dev11` and skip without it.
+It reaches its listener, drawn at the screen's own words a line, in 166 M
+microcycles on `micro` and 187.5 M on `rtl` at 1280 by 1024
+(`system_1002_runs_on_mono_tv`, measured to the half million). It
+restores its own band: `(si:disk-restore 4)`, answered `yes`, reads 20,832
+blocks of `LOD4` in 26 M microcycles and is back at the listener 139 M
+later, on `micro` (`system_1002_restores_its_band_to_the_listener`). That
+test holds, at every microcycle in `DISK-AWAIT-READY`, the disk registers'
+virtual address `77377774` to their physical `17377774`, and block-disk to
+moving on every million microcycles. The cold boot's `COLD-FAKE-L2-MAP`
+maps the disk registers and the run light; when the two take one level-2
+slot, the disk registers' virtual address reaches another word, and the
+restore waits in `DISK-AWAIT-READY` for ever. On a microcode with that
+collision, System 1002 dev9's, the test fails at the first check, the
+address reaching `17117774`, and without it at the second (measured).
 
 How to make a disk with standard tools is in
 [the manual](manual.md#quuxs-disk).
@@ -663,52 +684,62 @@ and jumps to 6. A reboot is a jump to 36000. The CADR keeps MIT's overlay:
 its PROM covers 0-777 until `PROMDISABLE` in the mode register, written at
 Unibus `766012`, lets the RAM show through.
 
-The PROM is muir-sys's version 1000 for block-disk (`data/quux-promh.mcr`),
-MIT's `promh.text` changed so that a PDL buffer of any width boots, QUUX's
-64 level-2 blocks are cleared, the disk is read by block number, and
-nothing is saved (muir-sys's `sys/ucadr/promh.text` at its commit
-`8e20b4c`), assembled at 36000. It sets error stop through the register
-page, not `766012`, and halts at `ERROR-MICROCODE-TOO-BIG` if a microcode
-reaches 36000. The control store stays 16K words: jump targets are
-`IR<25:12>`, dispatch words carry 14 address bits, and `SPC<14>` is the
-macroinstruction-return flag, so 32K waits for a new microinstruction
-format.
+The PROM is muir-sys's version 1000 for block-disk and a GPT
+(`data/quux-promh.mcr`), MIT's `promh.text` changed so that a PDL buffer
+of any width boots, QUUX's 64 level-2 blocks are cleared, the disk is read
+by block number, nothing is saved, and the microcode is found through the
+GPT (muir-sys's `sys/ucadr/promh.text`, handed over with System 1002 dev11,
+which was built from muir-sys's commit `8942300`), assembled at 36000. It sets error stop through the register page, not `766012`, and
+halts at `ERROR-MICROCODE-TOO-BIG` if a microcode reaches 36000. The
+control store stays 16K words: jump targets are `IR<25:12>`, dispatch
+words carry 14 address bits, and `SPC<14>` is the macroinstruction-return
+flag, so 32K waits for a new microinstruction format.
+
+**It finds the microcode through the GPT**: the first microcode partition
+in the entry array carrying attribute bit 48 (muir-sys). Its own halts are
+`ERROR-NO-GPT` at 36632, no GPT (or an entry array whose LBA does not fit
+in 32 bits, within the 8 GiB limit, muir-sys says);
+`ERROR-NO-CURRENT-MICR` at 36634, no current microcode partition; and
+`ERROR-ODD-MICR-START` at 36636, one whose first LBA is odd (the
+hand-over's error table `promh.tbl` and symbols `promh.sym`). On a pack
+with MIT's `LABL` label and no GPT --- a T-300 label with microcode 323 in
+`MCR1`, which the PROM before it booted --- it reads block 0 into page 3,
+nothing else, and halts at `ERROR-NO-GPT` after 630,129 microcycles on
+`micro` and 661,374 on `rtl`, having written nothing
+(`quux_s_prom_reads_a_gpt_not_mit_s_label`). **Unverified**: the other two
+halts, which no test here reaches.
 
 **It saves nothing and writes no block of the disk** (contract Q8). MIT's
 PROM saves main memory's page 0 to block 1 before it loads anything
 (`SAVE-A-PAGE`, `mit/sys/ucadr/promh.text`), and on a GPT disk block 1 is
-the partition table. QUUX's reads every block into its buffer at physical
-page 3, words 1400-1777, and loads the microcode's main-memory section ---
-four blocks, pages 3-6, the microcode symbol area --- last, over the
-buffer. Two halts are its own: `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040, a
-second main-memory section with blocks, and `ERROR-BUFFER-NOT-LOADED` at
-36042, a section that does not cover the buffer (the hand-over's error
-table, `promh.tbl`). 36000 is `JUMP GO`, and `GO` is at 36043; the code
-ends at 36554 (`promh.locs`, `I-MEM 36555`).
-`tests/quux_prom_saves_nothing.rs` boots it on both engines until the
-microcode's location 6 runs, on a pack made from MIT's microcode 323 and
-on System 1002's with microcode 1000, and counts: no block written; the
-only stores are to word 777, the command list word, one a block read; every
-block read goes into pages 3-6; blocks 1, 3 and 5 are byte for byte as
-they were; and pages 3-6 hold the main-memory section's four blocks.
-
-**It still finds the microcode through MIT's label**, `LABL` in block 0,
-not a GPT: on `data/quux-disk.img`, which has no label, it reads block 0
-into page 3 and halts at `ERROR-BAD-LABEL`, 36016, on both engines
-(`quux_s_prom_reads_mit_s_label_not_a_gpt`).
+the partition table's entry array. QUUX's reads every block into its buffer
+at physical page 3, words 1400-1777, and loads the microcode's main-memory
+section --- four blocks, pages 3-6, the microcode symbol area --- last,
+over the buffer. Two halts are for that: `ERROR-TWO-MAIN-MEM-SECTIONS` at
+36040, a second main-memory section with blocks, and
+`ERROR-BUFFER-NOT-LOADED` at 36042, a section that does not cover the
+buffer. 36000 is `JUMP GO`, and `GO` is at 36043; the code ends at 36636
+(`promh.locs`, `I-MEM 36637`). `tests/quux_prom_saves_nothing.rs` boots it
+on both engines until the microcode's location 6 runs, on
+`data/quux-disk.img` with MIT's microcode 323 in its `MCR1` and on System
+1002 dev11's VHD with microcode 1000, and counts: no block written; the
+only stores are to word 777, the command list word, one a block read;
+every block read goes into pages 3-6; the disk file is byte for byte as it
+was; and pages 3-6 hold the main-memory section's four blocks. On dev11 it
+reads 115 blocks and reaches 6 after 1,020,407 microcycles on `micro` and
+1,136,063 on `rtl`.
 
 **Its file, like QUUX's microcode's, is in partition order** (contract
 Q8): MIT's `.mcr` with the two 16-bit halves of every 32-bit word swapped,
 so that each word is stored low byte first, as it lies in a microcode
 partition and as block-disk reads it, and a whole number of 1024-byte
 blocks, so that `dd` writes a microcode file into its partition with no
-conversion. muir-sys's `sys/sys/qwmcr.lisp` at `8e20b4c` writes it.
+conversion. muir-sys's `sys/sys/qwmcr.lisp` writes it.
 Swapped back, the PROM's file has MIT's `promh.mcr`'s four sections, its
 dispatch and A memory word for word MIT's, only the program QUUX's
-(`quux_s_prom_is_mit_s_promh_changed`); and a microcode 1000 written into
-System 1002's `MCR1` by `dd` leaves the pack byte for byte as it was, the
-partition having held partition order all along
-(`quux_s_prom_saves_nothing_on_system_1002_s_pack`). The CADR's `.mcr`
+(`quux_s_prom_is_mit_s_promh_changed`); and System 1002 dev11's `MCR1`
+holds the hand-over's `ucadr.mcr` block for block, as `dd` put it there
+(`quux_s_prom_saves_nothing_on_system_1002_s_disk`). The CADR's `.mcr`
 stays MIT's, and so does `diskpack`, which is the CADR's.
 
 `tests/quux_prom.rs` holds the start at 36000, the PROM read only, the RAM
