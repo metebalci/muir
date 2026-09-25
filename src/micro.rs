@@ -794,7 +794,11 @@ impl Micro {
     /// of the page `VMA` is on, the cycle's direction is kept for the
     /// permission bits, and the clock is charged the mean wait for a
     /// cycle. The word itself moves at once, as it always has
-    /// here: this engine has no bus to wait on, only a clock to keep.
+    /// here: this engine has no bus to wait on, only a clock to keep. So a
+    /// write takes `MD` as it stands at the start, where the board, and
+    /// `rtl`, write an `MD` loaded in the microcycle after it
+    /// (`chip_and_rtl_write_the_md_of_the_microcycle_after_the_start`,
+    /// `tests/chip.rs`).
     fn start_cycle(&mut self, write: bool) {
         self.memop = true;
         self.lvmo = self.m.translate(self.m.vma).l2_data;

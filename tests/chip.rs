@@ -2304,6 +2304,115 @@ fn chip_and_rtl_agree_on_the_diagnostic_block() {
     );
 }
 
+/// A machine whose virtual page 0 is main memory's physical page 1, with
+/// `program` at PROM word 20 up and `m_words` in M memory from 1.
+fn on_main_memory(program: &[muir::isa::Insn], m_words: &[u32]) -> muir::machine::Machine {
+    use microcode::*;
+    let mut m = muir::machine::Machine::new();
+    m.l1_map[0] = 0;
+    m.l2_map[0] = (1 << 23) | (1 << 22) | 1;
+    for (k, &w) in m_words.iter().enumerate() {
+        m.mmem[k + 1] = w;
+    }
+    let mut prom = vec![filler(); 512];
+    prom[20..20 + program.len()].copy_from_slice(program);
+    m.load_prom(&prom);
+    m
+}
+
+/// Runs `m` on the board for `cycles` generator cycles, and, when asked, on
+/// `rtl` for as many steps: the A memory words `park` of each.
+fn a_words_after(
+    m: &muir::machine::Machine,
+    cycles: usize,
+    park: &[usize],
+    rtl_too: bool,
+) -> (Vec<u32>, Option<Vec<u32>>) {
+    use muir::engine::Engine;
+    let n = netlist::parse(NETLIST).unwrap();
+    let (mut c, mut clk, mut far, mut r) = same_program(&n, m);
+    let clk0 = cpu_clock(&n);
+    let a = Ram::new(&c, &n, &MEMS[0]);
+    for _ in 0..cycles {
+        generator_cycle(&mut c, &mut far, &mut clk, clk0);
+    }
+    let rtl = rtl_too.then(|| {
+        for _ in 0..cycles {
+            r.step().unwrap();
+        }
+        park.iter().map(|&p| r.machine().amem[p]).collect()
+    });
+    (park.iter().map(|&p| a.word(&c, p)).collect(), rtl)
+}
+
+/// **A write carries the `MD` of the microcycle after its start**: loaded
+/// there, the new word is the one written; loaded a microcycle later, the
+/// old. The cycle goes out at the edge ending the microcycle after the
+/// start (`busint.erface`: "The next clock (3) terminates MEMSTART and
+/// starts XBUSRQ"), and `MD` reaches the Xbus through the bus interface
+/// with no latch: the 8304 transceivers of `cadr1/lmdata.drw` between
+/// `MEM<31:0>` and the bus, "address, data, ack, and wrcyc lines just pass
+/// straight through". A `DESTMEM` in that microcycle is not held, since
+/// `MBUSY.SYNC` is still low there, and the one after it is. Main memory
+/// the netlist boards, as the harness runs them.
+#[test]
+fn chip_and_rtl_write_the_md_of_the_microcycle_after_the_start() {
+    use microcode::*;
+    use muir::isa::Insn;
+    let mut p = vec![filler(); 120];
+    // MD <- 1111 and a write at 10; MD <- 2222 in the next microcycle.
+    p[0] = Insn::new(ALU | SETM | m_src(1) | MD);
+    p[1] = Insn::new(ALU | SETM | m_src(2) | START_WRITE);
+    p[2] = Insn::new(ALU | SETM | m_src(3) | MD);
+    // The same at 11, with MD <- 2222 a microcycle later.
+    p[40] = Insn::new(ALU | SETM | m_src(1) | MD);
+    p[41] = Insn::new(ALU | SETM | m_src(4) | START_WRITE);
+    p[43] = Insn::new(ALU | SETM | m_src(3) | MD);
+    p[80] = Insn::new(ALU | SETM | m_src(2) | START_READ);
+    p[90] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o101));
+    p[91] = Insn::new(ALU | SETM | m_src(4) | START_READ);
+    p[101] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o102));
+    let m = on_main_memory(&p, &[0o1111, 0o10, 0o2222, 0o11]);
+    let (chip, rtl) = a_words_after(&m, 200, &[0o101, 0o102], true);
+    assert_eq!(chip, [0o2222, 0o1111], "the board");
+    assert_eq!(rtl, Some(chip), "rtl");
+}
+
+/// **On the board, a start in the microcycle right after a start loses the
+/// first cycle**: a write of 1111 at 10, then a read of 11 in the next
+/// microcycle. The read gets 11's word, and 10 and 11 keep theirs: no term
+/// of `-WAIT` holds the second start, `MBUSY.SYNC` being `MEMRQ` registered
+/// at the edge that raises `MEMSTART`, and the cycle that goes out takes
+/// the second start's direction and `VMA<7:0>`. `rtl` gets the same words
+/// in a release build, but it asks the bus interface for a second cycle
+/// while the first is running, which its debug assertion refuses, so it is
+/// not run here; QUUX holds the second start
+/// (`a_start_right_after_a_start_waits_for_it`,
+/// `tests/quux_device_registers.rs`).
+#[test]
+fn on_the_board_a_start_right_after_a_start_loses_the_first() {
+    use microcode::*;
+    use muir::isa::Insn;
+    let mut p = vec![filler(); 200];
+    // 5555 at 10 and 6666 at 11, each write on its own.
+    p[0] = Insn::new(ALU | SETM | m_src(5) | MD);
+    p[1] = Insn::new(ALU | SETM | m_src(2) | START_WRITE);
+    p[20] = Insn::new(ALU | SETM | m_src(6) | MD);
+    p[21] = Insn::new(ALU | SETM | m_src(4) | START_WRITE);
+    // A write of 1111 at 10, and a read of 11 straight after it.
+    p[40] = Insn::new(ALU | SETM | m_src(1) | MD);
+    p[41] = Insn::new(ALU | SETM | m_src(2) | START_WRITE);
+    p[42] = Insn::new(ALU | SETM | m_src(4) | START_READ);
+    p[80] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o101));
+    p[81] = Insn::new(ALU | SETM | m_src(2) | START_READ);
+    p[100] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o102));
+    p[101] = Insn::new(ALU | SETM | m_src(4) | START_READ);
+    p[120] = Insn::new(ALU | SETM | SRC_MD | a_dest(0o103));
+    let m = on_main_memory(&p, &[0o1111, 0o10, 0o2222, 0o11, 0o5555, 0o6666]);
+    let (chip, _) = a_words_after(&m, 300, &[0o101, 0o102, 0o103], false);
+    assert_eq!(chip, [0o6666, 0o5555, 0o6666], "the read of 11, then 10 and 11 as they were");
+}
+
 /// **`PROG.BOOT`, bit 7 of a mode-register write, reboots the machine.**  The
 /// program writes `200` into `766012` every time round, so both engines trap
 /// to 0 again and again, in the same microcycle and with the same period.

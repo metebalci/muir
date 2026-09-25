@@ -1283,18 +1283,17 @@ mod engines {
         let mut p = vec![
             Insn::new(ALU | SETM | m_src(4) | MD),
             Insn::new(ALU | SETM | m_src(3) | START_WRITE),
+            // An `MD` loaded in the microcycle after a start is the word
+            // written, on the CADR and QUUX alike: `tests/chip.rs`,
+            // `chip_and_rtl_write_the_md_of_the_microcycle_after_the_start`.
             filler(),
             Insn::new(ALU | SETM | m_src(2) | MD),
             Insn::new(ALU | SETM | m_src(1) | START_WRITE),
-            // A memory start straight after a register write trips `rtl`'s
-            // QUUX port ("a cycle is already running"), with or without
-            // this device: one microcycle between.
-            filler(),
         ];
         p.extend(read(5, 0o200));
         p.extend(read(6, 0o201));
         p.extend(read(7, 0o202));
-        p.push(Insn::new(JUMP | target(6) | ALWAYS));
+        p.push(Insn::new(JUMP | target(5) | ALWAYS));
         p
     }
 
