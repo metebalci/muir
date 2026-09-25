@@ -84,8 +84,11 @@ impl CacheConfig {
 
     /// `words` in lines of 4, 2-way, a hit in 20 ns --- two ticks of the
     /// fabric's grid, one for the RAM and one for the tag's compare --- and
-    /// a write buffer. **Unverified** until muir-fpga's fit says what a hit
-    /// takes.
+    /// a write buffer. The 20 ns is met on the Arty Z7-20 in muir-fpga's
+    /// routed fit of QUUX with contract Q6, a worst setup slack of +0.136 ns
+    /// in 12,236 LUTs and 71 block RAMs: the hit's paths, the cache RAM to
+    /// `MD` and the lookup to the port, each meet one 10 ns tick, with
+    /// +1.495 and +0.926 ns to spare. The DE25-Nano's fit is to follow.
     pub const fn with_words(words: u32) -> CacheConfig {
         CacheConfig { words, line_words: 4, ways: 2, hit_ns: 20, write_buffer: true }
     }
