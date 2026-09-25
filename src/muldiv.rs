@@ -49,12 +49,27 @@ const MUS: u64 = 0o40 << 3;
 const DVS: u64 = 0o41 << 3;
 const DVS1: u64 = 0o51 << 3;
 
-/// The divider's latency, in nanoseconds: a quotient bit each 10 ns for the
-/// 32 steps, and one 10 ns tick to load the result. It does not depend on
-/// the operands. A `DIV` microinstruction's microcycle does not start until
-/// this long after the divider has its operands; the time is QUUX's
-/// definition, not a measurement.
-pub const DIV_NS: u64 = 330;
+/// The divider's hold, in microcycles: a `DIV` is held this many
+/// microcycles after its operands are ready and then runs in its own, ten
+/// in all, 400 ns from `IR` to its closing edge at four ticks for a
+/// register, as muir-fpga's fabric closes it (`cadr_microcycle.sv` line
+/// 2192; its trace `quux_muldiv.quux.k4.golden`, row `c4`). An
+/// operand from `MD` is ready when the MD interlock lets go, the wait any
+/// instruction reading `MD` has for a read in progress; a register is ready
+/// at once. It does not depend on the operands. Mete's ruling of 25
+/// September 2026, after muir-fpga's `quux_divmd` found `rtl` dividing a
+/// word that landed in the microcycle before the `DIV`'s at once, where the
+/// fabric's divider, which needs its operand 17 ticks before the `DIV`
+/// ends, divided the old `MD`.
+///
+/// The count is QUUX's definition, not a measurement, and it is in
+/// microcycles, not nanoseconds: the nine held are 360 ns at four ticks,
+/// which cover the divider's 330 (a quotient bit each 10 ns tick for 32
+/// steps and a tick to load the result), and muir-fpga's fit meets it with
+/// 15 ticks to spare. At another `--sync-cycle-ticks` it is still nine
+/// held, ten in all: whether nine covers the divider then is for the
+/// contract that changes the microcycle to recount.
+pub const DIV_CYCLES: u64 = 9;
 
 /// Which of the two `ir` asks for, on a machine that has them: an ALU-class
 /// instruction, `IR<44:43>` 0, with `IR<8>` set and `IR<4:3>` 2 or 3.

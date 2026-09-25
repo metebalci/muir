@@ -146,7 +146,8 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// for a 16K-word QUUX's, the pointer and index checked against the
 /// geometry's width, which `a_pointer_wider_than_its_register_is_refused`
 /// holds, and version 31 whether the machine has QUUX's multiply and
-/// divide, and when `rtl` loaded `IR`, from which QUUX's divider is timed,
+/// divide, and when QUUX's divider's count started on `rtl` --- the edge
+/// that loaded `IR`, or for a `DIV` of `MD` the end of the MD interlock ---
 /// which `a_checkpoint_keeps_the_divider_s_time` in `tests/muldiv.rs`
 /// holds, and version 32 QUUX's tick, which `a_checkpoint_keeps_the_tick`
 /// in `tests/tick.rs` holds, and version 33 MONO TV's size, which

@@ -1426,22 +1426,23 @@ impl Engine for Micro {
         let nopa = (self.inhibit && !self.trap) || self.m.clock_control.nop11;
         let ilong = !nopa && self.p1.raw() >> 45 & 1 != 0;
         self.trap = false;
-        // QUUX's divider holds the microcycle off until `DIV_NS` after the
-        // `DIV` entered `IR`, a generator cycle at a time, as `rtl` does;
-        // not a nopped one, and not a single step, which `-WAIT` does not
-        // stop either.
+        // QUUX's divider holds the microcycle off for `DIV_CYCLES`
+        // generator cycles after its operands are ready, as `rtl` does; not
+        // a nopped one, and not a single step, which `-WAIT` does not stop
+        // either. This engine has no MD interlock --- the word is in `MD`
+        // two instructions after the read's start, whatever the memory is
+        // doing --- so the operands are ready as the `DIV` enters `IR`, and
+        // the count starts there, what `rtl` does for a `DIV` whose read
+        // has landed.
         let stepping = self.sstep && !self.ssdone;
         if self.m.geometry.muldiv
             && !nopa
             && !stepping
             && muldiv::decode(self.p1.raw()) == Some(muldiv::Op::Div)
         {
-            let mut held = 0;
-            while held < muldiv::DIV_NS {
+            for _ in 0..muldiv::DIV_CYCLES {
                 self.speedclk();
-                let cycle = self.cycle_ns(ilong);
-                self.m.ns += cycle;
-                held += cycle;
+                self.m.ns += self.cycle_ns(ilong);
                 self.mclk_edge();
             }
         }

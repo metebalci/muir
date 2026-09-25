@@ -116,23 +116,27 @@ fn a_checkpoint_keeps_the_ticks() {
     assert_eq!(time_of(&mut back, 8), 8 * 30);
 }
 
-/// **The divider's hold is counted in `sync`'s microcycles**: the fewest
-/// that cover its 330 ns, nine of 40 ns, against an ordinary instruction in
-/// the same place.
+/// **The divider's hold is counted in `sync`'s microcycles**: nine, of 40
+/// ns at four ticks and of 30 at three, against an ordinary instruction in
+/// the same place. Mete's ruling of 25 September 2026 counts microcycles,
+/// not nanoseconds, and leaves a change of the microcycle's length to the
+/// contract that makes it.
 #[test]
 fn a_div_is_held_in_sync_cycles() {
     let div = Insn::new(ALU | (0o43 << 3) | m_dest(1));
     let plain = Insn::new(ALU | SETZ | m_dest(1));
-    let time = |i: Insn| {
-        let mut prom = vec![filler(); 8];
-        prom[6] = i;
-        let mut e = quux(sync(4, 0), &prom);
-        for _ in 0..12 {
-            e.step().unwrap();
-        }
-        e.ns()
-    };
-    assert_eq!(time(div) - time(plain), muir::muldiv::DIV_NS.div_ceil(40) * 40);
+    for (ticks, ns) in [(4, 40), (3, 30)] {
+        let time = |i: Insn| {
+            let mut prom = vec![filler(); 8];
+            prom[6] = i;
+            let mut e = quux(sync(ticks, 0), &prom);
+            for _ in 0..12 {
+                e.step().unwrap();
+            }
+            e.ns()
+        };
+        assert_eq!(time(div) - time(plain), muir::muldiv::DIV_CYCLES * ns, "{ticks} ticks");
+    }
 }
 
 /// **A write lands no earlier than it is answered.** Under the CADR's

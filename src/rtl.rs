@@ -351,9 +351,10 @@ pub struct Rtl {
     srun: bool,
     sstep: bool,
     ssdone: bool,
-    /// When the instruction standing in `IR` was clocked into it: QUUX's
-    /// divider starts then, [`Rtl::stall`].
-    ir_loaded_ns: u64,
+    /// When QUUX's divider's count started for the instruction standing in
+    /// `IR`: the edge that clocked it in, moved on to the end of each
+    /// generator cycle the MD interlock holds it, [`Rtl::dividing`].
+    div_from_ns: u64,
     /// This microcycle's write pulse has fired already: a `-HANG` holding
     /// it fires the pulse before the hold ([`Rtl::step`]).
     pulsed: bool,
@@ -701,7 +702,7 @@ impl Rtl {
             srun: false,
             sstep: false,
             ssdone: false,
-            ir_loaded_ns: 0,
+            div_from_ns: 0,
             pulsed: false,
             statstop: false,
             halted: false,
@@ -1908,7 +1909,7 @@ impl Rtl {
         let wait = (r.destmem && self.mbusy_sync)
             || (r.use_md && self.mbusy && !self.bus.granted())
             || (r.lcinc && r.needfetch && self.mbusy_sync)
-            || self.dividing(r);
+            || (self.dividing(r) && !self.md_interlock(r));
         if wait {
             return Some(Stall::Wait);
         }
@@ -1918,13 +1919,30 @@ impl Rtl {
         None
     }
 
+    /// The MD interlock: the instruction reads `MD` while a read is in
+    /// progress, and waits for its word --- `-WAIT`'s `USE.MD AND MBUSY AND
+    /// -MEMGRANT` before the grant, `-HANG`'s `RD.IN.PROGRESS AND USE.MD`
+    /// (or QUUX's hold) after it, [`Rtl::stall`].
+    fn md_interlock(&self, r: &Read) -> bool {
+        r.use_md && ((self.mbusy && !self.bus.granted()) || self.rd_in_progress)
+    }
+
     /// QUUX's divider is busy: a `DIV` stands in `IR`, not nopped, and
-    /// [`muldiv::DIV_NS`] has not passed since it was clocked in. It is a
+    /// [`muldiv::DIV_CYCLES`] generator cycles have not passed since its
+    /// operands were ready --- since the edge that clocked it into `IR`, or
+    /// for a `DIV` of `MD` since the MD interlock let it go
+    /// ([`Rtl::div_from_ns`]), Mete's ruling of 25 September 2026. It is a
     /// `-WAIT` term of QUUX's own, so the master clock runs on, the
     /// microcycle starts at the first master clock edge after the divider
-    /// is done, and a single step does not wait for it.
+    /// is done, and a single step does not wait for it. The count starts
+    /// after the MD interlock and not after `-WAIT`'s other terms, which
+    /// hold the instruction and not its operands: the ruling counts from
+    /// when the operands are ready. **Unverified** that muir-fpga's fabric
+    /// overlaps those other waits with the count the same way; a `DIV`
+    /// writing a memory destination while a cycle is busy would settle it.
     fn dividing(&self, r: &Read) -> bool {
-        r.muldiv == Some(muldiv::Op::Div) && self.ns < self.ir_loaded_ns + muldiv::DIV_NS
+        let cycle = self.timing.cycle_ns(self.speed, r.ilong) as u64;
+        r.muldiv == Some(muldiv::Op::Div) && self.ns < self.div_from_ns + muldiv::DIV_CYCLES * cycle
     }
 
     /// Holds the microcycle off until the bus has moved on.
@@ -2246,7 +2264,7 @@ impl Rtl {
         // which tap ends the read phase --- so it is a number and not a
         // mechanism.
         self.ns += self.timing.cycle_ns(self.speed, r.ilong) as u64;
-        self.ir_loaded_ns = self.ns;
+        self.div_from_ns = self.ns;
 
         // page LC
         if r.destlc {
@@ -2802,7 +2820,13 @@ impl Rtl {
                     self.write_phase(&now);
                     self.pulsed = true;
                 }
+                let md_wait = self.md_interlock(&r);
                 let open = self.stall_for(stall, &r);
+                // The divider's count starts in the generator cycle after
+                // the MD interlock lets go.
+                if md_wait {
+                    self.div_from_ns = self.ns;
+                }
                 // A cycle with no acknowledgement due --- its timeout
                 // inhibited from the debug cable, or the other machine's
                 // answer not yet come --- is waited for one generator cycle
@@ -2931,7 +2955,7 @@ impl Engine for Rtl {
             srun,
             sstep,
             ssdone,
-            ir_loaded_ns,
+            div_from_ns,
             pulsed,
             statstop,
             halted,
@@ -3020,7 +3044,7 @@ impl Engine for Rtl {
             w.bool(*bit);
         }
         w.u64(*halted_ns);
-        w.u64(*ir_loaded_ns);
+        w.u64(*div_from_ns);
         w.bool(*pulsed);
         w.bool(*memstart);
         w.bool(*mbusy);
@@ -3126,7 +3150,7 @@ impl Engine for Rtl {
             *bit = r.bool()?;
         }
         self.halted_ns = r.u64()?;
-        self.ir_loaded_ns = r.u64()?;
+        self.div_from_ns = r.u64()?;
         self.pulsed = r.bool()?;
         self.memstart = r.bool()?;
         self.mbusy = r.bool()?;

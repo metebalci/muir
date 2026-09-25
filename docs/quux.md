@@ -168,7 +168,7 @@ select.
 | `Q` before | the multiplier | the low dividend |
 | Output bus | the product's high word | the partial remainder |
 | `Q` after | the product's low word | the quotient; `Q<31>` the first step's bit, set on overflow or a zero divisor |
-| Time | one ordinary microcycle | held until 330 ns after it entered `IR` |
+| Time | one ordinary microcycle, once its operands are ready | ten microcycles in all: nine held once its operands are ready, then its own; 400 ns at four ticks |
 
 Each step's M operand is the output bus of the step before, as when the
 microcode writes the step's result back to the same M location. Both
@@ -177,21 +177,55 @@ drive the output bus and load `Q` whatever the output selector `IR<13:12>` and
 the Q control `IR<1:0>` say. `DIVIDE-LAST-STEP` and `DVREM` stay the CADR's
 separate instructions.
 
-**The divider's hold** is a `-WAIT` term of QUUX's own: the divider is busy
-while a `DIV` stands in `IR`, not nopped, and 330 ns (`muldiv::DIV_NS`, 32
-quotient bits and a load at 10 ns each) have not passed since the clock edge
-that loaded `IR`. The master clock runs on, so the bus interface carries on,
-and the microcycle starts at the first master clock edge after that: the
-fewest whole generator cycles covering 330 ns: nine of QUUX's 40 ns at four
-ticks. The time does not depend on the operands. A halt during the
-hold stops the machine with the `DIV` still in `IR`. The hold does not stop a
-single step, as `-WAIT` does not; by then the divider is done.
+**A `DIV` takes ten microcycles, its own and nine held after its operands
+are ready**, QUUX's definition as ruled on 25 September 2026. A register is
+ready at once, so a `DIV` of a register closes 400 ns after it entered `IR`
+at four ticks; muir-fpga's fabric closes it on the same tick
+(`cadr_microcycle.sv` line 2192, its trace `quux_muldiv.quux.k4.golden`
+row `c4`). An
+`MD` operand first waits for its read to land, through the MD interlock any
+instruction reading `MD` has; the count starts in the microcycle after that
+wait ends. A `MUL` of `MD` waits the same and then takes its one
+microcycle. muir-fpga's measurement is what the ruling settles: since
+contract Q6 a main-memory read releases at its acknowledgement, so a `DIV`
+of `MD` can run in the microcycle after the word lands, and the fabric's
+divider needs its operand 17 ticks before the `DIV` ends. Its program
+`quux_divmd` puts a `DIV` of `MD` there; counted from the `DIV`'s entry into
+`IR`, the hold runs during the wait and the new word is divided at once,
+where the fabric divided the old `MD` --- at microcycle 81, an output bus of
+`a850e26d` against the fabric's `11465777`. Counted from the end of the
+wait, both divide the new word.
+
+The hold is a `-WAIT` term of QUUX's own: the divider is busy while a `DIV`
+stands in `IR`, not nopped, and `muldiv::DIV_CYCLES`, nine, generator cycles
+have not passed since the edge that loaded `IR` or, if the MD interlock held
+it, since the end of that hold. The master clock runs on, so the memory port
+carries on. Nine held microcycles of QUUX's 40 ns at four ticks is 360 ns,
+which covers the divider's 330 (32 quotient bits and a load at 10 ns each), and muir-fpga
+finds it fits with 15 ticks to spare. The count is in microcycles, not
+nanoseconds: at another `--sync-cycle-ticks` muir still holds nine, ten in
+all, and a
+contract that changes the microcycle's length recounts it. The time does
+not depend on the operands. A halt during the hold stops the machine with
+the `DIV` still in `IR`. The hold does not stop a single step, as `-WAIT`
+does not; by then the divider is done.
+
+**Unverified:** whether the fabric starts the count after `-WAIT`'s other
+terms too --- a memory destination written while a cycle is busy, a fetch
+--- which hold the instruction and not its operands. muir counts through
+them, since the ruling counts from when the operands are ready; a `DIV`
+with a memory destination behind a busy cycle, run on both, would settle
+it.
 
 `tests/muldiv.rs` holds each against the step sequence on the CADR, for many
 operands and every output selector and Q control, on `micro` and `rtl`, with
 the step sequence itself held to the netlist; the CADR's 42 and 43 to the
-netlist; the hold's length on both engines; a halted and single-stepped `DIV`;
-and a checkpoint taken during one.
+netlist; the hold's length on both engines, from a register's `DIV`'s start
+and from the end of a miss's wait for a `DIV` of `MD` (the `DIV` ends nine
+microcycles after a plain copy of `MD` in its place, 21 after the read's
+start on `rtl` where the copy ends at 12), and at three ticks; a `MUL` of
+`MD` ending with the copy; the CADR's 43 held for nothing; a halted and
+single-stepped `DIV`; and a checkpoint taken during one.
 
 ## The clocks in the processor
 
@@ -275,8 +309,8 @@ measuring about 16.
 What the microcode sees does not change, only the time: every register is
 clocked at the one edge and the late writes land one edge later, as the
 single-edge contract below has it; the bus keeps its own time on the grid;
-a held cycle is one microcycle long; and the divider's 330 ns hold is the
-fewest microcycles that cover it. An `ILONG` instruction takes `ilong_ticks`
+a held cycle is one microcycle long; and a `DIV` is ten microcycles, its
+own and nine held, at any length. An `ILONG` instruction takes `ilong_ticks`
 more, 0 unless the library says otherwise.
 
 `tests/sync_timing.rs` holds the microcycle's length, the default and the
@@ -335,7 +369,7 @@ changes when a cycle is answered and never what it reads.
 
 | | |
 |---|---|
-| A read that hits | acknowledged `hit_ns` after the request (20 ns, two ticks of the grid, **unverified** until a fit), with no bus cycle and none of the bus's setup, deskew or release |
+| A read that hits | acknowledged `hit_ns` after the request (20 ns, two ticks of the grid, met on the Arty in muir-fpga's fit; the DE25's to follow), with no bus cycle and none of the bus's setup, deskew or release |
 | A read that misses | main memory's line fill; it fills the line, the set's least recently used line going |
 | A write | allocates nothing. With the write buffer it is acknowledged after `hit_ns`, or when the buffer's last write is done, and main memory runs it behind the processor; the word is memory's from the acknowledgement, as a read after it finds it |
 | Shape | lines of 4 words, 2-way, `<words>` in all, a power of two |
