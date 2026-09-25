@@ -3,8 +3,9 @@
 
 //! `quux`: QUUX, the CADR evolved, on the engine the command line names.
 //! [`muir::cli`] is the command line, shared with `cadr`; this executable
-//! is the machine, and takes only QUUX's flags.
+//! is the machine, and takes only QUUX's flags. QUUX has no netlist, so it
+//! passes none: `--chip` is `cadr`'s.
 
 fn main() {
-    muir::cli::run(muir::machine::Geometry::QUUX);
+    muir::cli::run(muir::machine::Geometry::QUUX, None);
 }
