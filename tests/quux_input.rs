@@ -35,7 +35,9 @@ fn keys_come_out_in_order() {
         m.quux_input.press(w);
     }
     assert_eq!(m.bus_read(KBD_STATUS) & 1, 1);
+    assert!(m.quux_input.key_waiting(), "as the host sees it too");
     let got: Vec<u32> = (0..3).map(|_| m.bus_read(KBD_DATA)).collect();
+    assert!(!m.quux_input.key_waiting());
     assert_eq!(got, [0o101, 0o1234567, 0o15]);
     assert_eq!(m.bus_read(KBD_STATUS) & 1, 0, "taken");
     assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0);
