@@ -328,12 +328,11 @@ nowhere, by a scan of every control-store word, and running shows the same
 of what the OA registers make at run time: `tests/unused_codes.rs` reads
 every executed microinstruction as it stood in `IR` through a boot to the
 listener. System 1001 on 323, on the CADR, runs none. System 1002 on its
-microcode 1000 runs them at three addresses through its boot, each a
+microcode 1000 runs them at four addresses through its boot and a moment after, each a
 control-store word that carries them: destination 3 at `BEG06`, the tick's
-turn-on, and source 15 at `READ-MICROSECOND-CLOCK` and in `XUSLDB`; the
-tick's clear in `INTR-TICK` writes destination 3 too once the tick runs.
-It writes destination 3 with 1 and 3 alone, and neither writes destination
-4 nor reads source 17.
+turn-on, and in `INTR-TICK`, its clear, and source 15 at
+`READ-MICROSECOND-CLOCK` and in `XUSLDB`. It writes destination 3 with 1
+and 3 alone, and neither writes destination 4 nor reads source 17.
 
 `tests/interval_timers.rs` holds, for each timer, the periodic grid to the
 nanosecond with late clears and a period written under a raised flag, the
@@ -784,9 +783,10 @@ Unibus `766012`, lets the RAM show through.
 The PROM is muir-sys's version 1000 for block-disk and a GPT
 (`data/quux-promh.mcr`), MIT's `promh.text` changed so that a PDL buffer
 of any width boots, QUUX's 64 level-2 blocks are cleared, the disk is read
-by block number, nothing is saved, and the microcode is found through the
-GPT (muir-sys's `sys/ucadr/promh.text`, handed over with System 1002 dev11,
-which was built from muir-sys's commit `624ad92`), assembled at 36000. It sets error stop through the register page, not `766012`, and
+by block number, nothing is saved, the microcode is found through the
+GPT, and for revision 10 the devices are reset through the register page
+and timer 0 given its period (muir-sys's `sys/ucadr/promh.text` as
+committed in muir-sys `381edfb`), assembled at 36000. It sets error stop through the register page, not `766012`, and
 halts at `ERROR-MICROCODE-TOO-BIG` if a microcode reaches 36000. The
 control store stays 16K words: jump targets are `IR<25:12>`, dispatch
 words carry 14 address bits, and `SPC<14>` is the macroinstruction-return
@@ -794,15 +794,15 @@ flag, so 32K waits for a new microinstruction format.
 
 **It finds the microcode through the GPT**: the first microcode partition
 in the entry array carrying attribute bit 48 (muir-sys). Its own halts are
-`ERROR-NO-GPT` at 36632, no GPT (or an entry array whose LBA does not fit
+`ERROR-NO-GPT` at 36642, no GPT (or an entry array whose LBA does not fit
 in 32 bits, within the 8 GiB limit, muir-sys says);
-`ERROR-NO-CURRENT-MICR` at 36634, no current microcode partition; and
-`ERROR-ODD-MICR-START` at 36636, one whose first LBA is odd (the
+`ERROR-NO-CURRENT-MICR` at 36644, no current microcode partition; and
+`ERROR-ODD-MICR-START` at 36646, one whose first LBA is odd (the
 hand-over's error table `promh.tbl` and symbols `promh.sym`). On a pack
 with MIT's `LABL` label and no GPT --- a T-300 label with microcode 323 in
 `MCR1`, which the PROM before it booted --- it reads block 0 into page 3,
-nothing else, and halts at `ERROR-NO-GPT` after 630,129 microcycles on
-`micro` and 661,374 on `rtl`, having written nothing
+nothing else, and halts at `ERROR-NO-GPT` after 629,625 microcycles on
+`micro` and 660,870 on `rtl`, having written nothing
 (`quux_s_prom_reads_a_gpt_not_mit_s_label`). **Unverified**: the other two
 halts, which no test here reaches.
 
@@ -815,16 +815,17 @@ section --- four blocks, pages 3-6, the microcode symbol area --- last,
 over the buffer. Two halts are for that: `ERROR-TWO-MAIN-MEM-SECTIONS` at
 36040, a second main-memory section with blocks, and
 `ERROR-BUFFER-NOT-LOADED` at 36042, a section that does not cover the
-buffer. 36000 is `JUMP GO`, and `GO` is at 36043; the code ends at 36636
-(`promh.locs`, `I-MEM 36637`). `tests/quux_prom_saves_nothing.rs` boots it
+buffer. 36000 is `JUMP GO`, and `GO` is at 36043; `DISK-AWAIT-PACK`, the
+first disk routine, is at 36600, and the code ends at 36646 (`promh.locs`,
+`I-MEM 36647`). `tests/quux_prom_saves_nothing.rs` boots it
 on both engines until the microcode's location 6 runs, on
 `data/quux-disk.img` with MIT's microcode 323 in its `MCR1` and on System
 1002 dev11's VHD with microcode 1000, and counts: no block written; the
 only stores are to word 777, the command list word, one a block read;
 every block read goes into pages 3-6; the disk file is byte for byte as it
 was; and pages 3-6 hold the main-memory section's four blocks. On dev11 it
-reads 115 blocks and reaches 6 after 1,020,407 microcycles on `micro` and
-1,136,063 on `rtl`.
+reads 115 blocks and reaches 6 after 1,019,903 microcycles on `micro` and
+1,135,559 on `rtl`.
 
 **Its file, like QUUX's microcode's, is in partition order** (contract
 Q8): MIT's `.mcr` with the two 16-bit halves of every 32-bit word swapped,
@@ -848,26 +849,35 @@ refuses one in MIT's order or assembled at 0.
 QUUX runs only muir-sys's latest System 1002 band. The PROMs assembled at
 0, and System 1001 on QUUX, are retired with it.
 
-**Revision 10 asks two things more of the PROM** (contract Q11): after it
-maps the register page and writes error stop, and before it reads the
-disk, a write of word 104 with 1, reset devices, so that a reboot leaves no
-timer on and the file device disabled; and then timer 0's period, 16,667
-µs, at word 111, since no timer resets to a period and the microcode's
-tick, turned on through destination 3, rises only at the period the PROM
-wrote. It turns no timer on. dev11's PROM, `data/quux-promh.mcr`, writes
-neither: on revision 10 System 1002 dev11 still reaches its listener, with
-timer 0 on under its interrupt enable at period 0 and `INTR-TICK` run no
-time in 10 s after it (`m12_the_old_prom_on_revision_10`); and a reboot
-through it with timers 1 and 2 on and the file device enabled reaches the
-listener after 412,290,922 microcycles against 164,120,406 with neither,
-`INTR` run 8,811,697 times against 1,462, the timers still on and the
-device still enabled at location 6 and its queued commands run
-(`m11_fails_on_dev11_s_prom`), all on `micro`. `tests/system_1002_timers.rs`
-holds a PROM that does both: its writes of word 104 and then 111 before its
-first disk command, timer 0 off at period 16,667 at location 6, the band's
-600 ticks in 10 s through the alias and its mouse, and the reboot within
-1.1 times the baseline's `INTR` and 1.05 times its microcycles, with the
-timers off, the device disabled and no queued command run.
+**For revision 10 it resets the devices and gives timer 0 its period**
+(contract Q11). It pulses no `PROG.UNIBUS.RESET`, which resets nothing on
+QUUX. After it maps the register page and writes error stop, and before
+its first disk command, it writes word 104 with 1, reset devices, so that
+a reboot starts the microcode with no timer on, the file device disabled
+and block-disk idle; and then word 111 with 16,667, timer 0's period, since
+no timer resets to a period and the band's tick, turned on through
+destination 3, rises only at the period the PROM wrote. It turns no timer
+on. From power-on on `micro` the two writes come at microcycles 628,973 and
+628,981, and at location 6 timer 0 is off at period 16,667 with its
+interrupt enable 0 and timers 1 and 2 in their reset state
+(`m9_the_prom_resets_the_devices_and_writes_timer_0_s_period`). On it
+System 1002 dev11 reaches its listener with timer 0 on, periodic, under its
+interrupt enable, and runs `INTR-TICK` 600 times in 10 s after it, the mouse
+reaching the cursor (`m10_the_band_ticks_through_the_alias`). A reboot, a
+jump to 36000 without `-RESET`, with timers 1 and 2 left on and up under
+their interrupt enables and the file device enabled with three READs of
+64 KiB and a CREATE-DIRECTORY queued, reaches the listener after 162,990,934
+microcycles with `INTR` run 2,087 times, against 163,719,902 and 2,090 for
+the same reboot with neither, with the timers off and the device disabled
+at location 6 and no queued command run
+(`m11_a_reboot_resets_the_timers_and_the_file_device`). On dev11's own PROM,
+which writes neither word, the same reboot takes 412,290,922 microcycles
+against 164,120,406, `INTR` running 8,811,697 times against 1,462, with the
+timers still on and the device still enabled at location 6 and its queued
+commands run (`m11_fails_on_dev11_s_prom`); and from power-on the band
+reaches its listener with timer 0 on at period 0 and `INTR-TICK` running no
+time in 10 s (`m12_the_old_prom_on_revision_10`). All on `micro`, in
+`tests/system_1002_timers.rs`.
 
 ## The register page
 

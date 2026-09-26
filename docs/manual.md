@@ -1434,7 +1434,7 @@ The traps, each measured with qemu-img 10.2.1 and sgdisk 1.0.10:
 **Only the GPT PROM may meet a GPT disk.** QUUX's built-in PROM,
 `data/quux-promh.mcr`, is the GPT PROM: it takes the first microcode
 partition carrying bit 48 and writes no block of the disk, and on a disk
-with no GPT it halts at `ERROR-NO-GPT`, 36632
+with no GPT it halts at `ERROR-NO-GPT`, 36642
 ([QUUX](quux.md#its-boot-prom-in-its-own-addresses)). An older QUUX PROM
 given with `--prom` does not read the GPT, and one that saves page 0 to
 block 1 before it loads anything, as MIT's does, writes over sectors 2 and

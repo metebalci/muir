@@ -166,6 +166,7 @@ fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
     values.dedup();
     eprintln!("1002: destination 3 written {} times, with {values:?}", found.dest_3.len());
     assert!(values.contains(&1), "BEG06's turn-on, 1");
+    assert!(values.contains(&3), "INTR-TICK's clear, 3");
     assert!(values.iter().all(|v| [1, 3].contains(v)), "destination 3 only 1 and 3: {values:?}");
     assert!(found.dest_4.is_empty(), "destination 4 written: {:?}", found.dest_4);
     assert!(found.source_17.is_empty(), "source 17 read at {}", octal(&found.source_17));

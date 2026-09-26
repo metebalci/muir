@@ -117,23 +117,30 @@ fn the_cadr_keeps_the_overlay() {
 /// Where 36000's `JUMP GO` goes: `GO`, at 36043 since muir-sys's commit
 /// `7c4bcb2` put the halts `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040 and
 /// `ERROR-BUFFER-NOT-LOADED` at 36042 before it, and still there in the GPT
-/// PROM: the hand-over's symbol table `promh.sym` says `GO I-MEM 36043`
+/// PROM of revision 10: the hand-over's symbol table `promh.sym` says `GO
+/// I-MEM 36043`
 /// ([`the_built_in_quux_prom_is_the_hand_over`]).
 const GO: u64 = 0o36043;
 
-/// The PROM's last word: the GPT PROM's `promh.locs` says `(I-MEM 36637)`,
-/// the section's size, so the code is at 36000-36636, and 36636 is its last
-/// halt, `ERROR-ODD-MICR-START`.
-const LAST: usize = 0o36636;
+/// The PROM's last word: the revision 10 PROM's `promh.locs` says `(I-MEM
+/// 36647)`, the section's size, so the code is at 36000-36646, and 36646 is
+/// its last halt, `ERROR-ODD-MICR-START`, the disk routines and the halts
+/// after them following the reset devices and timer 0's period that the
+/// PROM writes for revision 10 (contract Q11).
+const LAST: usize = 0o36646;
+
+/// `DISK-AWAIT-PACK`, the first of the disk routines, which the new writes
+/// come before: 36600 in the revision 10 PROM's `promh.sym`.
+const DISK_AWAIT_PACK: u64 = 0o36600;
 
 /// The GPT PROM's own halts, after the disk routines, as its `promh.tbl`
 /// and `promh.sym` put them: no GPT header (or its entry array's LBA past
 /// 32 bits), no current microcode partition, and one whose first LBA is
 /// odd.
 const GPT_HALTS: [(u64, &str); 3] = [
-    (0o36632, "ERROR-NO-GPT"),
-    (0o36634, "ERROR-NO-CURRENT-MICR"),
-    (0o36636, "ERROR-ODD-MICR-START"),
+    (0o36642, "ERROR-NO-GPT"),
+    (0o36644, "ERROR-NO-CURRENT-MICR"),
+    (0o36646, "ERROR-ODD-MICR-START"),
 ];
 
 /// **A QUUX PROM file is read from 36000, in partition order** (contracts
@@ -186,12 +193,13 @@ fn quux_s_prom_is_mit_s_promh_changed() {
 }
 
 /// **The built-in QUUX PROM is muir-sys's hand-over, byte for byte**, where
-/// the hand-over (`ref/band-1002-dev11`, the GPT PROM System 1002 dev11 was
-/// built and tested with) is present; and its symbols and error table put
-/// what [`GO`], [`LAST`] and [`GPT_HALTS`] say where they say.
+/// the hand-over (`ref/prom-1002-q11`, the GPT PROM for revision 10, built
+/// from muir-sys `381edfb`) is present; and its symbols and error table put
+/// what [`GO`], [`LAST`], [`DISK_AWAIT_PACK`] and [`GPT_HALTS`] say where
+/// they say.
 #[test]
 fn the_built_in_quux_prom_is_the_hand_over() {
-    let handed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11");
+    let handed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/prom-1002-q11");
     let Ok(bytes) = std::fs::read(handed.join("promh.mcr")) else {
         eprintln!("skipped: {} is not present", handed.display());
         return;
@@ -202,6 +210,10 @@ fn the_built_in_quux_prom_is_the_hand_over() {
     let tbl = std::fs::read_to_string(handed.join("promh.tbl")).unwrap();
     let sym = std::fs::read_to_string(handed.join("promh.sym")).unwrap();
     assert!(sym.contains(&format!("GO I-MEM {GO:o} ")), "GO in promh.sym");
+    assert!(
+        sym.contains(&format!("DISK-AWAIT-PACK I-MEM {DISK_AWAIT_PACK:o} ")),
+        "DISK-AWAIT-PACK in promh.sym"
+    );
     let mut halts = vec![
         (0o36016, "ERROR-BAD-LABEL"),
         (GO - 3, "ERROR-TWO-MAIN-MEM-SECTIONS"),

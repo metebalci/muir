@@ -9,12 +9,11 @@
 //!
 //! The band is the gitignored `ref/band-1002-dev11` (muir-sys's hand-over,
 //! `tests/system_1002.rs`), named by digest; without it the tests skip and
-//! say so. **M9, M10 and M11 wait for the new PROM** (muir-sys's
-//! `promh.text` with contract Q11's steps 2, 5 and 6), which becomes
-//! muir's built-in `data/quux-promh.mcr`: until it is handed over the
-//! built-in PROM is dev11's, which writes neither word 104 nor word 111,
-//! and they are ignored. M11's discriminating run, on dev11's own PROM,
-//! runs now.
+//! say so. M9, M10 and M11 run on muir's built-in PROM,
+//! `data/quux-promh.mcr`, revision 10's (muir-sys `381edfb`, with contract
+//! Q11's steps 2, 5 and 6); M11's discriminating run and M12 on dev11's
+//! own, the hand-over's `promh.mcr`, which writes neither word 104 nor
+//! word 111.
 
 use std::path::{Path, PathBuf};
 
@@ -203,7 +202,6 @@ fn until_executed(e: &mut Micro, pc: u16, limit: u64) -> u64 {
 /// its reset state before the PROM runs, so the last clause holds only that
 /// the PROM turns nothing on; its reset of timers 1 and 2 is M11's.
 #[test]
-#[ignore = "pending the new PROM (contract Q11): the built-in PROM is dev11's until muir-sys hands it over"]
 fn m9_the_prom_resets_the_devices_and_writes_timer_0_s_period() {
     let Some((_dir, pack, root)) = band("q11-m9") else { return };
     let mut m = quux(&pack, &muir::prom::quux_boot_prom(), &root);
@@ -243,7 +241,6 @@ fn m9_the_prom_resets_the_devices_and_writes_timer_0_s_period() {
 /// executes 600 ± 1 times; and a mouse move reaches the cursor. (The
 /// unused-codes run's values are `tests/unused_codes.rs`'s.)
 #[test]
-#[ignore = "pending the new PROM (contract Q11): the built-in PROM is dev11's until muir-sys hands it over"]
 fn m10_the_band_ticks_through_the_alias() {
     let Some((_dir, pack, root)) = band("q11-m10") else { return };
     m10(&pack, &root, &muir::prom::quux_boot_prom());
@@ -465,7 +462,6 @@ fn m11(name: &str, prom: &[Insn]) -> Option<(Reboot, Reboot)> {
 /// 1.05 times --- with timers 1 and 2 off and the device disabled, no
 /// handle open, at location 6, and no queued command run.
 #[test]
-#[ignore = "pending the new PROM (contract Q11): the built-in PROM is dev11's until muir-sys hands it over"]
 fn m11_a_reboot_resets_the_timers_and_the_file_device() {
     let Some((base, run)) = m11("q11-m11", &muir::prom::quux_boot_prom()) else { return };
     m11_verdict(&run, &base).unwrap();

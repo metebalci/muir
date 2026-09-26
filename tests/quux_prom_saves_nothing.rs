@@ -246,7 +246,7 @@ fn quux_s_prom_saves_nothing_on_system_1002_s_disk() {
 /// `ERROR-NO-GPT`, where the GPT PROM halts when block 0's second sector
 /// is not a GPT header (the hand-over's `promh.tbl`, held by
 /// `tests/quux_prom.rs`).
-const ERROR_NO_GPT: u16 = 0o36632;
+const ERROR_NO_GPT: u16 = 0o36642;
 
 /// **QUUX's PROM finds the microcode through a GPT, not MIT's label**: on a
 /// pack with MIT's `LABL` label in block 0 and no GPT --- a T-300 label of

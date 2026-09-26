@@ -7,8 +7,10 @@
 //! It is in the gitignored `ref/band-1002-dev11` (muir-sys `624ad92`,
 //! contract Q8): a GPT disk as a dynamic VHD, which QUUX boots as it is,
 //! with microcode 1000 in its current `MCR1` and the band, "System 1002
-//! dev11", in its current `LOD4`; the GPT PROM, which is muir's built-in
-//! `data/quux-promh.mcr`; and the tree it was built from. No TV sync
+//! dev11", in its current `LOD4`; the GPT PROM it was built and tested
+//! with; and the tree it was built from. It boots here on muir's built-in
+//! PROM, `data/quux-promh.mcr`, revision 10's, the same GPT PROM with the
+//! reset devices and timer 0's period added (contract Q11). No TV sync
 //! program, no speed bits, and no CADR disk controller: QUUX's disk is
 //! block-disk. The band takes the screen's size from the feature page at
 //! every boot. Without it the tests skip and say so.
