@@ -61,11 +61,19 @@ fn sha256(path: &Path) -> String {
     String::from_utf8(out.stdout).unwrap().split_whitespace().next().unwrap().to_string()
 }
 
+/// Whether the hand-over is here; if not, says the test is skipped.
+fn present() -> bool {
+    let here = from().join("pack-1002-dev11.vhd").exists();
+    if !here {
+        eprintln!("skipped: {} is not present", from().display());
+    }
+    here
+}
+
 /// A copy of the disk, which the machine writes, and the served tree, in
 /// a scratch directory, after checking the hand-over's digests.
 fn band(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
-    if !from().join("pack-1002-dev11.vhd").exists() {
-        eprintln!("skipped: {} is not present", from().display());
+    if !present() {
         return None;
     }
     for (file, digest) in DIGESTS {
@@ -472,6 +480,9 @@ fn m11_a_reboot_resets_the_timers_and_the_file_device() {
 /// If it passed, M11 would show nothing.
 #[test]
 fn m11_fails_on_dev11_s_prom() {
+    if !present() {
+        return;
+    }
     let Some((base, run)) = m11("q11-m11-dev11", &dev11_prom()) else { return };
     let verdict = m11_verdict(&run, &base);
     eprintln!("dev11's PROM: {verdict:?}");
