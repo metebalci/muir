@@ -115,7 +115,7 @@ fn the_cadr_keeps_the_overlay() {
 }
 
 /// Where 36000's `JUMP GO` goes: `GO`, at 36043 since muir-sys's commit
-/// `8e20b4c` put the halts `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040 and
+/// `7c4bcb2` put the halts `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040 and
 /// `ERROR-BUFFER-NOT-LOADED` at 36042 before it, and still there in the GPT
 /// PROM: the hand-over's symbol table `promh.sym` says `GO I-MEM 36043`
 /// ([`the_built_in_quux_prom_is_the_hand_over`]).

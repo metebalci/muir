@@ -30,7 +30,7 @@
 # OZ at 177200, which serves the sources' `sys` and `site` and a writable
 # `lispm` home. So it is run with ozd at 177200 and muir at 177201, as the
 # release's notes give the two commands. Unattended cold-load reporting
-# uses MINI opcode 204, supported by ozd 8c816e5 or later.
+# uses MINI opcode 204, supported by ozd 26927a8 or later.
 #
 # Re-running this is safe: whatever is already in place is left alone, and
 # nothing else in vendor/ is touched.

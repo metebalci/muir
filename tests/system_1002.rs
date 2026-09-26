@@ -4,7 +4,7 @@
 //! System 1002 on QUUX with MONO TV: muir-sys's development band, which
 //! sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-1002-dev11` (muir-sys `8942300`,
+//! It is in the gitignored `ref/band-1002-dev11` (muir-sys `624ad92`,
 //! contract Q8): a GPT disk as a dynamic VHD, which QUUX boots as it is,
 //! with microcode 1000 in its current `MCR1` and the band, "System 1002
 //! dev11", in its current `LOD4`; the GPT PROM, which is muir's built-in
