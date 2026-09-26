@@ -598,7 +598,7 @@ fn the_file_root_is_quux_s() {
         (
             vec![],
             vec![
-                "a real-time clock and a file device".into(),
+                "a real-time clock, a file device, three interval timers and reset devices".into(),
                 "file device: 20 us a command and 100 us a KiB".into(),
                 "file device: / is empty and read-only: nothing is mounted".into(),
             ],

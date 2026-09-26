@@ -36,11 +36,33 @@ fn uses_the_codes(ir: u64) -> bool {
     dest || src
 }
 
+/// What a run found: the addresses whose executed word used the codes;
+/// those among them whose control-store word did not; and, of what ran,
+/// every value written to destination 3, the destination 4 writes and the
+/// source 17 reads, as `(address, value)`, the value being the output bus
+/// the console reads for the instruction in `IR` before it executes.
+#[derive(Default)]
+struct Found {
+    used: Vec<u16>,
+    made: Vec<u16>,
+    dest_3: Vec<(u16, u32)>,
+    dest_4: Vec<(u16, u32)>,
+    source_17: Vec<u16>,
+}
+
+/// Which of destinations 3 and 4 `ir` writes, or source 17 reads.
+fn codes(ir: u64) -> (bool, bool, bool) {
+    let class = ir >> 43 & 3;
+    let d = (class == 0 || class == 3) && ir >> 25 & 1 == 0;
+    let dest = ir >> 19 & 0o37;
+    let src = ir >> 31 & 1 == 1 && ir >> 26 & 0o17 == 0o17;
+    (d && dest == 3, d && dest == 4, src)
+}
+
 /// Boots `m` to its listener on `rtl`, checking every executed
-/// microinstruction: the addresses whose executed word used the codes, and
-/// those among them whose control-store word did not. It asserts the
-/// listener came, so that a boot stuck early is not a pass.
-fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> (Vec<u16>, Vec<u16>) {
+/// microinstruction ([`Found`]). It asserts the listener came, so that a
+/// boot stuck early is not a pass.
+fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> Found {
     let mut e = Rtl::new(m);
     e.boot();
     let m = e.machine_mut();
@@ -49,7 +71,8 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> (Vec<u16>, Vec<u16>) {
         .serving(root)
         .at_time(support::time::TEST_UNIVERSAL)
         .plug(m, 0);
-    let (mut used, mut made) = (Vec::new(), Vec::new());
+    let mut found = Found::default();
+    let (used, made) = (&mut found.used, &mut found.made);
     // Up to the listener, checked every million microcycles, and two
     // million more.
     let mut until = 300_000_000u64;
@@ -61,10 +84,23 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> (Vec<u16>, Vec<u16>) {
             until = n + 2_000_000;
         }
         let ir = e.ir();
+        let ob = uses_the_codes(ir).then(|| {
+            use muir::spy::{OB_HIGH, OB_LOW};
+            (e.spy_read(OB_HIGH) as u32) << 16 | e.spy_read(OB_LOW) as u32
+        });
         e.step().unwrap();
         if let Some(pc) = e.executed()
             && uses_the_codes(ir)
         {
+            let ob = ob.unwrap();
+            match codes(ir) {
+                (true, _, _) => found.dest_3.push((pc, ob)),
+                (_, true, _) => found.dest_4.push((pc, ob)),
+                _ => {}
+            }
+            if codes(ir).2 {
+                found.source_17.push(pc);
+            }
             if !used.contains(&pc) {
                 used.push(pc);
             }
@@ -75,14 +111,18 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> (Vec<u16>, Vec<u16>) {
         }
     }
     assert!(support::lit_rows(&e, 84..130) > 400, "the listener never came");
-    (used, made)
+    found
 }
 
 /// **System 1002 uses the clocks' codes only where its microcode says so**,
 /// through its boot to the listener and a moment after on QUUX: no
 /// instruction the OA registers make writes destinations 3 to 7 or reads
 /// sources 15 or 17. Its microcode, 1000 for Q8 (dev11), uses them at
-/// the tick's own sites.
+/// the tick's own sites. And what it writes (contract Q11, M10): to
+/// destination 3, the destination 3 alias at revision 10, 1 and 3 only,
+/// Q1's tick on and its clear; to destination 4 nothing; and it reads
+/// source 17 nowhere --- so Q1's interval timer, which revision 10 drops,
+/// had no user.
 #[test]
 fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
     let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11");
@@ -116,10 +156,19 @@ fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
     m.geometry = Geometry::QUUX;
     m.tv.set_board(Board::MonoTv);
     m.tv.set_mono_tv_size(1280, 1024);
-    let (used, made) = run(m, (0o177201, 0o177200), root);
-    eprintln!("1002: the codes ran at {}", octal(&used));
+    let found = run(m, (0o177201, 0o177200), root);
+    let (used, made) = (&found.used, &found.made);
+    eprintln!("1002: the codes ran at {}", octal(used));
     assert!(!used.is_empty(), "the tick's own sites ran");
-    assert!(made.is_empty(), "made by the OA registers at {}", octal(&made));
+    assert!(made.is_empty(), "made by the OA registers at {}", octal(made));
+    let mut values: Vec<u32> = found.dest_3.iter().map(|&(_, v)| v).collect();
+    values.sort();
+    values.dedup();
+    eprintln!("1002: destination 3 written {} times, with {values:?}", found.dest_3.len());
+    assert!(values.contains(&1), "BEG06's turn-on, 1");
+    assert!(values.iter().all(|v| [1, 3].contains(v)), "destination 3 only 1 and 3: {values:?}");
+    assert!(found.dest_4.is_empty(), "destination 4 written: {:?}", found.dest_4);
+    assert!(found.source_17.is_empty(), "source 17 read at {}", octal(&found.source_17));
 }
 
 /// **System 1001 on MIT's 323, on the CADR, never runs them at all**, the
@@ -138,6 +187,6 @@ fn system_1001_on_323_never_runs_the_codes() {
     std::fs::create_dir_all(root.join("lispm")).unwrap();
     std::os::unix::fs::symlink(sources.join("sys"), root.join("sys")).unwrap();
     std::os::unix::fs::symlink(sources.join("site"), root.join("site")).unwrap();
-    let (used, _) = run(support::machine_with_pack(&copy), (0o177201, 0o177200), root);
-    assert!(used.is_empty(), "the codes ran at {}", octal(&used));
+    let found = run(support::machine_with_pack(&copy), (0o177201, 0o177200), root);
+    assert!(found.used.is_empty(), "the codes ran at {}", octal(&found.used));
 }

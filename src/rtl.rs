@@ -602,7 +602,6 @@ struct Read {
     destlc: bool,
     destintctl: bool,
     desttickctl: bool,
-    desttickper: bool,
     destimod0: bool,
     destimod1: bool,
     destpdlp: bool,
@@ -788,8 +787,9 @@ impl Rtl {
     /// the interface has a reset of its own and this is not it.
     pub fn reset(&mut self) {
         self.m.reset_console_registers();
-        // QUUX's tick is the processor's, and `-RESET` turns it off.
-        self.m.tick = crate::machine::Tick::new();
+        // QUUX's interval timers: `-RESET` puts every one in its reset
+        // state (contract Q11).
+        self.m.timers = crate::machine::Timers::new();
         // CONTRL 3D26
         self.inop = false;
         self.spushd = false;
@@ -1118,10 +1118,10 @@ impl Rtl {
         let low_group = destm && !bit(ir, 23) && !bit(ir, 22);
         let destlc = low_group && d19 == 1;
         let destintctl = low_group && d19 == 2;
-        // QUUX's tick, destinations 3 and 4 (`machine::Tick`); on the CADR
-        // the low group decodes neither, and only M is written.
+        // QUUX's destination 3 alias, timer 0's control (`machine::Timers`);
+        // on the CADR the low group decodes no 3, and on neither machine
+        // 4, and only M is written.
         let desttickctl = low_group && d19 == 3 && self.m.geometry.tick;
-        let desttickper = low_group && d19 == 4 && self.m.geometry.tick;
         let mid_group = destm && !bit(ir, 23) && bit(ir, 22);
         let destpdltop = mid_group && d19 == 0;
         let destpdl_p = mid_group && d19 == 1;
@@ -1242,12 +1242,9 @@ impl Rtl {
         } else if let (true, 6, Some(id)) = (group_b, src, self.m.geometry.machine_id) {
             // QUUX's MACHINE-ID in source 16 (`Geometry::QUUX`).
             id
-        } else if group_b && src == 7 && self.m.geometry.tick {
-            // QUUX's clocks' status in source 17 (`machine::Tick`).
-            self.m.tick.status(self.ns)
         } else if group_b && src == 5 && self.m.geometry.tick {
-            // QUUX's microsecond clock in source 15 (`machine::Tick`).
-            crate::machine::Tick::microseconds(self.ns)
+            // QUUX's microsecond clock in source 15 (`machine::Timers`).
+            crate::machine::Timers::microseconds(self.ns)
         } else {
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 that decodes
             // `IR<28:26>` under `IR<31>` and `IR<29>` has those three outputs
@@ -1516,7 +1513,6 @@ impl Rtl {
             destlc,
             destintctl,
             desttickctl,
-            desttickper,
             destimod0,
             destimod1,
             destpdlp,
@@ -2347,11 +2343,11 @@ impl Rtl {
             self.lc = (self.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
         }
         // page FLAG
+        // The destination 3 alias lands at this edge, before a register
+        // write the port takes here, which lands with this edge's time in
+        // the next microcycle's `bus_cycle` (contract Q11, rule 10).
         if r.desttickctl {
-            self.m.tick.control(self.ns, r.ob);
-        }
-        if r.desttickper {
-            self.m.tick.period(self.ns, r.ob);
+            self.m.timers.alias(self.ns, r.ob);
         }
         if r.destintctl {
             self.lc_byte_mode = bit(r.ob as u64, 29);
@@ -2360,9 +2356,12 @@ impl Rtl {
                 // The interface puts it on the backplane as `-XBUS INIT`
                 // and `-UB INIT`: the memory boards are held by it, and the
                 // model I/O boards clear what their reset pins clear,
-                // `Machine::bus_reset`.
+                // `Machine::bus_reset`. QUUX has no `PROG.UNIBUS.RESET`
+                // (contract Q11): the bit is kept and read back, and drives
+                // nothing; its devices are reset by the register page's
+                // word 104.
                 self.bus.unibus_reset(self.ns, reset);
-                if reset {
+                if reset && self.m.geometry.unibus {
                     self.m.bus_reset();
                 }
             }

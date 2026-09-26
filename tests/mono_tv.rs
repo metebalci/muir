@@ -139,16 +139,16 @@ fn it_keeps_black_on_white_and_never_interrupts() {
 /// and the words a line in 15:0, and 13 the buffer's first physical address
 /// --- MONO TV's, or the CADR's TV's when QUUX has that board. Word 14 is
 /// the clocks' (`tests/quux.rs`), 15 the devices of revision 9
-/// (`tests/quux_rtc.rs`), and 16 is 0.
+/// (`tests/quux_rtc.rs`), and 16 the number of interval timers, 3.
 #[test]
 fn the_feature_page_describes_the_main_screen() {
     let page = 0o17377000;
     let words = |m: &mut Machine| [0o11, 0o12, 0o13, 0o16].map(|w| m.bus_read(page + w));
     let packed = |hi: u32, lo: u32| hi << 16 | lo;
-    assert_eq!(words(&mut quux_with_mono_tv()), [packed(1280, 1024), packed(1, 40), 0o17000000, 0]);
+    assert_eq!(words(&mut quux_with_mono_tv()), [packed(1280, 1024), packed(1, 40), 0o17000000, 3]);
     let mut m = Machine::new();
     m.geometry = Geometry::QUUX;
-    assert_eq!(words(&mut m), [packed(768, 963), packed(1, 24), 0o17000000, 0]);
+    assert_eq!(words(&mut m), [packed(768, 963), packed(1, 24), 0o17000000, 3]);
 }
 
 /// **The bus interface acknowledges the whole buffer**: `rtl` takes a cycle

@@ -21,7 +21,8 @@ differences, what it needed:
 | MACHINE-ID in functional source 16 | nothing | 1000 reads it at boot and runs as either machine | `PROCESSOR-TYPE-CODE` is 4 | nothing |
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
-| The clocks in the processor: the 60 Hz tick, the interval timer, the microsecond clock | nothing | none enables the tick yet: the clock handler is still entered from the display's interrupt; the microsecond clock is still read on the Unibus | nothing | nothing |
+| The clocks: the microsecond clock in the processor, and the interval timers on the register page, timer 0 the tick | writes reset devices and timer 0's period, 16,667 µs (revision 10) | 1000 turns the tick on at `BEG06` and clears it in `INTR-TICK` through destination 3, the destination 3 alias | nothing: it reads the microsecond clock, and no timer | nothing |
+| Reset devices, word 104 of the register page | writes it before it reads the disk (revision 10) | 1000 still pulses `PROG.UNIBUS.RESET`, which resets nothing on QUUX | nothing | nothing |
 | Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002: the partitions, the band and the disk routines by block number | block-disk is `quux`'s only disk; `--disk-controller`, the CADR's controller, is `cadr`'s |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
 | No delay lines: `sync`, always | nothing | nothing | nothing | `--sync-cycle-ticks`; `--timing-model` is `cadr`'s |
@@ -83,15 +84,19 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 9 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, 9 the real-time clock and the file device | |
+| 15:4 | hardware revision: 10 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, 9 the real-time clock and the file device, 10 the interval timers and reset devices | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
 decodes it has that output unconnected, and neither microcode 323 nor
 microcode 1000 reads it. `IR<30>` is in no source decode, so source 36 is the
-same. Source 17 is QUUX's tick (below), and open on the CADR. A machine is QUUX only if bits
+same. Source 17 reads all ones on both: open on the CADR, and on QUUX
+unassigned since revision 10 (below). A machine is QUUX only if bits
 31:16 hold the signature; the revision says which QUUX, each one containing
-the last.
+the last up to revision 9. Revision 10 does not contain revision 9: Q1's
+interval timer (destination 4, source 17) and the reset `PROG.UNIBUS.RESET`
+gave on QUUX are gone, the interval timers and reset devices taking their
+places (below).
 
 `tests/quux.rs` holds the word on both engines and the CADR's all ones;
 `the_unassigned_sources_read_all_ones_on_the_board` in `tests/output_bus.rs`
@@ -121,7 +126,7 @@ to `17377377` (page 36776), just below the page the display's control
 registers and the disk controller share. It is read-only and read like any
 device register, through the map:
 
-| Word | QUUX, revision 9 |
+| Word | QUUX, revision 10 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -131,16 +136,20 @@ device register, through the map:
 | 5 | A memory: 1,024 words |
 | 6 | dispatch memory: 2,048 words |
 | 7 | multiply and divide: 3, bit 0 `MUL` and bit 1 `DIV` |
-| 10 | the processor tick: 1 |
+| 10 | the tick, timer 0: 1 |
 | 11 | the main screen: width in 31:16, height in 15:0 |
 | 12 | the main screen: bits a pixel in 31:16, words a line in 15:0 |
 | 13 | the main screen: its buffer's first physical address |
-| 14 | the interval timer and the microsecond clock: 1 |
+| 14 | the microsecond clock: 1 |
 | 15 | the devices of revision 9, a bit each: 3, bit 0 the real-time clock and bit 1 the file device |
-| 16-377 | 0 |
+| 16 | the number of interval timers: 3 |
+| 17-377 | 0 |
 
 Word 15 reads 0 below revision 9, as every unused word does, so software
-decides by it whether the real-time clock and the file device are there.
+decides by it whether the real-time clock and the file device are there;
+word 16 reads 0 below revision 10, and so says whether the interval timers
+and reset devices are. Word 14 named Q1's interval timer too up to revision
+9, which revision 10 drops.
 
 Words 11 to 13 describe whichever display is fitted: MONO TV's 1280 by 1024,
 one bit a pixel, 40 words a line at `17000000`, or, on a QUUX run with a CADR
@@ -233,35 +242,84 @@ start on `rtl` where the copy ends at 12), and at three ticks; a `MUL` of
 `MD` ending with the copy; the CADR's 43 held for nothing; a halted and
 single-stepped `DIV`; and a checkpoint taken during one.
 
-## The clocks in the processor
+## The clocks
 
-**QUUX's processor has its clocks** (revision 5): a tick, fixed at 60 Hz,
-an interval timer, and a microsecond clock. The CADR has no clock in the
-processor. Its clock is the display board's vertical interrupt: microcode
-323's `INTRX0` (`sys/ucadr/uc-interrupt.lisp`) reads the TV's mode register,
-clears its vertical flag, and runs the "roughly-60-cycle clock" handler ---
-the mouse, the disk's idle time, the Chaosnet's transmit-abort wakeup, and
-the sequence-break counter the scheduler runs on. Its microsecond clock and
+**QUUX has clocks of its own**: a microsecond clock in the processor
+(revision 5), and three interval timers on the register page, timer 0, 1
+and 2 (revision 10, contract Q11), timer 0 being the tick, the machine's
+60-cycle clock. The CADR has no clock in the processor. Its clock is the
+display board's vertical interrupt: microcode 323's `INTRX0`
+(`sys/ucadr/uc-interrupt.lisp`) reads the TV's mode register, clears its
+vertical flag, and runs the "roughly-60-cycle clock" handler --- the mouse,
+the disk's idle time, the Chaosnet's transmit-abort wakeup, and the
+sequence-break counter the scheduler runs on. Its microsecond clock and
 interval timer are on the I/O board, on the Unibus (`764120`-`764124`).
 
-| | |
-|---|---|
-| Functional destination 3 | control: `<0>` the tick's enable, and a write with `<1>` set clears its flag; `<2>` the interval timer's enable, and a write with `<3>` set clears its flag |
-| Functional destination 4 | the interval timer's period in microseconds, `<23:0>`; a write starts a period from then; 0 stops it |
-| Functional source 17 | `<0>` the tick's flag, `<1>` its enable, `<2>` the interval timer's flag, `<3>` its enable |
-| Functional source 15 | the microseconds since power-on, 32 bits, wrapping: one read gives the whole word |
-| The tick's period | 16,667 µs, 60 Hz, fixed |
-| Interrupt | while enabled, each flag is ORed into the interrupt pending that jump conditions 5 and 6 test, so it costs nothing until it rises |
+**The interval timers** are identical, each a block of two words:
 
-A flag rises a period after its timer is enabled (the interval timer's
-also after its period is written), then every period after, whether or not
-it was cleared between; a clear takes it down until the next. `-RESET`
-turns both off. A flag that rises while a microcycle waits for `MD` is up
-for the jump after it: `SINTR` is registered at the edge that ends the
-waiting microcycle, with the flags as they stand then
-(`a_flag_rising_during_a_wait_is_seen_by_the_jump_after`, the case
-muir-fpga measured). Revision 4's tick took its period from destination 4;
-revision 5 fixes it at 60 Hz and gives destination 4 to the interval timer.
+| Word | Read | Write |
+|---|---|---|
+| 110, 112, 114: timer 0, 1, 2's control and status | `<0>` on, `<1>` its flag, `<2>` its mode (0 periodic, 1 one-shot), `<8>` its interrupt enable; the rest 0 | `<0>` on; a write with `<1>` set clears the flag; `<2>` the mode, taken only by a write that turns the timer on; `<8>` the interrupt enable, taken by every write; the rest ignored |
+| 111, 113, 115: timer 0, 1, 2's period | the period in µs, `<23:0>`, as last written; the rest 0 | `<23:0>` the period, 1 to 16,777,215 µs; the rest ignored |
+
+- A write that turns a timer on starts a period from the write and takes
+  its mode from it; one that leaves it on starts nothing and changes no
+  mode; one that turns it off takes its flag down, and its mode reads as it
+  was until the next turn-on. A write of one timer's words touches that
+  timer alone.
+- A period written while the timer is on starts a period from the write,
+  and so takes the flag down: a rise up and not yet taken is lost. Written
+  while it is off, it sets the period only. A timer on at period 0 never
+  rises.
+- **Periodic**: the flag rises a period after the start and every period
+  after, on the start's grid, whether or not it was cleared between; while
+  it is up, further rises merge into it, and a clear takes it down until the
+  next.
+- **One-shot**: the flag rises once, a period after the start. The timer
+  stays on with nothing to count, as a timer on at period 0, until a period
+  write or an off-then-on starts it again. A clear starts nothing, and under
+  a raised flag nothing more is counted: a one-shot that has risen and been
+  cleared reads as one armed and not yet risen, on with its flag down.
+- **The flag rises whatever the interrupt enable says**, so a timer can be
+  polled through its word. Under `<8>`, it is the timer's bit of word 100
+  --- `<0>` timer 0, `<1>` timer 1, `<7>` timer 2 --- and is ORed into the
+  interrupt pending that jump conditions 5 and 6 test: a level, down when
+  the flag is cleared, the timer turned off or `<8>` cleared.
+- **Reset**: power-on, `-RESET`, `-BOOT` and reset devices (below) each put
+  every timer off, its flag down, periodic, interrupt enable 0 and period
+  0. No timer has a period of its own: timer 0's 60 Hz, 16,667 µs, is
+  written by the boot PROM of revision 10 (contract Q11). The microsecond
+  clock moves on through every reset.
+- **Instants.** A timer word is read or written at the instant the
+  register's cycle is taken, the edge the memory port takes it at (`rtl`:
+  the edge that ends the microcycle after the memory start), and a period
+  starts from that edge; a write is in `SINTR` from the next edge on, the
+  one that acknowledges the cycle, and not at the edge that takes it. A read
+  gives the flags as they stood at that edge, a rise at the edge itself
+  counting as before it.
+
+A flag that rises while a microcycle waits for `MD` is up for the jump
+after it: `SINTR` is registered at the edge that ends the waiting
+microcycle, with the flags as they stand then (the case muir-fpga measured
+on Q1's timers).
+
+**The destination 3 alias** (contract Q11, a proposed term): functional
+destination 3 is timer 0's control, as Q1's tick control was, for the
+microcode that turns its tick on and clears it there, microcode 1000 of
+System 1002. `<0>` on, and a write with `<1>` set clears the flag; a write
+that turns timer 0 on also makes it periodic and sets its interrupt enable,
+since Q1's tick interrupted whenever it was on; one that leaves it on or
+turns it off leaves the interrupt enable as it was. `<3:2>`, Q1's interval
+timer's, and the rest are ignored, and no other timer is touched. A write
+lands at the edge that ends its microcycle and is in that edge's own
+`SINTR`, which leaves out a flag it takes down; at an edge that also takes
+a register write, destination 3 is taken first. **Functional destination 4
+writes only M, and functional source 17 reads all ones**, on QUUX as on the
+CADR: Q1's interval timer, whose period and status they were up to
+revision 9, is gone, the page's timers taking its place.
+
+**The microsecond clock** is functional source 15: the microseconds since
+power-on, 32 bits, wrapping, one read giving the whole word.
 
 On the CADR, destinations 3 to 7 have no output on the 74S138 that decodes
 them and write only M, and sources 15 and 17 have none either and read all
@@ -269,16 +327,25 @@ ones. Microcode 323 writes destinations 3 to 7 and reads sources 15 and 17
 nowhere, by a scan of every control-store word, and running shows the same
 of what the OA registers make at run time: `tests/unused_codes.rs` reads
 every executed microinstruction as it stood in `IR` through a boot to the
-listener. System 1001 on 323, on the CADR, runs none; System 1002 on its
-microcode for revision 4 runs them at three addresses, each a control-store
-word that carries them, the tick's own, and reads source 15 nowhere.
+listener. System 1001 on 323, on the CADR, runs none. System 1002 on its
+microcode 1000 runs them at three addresses through its boot, each a
+control-store word that carries them: destination 3 at `BEG06`, the tick's
+turn-on, and source 15 at `READ-MICROSECOND-CLOCK` and in `XUSLDB`; the
+tick's clear in `INTR-TICK` writes destination 3 too once the tick runs.
+It writes destination 3 with 1 and 3 alone, and neither writes destination
+4 nor reads source 17.
 
-`tests/tick.rs` holds the interval timer against a 100 and a 300 µs period,
-its clear and its stop at 0, the tick at 60 Hz whatever destination 4 says,
-the interrupt condition taken with either on and not with both off, source
-15 against each engine's time (under `sync` too) and across its wrap, the
-CADR's all ones, and a checkpoint taken in the middle of an interval, on
-`micro` and `rtl`.
+`tests/interval_timers.rs` holds, for each timer, the periodic grid to the
+nanosecond with late clears and a period written under a raised flag, the
+one-shot's one rise, the mode taken at turn-on, the independence of the
+three, every reset on both engines, the interrupt under `<8>` and not
+without it on both engines and inside a wait for `MD`, the layout,
+destination 4 and source 17 on QUUX, a checkpoint resumed to the same
+rises, the alias, and on `rtl` the shared edge: destination 3 before a
+register write, its `SINTR`, and a read's flags as they stood at its edge.
+`tests/tick.rs` holds the tick through the alias at the PROM's period, the
+microsecond clock against each engine's time (under `sync` too) and across
+its wrap, and the CADR's all ones.
 
 ## QUUX drops the delay lines
 
@@ -781,6 +848,27 @@ refuses one in MIT's order or assembled at 0.
 QUUX runs only muir-sys's latest System 1002 band. The PROMs assembled at
 0, and System 1001 on QUUX, are retired with it.
 
+**Revision 10 asks two things more of the PROM** (contract Q11): after it
+maps the register page and writes error stop, and before it reads the
+disk, a write of word 104 with 1, reset devices, so that a reboot leaves no
+timer on and the file device disabled; and then timer 0's period, 16,667
+µs, at word 111, since no timer resets to a period and the microcode's
+tick, turned on through destination 3, rises only at the period the PROM
+wrote. It turns no timer on. dev11's PROM, `data/quux-promh.mcr`, writes
+neither: on revision 10 System 1002 dev11 still reaches its listener, with
+timer 0 on under its interrupt enable at period 0 and `INTR-TICK` run no
+time in 10 s after it (`m12_the_old_prom_on_revision_10`); and a reboot
+through it with timers 1 and 2 on and the file device enabled reaches the
+listener after 412,290,922 microcycles against 164,120,406 with neither,
+`INTR` run 8,811,697 times against 1,462, the timers still on and the
+device still enabled at location 6 and its queued commands run
+(`m11_fails_on_dev11_s_prom`), all on `micro`. `tests/system_1002_timers.rs`
+holds a PROM that does both: its writes of word 104 and then 111 before its
+first disk command, timer 0 off at period 16,667 at location 6, the band's
+600 ticks in 10 s through the alias and its mouse, and the reboot within
+1.1 times the baseline's `INTR` and 1.05 times its microcycles, with the
+timers off, the device disabled and no queued command run.
+
 ## The register page
 
 **QUUX's registers share the feature page**, `17377000`-`17377377` (revision
@@ -790,10 +878,12 @@ largest MONO TV buffer and 36777 the display's and disk's registers.
 | Word | |
 |---|---|
 | 0-77 | the feature page, read only |
-| 100 | interrupt status, read only: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's done, `<3>` the keyboard, `<4>` the mouse, `<5>` the network, `<6>` the file device, each under its own enable |
+| 100 | interrupt status, read only: `<0>` timer 0, the tick, `<1>` timer 1, `<2>` block-disk's done, `<3>` the keyboard, `<4>` the mouse, `<5>` the network, `<6>` the file device, `<7>` timer 2, each under its own enable |
 | 101 | error status: the bus errors, as `766044` gives them; a write clears them |
 | 102 | mode: `<0>` error stop, which the host can set too |
 | 103 | the real-time clock, read only (below) |
+| 104 | reset devices: a write with `<0>` set resets every device (below); a write with `<0>` clear does nothing; reads 0 |
+| 110-115 | the interval timers ([the clocks](#the-clocks)) |
 | 120-123 | the keyboard and the mouse (below) |
 | 140-147 | the network (below) |
 | 160-171 | the file device (below) |
@@ -801,6 +891,38 @@ largest MONO TV buffer and 36777 the display's and disk's registers.
 
 On the CADR nothing answers on the page. `tests/quux_registers.rs` holds
 each word, on the machine and through both engines' bus.
+
+**Reset devices** (revision 10, contract Q11; a proposed term): a write of
+word 104 with `<0>` set resets every device, at the instant the write is
+taken. What the file device had due by then runs first, as for a write of
+its word 160; then
+
+| Device | What reset devices does |
+|---|---|
+| The interval timers | every timer off, flag down, periodic, interrupt enable 0, period 0 |
+| The file device | disabled, status `<2>` and `<3>` cleared (below) |
+| Block-disk | command 0, its done interrupt's enable with it, and its errors cleared; not active at once, a transfer in flight ending there |
+| The network | the I/O board's `-UB INIT`: its writable status bits, the Chaosnet interface's reset and the serial line's |
+| MONO TV | nothing to show: it has no vertical flag and no interrupt |
+| The keyboard and mouse | nothing: the FIFO, the counts and both interrupt enables are kept, since a warm boot's key word is read by the microcode's location 6 after the PROM, which writes word 104, has run |
+| The real-time clock, the microsecond clock, words 101 and 102 | nothing |
+
+Block-disk, the network, MONO TV and the file device are reset as
+`PROG.UNIBUS.RESET` reset them up to revision 9 (`Machine::bus_reset`).
+**On QUUX `INTERRUPT-CONTROL<28>`, `PROG.UNIBUS.RESET`, drives nothing**:
+the bit is written and read back through `LOCATION-COUNTER` as on the CADR,
+and resets no device; the CADR's still resets its boards. Nothing is held
+off `SINTR` at a write of word 104: its effect is in the `SINTR` of the edge
+after the one that takes it, as any register write's is. Anything may write
+the word; revision 10's boot PROM writes it before it reads the disk.
+
+`tests/quux_reset_devices.rs` holds word 104 reading 0, a write with `<0>`
+clear changing nothing in the machine's state, a write of 1 leaving every
+device as `PROG.UNIBUS.RESET` does from the same state and every timer
+reset with the keyboard and mouse kept, what the file device had due
+running first, a destination 3 write at the same edge undone, `SINTR` at
+the write's edge and at the next, and `<28>` resetting nothing on QUUX on
+both engines.
 
 ## The real-time clock
 
@@ -1006,9 +1128,9 @@ discarded and its temporary file removed; and sets the indexes and the
 interrupt enable to 0. Quiet, 161 `<1>`, is up at once: muir's device is
 never in the middle of a copy, and a command it ran stands, host effect and
 all. The bases and sizes stay, and may be written before the next enable.
-**Every machine reset disables it too**, `PROG.UNIBUS.RESET`, which
-`RESET-MACHINE` pulses at every microcode start, clearing status `<2>` and
-`<3>` with it. Power-on is disabled.
+**Reset devices disables it too** (word 104, revision 10), clearing status
+`<2>` and `<3>` with it; `PROG.UNIBUS.RESET` reaches it no more. Power-on
+is disabled.
 
 **Word 100 `<6>`** is up while the interrupt enable is on and a response is
 waiting, 170 ≠ 171: a level, cleared by writing 171 up to 170 or by the
@@ -1042,7 +1164,8 @@ mounts are the flags'.
 the rings against a scratch folder --- each register, the refused enable and
 the index fault, the due time to the nanosecond and nothing before it, the
 order, the wrap at 1, 2 and 256 entries and across 2^16, a full response
-ring, the interrupt, the disable and the machine reset, every command and
+ring, the interrupt, the disable and reset devices, `<28>` leaving it as it
+was, every command and
 its statuses, the write landing whole with its temporary file never listed,
 the date, the mounts, a read-only mount unchanged, names, symlinks, LOG, the
 checkpoint's refusal and its round trip --- and both engines running a

@@ -115,8 +115,9 @@ fn a_translation_goes_through_a_block_above_37() {
 /// processor type, 4, in 3:0. On the CADR no part drives the M bus for
 /// source 16 and it reads all ones, as `chip` shows
 /// (`tests/output_bus.rs`), which can never carry the signature. Source 36
-/// is 16, `IR<30>` being in no source decode. Source 17 is QUUX's tick
-/// (`tests/tick.rs`), 0 while it is off, and open on the CADR.
+/// is 16, `IR<30>` being in no source decode. Source 17 reads all ones on
+/// both since revision 10 (contract Q11), open on the CADR and unassigned
+/// on QUUX.
 #[test]
 fn quux_answers_its_id_in_source_16() {
     let prom = [
@@ -124,8 +125,8 @@ fn quux_answers_its_id_in_source_16() {
         Insn::new(ALU | SETM | src(0o36) | a_dest(0o202)),
         Insn::new(ALU | SETM | src(0o17) | a_dest(0o203)),
     ];
-    let id = (0x5155 << 16) | (9 << 4) | 4;
-    for (geometry, want) in [(Geometry::QUUX, [id, id, 0]), (Geometry::CADR, [!0, !0, !0])] {
+    let id = (0x5155 << 16) | (10 << 4) | 4;
+    for (geometry, want) in [(Geometry::QUUX, [id, id, !0]), (Geometry::CADR, [!0, !0, !0])] {
         let (e, r) = both(&prom, &|m: &mut Machine| m.geometry = geometry, 30);
         for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
             let got = [m.amem[0o201], m.amem[0o202], m.amem[0o203]];
@@ -143,8 +144,9 @@ fn quux_answers_its_id_in_source_16() {
 /// control store's, A memory's and dispatch memory's, then which of the
 /// multiply and divide it has (bit 0 `MUL`, bit 1 `DIV`), whether it has
 /// the tick, word 14, whether it has the interval timer and the
-/// microsecond clock (revision 5), and word 15, `<0>` the real-time clock
-/// and `<1>` the file device (revision 9); the rest reads 0. On
+/// microsecond clock (revision 5), word 15, `<0>` the real-time clock
+/// and `<1>` the file device (revision 9), and word 16 the number of
+/// interval timers, 3 (revision 10); the rest reads 0. On
 /// the CADR nothing answers there, and a read times out as any read of an
 /// empty I/O address does, the Xbus NXM bit set.
 #[test]
@@ -170,7 +172,7 @@ fn quux_lists_its_sizes_in_its_feature_page() {
         }
     };
     let id = Geometry::QUUX.machine_id.unwrap();
-    let want = [id, 6, 2048, 16384, 16384, 1024, 2048, 3, 1, 1, 3, 0, 0];
+    let want = [id, 6, 2048, 16384, 16384, 1024, 2048, 3, 1, 1, 3, 3, 0];
     let (e, r) = both(&prom, &set(Geometry::QUUX), 400);
     for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
         let got: Vec<u32> = (0..words.len()).map(|k| m.amem[0o200 + k]).collect();

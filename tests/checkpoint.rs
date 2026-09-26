@@ -174,10 +174,13 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// `a_checkpoint_waits_for_an_idle_device_and_keeps_its_registers` in
 /// `tests/quux_file_device.rs` holds, and version 44 `micro`'s write not
 /// yet gone out, which `micro_carries_a_write_not_yet_gone_out_across_a_checkpoint`
+/// holds, and version 45 QUUX's three interval timers in place of Q1's
+/// tick and interval timer (contract Q11), which
+/// `m8_a_checkpoint_resumes_to_the_same_rises` in `tests/interval_timers.rs`
 /// holds.
 #[test]
-fn the_format_is_version_44_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 44, "a new version needs its own tests");
+fn the_format_is_version_45_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 45, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -185,14 +188,14 @@ fn the_format_is_version_44_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 44u32.to_le_bytes());
+    assert_eq!(&good[at..at + 4], 45u32.to_le_bytes());
     for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 44"), "{err}");
+        assert!(err.contains("reads 45"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

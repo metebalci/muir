@@ -84,8 +84,11 @@ pub struct Geometry {
     /// Whether ALU functions 42 and 43 are QUUX's one-instruction multiply
     /// and divide ([`crate::muldiv`]) rather than the CADR's.
     pub muldiv: bool,
-    /// Whether the processor has QUUX's tick ([`Tick`]): functional
-    /// destinations 3 and 4, source 17.
+    /// Whether the machine has QUUX's clocks ([`Timers`]): the interval
+    /// timers on the register page, words 110-115, their interrupts in word
+    /// 100 and reset devices at word 104 (contract Q11); functional
+    /// destination 3, the destination 3 alias on timer 0; and the
+    /// microsecond clock, functional source 15 (contract Q1).
     pub tick: bool,
     /// Whether the mode register has `SPEED1` and `SPEED0`, which choose the
     /// delay-line tap that ends the read phase (`mit/cadr/ir.bits`). The
@@ -141,14 +144,17 @@ impl Geometry {
         file_device: false,
     };
 
-    /// QUUX's, revision 9: a real-time clock and a file device on the
+    /// QUUX's, revision 10: three interval timers and reset devices on the
+    /// register page (contract Q11, [`Timers`], [`Machine::reset_devices`]);
+    /// a real-time clock and a file device on the
     /// register page (contract Q9, [`Rtc`], [`crate::file_device`]); main memory and the frame buffer on its own port
     /// through its cache, with no bus interface (contract Q6), and its
     /// devices reached by their registers alone, with no bus (contract Q7,
     /// [`crate::memory_port`]); its boot
     /// PROM at control store 36000 and the register page (contract Q2, [`Geometry::prom_base`],
-    /// [`Machine::interrupt_sources`]); clocks in the processor, the tick
-    /// fixed at 60 Hz, an interval timer and a microsecond clock ([`Tick`]); `MUL` and
+    /// [`Machine::interrupt_sources`]); the microsecond clock in the
+    /// processor, functional source 15, and timer 0 reached as the tick
+    /// through functional destination 3 ([`Timers`]); `MUL` and
     /// `DIV` in one instruction each, ALU
     /// functions 42 and 43 ([`crate::muldiv`]); a PDL buffer of 16K words,
     /// its pointer and index 14 bits; and a level-1 entry of six bits, 64 blocks of level 2 and so 63
@@ -164,13 +170,13 @@ impl Geometry {
     /// 16K PDL buffer, then the multiply and divide, then the tick, then the
     /// clocks of contract Q1, then Q2's register page and PROM, then Q6's
     /// memory port, then Q7's device registers, then Q9's real-time clock and
-    /// file device --- and
+    /// file device, then Q11's interval timers and reset devices --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
         l1_bits: 6,
         pdl_bits: 14,
-        machine_id: Some((0x5155 << 16) | (9 << 4) | 4),
+        machine_id: Some((0x5155 << 16) | (10 << 4) | 4),
         muldiv: true,
         tick: true,
         speed_bits: false,
@@ -217,12 +223,12 @@ impl Geometry {
     /// level-1 entry's bits, the level-2 map's entries, the PDL buffer's
     /// words, the control store's, A memory's and dispatch memory's, and
     /// which of `MUL` (bit 0) and `DIV` (bit 1) it has, and whether it has
-    /// the tick (1); words 11 to 13, the main screen, are the display's
-    /// ([`Machine::bus_read`]); word 14 the interval timer and the
-    /// microsecond clock; word 15 the devices of revision 9 by bits, `<0>`
-    /// the real-time clock and `<1>` the file device; every other word 0.
-    /// Below revision 9 word 15 reads 0, as every unused word does.
-    /// Read-only.
+    /// the tick, timer 0 (1); words 11 to 13, the main screen, are the
+    /// display's ([`Machine::bus_read`]); word 14 the microsecond clock;
+    /// word 15 the devices of revision 9 by bits, `<0>` the real-time clock
+    /// and `<1>` the file device; word 16 the number of interval timers,
+    /// 3; every other word 0. Below revision 9 word 15 reads 0, and below
+    /// revision 10 word 16, as every unused word does. Read-only.
     pub fn feature_word(self, phys: u32) -> Option<u32> {
         let id = self.machine_id?;
         if (phys >> 8) & 0o37777 != Self::FEATURE_PAGE {
@@ -237,12 +243,15 @@ impl Geometry {
             5 => 1024,
             6 => 2048,
             7 => (self.muldiv as u32) * 3,
+            // The tick, timer 0.
             0o10 => self.tick as u32,
-            // The interval timer and the microsecond clock (revision 5).
+            // The microsecond clock (revision 5).
             0o14 => self.tick as u32,
             // The devices of revision 9, by bits (contract Q9): `<0>` the
             // real-time clock, `<1>` the file device.
             0o15 => self.rtc as u32 | (self.file_device as u32) << 1,
+            // The number of interval timers (contract Q11, revision 10).
+            0o16 => self.tick as u32 * Timers::COUNT,
             _ => 0,
         })
     }
@@ -252,7 +261,7 @@ impl Geometry {
 /// 103, the real time in whole seconds since 1970-01-01 UTC, unsigned 32
 /// bits, good to 2106. Read-only to the machine: a write goes nowhere, as a
 /// write of any read-only word on the page does, and the host keeps the
-/// time. Finer time is the microsecond clock's ([`Tick::microseconds`]).
+/// time. Finer time is the microsecond clock's ([`Timers::microseconds`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Rtc {
     /// Live, the default: the host's clock at each read, as a real RTC keeps
@@ -301,20 +310,125 @@ impl Rtc {
     }
 }
 
-/// QUUX's clocks in the processor (revision 5, contract Q1): the tick,
-/// fixed at 60 Hz, the machine's clock in place of the CADR display's
-/// vertical interrupt; an interval timer; and the microsecond clock.
+/// One of QUUX's interval timers (contract Q11, revision 10): timer 0, 1
+/// or 2 on the register page, each with its control and status word at
+/// 110 + 2k and its period at 111 + 2k.
 ///
-/// Functional destination 3 is their control: `<0>` enables the tick and a
-/// write with `<1>` set clears its flag; `<2>` enables the interval timer
-/// and a write with `<3>` set clears its flag. Destination 4 is the
-/// interval timer's period in microseconds, `<23:0>`, 0 stopping it.
-/// Functional source 17 reads `<0>` the tick's flag, `<1>` its enable, `<2>`
-/// the interval timer's flag and `<3>` its enable. A flag rises a period
-/// after its timer is enabled (or, the interval timer's, its period
-/// written), and then every period, whether or not it was cleared in
-/// between; while enabled and up it is part of [`Machine::interrupt`].
-/// Functional source 15 is the microsecond clock, [`Tick::microseconds`].
+/// | Word | Read | Write |
+/// |---|---|---|
+/// | 110 + 2k | `<0>` on, `<1>` its flag, `<2>` its mode (0 periodic, 1 one-shot), `<8>` its interrupt enable; the rest 0 | `<0>` on; `<1>` set clears the flag; `<2>` the mode, taken only by a write that turns it on; `<8>` the interrupt enable, taken by every write; the rest ignored |
+/// | 111 + 2k | the period in µs, `<23:0>`, as last written | `<23:0>` the period; the rest ignored |
+///
+/// A write that turns the timer on starts a period from itself and takes
+/// its mode; one that leaves it on starts nothing and changes no mode; one
+/// that turns it off takes its flag down. A period written while it is on
+/// starts a period from the write, and so takes the flag down: a rise up
+/// and not yet taken is lost. **Periodic**, the flag rises a period after
+/// the start and every period after, on the start's grid, whether or not
+/// it was cleared between; while it is up, further rises merge into it.
+/// **One-shot**, it rises once, a period after the start, and the timer
+/// stays on with nothing to count until a period write or an off-then-on
+/// starts it again; a clear starts nothing. A timer on at period 0 never
+/// rises. The flag rises whatever the interrupt enable says; under it, the
+/// flag is the timer's bit of word 100 ([`Machine::interrupt_sources`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IntervalTimer {
+    pub on: bool,
+    /// The mode, taken at the turn-on: one-shot, or periodic.
+    pub one_shot: bool,
+    /// `<8>`: whether the flag is word 100's bit and an interrupt.
+    pub interrupt_enable: bool,
+    /// `<23:0>` of the last period written, µs.
+    pub period_us: u32,
+    /// When the flag next rises, or rose and has not been cleared;
+    /// `u64::MAX`, never.
+    pub deadline_ns: u64,
+}
+
+impl IntervalTimer {
+    /// Where power-on, `-RESET`, `-BOOT` and reset devices put every timer:
+    /// off, flag down, periodic, interrupt enable 0, period 0.
+    pub const RESET: IntervalTimer = IntervalTimer {
+        on: false,
+        one_shot: false,
+        interrupt_enable: false,
+        period_us: 0,
+        deadline_ns: u64::MAX,
+    };
+
+    /// The control word's bits.
+    pub const ON: u32 = 1;
+    pub const FLAG: u32 = 2;
+    pub const ONE_SHOT: u32 = 4;
+    pub const INTERRUPT_ENABLE: u32 = 1 << 8;
+
+    /// The flag, at `now`: a rise at `now` counts as before it.
+    pub fn flag(self, now: u64) -> bool {
+        now >= self.deadline_ns
+    }
+
+    /// The timer's bit of word 100 at `now`: the flag under the interrupt
+    /// enable.
+    pub fn interrupt(self, now: u64) -> bool {
+        self.interrupt_enable && self.flag(now)
+    }
+
+    /// Its control and status word at `now`.
+    pub fn status(self, now: u64) -> u32 {
+        self.on as u32
+            | (self.flag(now) as u32) << 1
+            | (self.one_shot as u32) << 2
+            | if self.interrupt_enable { Self::INTERRUPT_ENABLE } else { 0 }
+    }
+
+    /// A deadline a period after `now`, or never if the period is 0.
+    fn after(now: u64, period_us: u32) -> u64 {
+        if period_us == 0 { u64::MAX } else { now + period_us as u64 * 1000 }
+    }
+
+    /// A write of its control word at `now`.
+    pub fn write_control(&mut self, now: u64, v: u32) {
+        let on = v & Self::ON != 0;
+        if on && !self.on {
+            self.one_shot = v & Self::ONE_SHOT != 0;
+            self.deadline_ns = Self::after(now, self.period_us);
+        } else if v & Self::FLAG != 0 && self.flag(now) {
+            self.deadline_ns = if self.one_shot || self.period_us == 0 {
+                // A one-shot counts nothing more once it has risen.
+                u64::MAX
+            } else {
+                // The next boundary of the start's grid after `now`.
+                let p = self.period_us as u64 * 1000;
+                self.deadline_ns + (now - self.deadline_ns) / p * p + p
+            };
+        }
+        if !on {
+            self.deadline_ns = u64::MAX;
+        }
+        self.on = on;
+        self.interrupt_enable = v & Self::INTERRUPT_ENABLE != 0;
+    }
+
+    /// A write of its period word at `now`.
+    pub fn write_period(&mut self, now: u64, v: u32) {
+        self.period_us = v & 0o77777777;
+        if self.on {
+            self.deadline_ns = Self::after(now, self.period_us);
+        }
+    }
+}
+
+/// QUUX's clocks in the processor: the three interval timers of contract
+/// Q11 ([`IntervalTimer`], revision 10), timer 0 of them the tick that
+/// takes the place of the CADR display's vertical interrupt, and the
+/// microsecond clock of contract Q1, functional source 15
+/// ([`Timers::microseconds`]).
+///
+/// **The destination 3 alias** ([`Timers::alias`]): functional destination
+/// 3 is timer 0's control as Q1's tick control was, for the microcode of
+/// the bands revision 10 runs, which turns its tick on and clears it there.
+/// Destination 4 writes only M and source 17 reads all ones, as on the
+/// CADR: Q1's interval timer is gone, and the page's timers take its place.
 ///
 /// None of this is the CADR's: page SOURCE decodes no destination 3 or 4
 /// and no source 15 or 17. Microcode 323 neither writes the one nor reads
@@ -322,52 +436,76 @@ impl Rtc {
 /// every executed word read as the OA registers left it
 /// (`tests/unused_codes.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Tick {
-    pub enabled: bool,
-    /// When the tick's flag next rises, or rose and has not been cleared.
-    pub deadline_ns: u64,
-    pub interval_enabled: bool,
-    pub interval_us: u32,
-    /// When the interval timer's flag next rises, or rose and has not been
-    /// cleared.
-    pub interval_deadline_ns: u64,
+pub struct Timers {
+    pub timer: [IntervalTimer; 3],
 }
 
-impl Tick {
-    /// 60 Hz, near enough: what the display's vertical interrupt was.
-    pub const PERIOD_US: u32 = 16_667;
+impl Timers {
+    /// Timer 0's period for a 60-cycle tick, 16,667 µs, what the display's
+    /// vertical interrupt was; the boot PROM writes it (contract Q11). No
+    /// timer resets to it.
+    pub const TICK_PERIOD_US: u32 = 16_667;
 
-    pub const fn new() -> Tick {
-        Tick {
-            enabled: false,
-            deadline_ns: u64::MAX,
-            interval_enabled: false,
-            interval_us: 0,
-            interval_deadline_ns: u64::MAX,
+    /// Word 100's bit for each timer: `<0>`, `<1>`, `<7>`.
+    pub const INTERRUPT_BITS: [u32; 3] = [1 << 0, 1 << 1, 1 << 7];
+
+    /// How many there are, feature word 16.
+    pub const COUNT: u32 = 3;
+
+    /// Every timer in its reset state.
+    pub const fn new() -> Timers {
+        Timers { timer: [IntervalTimer::RESET; 3] }
+    }
+
+    /// Word 100's timer bits at `now`.
+    pub fn interrupt_sources(&self, now: u64) -> u32 {
+        (0..3).filter(|&k| self.timer[k].interrupt(now)).map(|k| Self::INTERRUPT_BITS[k]).sum()
+    }
+
+    /// Whether any timer's flag, under its interrupt enable, is up at `now`.
+    pub fn pending(&self, now: u64) -> bool {
+        self.timer.iter().any(|t| t.interrupt(now))
+    }
+
+    /// Which timer, and whether its period, register page word `word`
+    /// names, if it is one of 110-115.
+    fn word(word: u32) -> Option<(usize, bool)> {
+        (0o110..=0o115).contains(&word).then(|| (((word - 0o110) / 2) as usize, word & 1 != 0))
+    }
+
+    /// A read of register page word `word` at `now`, if it is a timer's.
+    pub fn read(&self, word: u32, now: u64) -> Option<u32> {
+        let (k, period) = Self::word(word)?;
+        let t = self.timer[k];
+        Some(if period { t.period_us } else { t.status(now) })
+    }
+
+    /// A write of register page word `word` at `now`: whether it is a
+    /// timer's.
+    pub fn write(&mut self, word: u32, v: u32, now: u64) -> bool {
+        let Some((k, period)) = Self::word(word) else { return false };
+        let t = &mut self.timer[k];
+        if period {
+            t.write_period(now, v)
+        } else {
+            t.write_control(now, v)
         }
+        true
     }
 
-    /// The tick's flag, at `now`.
-    pub fn flag(self, now: u64) -> bool {
-        now >= self.deadline_ns
-    }
-
-    /// The interval timer's flag, at `now`.
-    pub fn interval_flag(self, now: u64) -> bool {
-        now >= self.interval_deadline_ns
-    }
-
-    /// Whether either flag, under its enable, is up at `now`.
-    pub fn pending(self, now: u64) -> bool {
-        (self.enabled && self.flag(now)) || (self.interval_enabled && self.interval_flag(now))
-    }
-
-    /// Source 17 at `now`.
-    pub fn status(self, now: u64) -> u32 {
-        (self.interval_enabled as u32) << 3
-            | (self.interval_flag(now) as u32) << 2
-            | (self.enabled as u32) << 1
-            | self.flag(now) as u32
+    /// A write of functional destination 3 at `now`, the destination 3
+    /// alias: Q1's tick control on timer 0. `<0>` on, and a write with
+    /// `<1>` set clears the flag; a write that turns it on also makes it
+    /// periodic and sets its interrupt enable, since Q1's tick interrupted
+    /// whenever it was on; one that leaves it on or turns it off leaves the
+    /// interrupt enable as it was. `<3:2>`, Q1's interval timer's, and the
+    /// rest are ignored, and no other timer is touched.
+    pub fn alias(&mut self, now: u64, v: u32) {
+        let t = &mut self.timer[0];
+        let turns_on = v & IntervalTimer::ON != 0 && !t.on;
+        let enable =
+            if turns_on || t.interrupt_enable { IntervalTimer::INTERRUPT_ENABLE } else { 0 };
+        t.write_control(now, v & (IntervalTimer::ON | IntervalTimer::FLAG) | enable);
     }
 
     /// Source 15 at `now`: the microseconds since power-on, 32 bits,
@@ -376,77 +514,34 @@ impl Tick {
         (now / 1000) as u32
     }
 
-    /// A deadline `period` after `now`, or never if the period is 0.
-    fn after(now: u64, period_us: u32) -> u64 {
-        if period_us == 0 { u64::MAX } else { now + period_us as u64 * 1000 }
-    }
-
-    /// The next period boundary after `now` of a flag that rose at
-    /// `deadline`.
-    fn next(deadline: u64, now: u64, period_us: u32) -> u64 {
-        if period_us == 0 {
-            return u64::MAX;
-        }
-        let p = period_us as u64 * 1000;
-        deadline + (now - deadline) / p * p + p
-    }
-
-    /// A write of destination 3 at `now`.
-    pub fn control(&mut self, now: u64, v: u32) {
-        let enable = v & 1 != 0;
-        if enable && !self.enabled {
-            self.deadline_ns = Self::after(now, Self::PERIOD_US);
-        } else if v & 2 != 0 && self.flag(now) {
-            self.deadline_ns = Self::next(self.deadline_ns, now, Self::PERIOD_US);
-        }
-        if !enable {
-            self.deadline_ns = u64::MAX;
-        }
-        self.enabled = enable;
-        let interval = v & 4 != 0;
-        if interval && !self.interval_enabled {
-            self.interval_deadline_ns = Self::after(now, self.interval_us);
-        } else if v & 8 != 0 && self.interval_flag(now) {
-            self.interval_deadline_ns =
-                Self::next(self.interval_deadline_ns, now, self.interval_us);
-        }
-        if !interval {
-            self.interval_deadline_ns = u64::MAX;
-        }
-        self.interval_enabled = interval;
-    }
-
-    /// A write of destination 4 at `now`: the interval timer's period, from
-    /// then.
-    pub fn period(&mut self, now: u64, v: u32) {
-        self.interval_us = v & 0o77777777;
-        if self.interval_enabled {
-            self.interval_deadline_ns = Self::after(now, self.interval_us);
+    pub fn save(&self, w: &mut crate::checkpoint::Writer) {
+        for t in &self.timer {
+            w.bool(t.on);
+            w.bool(t.one_shot);
+            w.bool(t.interrupt_enable);
+            w.u32(t.period_us);
+            w.u64(t.deadline_ns);
         }
     }
 
-    pub fn save(self, w: &mut crate::checkpoint::Writer) {
-        w.bool(self.enabled);
-        w.u64(self.deadline_ns);
-        w.bool(self.interval_enabled);
-        w.u32(self.interval_us);
-        w.u64(self.interval_deadline_ns);
-    }
-
-    pub fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<Tick> {
-        Ok(Tick {
-            enabled: r.bool()?,
-            deadline_ns: r.u64()?,
-            interval_enabled: r.bool()?,
-            interval_us: r.u32()?,
-            interval_deadline_ns: r.u64()?,
-        })
+    pub fn load(r: &mut crate::checkpoint::Reader) -> std::io::Result<Timers> {
+        let mut timers = Timers::new();
+        for t in &mut timers.timer {
+            *t = IntervalTimer {
+                on: r.bool()?,
+                one_shot: r.bool()?,
+                interrupt_enable: r.bool()?,
+                period_us: r.u32()?,
+                deadline_ns: r.u64()?,
+            };
+        }
+        Ok(timers)
     }
 }
 
-impl Default for Tick {
-    fn default() -> Tick {
-        Tick::new()
+impl Default for Timers {
+    fn default() -> Timers {
+        Timers::new()
     }
 }
 
@@ -608,8 +703,8 @@ pub struct Machine {
     /// inside the board, is not time at any speed but one, and is not
     /// advanced at all by the far end of `chip`'s cables.
     pub ns: u64,
-    /// QUUX's tick, where the geometry has one.
-    pub tick: Tick,
+    /// QUUX's interval timers, where the geometry has them.
+    pub timers: Timers,
     /// QUUX's real-time clock's setting, where the geometry has one
     /// ([`Geometry::rtc`]): live, or counted from `--rtc`'s start.
     pub rtc: Rtc,
@@ -636,6 +731,11 @@ pub struct Machine {
     /// block-disk keeps its own record ([`crate::block_disk::BlockDisk::log`]).
     /// Not kept in a checkpoint.
     pub store_log: Option<Vec<u32>>,
+    /// Every write of a device register on QUUX's register page or of the
+    /// disk's registers, in order, when a test or a trace asks for the
+    /// record by setting it to `Some`: the physical address, the word, and
+    /// [`Machine::cycles`] then. Not kept in a checkpoint.
+    pub register_log: Option<Vec<(u32, u32, u64)>>,
 }
 
 impl Machine {
@@ -683,13 +783,14 @@ impl Machine {
             interrupt_control: 0,
             dispatch_constant: 0,
             geometry: Geometry::CADR,
-            tick: Tick::new(),
+            timers: Timers::new(),
             rtc: Rtc::Host,
             dma_written: false,
             block_disk: None,
             file_device: crate::file_device::FileDevice::new(),
             write_buffer_empty_at: 0,
             store_log: None,
+            register_log: None,
             l1_map: [0; 2048],
             l2_map: [0; L2_MAP_WORDS],
             main: vec![0; boards << 16],
@@ -732,16 +833,15 @@ impl Machine {
         }
     }
 
-    /// QUUX's interrupt status, the register page's word 100: `<0>` the
-    /// tick, `<1>` the interval timer, `<2>` block-disk's done, each under
-    /// its own enable; `<3>` the keyboard and `<4>` the mouse
-    /// ([`crate::quux_input`]); `<5>` the network, the Chaosnet interface's
-    /// request (contract Q4); `<6>` the file device, a response waiting
-    /// under its interrupt enable (contract Q9).
+    /// QUUX's interrupt status, the register page's word 100: `<0>` timer
+    /// 0, `<1>` timer 1 and `<7>` timer 2, each its flag under its interrupt
+    /// enable (contract Q11); `<2>` block-disk's done under its enable;
+    /// `<3>` the keyboard and `<4>` the mouse ([`crate::quux_input`]); `<5>`
+    /// the network, the Chaosnet interface's request (contract Q4); `<6>`
+    /// the file device, a response waiting under its interrupt enable
+    /// (contract Q9).
     pub fn interrupt_sources(&self) -> u32 {
-        let t = self.tick;
-        (self.geometry.tick && t.enabled && t.flag(self.ns)) as u32
-            | ((self.geometry.tick && t.interval_enabled && t.interval_flag(self.ns)) as u32) << 1
+        (if self.geometry.tick { self.timers.interrupt_sources(self.ns) } else { 0 })
             | (self.block_disk.as_ref().is_some_and(|d| d.interrupt_at(self.ns)) as u32) << 2
             | if self.geometry.machine_id.is_some() { self.quux_input.interrupts() } else { 0 }
             | (self.ioboard.chaos.as_ref().is_some_and(|c| c.interrupt_request().is_some()) as u32)
@@ -988,7 +1088,8 @@ impl Machine {
     /// simulated. The I/O board's keyboard interrupt comes over the Unibus
     /// and is taken by [`Machine::unibus_interrupt`].
     ///
-    /// On QUUX, its tick too, while enabled and up, at [`Machine::ns`].
+    /// On QUUX, the interval timers too, each while its flag is up under
+    /// its interrupt enable, at [`Machine::ns`].
     pub fn interrupt(&self) -> bool {
         self.interrupt_at(self.ns)
     }
@@ -1001,7 +1102,7 @@ impl Machine {
     pub fn interrupt_at(&self, now: u64) -> bool {
         self.xbus_interrupt()
             || (self.geometry.unibus && self.unibus_interrupt().is_some())
-            || (self.geometry.tick && self.tick.pending(now.max(self.ns)))
+            || (self.geometry.tick && self.timers.pending(now.max(self.ns)))
             || (self.geometry.machine_id.is_some() && self.quux_input.interrupts() != 0)
             // The network's request, word 100's <5> (contract Q4), reaches
             // the processor as every bit of the register page's does, not
@@ -1334,10 +1435,31 @@ impl Machine {
         if let Some(d) = self.block_disk.as_mut() {
             d.xbus_init();
         }
-        // QUUX's file device: every machine reset disables it, dropping its
-        // queue and closing its handles (contract Q9).
+        // QUUX's file device: disabled, its queue dropped and its handles
+        // closed, status `<2>` and `<3>` cleared (contract Q9).
         self.file_device.reset();
         self.ioboard.unibus_init();
+    }
+
+    /// **Reset devices** (contract Q11, revision 10): a write of the
+    /// register page's word 104 with `<0>` set, at [`Machine::ns`], the
+    /// instant the write is taken. What the file device had due by then
+    /// runs first, as for a write of its word 160; then every device is
+    /// reset --- block-disk, the network (the I/O board's `-UB INIT`, its
+    /// Chaosnet interface and serial line) and the file device as the
+    /// CADR's `PROG.UNIBUS.RESET` resets its boards, [`Machine::bus_reset`],
+    /// which on QUUX nothing else calls; MONO TV, which has no vertical flag
+    /// and no interrupt, with nothing to show for it --- and every interval
+    /// timer to its reset state ([`IntervalTimer::RESET`]). The keyboard and
+    /// the mouse are not reset: a warm boot's key word is read by the
+    /// microcode's location 6 after the PROM, which writes this, has run.
+    /// Nothing is held off `SINTR` at the write's edge: a register write
+    /// lands after the `SINTR` of the edge that takes it (contract Q11,
+    /// section 4).
+    pub fn reset_devices(&mut self) {
+        self.advance_file_device();
+        self.bus_reset();
+        self.timers = Timers::new();
     }
 
     /// A read of a diagnostic register through this alone reads the open
@@ -1363,6 +1485,11 @@ impl Machine {
                 0o102 => self.mode.errstop as u32,
                 // The real-time clock (contract Q9).
                 0o103 if self.geometry.rtc => self.rtc.seconds(self.ns),
+                // The interval timers (contract Q11), at the machine's
+                // clock.
+                k @ 0o110..=0o115 if self.geometry.tick => {
+                    self.timers.read(k, self.ns).unwrap_or(0)
+                }
                 // The file device (contract Q9), at the machine's clock.
                 k @ 0o160..=0o171 if self.geometry.file_device => {
                     self.advance_file_device();
@@ -1430,6 +1557,12 @@ impl Machine {
             self.bus_error |= bus_error::XBUS_NXM;
             return;
         }
+        if let Some(log) = self.register_log.as_mut()
+            && (self.geometry.feature_word(phys).is_some()
+                || disk_controller::register(phys).is_some())
+        {
+            log.push((phys, value, self.cycles));
+        }
         // QUUX's register page (contract Q2): a write of word 101 clears the
         // bus errors, as a write of `766044` does, and word 102 `<0>` is
         // error stop; the features, the real-time clock (word 103) and the
@@ -1438,6 +1571,17 @@ impl Machine {
             match phys & 0o377 {
                 0o101 => self.bus_error = 0,
                 0o102 => self.mode.errstop = value & 1 != 0,
+                // Reset devices (contract Q11): `<0>` set resets every
+                // device; clear, nothing.
+                0o104 if self.geometry.tick => {
+                    if value & 1 != 0 {
+                        self.reset_devices();
+                    }
+                }
+                // The interval timers (contract Q11).
+                k @ 0o110..=0o115 if self.geometry.tick => {
+                    self.timers.write(k, value, self.ns);
+                }
                 // The file device (contract Q9): what was due is done
                 // first, and a producer index is taken from when the write
                 // buffer is empty.
@@ -1583,13 +1727,14 @@ impl Machine {
             interrupt_control,
             dispatch_constant,
             geometry,
-            tick,
+            timers,
             rtc,
             dma_written,
             block_disk,
             file_device,
             write_buffer_empty_at: _,
             store_log: _,
+            register_log: _,
             l1_map,
             l2_map,
             main,
@@ -1637,7 +1782,7 @@ impl Machine {
         w.u8(geometry.pdl_bits as u8);
         w.bool(geometry.muldiv);
         w.bool(geometry.tick);
-        tick.save(w);
+        timers.save(w);
         rtc.save(w);
         file_device.save(w);
         w.bool(*dma_written);
@@ -1721,7 +1866,7 @@ impl Machine {
         r.u32s_into(&mut self.l1_map)?;
         let (l1_bits, pdl_bits, muldiv) = (r.u8()? as u32, r.u8()? as u32, r.bool()?);
         let tick = r.bool()?;
-        self.tick = Tick::load(r)?;
+        self.timers = Timers::load(r)?;
         self.rtc = Rtc::load(r)?;
         self.file_device.load(r)?;
         self.dma_written = r.bool()?;

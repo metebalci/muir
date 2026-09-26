@@ -121,7 +121,7 @@ fn feature_word_15_announces_it() {
     let mut m = quux();
     assert_eq!(m.bus_read(PAGE + 0o15), 3);
     let id = Geometry::QUUX.machine_id.unwrap();
-    assert_eq!((id >> 4) & 0o7777, 9, "revision 9");
+    assert!((id >> 4) & 0o7777 >= 9, "revision 9 or later");
 }
 
 /// **A checkpoint keeps the count**: a machine resumed from one reads the

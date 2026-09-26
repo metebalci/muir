@@ -146,9 +146,10 @@ them.
 where the CADR's is five, so it maps 63 regions of 8K words at once to the
 CADR's 31; its PDL buffer is 16K words to the CADR's 1K; and ALU functions
 42 and 43 multiply and divide in one instruction each, where the CADR takes
-a step per bit; and its processor has its clocks, a 60 Hz tick, an interval
-timer and a microsecond clock, where the CADR's clock is the display's
-vertical interrupt and the others are on the I/O board. The rest of it is
+a step per bit; and it has clocks of its own, a microsecond clock in the
+processor and three interval timers on its register page, timer 0 the
+60 Hz tick, where the CADR's clock is the display's vertical interrupt and
+the others are on the I/O board. The rest of it is
 the CADR's. It boots from its own PROM and needs microcode that knows it.
 [QUUX](quux.md) has the whole of the difference.
 

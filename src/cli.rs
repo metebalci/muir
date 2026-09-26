@@ -6272,7 +6272,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
         if geometry == crate::machine::Geometry::QUUX {
             writeln!(
                 s,
-                "machine: quux, revision 9: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, clocks in the processor (a 60 Hz tick, an interval timer and a microsecond clock), the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, its devices reached by their registers, a real-time clock and a file device"
+                "machine: quux, revision 10: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, a microsecond clock in the processor, the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, its devices reached by their registers, a real-time clock, a file device, three interval timers and reset devices"
             )
             .unwrap();
         }

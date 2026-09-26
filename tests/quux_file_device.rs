@@ -636,10 +636,11 @@ fn the_interrupt_is_a_level_under_its_enable() {
 /// **Disable is the reset**: a queued command is dropped with no response
 /// and no memory written, every handle is closed and a write discarded, its
 /// temporary file gone and the target unchanged, the indexes and the
-/// interrupt enable 0, and quiet at once. Every machine reset does the same.
+/// interrupt enable 0, and quiet at once. Reset devices, a write of word 104
+/// with 1 (contract Q11), does the same, and clears status `<2>` and `<3>`.
 #[test]
 fn a_disable_or_a_machine_reset_drops_everything() {
-    for how in ["disable", "bus reset"] {
+    for how in ["disable", "reset devices"] {
         let f = Folder::new(&format!("reset-{}", how.len()));
         f.file("keep", b"old");
         let mut d = Dev::new(default_root(&f));
@@ -662,7 +663,7 @@ fn a_disable_or_a_machine_reset_drops_everything() {
         let before = d.m.main.clone();
         match how {
             "disable" => d.m.bus_write(CONTROL, 0),
-            _ => d.m.bus_reset(),
+            _ => d.m.bus_write(PAGE + 0o104, 1),
         }
         let s = d.m.bus_read(STATUS);
         assert_eq!(s & 0b11, 0b10, "{how}: disabled and quiet, {s:b}");
@@ -681,6 +682,88 @@ fn a_disable_or_a_machine_reset_drops_everything() {
         (d.prod, d.cons) = (0, 0);
         let (rr, _) = d.read(r.handle(), 0, 10);
         assert_eq!(rr.status(), status::BAD_HANDLE, "{how}");
+    }
+}
+
+/// **On QUUX `PROG.UNIBUS.RESET` no longer reaches the device** (contract
+/// Q11): a program that raises and drops `INTERRUPT-CONTROL<28>` leaves it
+/// enabled, its handles open and its queue as it was, on both engines;
+/// the queued command then completes.
+#[test]
+fn a_prog_unibus_reset_leaves_the_device_as_it_was() {
+    use muir::engine::Engine;
+    use muir::isa::Insn;
+    use muir::isa::asm::{ALU, ALWAYS, JUMP, N, SETM, START_READ, filler, m_src, target};
+    const INTERRUPT_CONTROL: u64 = (2 << 19) | (0o37 << 14);
+    let f = Folder::new("unibus-reset");
+    f.file("data", &[7u8; 70_000]);
+    for engine in ["micro", "rtl"] {
+        let mut d = Dev::new(default_root(&f));
+        let o = d.open("/data", READ);
+        assert_eq!(o.status(), 0);
+        let mut words = vec![filler(); 1024];
+        // <28> up and down, then a loop reading word 100, so that `rtl`'s
+        // machine keeps time.
+        words[..6].copy_from_slice(&[
+            Insn::new(ALU | SETM | m_src(1) | INTERRUPT_CONTROL),
+            Insn::new(ALU | SETM | m_src(2) | INTERRUPT_CONTROL),
+            Insn::new(ALU | SETM | m_src(3) | START_READ),
+            filler(),
+            filler(),
+            Insn::new(JUMP | target(2) | ALWAYS | N),
+        ]);
+        d.m.load_prom(&words);
+        support::prom_program_in_ram(&mut d.m);
+        d.m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+        d.m.mmem[1] = 1 << 28;
+        d.m.mmem[3] = (1 << 8) | 0o100;
+        let mut e: Box<dyn Engine> = match engine {
+            "micro" => Box::new(muir::micro::Micro::new(d.m)),
+            _ => {
+                // Its clock where the scripted driver left the machine's.
+                let ns = d.m.ns;
+                let mut r = muir::rtl::Rtl::new(d.m);
+                r.set_clock(ns);
+                Box::new(r)
+            }
+        };
+        e.boot();
+        // A READ of 64 KiB queued, some 6 ms of the device's time.
+        let m = e.machine_mut();
+        let slot = CMD_RING as usize + 8 * d.prod as usize;
+        m.main[slot..slot + 8].copy_from_slice(&[
+            0o77 | op::READ << 16,
+            o.handle(),
+            0,
+            0,
+            BUF_B,
+            65_536,
+            0,
+            0,
+        ]);
+        let prod = d.prod as u32 + 1;
+        m.bus_write(CMD_PROD, prod);
+        let look = |m: &mut Machine| {
+            [m.bus_read(CONTROL), m.bus_read(STATUS), m.bus_read(CMD_PROD), m.bus_read(CMD_CONS)]
+        };
+        let before = look(m);
+        assert_eq!(before[1] & 1, 1, "{engine}: enabled");
+        assert_eq!(before[1] >> 16 & 0xff, 1, "{engine}: one handle open");
+        for _ in 0..10 {
+            e.step().unwrap();
+        }
+        assert_eq!(look(e.machine_mut()), before, "{engine}: <28> reached the device");
+        for _ in 0..1_000_000 {
+            if e.machine().file_device.response_producer() as u32 == prod {
+                break;
+            }
+            e.step().unwrap();
+        }
+        assert_eq!(
+            e.machine().file_device.response_producer() as u32,
+            prod,
+            "{engine}: the queued READ completed"
+        );
     }
 }
 

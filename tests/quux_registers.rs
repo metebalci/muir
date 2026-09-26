@@ -24,25 +24,32 @@ fn quux() -> Machine {
 }
 
 /// **Word 100 says who interrupted**, a bit each and each under its own
-/// enable: `<0>` the tick, `<1>` the interval timer, `<2>` block-disk's
-/// done. The processor's interrupt pending is their OR.
+/// enable: `<0>` timer 0, `<1>` timer 1 and `<7>` timer 2 (contract Q11),
+/// `<2>` block-disk's done. The processor's interrupt pending is their OR.
 #[test]
 fn word_100_says_who_interrupted() {
     let mut m = quux();
     assert_eq!(m.bus_read(INTERRUPTS), 0, "nothing");
     assert!(!m.interrupt());
-    // The tick and the interval timer, 50 µs, enabled at 0.
-    m.tick.period(0, 50);
-    m.tick.control(0, 1 | 4);
+    // Timer 1 at 50 µs and timer 0 at 16,667 µs, turned on at 0 under
+    // their interrupt enables, and timer 2 at 70 µs.
+    for (k, p) in [(0, 16_667), (1, 50), (2, 70)] {
+        m.bus_write(PAGE + 0o111 + 2 * k, p);
+        m.bus_write(PAGE + 0o110 + 2 * k, 0o401);
+    }
     m.ns = 49_000;
-    assert_eq!(m.bus_read(INTERRUPTS), 0, "neither yet");
+    assert_eq!(m.bus_read(INTERRUPTS), 0, "none yet");
     m.ns = 50_000;
-    assert_eq!(m.bus_read(INTERRUPTS), 2, "the interval timer");
+    assert_eq!(m.bus_read(INTERRUPTS), 2, "timer 1");
     assert!(m.interrupt());
+    m.ns = 70_000;
+    assert_eq!(m.bus_read(INTERRUPTS), 0o202, "and timer 2");
     m.ns = 16_667_000;
-    assert_eq!(m.bus_read(INTERRUPTS), 3, "and the tick");
-    m.tick.control(m.ns, 0);
-    assert_eq!(m.bus_read(INTERRUPTS), 0, "disabled, neither");
+    assert_eq!(m.bus_read(INTERRUPTS), 0o203, "and timer 0");
+    for k in 0..3 {
+        m.bus_write(PAGE + 0o110 + 2 * k, 0);
+    }
+    assert_eq!(m.bus_read(INTERRUPTS), 0, "off, none");
     // Block-disk's done interrupt, command <11>.
     let mut d = BlockDisk::new(BLOCK_NS);
     d.attach(muir::disk_image::Disk::blank(Pack::T300.blocks()));
@@ -92,7 +99,7 @@ fn word_102_is_error_stop() {
 #[test]
 fn the_reserved_words_read_0() {
     let mut m = quux();
-    for w in [0o16, 0o77, 0o104, 0o117, 0o157, 0o172, 0o377] {
+    for w in [0o17, 0o77, 0o105, 0o117, 0o157, 0o172, 0o377] {
         m.bus_write(PAGE + w, !0);
         assert_eq!(m.bus_read(PAGE + w), 0, "word {w:o}");
     }

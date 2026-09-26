@@ -112,7 +112,7 @@ pub const WORDS_PER_LINE: usize = 24;
 /// a board of QUUX's own (`--tv-board mono-tv`), a frame buffer and a mode
 /// register with black-on-white in it, and nothing else --- no sync
 /// program, no color map and no interrupt, the machine's clock being the
-/// processor's tick (`machine::Tick`).
+/// tick, timer 0 of the interval timers (`machine::Timers`).
 pub const MONO_TV_WIDTH: usize = 1280;
 /// Lines of MONO TV, at its default size.
 pub const MONO_TV_HEIGHT: usize = 1024;

@@ -271,7 +271,9 @@ impl Micro {
         let reset = std::mem::take(&mut self.m.prog_reset) || boot;
         if reset {
             self.m.reset_console_registers();
-            self.m.tick = crate::machine::Tick::new();
+            // `-RESET` and `-BOOT` put every interval timer in its reset
+            // state (contract Q11).
+            self.m.timers = crate::machine::Timers::new();
             // `-RESET` clears `MEMSTART` (`Rtl::reset`).
             self.write_out = None;
         }
@@ -620,14 +622,13 @@ impl Micro {
             0o16 if self.m.geometry.machine_id.is_some() => {
                 self.m.geometry.machine_id.unwrap_or(!0)
             }
-            // QUUX's tick, where it has one (`machine::Tick`).
-            0o17 if self.m.geometry.tick => self.m.tick.status(self.m.ns),
-            // QUUX's microsecond clock (`machine::Tick`).
-            0o15 if self.m.geometry.tick => crate::machine::Tick::microseconds(self.m.ns),
+            // QUUX's microsecond clock (`machine::Timers`).
+            0o15 if self.m.geometry.tick => crate::machine::Timers::microseconds(self.m.ns),
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 for the
             // upper eight has those three outputs unconnected, so no part
             // drives the M bus and an undriven TTL bus reads high, as `chip`
-            // shows. Microcode 323 reads 0o15 once, at 0o20535.
+            // shows. Microcode 323 reads 0o15 once, at 0o20535. On QUUX,
+            // 0o17 too since revision 10 (contract Q11).
             _ => !0,
         })
     }
@@ -725,19 +726,22 @@ impl Micro {
             // at FLAG 3E08: as it rises the model I/O boards are reset,
             // `Machine::bus_reset`; this engine has no bus interface or
             // memory boards for it to hold.  The flag bits are mirrored
-            // into LC.
+            // into LC. QUUX has no `PROG.UNIBUS.RESET` (contract Q11): the
+            // bit is kept and read back, and drives nothing; its devices
+            // are reset by the register page's word 104.
             0o2 => {
                 let was = self.m.interrupt_control & (1 << 28) != 0;
                 self.m.interrupt_control = data;
                 self.m.lc = (self.m.lc & !(0o17 << 26)) | (data & (0o17 << 26));
-                if !was && data & (1 << 28) != 0 {
+                if !was && data & (1 << 28) != 0 && self.m.geometry.unibus {
                     self.m.bus_reset();
                 }
             }
-            // QUUX's tick: its control and its period (`machine::Tick`). On
-            // the CADR these are two of the codes that write only M.
-            0o3 if self.m.geometry.tick => self.m.tick.control(self.m.ns, data),
-            0o4 if self.m.geometry.tick => self.m.tick.period(self.m.ns, data),
+            // QUUX's destination 3 alias: timer 0's control, as Q1's tick
+            // control (`machine::Timers::alias`). On the CADR, and for
+            // destination 4 on QUUX too since revision 10, a code that
+            // writes only M.
+            0o3 if self.m.geometry.tick => self.m.timers.alias(self.m.ns, data),
             // Pdl Buffer Top, Push, (Index), Index, Pointer
             // The word is written in the next microcycle's write phase,
             // [`Micro::land_writes`].
@@ -1377,7 +1381,7 @@ impl Engine for Micro {
         // them, which is where `PROMDISABLE` lives; the PROM is back over the
         // bottom of the control store.  `-BOOT` presets `RUN`.
         self.m.reset_console_registers();
-        self.m.tick = crate::machine::Tick::new();
+        self.m.timers = crate::machine::Timers::new();
         self.m.clock_control.run = true;
         self.srun = true;
         self.npc = self.m.reset_pc();
