@@ -30,7 +30,7 @@
 //! word is stored little-endian, as it lies in a microcode partition and as
 //! block-disk reads it, and a whole number of 1024-byte blocks, so that
 //! `dd` writes the file into a partition with no conversion. muir-sys's
-//! writer, `sys/sys/qwmcr.lisp` at its commit `8e20b4c`, makes it for both
+//! writer, `sys/sys/qwmcr.lisp` at its commit `7c4bcb2`, makes it for both
 //! the microcode and the boot PROM. [`parse_partition_order`] reads it;
 //! [`swap_halves`] turns either order into the other. The CADR's `.mcr`
 //! stays MIT's.

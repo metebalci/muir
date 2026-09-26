@@ -296,8 +296,8 @@ on it, and `micro`'s clock counts the same ticks.
 
 The ticks are a board's: the number its fit proves its longest path settles
 in. **Four ticks, 40 ns, is met on the Arty Z7-20**: muir-fpga's QUUX at
-four ticks, with contracts Q1-Q5 and block-disk, its commit `099507d`
-(against muir at `e12749e`), has a worst setup slack of +0.461 ns and no
+four ticks, with contracts Q1-Q5 and block-disk, its commit `bddc44d`
+(against muir at `8598fbd`), has a worst setup slack of +0.461 ns and no
 failing path, in 11,974 LUTs; an earlier fit of
 the same design measured the longest chains as MD through both
 map levels and the M bus to the control-store address, 28.0 ns of 40, and
@@ -305,7 +305,7 @@ the multiplier, 24.1 ns of the 30 a path after the scratchpads gets. Both
 boards run four ticks: three, 30 ns, is out of the DE25-Nano's reach by
 the divider alone, a `DIV` of `MD` needing its word 17 ticks before its
 hold ends. The DE25-Nano at four ticks meets them at every corner, a worst
-setup slack of +0.180 ns at `099507d`, its thinnest path the microsecond
+setup slack of +0.180 ns at `bddc44d`, its thinnest path the microsecond
 clock's count under a constraint a tick tighter than the microcycle's (an
 earlier fit's longest chain was MD through the maps to the next address at
 16.1 ns); the level-1 map's MLAB write-to-read, which Quartus does not time,
@@ -543,7 +543,7 @@ microcode and System 1002's band read the GPT; MIT's label in block 0 is
 the CADR's.
 
 **System 1002's band is dev11, on a GPT disk in a dynamic VHD**: muir-sys's
-development band "System 1002 dev11", built from its commit `8942300`, a
+development band "System 1002 dev11", built from its commit `624ad92`, a
 T-300's 263,245 blocks with the current `MCR1` at block 17 holding
 microcode 1000 and the current `LOD4` the band, no FILE and no TEMP.
 QUUX boots the VHD as it is, a copy of it, the disk being written; the
@@ -688,7 +688,7 @@ listener draws in at 24 words a line; its writes of the sync program's
 registers fail and leave the NXM bit set, and nothing stops over
 it. System 1002 sizes the main screen from the feature page's words 11 to 13,
 and draws it right: muir-sys's development band (`ref/band-1002-dev2`,
-muir-sys `5427570`, microcode 1000 for revision 4, no sync program and no
+muir-sys `8cf913e`, microcode 1000 for revision 4, no sync program and no
 speed bits) reaches its listener in
 11 M microcycles on both engines, its herald, listener and who line drawn at
 the screen's own words a line (`system_1002_runs_on_mono_tv` in
@@ -719,7 +719,7 @@ The PROM is muir-sys's version 1000 for block-disk and a GPT
 of any width boots, QUUX's 64 level-2 blocks are cleared, the disk is read
 by block number, nothing is saved, and the microcode is found through the
 GPT (muir-sys's `sys/ucadr/promh.text`, handed over with System 1002 dev11,
-which was built from muir-sys's commit `8942300`), assembled at 36000. It sets error stop through the register page, not `766012`, and
+which was built from muir-sys's commit `624ad92`), assembled at 36000. It sets error stop through the register page, not `766012`, and
 halts at `ERROR-MICROCODE-TOO-BIG` if a microcode reaches 36000. The
 control store stays 16K words: jump targets are `IR<25:12>`, dispatch
 words carry 14 address bits, and `SPC<14>` is the macroinstruction-return
