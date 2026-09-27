@@ -43,10 +43,12 @@ base=${SYSTEM_1001_BASE:-https://github.com/metebalci/muir-sys/releases/download
 rel=$muir/vendor/system-1001
 run=$muir/vendor/run
 
-# The SHA-256 of each file, as the release's notes publish them.
+# The SHA-256 of each file, as the release's notes publish them. The
+# sources tarball is the one that replaced the first on 27 Sep 2026, the same
+# files with every member owned by root; the first (507d1fe8...) is refused.
 sum_of() {
     case $1 in
-    release-1001-sys.tar.gz) echo 507d1fe89e8a8890a42c4a8630ef5eddb058fbebebc4c66df7e33ea708a42269 ;;
+    release-1001-sys.tar.gz) echo 74c6ed96d5dcebf6f01a8b5ba1ebebb160ffe345bbcebbd059253b9ca4695be9 ;;
     release-1001-pack.img.gz) echo 7ddf071b28a6e8b14fe0501683458ee8ae640291751e2c306e35316ee15ba713 ;;
     release-1001-pack.img) echo 279e597891a0d8263a82d52898dbc2194e7c0f19cbca194d8aaf5750226b7298 ;;
     esac
