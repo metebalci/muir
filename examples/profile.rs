@@ -4,8 +4,8 @@
 //! Where a band's microcycles go, workload by workload.
 //!
 //! Boots System 1001's pack (`tools/fetch-system-1001.sh`) on the CADR, and
-//! muir-sys's latest System 1002 band on QUUX (`MUIR_BAND`, or
-//! `ref/band-1002-dev11`), with the test harness's Chaosnet server at OZ,
+//! muir-sys's latest System 2000 band on QUUX (`MUIR_BAND`, or
+//! `ref/band-2000`), with the test harness's Chaosnet server at OZ,
 //! logs in, defines a set of workloads at the listener and runs them one at
 //! a time, counting every control-store address the engine executes. Each workload ends by writing a marker
 //! file through the FILE service, which is how the run knows it is over:
@@ -631,13 +631,14 @@ fn profile<E: Profiled>(
 ) {
     let on_quux = geometry != muir::machine::Geometry::CADR;
     let dir = support::scratch("profile");
-    // QUUX runs only System 1002, muir-sys's latest band: `MUIR_BAND`, or
-    // `ref/band-1002-dev11`, its GPT disk (a `.vhd`, or a raw `.img`) and
-    // the tree it was built from. The CADR runs System 1001's release.
+    // QUUX runs only muir-sys's latest band: `MUIR_BAND`, or
+    // `ref/band-2000`, its GPT disk (a `.vhd`, or a raw `.img`) and the
+    // tree it was built from, which unpacks to one `release-*` directory.
+    // The CADR runs System 1001's release.
     let (pack, sources) = if on_quux {
-        let band = std::env::var_os("MUIR_BAND").map(PathBuf::from).unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11")
-        });
+        let band = std::env::var_os("MUIR_BAND")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000"));
         let file = |suffixes: &[&str]| {
             std::fs::read_dir(&band)
                 .unwrap_or_else(|e| panic!("{}: {e}", band.display()))
@@ -653,7 +654,12 @@ fn profile<E: Profiled>(
             .status()
             .unwrap();
         assert!(untar.success(), "the band's tree unpacks");
-        (file(&[".vhd", ".img"]), dir.join("release-1002"))
+        let release = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("release-")))
+            .expect("the band's tree unpacks to a release-* directory");
+        (file(&[".vhd", ".img"]), release)
     } else {
         let (Some(pack), Some(sources)) =
             (support::vendor(&["run", "release-1001-pack.img"]), support::vendor(&["system-1001"]))
@@ -734,13 +740,19 @@ fn profile<E: Profiled>(
     let files = label_files(&sources.join("sys/ucadr"));
 
     let mut m = if on_quux {
-        // QUUX's own PROM at 36000, the pack on block-disk, MONO TV.
+        // QUUX's own PROM at 36000, the pack on block-disk, MONO TV, and
+        // the file device serving the root as HOST's `/` and its `sys` and
+        // `site` as `/sys` and `/site`, where the band's `SYS:` is.
         let mut m = muir::machine::Machine::new();
         m.load_prom(&muir::prom::quux_boot_prom());
         let mut d = muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS);
         d.attach(muir::disk_image::Disk::open_rw(&copy).unwrap());
         m.block_disk = Some(d);
         m.tv.set_board(muir::tv::Board::MonoTv);
+        m.file_device.mounts.add(&root.display().to_string()).unwrap();
+        for part in ["sys", "site"] {
+            m.file_device.mounts.add(&format!("{part}={}", root.join(part).display())).unwrap();
+        }
         m
     } else {
         support::machine_with_pack(&copy)

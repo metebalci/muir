@@ -1,22 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! System 1002 dev11 on QUUX revision 10 (contract Q11): the boot PROM's
-//! reset devices and timer 0's period (M9), the band on revision 10 with no
-//! tick, its microcode's destination 3 writing only M (M10), a reboot that
-//! resets timers 1 and 2 and the file device (M11, and the Q9 amendment's
-//! R3), and the old PROM on revision 10 (M12, a record). dev11's microcode
-//! turns its tick on through Q1's destination 3, which revision 10 does not
-//! have; a band that ticks on revision 10 needs the Q11 microcode, which
-//! reaches timer 0 through the register page.
+//! System 2000 on QUUX revision 10 (contract Q11): the boot PROM's reset
+//! devices and timer 0's period (M9), the band ticking on revision 10 and
+//! saying it is System 2000 on microcode 2000 (M10), a reboot that resets
+//! timers 1 and 2 and the file device (M11, and the Q9 amendment's R3), and
+//! the PROM before Q11 on revision 10 (M12, a record). Microcode 2000 is
+//! the Q11 microcode: it reaches timer 0 through the register page, writing
+//! its period at `RESET-MACHINE` and turning it on at `BEG06`, and writes
+//! reset devices at every start of the microcode (`uc-cold-disk.lisp` in
+//! the hand-over's tree).
 //!
-//! The band is the gitignored `ref/band-1002-dev11` (muir-sys's hand-over,
-//! `tests/system_1002.rs`), named by digest; without it the tests skip and
+//! The band is the gitignored `ref/band-2000` (muir-sys's hand-over,
+//! `tests/system_2000.rs`), named by digest; without it the tests skip and
 //! say so. M9, M10 and M11 run on muir's built-in PROM,
-//! `data/quux-promh.mcr`, revision 10's (muir-sys `381edfb`, with contract
-//! Q11's steps 2, 5 and 6); M11's discriminating run and M12 on dev11's
-//! own, the hand-over's `promh.mcr`, which writes neither word 104 nor
-//! word 111.
+//! `data/quux-promh.mcr`, PROM 2000, the hand-over's `promh.mcr` byte for
+//! byte (with contract Q11's steps 2, 5 and 6). M11's discriminating run
+//! and M12 run on the PROM before Q11, which writes neither word 104 nor
+//! word 111: dev11's, the `promh.mcr` of the gitignored
+//! `ref/band-1002-dev11`, named by digest; without it they skip and say so.
 
 use std::path::{Path, PathBuf};
 
@@ -27,11 +29,21 @@ use muir::machine::{IntervalTimer, Machine, Timers};
 use muir::micro::Micro;
 use muir::spy;
 use muir::sym::{self, Space};
+use muir::terminal::keyboard::Keyboard;
 use muir::tv::Board;
 
 mod support;
 
-const BAND: &str = "ref/band-1002-dev11";
+const BAND: &str = "ref/band-2000";
+const PACK: &str = "pack-2000.vhd";
+const TREE: &str = "tree-2000.tar.gz";
+const RELEASE: &str = "release-2000";
+/// Where the PROM before Q11 is, dev11's, and its SHA-256 in that
+/// hand-over's `SHA256SUMS`.
+const OLD_PROM: (&str, &str) = (
+    "ref/band-1002-dev11/promh.mcr",
+    "dba5c36fbcf5e6277d4ce5d50387980f60c72588570e0eaacfdb840a419cd396",
+);
 /// LISPM-1 and OZ, as the release's `site/hosts.text` gives them.
 const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
@@ -48,10 +60,10 @@ const FDEV_STATUS: u32 = PAGE + 0o161;
 
 /// The hand-over's files this names, by their SHA-256 in its `SHA256SUMS`.
 const DIGESTS: [(&str, &str); 4] = [
-    ("pack-1002-dev11.vhd", "4afd8122bc8beaf2c83ec8f297e8828c805f70e2f8ddcea3dd87b33b54cc2490"),
-    ("tree-1002-dev11.tar.gz", "e47f0711abc4e455c74afd7321c704a61585eba5fbc6fa798a6e3d488bd6e37b"),
-    ("ucadr.sym", "b4fbb44ba9c2ca7142e18f57060c745b5cea49c178687e7b38303522567f1f92"),
-    ("promh.mcr", "dba5c36fbcf5e6277d4ce5d50387980f60c72588570e0eaacfdb840a419cd396"),
+    (PACK, "b03efafa0c9cae77e4c83f94c83e1c7da32a4253866b99cb36b81fe48689fc01"),
+    (TREE, "81056d86762cdc76167aca82c76da840b96207395f046c778828f4107c771040"),
+    ("ucadr.sym", "8ba1ecc3ccc5b62402b02c5b971a9840d2d4726335fd3fb6e1a15eae52a4ca3b"),
+    ("promh.mcr", "41bc42a2eb3888915f9e62a168f524884e61b35178d305bec12c2222e35a90b5"),
 ];
 
 fn from() -> PathBuf {
@@ -66,7 +78,7 @@ fn sha256(path: &Path) -> String {
 
 /// Whether the hand-over is here; if not, says the test is skipped.
 fn present() -> bool {
-    let here = from().join("pack-1002-dev11.vhd").exists();
+    let here = from().join(PACK).exists();
     if !here {
         eprintln!("skipped: {} is not present", from().display());
     }
@@ -80,14 +92,14 @@ fn band(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
         return None;
     }
     for (file, digest) in DIGESTS {
-        assert_eq!(sha256(&from().join(file)), digest, "{file}: not dev11's");
+        assert_eq!(sha256(&from().join(file)), digest, "{file}: not band-2000's");
     }
     let dir = support::scratch(name);
     let pack = dir.join("pack.vhd");
-    std::fs::copy(from().join("pack-1002-dev11.vhd"), &pack).unwrap();
+    std::fs::copy(from().join(PACK), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from().join("tree-1002-dev11.tar.gz"))
+        .arg(from().join(TREE))
         .arg("-C")
         .arg(dir.path())
         .status()
@@ -95,16 +107,23 @@ fn band(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     assert!(untar.success(), "the tree unpacks");
     let root = dir.join("root");
     std::fs::create_dir_all(root.join("lispm")).unwrap();
+    std::fs::create_dir_all(root.join("home/lispm")).unwrap();
     for part in ["sys", "site"] {
-        std::os::unix::fs::symlink(dir.join("release-1002").join(part), root.join(part)).unwrap();
+        std::os::unix::fs::symlink(dir.join(RELEASE).join(part), root.join(part)).unwrap();
     }
     Some((dir, pack, root))
 }
 
-/// dev11's own PROM, the hand-over's `promh.mcr`, which writes neither
-/// word 104 nor word 111.
-fn dev11_prom() -> Vec<Insn> {
-    muir::prom::parse_quux_mcr(&std::fs::read(from().join("promh.mcr")).unwrap()).unwrap()
+/// The PROM before Q11, dev11's, which writes neither word 104 nor word
+/// 111, checked by its digest; or `None`, saying the test is skipped.
+fn old_prom() -> Option<Vec<Insn>> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(OLD_PROM.0);
+    if !path.exists() {
+        eprintln!("skipped: {} is not present", path.display());
+        return None;
+    }
+    assert_eq!(sha256(&path), OLD_PROM.1, "{}: not dev11's", path.display());
+    Some(muir::prom::parse_quux_mcr(&std::fs::read(path).unwrap()).unwrap())
 }
 
 /// The band's microcode's address of `name`, from the hand-over's
@@ -122,8 +141,10 @@ fn a_mem(name: &str) -> usize {
 }
 
 /// QUUX with `prom` at 36000, the disk on block-disk, MONO TV at the
-/// band's 1280 by 1024, and the file device serving `files`.
-fn quux(pack: &Path, prom: &[Insn], files: &Path) -> Machine {
+/// band's 1280 by 1024, and the file device serving `files` as HOST's `/`
+/// and `root`'s `sys` and `site`, the tree's, as `/sys` and `/site`, where
+/// the band's `SYS:` is (`site/sys.translations`).
+fn quux(pack: &Path, prom: &[Insn], files: &Path, root: &Path) -> Machine {
     use muir::block_disk::{BLOCK_NS, BlockDisk};
     let mut m = Machine::new();
     m.load_prom(prom);
@@ -134,6 +155,9 @@ fn quux(pack: &Path, prom: &[Insn], files: &Path) -> Machine {
     m.tv.set_board(Board::MonoTv);
     m.tv.set_mono_tv_size(1280, 1024);
     m.file_device.mounts.add(&files.display().to_string()).unwrap();
+    for part in ["sys", "site"] {
+        m.file_device.mounts.add(&format!("{part}={}", root.join(part).display())).unwrap();
+    }
     m
 }
 
@@ -215,7 +239,7 @@ fn until_executed(e: &mut Micro, pc: u16, limit: u64) -> u64 {
 #[test]
 fn m9_the_prom_resets_the_devices_and_writes_timer_0_s_period() {
     let Some((_dir, pack, root)) = band("q11-m9") else { return };
-    let mut m = quux(&pack, &muir::prom::quux_boot_prom(), &root);
+    let mut m = quux(&pack, &muir::prom::quux_boot_prom(), &root, &root);
     m.register_log = Some(Vec::new());
     let mut e = Micro::new(m);
     e.boot();
@@ -245,32 +269,81 @@ fn m9_the_prom_resets_the_devices_and_writes_timer_0_s_period() {
     assert_eq!([t[1], t[2]], [IntervalTimer::RESET; 2], "timers 1 and 2 at location 6");
 }
 
-/// **M10, the current band on revision 10 with the new PROM** (System 1002
-/// dev11, named by digest): it boots to its listener; there word 110 reads
-/// 0, timer 0 off, its microcode's turn-on at `BEG06` having gone to
-/// destination 3, which writes only M; word 111 reads the PROM's 16,667;
-/// and over 10 s of simulated time after the listener `INTR-TICK` executes
-/// not once. Whether a mouse move reaches the cursor with no tick is
-/// recorded. (The unused-codes run's values are `tests/unused_codes.rs`'s.)
+/// Types `text` a character at a time, 3 ms of simulated time after
+/// each.
+fn type_slow(e: &mut Micro, k: &mut Keyboard, text: &str) {
+    for ch in text.chars() {
+        support::type_at(e, k, &ch.to_string());
+        run_ns(e, 3_000_000);
+    }
+}
+
+fn run_ns(e: &mut Micro, ns: u64) {
+    let t = e.machine().ns;
+    while e.machine().ns < t + ns {
+        e.step().unwrap();
+    }
+}
+
+/// What the band says it is: logged in at the listener, it writes to the
+/// file device, as `HOST://home//lispm//versions`, 3, its microcode's
+/// version, its machine type and the herald's line, then the 60ths
+/// `(time)` moved over a `process-sleep` of 60, which only the tick moves;
+/// what it wrote, within 60 s of simulated time.
+fn says_what_it_is(e: &mut Micro, k: &mut Keyboard, root: &Path) -> Option<String> {
+    type_slow(e, k, "(login \"LISPM\" \"HOST\" t)\n");
+    run_ns(e, 2_000_000_000);
+    type_slow(
+        e,
+        k,
+        "(let ((t0 (time))) (process-sleep 60.) (with-open-file (s \"HOST://home//lispm//versions\" \
+         :direction :output) (format s \"~S ~S END~%\" (list (+ 1 2) %microcode-version-number \
+         (si:machine-type) (si:system-version-info)) (time-difference (time) t0))))\n",
+    );
+    let file = root.join("home/lispm/versions");
+    let t = e.machine().ns;
+    while e.machine().ns < t + 60_000_000_000 {
+        run_ns(e, 50_000_000);
+        if let Ok(s) = std::fs::read_to_string(&file)
+            && s.contains("END")
+        {
+            return Some(s);
+        }
+    }
+    None
+}
+
+/// **M10, the band ticks on revision 10 and says it is System 2000 on
+/// microcode 2000**, on the new PROM: it boots to its listener; there word
+/// 110 reads 401, timer 0 on, periodic, under its interrupt enable (its
+/// flag, `<1>`, masked, as a tick may be pending at the read), turned on at
+/// `BEG06` through the register page; word 111 reads 16,667; and over 10 s
+/// of simulated time after the listener `INTR-TICK` executes 600 times, give
+/// or take one. Then, logged in, the band writes
+/// `(3 2000 "QUUX" "Experimental System 2000, microcode 2000")` and a
+/// `(time)` that moved over its second's sleep ([`says_what_it_is`]).
+/// Whether a mouse move reaches the cursor is recorded. (The unused-codes
+/// run's values are `tests/unused_codes.rs`'s.)
 #[test]
-fn m10_the_band_does_not_tick_on_revision_10() {
+fn m10_the_band_ticks_and_says_it_is_system_2000() {
     let Some((_dir, pack, root)) = band("q11-m10") else { return };
     let tick = ucadr("INTR-TICK");
-    let mut e = Micro::new(quux(&pack, &muir::prom::quux_boot_prom(), &root));
+    let mut e = Micro::new(quux(&pack, &muir::prom::quux_boot_prom(), &root, &root));
     e.boot();
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root.clone(), 400_000_000);
     eprintln!("listener after {ran} microcycles");
     let m = e.machine_mut();
-    assert_eq!(m.bus_read(control(0)), 0, "word 110: timer 0 off");
-    assert_eq!(m.bus_read(period(0)), Timers::TICK_PERIOD_US, "word 111");
+    let (c0, p0) = (m.bus_read(control(0)), m.bus_read(period(0)));
     let t0 = e.machine().ns;
     let mut ticks = 0u32;
     while e.machine().ns < t0 + 10_000_000_000 {
         e.step().unwrap();
         ticks += (e.executed() == Some(tick)) as u32;
     }
-    eprintln!("INTR-TICK ran {ticks} times in 10 s");
-    assert_eq!(ticks, 0, "INTR-TICK in 10 s");
+    eprintln!("word 110 {c0:o}, word 111 {p0}; INTR-TICK ran {ticks} times in 10 s");
+    assert_eq!(c0 & !2, 0o401, "word 110: timer 0 on, periodic, interrupt enable");
+    assert_eq!(p0, Timers::TICK_PERIOD_US, "word 111");
+    assert!(ticks.abs_diff(600) <= 1, "INTR-TICK ran {ticks} times in 10 s");
     // The mouse, a record.
     use muir::quux_input::KeyboardMouse;
     let (ax, ay) = (a_mem("A-MOUSE-X"), a_mem("A-MOUSE-Y"));
@@ -282,6 +355,13 @@ fn m10_the_band_does_not_tick_on_revision_10() {
         e.step().unwrap();
     }
     eprintln!("mouse {before:?} -> {:?}", at(&e));
+    let said = says_what_it_is(&mut e, &mut Keyboard::new(), &root);
+    eprintln!("the band says {said:?}");
+    let said = said.expect("the band wrote what it is");
+    let (what, moved) = said.trim_end().strip_suffix(" END").unwrap().rsplit_once(' ').unwrap();
+    assert_eq!(what, r#"(3 2000 "QUUX" "Experimental System 2000, microcode 2000")"#);
+    let moved: u32 = moved.parse().unwrap();
+    assert!((60..90).contains(&moved), "(time) moved {moved} over a second's sleep");
 }
 
 /// Commands to queue on a machine, later.
@@ -307,14 +387,17 @@ const RESP_RING: u32 = 0o7000100;
 const NAME: u32 = 0o7000200;
 const BUF: u32 = 0o7100000;
 
-/// **M11's reboot**: boot to the listener with `prom` and halt; if
-/// `loaded`, turn timers 1 and 2 on under their interrupt enables (1
-/// periodic at 1,000 us, 2 one-shot at 5,000 us), run 6 ms so that both
-/// are up, and halt again, and leave the file device enabled with an OPEN
-/// done and three READs of 64 KiB each and a CREATE-DIRECTORY queued, the
-/// first due 6.4 ms after the PROM's write of word 102, its step 4, just
-/// before its reset devices. Then the PC to 36000 without `-RESET`, and on
-/// to the listener, within `limit` microcycles.
+/// **M11's reboot**: boot to the listener with `prom`; if `loaded`, halt,
+/// turn timers 1 and 2 on under their interrupt enables (1 periodic at
+/// 1,000 us, 2 one-shot at 5,000 us), let 6 ms pass so that both are up,
+/// and leave the file device enabled with an OPEN done and three READs of
+/// 64 KiB each and a CREATE-DIRECTORY queued, the first due 6.4 ms after
+/// the PROM's write of word 102, its step 4, just before its reset
+/// devices. Then the PC to 36000 without `-RESET`, and on to the listener,
+/// within `limit` microcycles. The timers are turned on with the machine
+/// halted because microcode 2000 turns off a timer 1 or 2 that interrupts
+/// (`INTR-TIMER-1-STRAY` and `INTR-TIMER-2-STRAY` in `uc-interrupt.lisp`),
+/// which a running band would do before the reboot.
 fn reboot(
     pack: &Path,
     root: &Path,
@@ -324,7 +407,7 @@ fn reboot(
     limit: u64,
 ) -> Reboot {
     let (intr, intr_at) = (ucadr("INTR"), 6u16);
-    let mut e = Micro::new(quux(pack, prom, files));
+    let mut e = Micro::new(quux(pack, prom, files, root));
     e.boot();
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root.to_path_buf(), 400_000_000);
     eprintln!("listener after {ran} microcycles");
@@ -336,6 +419,11 @@ fn reboot(
     use muir::file_device::op;
     let mut queue: Option<Queue> = None;
     if loaded {
+        // Halted, so that the band touches neither the timers nor the
+        // device's memory.
+        e.spy_write(spy::CLK, 0);
+        e.step().unwrap();
+        e.step().unwrap();
         let m = e.machine_mut();
         m.bus_write(period(1), 1_000);
         m.bus_write(control(1), 0o401);
@@ -345,10 +433,6 @@ fn reboot(
         while e.machine().ns < t + 6_000_000 {
             e.step().unwrap();
         }
-        // Halted, so that the band touches none of the device's memory.
-        e.spy_write(spy::CLK, 0);
-        e.step().unwrap();
-        e.step().unwrap();
         let m = e.machine_mut();
         assert_eq!(m.bus_read(control(1)) & 3, 3, "timer 1 on and up");
         assert_eq!(m.bus_read(control(2)) & 3, 3, "timer 2 on and up");
@@ -472,29 +556,35 @@ fn m11_a_reboot_resets_the_timers_and_the_file_device() {
     m11_verdict(&run, &base).unwrap();
 }
 
-/// **M11's discriminating run**: the same on dev11's own PROM, which
-/// writes no word 104, fails the pass criterion; its figures are printed.
-/// If it passed, M11 would show nothing.
+/// **M11's discriminating run**: the same on the PROM before Q11, dev11's,
+/// which writes no word 104, fails the pass criterion; its figures are
+/// printed. If it passed, M11 would show nothing.
 #[test]
-fn m11_fails_on_dev11_s_prom() {
+fn m11_fails_on_the_prom_before_q11() {
     if !present() {
         return;
     }
-    let Some((base, run)) = m11("q11-m11-dev11", &dev11_prom()) else { return };
+    let Some(prom) = old_prom() else { return };
+    let Some((base, run)) = m11("q11-m11-old-prom", &prom) else { return };
     let verdict = m11_verdict(&run, &base);
-    eprintln!("dev11's PROM: {verdict:?}");
-    assert!(verdict.is_err(), "M11 passed on dev11's PROM: it shows nothing");
+    eprintln!("the PROM before Q11: {verdict:?}");
+    assert!(verdict.is_err(), "M11 passed on the PROM before Q11: it shows nothing");
 }
 
-/// **M12, a record**: the old PROM, dev11's, on revision 10 from power-on:
-/// whether the listener is reached, and `INTR-TICK`'s executions over 10 s
-/// after it (expected 0: timer 0 is never turned on, and its period is 0).
+/// **M12, a record**: the PROM before Q11, dev11's, on revision 10 from
+/// power-on: whether the listener is reached, and `INTR-TICK`'s executions
+/// over 10 s after it. Microcode 2000 writes timer 0's period itself at
+/// `RESET-MACHINE`, so the PROM's missing word 111 need not stop the tick.
 /// Not a pass condition.
 #[test]
-fn m12_the_old_prom_on_revision_10() {
+fn m12_the_prom_before_q11_on_revision_10() {
+    if !present() {
+        return;
+    }
+    let Some(prom) = old_prom() else { return };
     let Some((_dir, pack, root)) = band("q11-m12") else { return };
     let tick = ucadr("INTR-TICK");
-    let mut e = Micro::new(quux(&pack, &dev11_prom(), &root));
+    let mut e = Micro::new(quux(&pack, &prom, &root, &root));
     e.boot();
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root.clone(), 400_000_000);
     eprintln!("M12: listener after {ran} microcycles");

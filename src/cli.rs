@@ -1617,7 +1617,7 @@ const HELP: &[(Whose, &str)] = &[
                                MIT's order is refused saying so, and so is one
                                assembled at 0. The start says how the file
                                stands to QUUX's own. [default: QUUX's own,
-                               built in --- data/quux-promh.mcr, version 1000]",
+                               built in --- data/quux-promh.mcr, version 2000]",
     ),
     (
         Whose::Both,
@@ -2589,7 +2589,7 @@ fn prom_shown(file: Option<&Path>, prom: &[Insn], geometry: crate::machine::Geom
         return if geometry == crate::machine::Geometry::CADR {
             "built in, System 100's own sys/ubin/promh.mcr, version 9".to_string()
         } else {
-            "built in, QUUX's data/quux-promh.mcr, version 1000, at 36000".to_string()
+            "built in, QUUX's data/quux-promh.mcr, version 2000, at 36000".to_string()
         };
     };
     let (theirs, whose) = if geometry == crate::machine::Geometry::CADR {

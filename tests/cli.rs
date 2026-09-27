@@ -874,7 +874,7 @@ fn the_executable_is_the_machine_and_quux_has_no_netlist() {
         assert!(out.status.success(), "{engine}: {t}");
         assert!(t.contains("machine: quux"), "{engine} says which machine:\n{t}");
         assert!(
-            t.contains("QUUX's data/quux-promh.mcr, version 1000"),
+            t.contains("QUUX's data/quux-promh.mcr, version 2000"),
             "{engine}: QUUX's PROM:\n{t}"
         );
         let out = cadr().args([engine, "--stop-after", "1"]).run();

@@ -117,31 +117,29 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> Found {
     found
 }
 
-/// **System 1002 uses the clocks' codes only where its microcode says so**,
+/// **System 2000 uses the clocks' codes only where its microcode says so**,
 /// through its boot to the listener and a moment after on QUUX: no
 /// instruction the OA registers make writes destinations 3 to 7 or reads
-/// sources 15 or 17. Its microcode, 1000 for Q8 (dev11), uses them at
-/// the tick's own sites. And what it writes (contract Q11, M10): to
-/// destination 3 1 alone, Q1's tick on at `BEG06`, which at revision 10
-/// writes only M, so that timer 0 is still off at the end and `INTR-TICK`,
-/// where its clear, 3, is written, never runs; to destination 4 nothing;
-/// and it reads source 17 nowhere --- so Q1's interval timer, which
-/// revision 10 drops, had no user.
+/// sources 15 or 17. Its microcode, 2000, the Q11 microcode, uses them at
+/// its own sites. And what it writes (contract Q11): nothing to
+/// destination 3 or 4, its tick being timer 0 on the register page, which
+/// is on at the end; and it reads source 17 nowhere --- so Q1's interval
+/// timer, which revision 10 drops, has no user.
 #[test]
-fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11");
-    if !from.join("pack-1002-dev11.vhd").exists() {
+fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
+    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000");
+    if !from.join("pack-2000.vhd").exists() {
         eprintln!("skipped: {} is not present", from.display());
         return;
     }
     // A copy of the disk, a dynamic VHD booted as it is: the machine
     // writes it.
-    let dir = support::scratch("unused-codes-1002");
+    let dir = support::scratch("unused-codes-2000");
     let pack = dir.join("pack.vhd");
-    std::fs::copy(from.join("pack-1002-dev11.vhd"), &pack).unwrap();
+    std::fs::copy(from.join("pack-2000.vhd"), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev11.tar.gz"))
+        .arg(from.join("tree-2000.tar.gz"))
         .arg("-C")
         .arg(dir.path())
         .status()
@@ -150,7 +148,7 @@ fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
     let root = dir.join("root");
     std::fs::create_dir_all(root.join("lispm")).unwrap();
     for part in ["sys", "site"] {
-        std::os::unix::fs::symlink(dir.join("release-1002").join(part), root.join(part)).unwrap();
+        std::os::unix::fs::symlink(dir.join("release-2000").join(part), root.join(part)).unwrap();
     }
     let mut m = Machine::new();
     m.load_prom(&muir::prom::quux_boot_prom());
@@ -160,19 +158,21 @@ fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
     m.geometry = Geometry::QUUX;
     m.tv.set_board(Board::MonoTv);
     m.tv.set_mono_tv_size(1280, 1024);
+    // The file device serving the tree's `sys` and `site` as HOST's `/sys`
+    // and `/site`, where the band's `SYS:` is (`site/sys.translations`).
+    m.file_device.mounts.add(&root.display().to_string()).unwrap();
+    for part in ["sys", "site"] {
+        m.file_device.mounts.add(&format!("{part}={}", root.join(part).display())).unwrap();
+    }
     let found = run(m, (0o177201, 0o177200), root);
     let (used, made) = (&found.used, &found.made);
-    eprintln!("1002: the codes ran at {}", octal(used));
-    assert!(!used.is_empty(), "the tick's own sites ran");
+    eprintln!("2000: the codes ran at {}", octal(used));
+    assert!(!used.is_empty(), "the clocks' own sites ran");
     assert!(made.is_empty(), "made by the OA registers at {}", octal(made));
-    let mut values: Vec<u32> = found.dest_3.iter().map(|&(_, v)| v).collect();
-    values.sort();
-    values.dedup();
-    eprintln!("1002: destination 3 written {} times, with {values:?}", found.dest_3.len());
-    assert_eq!(values, [1], "destination 3 only BEG06's turn-on, 1, and no INTR-TICK clear");
+    assert!(found.dest_3.is_empty(), "destination 3 written: {:?}", found.dest_3);
     assert!(found.dest_4.is_empty(), "destination 4 written: {:?}", found.dest_4);
     assert!(found.source_17.is_empty(), "source 17 read at {}", octal(&found.source_17));
-    assert!(!found.timer_0_on, "destination 3's writes turned timer 0 on");
+    assert!(found.timer_0_on, "timer 0 on at the end");
 }
 
 /// **System 1001 on MIT's 323, on the CADR, never runs them at all**, the

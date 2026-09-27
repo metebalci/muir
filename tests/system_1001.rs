@@ -177,7 +177,9 @@ fn a_mem(ucode: &std::path::Path, name: &str) -> usize {
     syms.address(muir::sym::Space::AMem, name).unwrap_or_else(|| panic!("no {name}")) as usize
 }
 
-/// **QUUX's microcode 1000 stops on a CADR.** It reads the MACHINE-ID at
+/// **QUUX's microcode 1000 stops on a CADR**: the build for revision 4
+/// (`ref/ucode-1000-quux4`), from before QUUX's numbers moved to the 2000s,
+/// and not the CADR's own microcode 1000. It reads the MACHINE-ID at
 /// boot and, without QUUX's signature and a revision of 4 or more, halts at
 /// `MACHINE-NOT-QUUX-4`, so that the PC shows 26621. On a CADR booted by
 /// MIT's PROM it gets there and stays, on both engines.
@@ -212,13 +214,15 @@ fn quux_s_microcode_1000_halts_on_a_cadr() {
     }
 }
 
-/// **Microcode 1000 runs on the CADR too, as a CADR.** It reads functional
+/// **QUUX's first microcode 1000 runs on the CADR too, as a CADR**: the
+/// combined build (`ref/ucode-1000`), from before QUUX's numbers moved to
+/// the 2000s, and not the CADR's own microcode 1000. It reads functional
 /// source 16 at boot; on the CADR there is no QUUX signature there, so it
 /// takes the CADR's map --- five-bit level-1 entries, invalid block 37 ---
 /// and processor type 1. The band reaches its listener on both engines with
 /// version 1000 and type 1, and no level-1 entry names a block above 37.
 #[test]
-fn microcode_1000_runs_on_a_cadr_as_a_cadr() {
+fn quux_s_microcode_1000_runs_on_a_cadr_as_a_cadr() {
     let Some(ucode) = rebuilt_microcode("ucode-1000") else { return };
     let type_code = a_mem(&ucode, "A-PROCESSOR-TYPE-CODE");
     for engine in ["micro", "rtl"] {
@@ -254,7 +258,7 @@ fn microcode_1000_runs_on_a_cadr_as_a_cadr() {
                 )
             }
         };
-        eprintln!("{engine}: the CADR's listener on microcode 1000 after {ran} microcycles");
+        eprintln!("{engine}: the CADR's listener on QUUX's microcode 1000 after {ran} microcycles");
         assert_eq!(
             (version, code, above),
             (1000, 1, 0),

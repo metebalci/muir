@@ -53,11 +53,11 @@ file=7afa9532-75de-409f-8dc8-fef9763511d5
 
 "$qemu_img" create -q -f raw "$raw" 8M
 sgdisk -a 2 -U 00000000-0000-4000-8000-000000000000 \
-    -n 1:2048:2559 -t 1:$microcode -c 1:"MCR1 UCADR 1000" -A 1:set:48 \
+    -n 1:2048:2559 -t 1:$microcode -c 1:"MCR1 UCADR 2000" -A 1:set:48 \
     -u 1:00000000-0000-4000-8000-000000000001 \
     -n 2:2560:3071 -t 2:$microcode -c 2:"MCR2 UCADR 999" \
     -u 2:00000000-0000-4000-8000-000000000002 \
-    -n 3:3072:5119 -t 3:$band -c 3:"LOD1 System 1002.1" -A 3:set:48 \
+    -n 3:3072:5119 -t 3:$band -c 3:"LOD1 System 2000.1" -A 3:set:48 \
     -u 3:00000000-0000-4000-8000-000000000003 \
     -n 4:5120:7167 -t 4:$band -c 4:"LOD2 A comment that is 31 characters" \
     -u 4:00000000-0000-4000-8000-000000000004 \

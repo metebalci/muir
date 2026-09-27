@@ -1,19 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! System 1002 on QUUX with MONO TV: muir-sys's development band, which
-//! sizes its main screen from the feature page.
+//! System 2000 on QUUX with MONO TV: muir-sys's development band on
+//! microcode 2000, which sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-1002-dev11` (muir-sys `624ad92`,
-//! contract Q8): a GPT disk as a dynamic VHD, which QUUX boots as it is,
-//! with microcode 1000 in its current `MCR1` and the band, "System 1002
-//! dev11", in its current `LOD4`; the GPT PROM it was built and tested
-//! with; and the tree it was built from. It boots here on muir's built-in
-//! PROM, `data/quux-promh.mcr`, revision 10's, the same GPT PROM with the
-//! reset devices and timer 0's period added (contract Q11). No TV sync
-//! program, no speed bits, and no CADR disk controller: QUUX's disk is
-//! block-disk. The band takes the screen's size from the feature page at
-//! every boot. Without it the tests skip and say so.
+//! It is in the gitignored `ref/band-2000` (muir-sys `3b1dcf2`, contracts
+//! Q8 and Q11): a GPT disk as a dynamic VHD, which QUUX boots as it is,
+//! with microcode 2000 in its current `MCR1`, "MCR1 UCADR 2000", and the
+//! band, "LOD4 System 2000", in its current `LOD4`; PROM 2000, the PROM it
+//! was built and tested with, which is muir's built-in
+//! `data/quux-promh.mcr` byte for byte (`tests/quux_prom.rs`); and the
+//! tree it was built from, `release-2000/`. No TV sync program, no speed
+//! bits, and no CADR disk controller: QUUX's disk is block-disk. The band
+//! takes the screen's size from the feature page at every boot. Without it
+//! the tests skip and say so.
 
 use std::path::PathBuf;
 
@@ -30,22 +30,22 @@ const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
 /// A copy of the disk, which the machine writes, and the served tree, in a
 /// scratch directory.
-fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
+fn band_2000(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND);
-    if !from.join("pack-1002-dev11.vhd").exists() {
+    if !from.join(PACK).exists() {
         eprintln!("skipped: {} is not present", from.display());
         return None;
     }
     let dir = support::scratch(name);
     let pack = dir.join("pack.vhd");
-    std::fs::copy(from.join("pack-1002-dev11.vhd"), &pack).unwrap();
+    std::fs::copy(from.join(PACK), &pack).unwrap();
     // Booted as it is: a dynamic VHD of a T-300's 263,245 blocks, the
     // hand-over's README says.
     let (format, bytes) = muir::disk_image::probe(&pack).unwrap();
     assert_eq!((format, bytes / 1024), (muir::disk_image::Format::DynamicVhd, 263_245));
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-1002-dev11.tar.gz"))
+        .arg(from.join(TREE))
         .arg("-C")
         .arg(dir.path())
         .status()
@@ -54,25 +54,32 @@ fn band_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     let root = dir.join("root");
     std::fs::create_dir_all(root.join("lispm")).unwrap();
     for part in ["sys", "site"] {
-        std::os::unix::fs::symlink(dir.join("release-1002").join(part), root.join(part)).unwrap();
+        std::os::unix::fs::symlink(dir.join(RELEASE).join(part), root.join(part)).unwrap();
     }
     Some((dir, pack, root))
 }
 
-/// The band, muir-sys's hand-over.
-const BAND: &str = "ref/band-1002-dev11";
+/// The band, muir-sys's hand-over: its disk, its tree, and the directory
+/// the tree unpacks to.
+const BAND: &str = "ref/band-2000";
+const PACK: &str = "pack-2000.vhd";
+const TREE: &str = "tree-2000.tar.gz";
+const RELEASE: &str = "release-2000";
 
-/// The size `band-1002-dev11` was built at; it takes whatever size the
-/// feature page says at boot ([`system_1002_sizes_its_screen_at_boot`]).
+/// The size muir-sys checked `band-2000` at (its hand-over's screens); it
+/// takes whatever size the feature page says at boot
+/// ([`system_2000_sizes_its_screen_at_boot`]).
 const BAND_SIZE: (usize, usize) = (1280, 1024);
 
-fn quux(pack: &std::path::Path) -> Machine {
-    quux_at(pack, BAND_SIZE)
+fn quux(pack: &std::path::Path, root: &std::path::Path) -> Machine {
+    quux_at(pack, root, BAND_SIZE)
 }
 
 /// QUUX with its own boot PROM at 36000 (`data/quux-promh.mcr`), the disk
-/// on block-disk, and MONO TV at `w` by `h`.
-fn quux_at(pack: &std::path::Path, (w, h): (usize, usize)) -> Machine {
+/// on block-disk, MONO TV at `w` by `h`, and the file device serving
+/// `root` as HOST's `/` and the tree's `sys` and `site` as `/sys` and
+/// `/site`, where the band's `SYS:` is (`site/sys.translations`).
+fn quux_at(pack: &std::path::Path, root: &std::path::Path, (w, h): (usize, usize)) -> Machine {
     use muir::block_disk::{BLOCK_NS, BlockDisk};
     let mut m = Machine::new();
     m.load_prom(&muir::prom::quux_boot_prom());
@@ -82,7 +89,17 @@ fn quux_at(pack: &std::path::Path, (w, h): (usize, usize)) -> Machine {
     m.geometry = Geometry::QUUX;
     m.tv.set_board(Board::MonoTv);
     m.tv.set_mono_tv_size(w, h);
+    serve(&mut m, root);
     m
+}
+
+/// The file device serving `root` as HOST's `/`, and its `sys` and `site`
+/// by name.
+fn serve(m: &mut Machine, root: &std::path::Path) {
+    m.file_device.mounts.add(&root.display().to_string()).unwrap();
+    for part in ["sys", "site"] {
+        m.file_device.mounts.add(&format!("{part}={}", root.join(part).display())).unwrap();
+    }
 }
 
 /// Whether the listener is framed at the screen's own size, and not at any
@@ -106,55 +123,99 @@ fn framed(e: &impl Engine, words_per_line: usize, h: usize) -> bool {
 
 /// The screen as a GIF in the temporary directory, for a failure message.
 fn shot(e: &impl Engine, name: &str) -> String {
-    let path = std::env::temp_dir().join(format!("muir-system-1002-{name}.gif"));
+    let path = std::env::temp_dir().join(format!("muir-system-2000-{name}.gif"));
     let mut rec = muir::capture::Recorder::new(false);
     rec.sample(&e.machine().tv, 0, 0);
     std::fs::write(&path, rec.gif()).unwrap();
     path.display().to_string()
 }
 
-/// **System 1002 reaches its listener on QUUX with MONO TV, drawn at the
-/// screen's words a line**, on both engines, at the size the band was built
-/// for ([`BAND_SIZE`]): its listener is framed at MONO TV's words a line and
-/// at no other width, the CADR's 24 among them, which is the band drawing
-/// for the screen it was given.
+/// `%MICROCODE-VERSION-NUMBER`, A memory's word 40 (`mcr::Mcr::version`
+/// has where that is from), as the running machine holds it.
+fn microcode_version(e: &impl Engine) -> u32 {
+    e.machine().amem[0o40] & 0o77777777
+}
+
+/// **The band is System 2000 on microcode 2000**, as the disk says: its
+/// current `MCR1` is named "MCR1 UCADR 2000" and holds the hand-over's
+/// `ucadr.mcr`, whose `A-VERSION` is 2000, and its current `LOD4` is named
+/// "LOD4 System 2000". No boot; the running band's own word is
+/// `tests/system_2000_timers.rs`'s M10.
 #[test]
-fn system_1002_runs_on_mono_tv() {
+fn band_2000_is_system_2000_on_microcode_2000() {
+    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND);
+    if !from.join(PACK).exists() {
+        eprintln!("skipped: {} is not present", from.display());
+        return;
+    }
+    let bytes = std::fs::read(from.join("ucadr.mcr")).unwrap();
+    let mcr = muir::mcr::parse_partition_order(&bytes).unwrap();
+    assert_eq!(mcr.version(), Some(2000), "ucadr.mcr's A-VERSION");
+    let mut d = muir::disk_image::Disk::open(from.join(PACK)).unwrap();
+    let parts = support::gpt_partitions(&mut d);
+    let current = |lisp: &str| {
+        parts
+            .iter()
+            .find(|p| p.current && p.name.starts_with(lisp))
+            .unwrap_or_else(|| panic!("no current {lisp}: {parts:?}"))
+    };
+    assert_eq!(current("MCR").name, "MCR1 UCADR 2000");
+    assert_eq!(current("LOD").name, "LOD4 System 2000");
+    let mcr1 = current("MCR");
+    for (k, block) in bytes.chunks(1024).enumerate() {
+        let on_disk: Vec<u8> = d
+            .read_block(mcr1.first + k as u32)
+            .unwrap()
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        assert!(on_disk == block, "MCR1's block {k} is the hand-over's ucadr.mcr");
+    }
+}
+
+/// **System 2000 reaches its listener on QUUX with MONO TV, drawn at the
+/// screen's words a line**, on both engines, at the size muir-sys checked the
+/// band at ([`BAND_SIZE`]), with microcode 2000 in A memory: its listener is
+/// framed at MONO TV's words a line and at no other width, the CADR's 24
+/// among them, which is the band drawing for the screen it was given.
+#[test]
+fn system_2000_runs_on_mono_tv() {
     for engine in ["micro", "rtl"] {
-        let Some((_dir, pack, root)) = band_1002(&format!("system-1002-{engine}")) else {
+        let Some((_dir, pack, root)) = band_2000(&format!("system-2000-{engine}")) else {
             return;
         };
-        let m = quux(&pack);
-        let (ran, drawn) = match engine {
+        let m = quux(&pack, &root);
+        let (ran, drawn, version) = match engine {
             "micro" => {
                 let mut e = Micro::new(m);
                 e.boot();
                 let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-                (ran, drawn_at_its_words_a_line(&e))
+                (ran, drawn_at_its_words_a_line(&e), microcode_version(&e))
             }
             _ => {
                 let mut e = Rtl::new(m);
                 e.boot();
                 let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-                (ran, drawn_at_its_words_a_line(&e))
+                (ran, drawn_at_its_words_a_line(&e), microcode_version(&e))
             }
         };
-        eprintln!("{engine}: listener after {ran} microcycles");
+        eprintln!("{engine}: listener after {ran} microcycles, microcode {version}");
         assert!(drawn, "{engine}: drawn at the screen's words a line");
+        assert_eq!(version, 2000, "{engine}: the microcode's version");
     }
 }
 
-/// **System 1002 sizes its screen at boot**: the same band, built at
+/// **System 2000 sizes its screen at boot**: the same band, checked at
 /// [`BAND_SIZE`], booted at other sizes, draws its listener at each size's
 /// own words a line. 1920 by 1080 is the largest MONO TV QUUX supports.
 #[test]
-fn system_1002_sizes_its_screen_at_boot() {
+fn system_2000_sizes_its_screen_at_boot() {
     for size in [(1024, 768), (1920, 1080)] {
-        let Some((_dir, pack, root)) = band_1002(&format!("system-1002-{}x{}", size.0, size.1))
+        let Some((_dir, pack, root)) = band_2000(&format!("system-2000-{}x{}", size.0, size.1))
         else {
             return;
         };
-        let mut e = Micro::new(quux_at(&pack, size));
+        let mut e = Micro::new(quux_at(&pack, &root, size));
         e.boot();
         let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
         eprintln!("{size:?}: listener after {ran} microcycles");
@@ -167,21 +228,21 @@ fn system_1002_sizes_its_screen_at_boot() {
     }
 }
 
-/// **System 1002 runs at its ticks**: QUUX drops the delay lines, and its
+/// **System 2000 runs at its ticks**: QUUX drops the delay lines, and its
 /// microcycle is `sync`'s K ticks of 10 ns. The same microcode and band
 /// reach the same listener at four ticks and at three, and the time to it
 /// is shorter at three by less than the microcycles' ratio, the bus keeping
 /// its own time.
 #[test]
-fn system_1002_runs_at_its_ticks() {
+fn system_2000_runs_at_its_ticks() {
     use muir::clock::TimingModel;
     let mut times = Vec::new();
     for ticks in [4, 3] {
         let model = TimingModel::Sync { cycle_ticks: ticks, ilong_ticks: 0 };
-        let Some((_dir, pack, root)) = band_1002(&format!("system-1002-sync-{ticks}")) else {
+        let Some((_dir, pack, root)) = band_2000(&format!("system-2000-sync-{ticks}")) else {
             return;
         };
-        let mut e = Rtl::new(quux(&pack));
+        let mut e = Rtl::new(quux(&pack, &root));
         e.set_timing_model(model);
         e.boot();
         let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
@@ -197,16 +258,17 @@ fn system_1002_runs_at_its_ticks() {
     assert!(ratio > 1.0 && ratio < 4.0 / 3.0, "{ratio:.3} times faster at three ticks");
 }
 
-/// `DISK-AWAIT-READY`, where microcode 1000 waits for block-disk to be
-/// ready (dev11's `ucadr.sym`: `DISK-AWAIT-READY I-MEM 25036`).
+/// `DISK-AWAIT-READY`, where microcode 2000 waits for block-disk to be
+/// ready (the hand-over's `ucadr.sym`: `DISK-AWAIT-READY I-MEM 25036`).
 const DISK_AWAIT_READY: u16 = 0o25036;
 
 /// The disk registers as the microcode addresses them, virtual
-/// (`DISK-REGS-ADDRESS-BASE NUMBER 77377774` in dev11's `ucadr.sym`), and
+/// (`DISK-REGS-ADDRESS-BASE NUMBER 77377774` in the hand-over's
+/// `ucadr.sym`), and
 /// where they are, physical: word 774 of the register page, 17377000.
 const DISK_REGS: (u32, u32) = (0o77377774, 0o17377774);
 
-/// **System 1002 restores its own band and comes back to the listener**:
+/// **System 2000 restores its own band and comes back to the listener**:
 /// booted at 1280 by 1024, `(si:disk-restore 4)` answered `yes` reads LOD4
 /// back in and boots it to the listener again, on `micro`. The microcode's
 /// cold boot maps the disk registers and the run light with
@@ -219,19 +281,20 @@ const DISK_REGS: (u32, u32) = (0o77377774, 0o17377774);
 /// physical one, and every million microcycles block-disk has to have moved
 /// on. The restore takes about 26 million microcycles to read the band and
 /// 165 million to the listener (measured). The test catches the collision:
-/// on the band before the fix, dev9 (microcode 1000 for Q5, with the PROM
-/// it booted on, which read MIT's label), the disk registers' virtual
+/// on the band before the fix, dev9 (QUUX's microcode for Q5, then
+/// numbered 1000, with the PROM it booted on, which read MIT's label), the
+/// disk registers' virtual
 /// address reaches 17117774 at `DISK-AWAIT-READY`; with that check taken
 /// out, block-disk stands still within 2 million microcycles of the answer
 /// (measured).
 #[test]
-fn system_1002_restores_its_band_to_the_listener() {
+fn system_2000_restores_its_band_to_the_listener() {
     use muir::terminal::keyboard::Keyboard;
-    let Some((_dir, pack, root)) = band_1002("system-1002-restore") else {
+    let Some((_dir, pack, root)) = band_2000("system-2000-restore") else {
         return;
     };
     let lod4 = support::gpt_partition(&mut muir::disk_image::Disk::open(&pack).unwrap(), "LOD4");
-    let mut m = quux(&pack);
+    let mut m = quux(&pack, &root);
     m.block_disk.as_mut().unwrap().log = Some(Vec::new());
     let mut e = Micro::new(m);
     e.boot();
@@ -239,8 +302,7 @@ fn system_1002_restores_its_band_to_the_listener() {
     eprintln!("listener after {ran} microcycles");
     let mut k = Keyboard::new();
     support::type_at(&mut e, &mut k, "(si:disk-restore 4)");
-    // Time for the question, "Do you really want to reload LOD4 (System
-    // 1002 dev11)? (Yes or No)", before its answer.
+    // Time for the question, whether to reload LOD4, before its answer.
     for _ in 0..20_000_000 {
         e.step().unwrap();
     }

@@ -8,6 +8,12 @@ is the CADR as MIT built it; muir-fpga and muir-sys choose it with
 This page says where QUUX differs from the CADR. Everything it does not
 mention is the CADR's.
 
+QUUX's software is numbered in the 2000s and the CADR's in the 1000s: QUUX
+runs muir-sys's System 2000 on microcode 2000 and boots on PROM 2000.
+muir-sys's earlier builds for QUUX were numbered 1000 (the PROM and the
+microcode) and 1002 (the system); where this page records what one of them
+did, it names it by that number and calls it QUUX's.
+
 ## What each difference reaches
 
 A change to the hardware reaches further than the board: the boot PROM,
@@ -17,20 +23,20 @@ differences, what it needed:
 
 | Difference | Boot PROM | Microcode | Lisp system | Tools |
 |---|---|---|---|---|
-| Six-bit level-1 map entry | nothing: MIT's PROM boots it; version 1000 also clears QUUX's 64 blocks | 1000: the six-bit read, the two-deposit write, invalid block 77, the reverse first-level map moved to system communication area 640-737 and the swap-out CCWs to 440-457 | nothing: System 1001 runs unchanged | CC's remote debugger (`CADR-DEBUGGER`) still assumes the CADR's map |
-| MACHINE-ID in functional source 16 | nothing | 1000 reads it at boot and runs as either machine | `PROCESSOR-TYPE-CODE` is 4 | nothing |
+| Six-bit level-1 map entry | nothing: MIT's PROM boots it; PROM 2000 also clears QUUX's 64 blocks | 2000: the six-bit read, the two-deposit write, invalid block 77, the reverse first-level map moved to system communication area 640-737 and the swap-out CCWs to 440-457 | nothing: System 1001 runs unchanged | CC's remote debugger (`CADR-DEBUGGER`) still assumes the CADR's map |
+| MACHINE-ID in functional source 16 | nothing | 2000 reads it at boot and halts at `MACHINE-NOT-QUUX-10` on anything but QUUX from revision 10 | `PROCESSOR-TYPE-CODE` is 4 | nothing |
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
-| `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
-| The clocks: the microsecond clock in the processor, and the interval timers on the register page, timer 0 the tick | writes reset devices and timer 0's period, 16,667 µs (revision 10) | 1000 for revision 10 (muir-sys `c3a162a`) turns the tick on at `BEG06` and clears it in `INTR-TICK` through word 110; dev11's 1000 does both through Q1's destination 3, which writes only M at revision 10, so it has no tick there | nothing: it reads the microsecond clock, and no timer | nothing |
-| Reset devices, word 104 of the register page | writes it before it reads the disk (revision 10) | 1000 still pulses `PROG.UNIBUS.RESET`, which resets nothing on QUUX | nothing | nothing |
-| Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002: the partitions, the band and the disk routines by block number | block-disk is `quux`'s only disk; `--disk-controller`, the CADR's controller, is `cadr`'s |
+| `MUL` and `DIV` in one instruction | nothing | 2000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
+| The clocks: the microsecond clock in the processor, and the interval timers on the register page, timer 0 the tick | writes reset devices and timer 0's period, 16,667 µs (revision 10) | 2000 writes timer 0's period at `RESET-MACHINE`, turns the tick on at `BEG06` and clears it in `INTR-TICK` through word 110, and turns off timer 1 or 2 if one interrupts | nothing: it reads the microsecond clock, and no timer | nothing |
+| Reset devices, word 104 of the register page | writes it before it reads the disk (revision 10) | 2000 writes it at `RESET-MACHINE`, at every start of the microcode, a `%DISK-RESTORE`'s too, in place of `PROG.UNIBUS.RESET` | nothing | nothing |
+| Block-disk | muir-sys's PROM 2000 for block-disk, which no longer boots the CADR controller | 2000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 2000: the partitions, the band and the disk routines by block number | block-disk is `quux`'s only disk; `--disk-controller`, the CADR's controller, is `cadr`'s |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
 | No delay lines: `sync`, always | nothing | nothing | nothing | `--sync-cycle-ticks`; `--timing-model` is `cadr`'s |
-| No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and 1000 never do either, counted (below) | nothing | nothing |
+| No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and QUUX's 1000 never do either, counted (below) | nothing | nothing |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
-| MONO TV, the display | nothing | 1000 for revision 4 (System 1002's): the run light in MONO TV's buffer, no TV vertical flag | System 1002 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
+| MONO TV, the display | nothing | 2000: the run light in MONO TV's buffer, no TV vertical flag | System 2000 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
 | The real-time clock | nothing | nothing | does not read it yet | `--rtc` |
-| The file device | nothing | nothing | does not use it yet | `--file-root` |
+| The file device | nothing | 2000 waits at `RESET-MACHINE` for it to be quiet, word 161 `<1>`, after reset devices | System 2000's `SYS:` is on it, HOST's `/sys` and `/site` (`site/sys.translations`) | `--file-root` |
 
 ## What each change measured
 
@@ -40,7 +46,7 @@ it:
 
 | Change | Measured |
 |---|---|
-| Six-bit level-1 map (QUUX on microcode 1000 against the CADR on 323 rebuilt, 324) | 11.3% fewer microcycles on `micro` and 11.1% on `rtl` over thirteen workloads; `intern` 31% fewer, `print-scroll` 27%, `compile` 21%, the idle listener 20 to 30% |
+| Six-bit level-1 map (QUUX on its microcode 1000 against the CADR on 323 rebuilt, 324) | 11.3% fewer microcycles on `micro` and 11.1% on `rtl` over thirteen workloads; `intern` 31% fewer, `print-scroll` 27%, `compile` 21%, the idle listener 20 to 30% |
 | 16K-word PDL buffer (against QUUX's 1K) | 3.8% fewer on `micro` and 4.3% on `rtl` over thirteen workloads; deep recursion 29% fewer, its PDL buffer's share falling from 26% of its microcycles to 0.9% |
 | `MUL` and `DIV` (microcode using them against the same without) | 20% fewer microcycles a macroinstruction on the multiply-and-divide workload (25.0 to 20.0), 7% on float, 1.5% on bignum; multiply and divide's share of the first 25.6% to 5.4% |
 
@@ -88,8 +94,8 @@ no bus cycle:
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
-decodes it has that output unconnected, and neither microcode 323 nor
-microcode 1000 reads it. `IR<30>` is in no source decode, so source 36 is the
+decodes it has that output unconnected, and microcode 323 does not read
+it; microcode 2000 does, at boot (above). `IR<30>` is in no source decode, so source 36 is the
 same. Source 17 reads all ones on both: open on the CADR, and on QUUX
 unassigned since revision 10 (below). A machine is QUUX only if bits
 31:16 hold the signature; the revision says which QUUX, each one containing
@@ -309,8 +315,8 @@ its interval timer's period and their status, which they were up to
 revision 9, are gone, and every timer is reached through the register page
 alone. A write of destination 3 changes no timer, also at an edge that
 takes a register write, and takes no flag out of any `SINTR`. So
-microcode that turns its tick on through destination 3, as System 1002
-dev11's does, has no tick at revision 10.
+microcode that turns its tick on through destination 3, as QUUX's System
+1002 dev11's did, has no tick at revision 10.
 
 **The microsecond clock** is functional source 15: the microseconds since
 power-on, 32 bits, wrapping, one read giving the whole word.
@@ -321,14 +327,14 @@ ones. Microcode 323 writes destinations 3 to 7 and reads sources 15 and 17
 nowhere, by a scan of every control-store word, and running shows the same
 of what the OA registers make at run time: `tests/unused_codes.rs` reads
 every executed microinstruction as it stood in `IR` through a boot to the
-listener. System 1001 on 323, on the CADR, runs none. System 1002 on its
-microcode 1000, dev11's, runs them at three addresses through its boot and
-a moment after on revision 10, each a control-store word that carries them:
-destination 3 at `BEG06`, the tick's turn-on, and source 15 at
-`READ-MICROSECOND-CLOCK` and in `XUSLDB`. It writes destination 3 with 1
-alone, which reaches M alone, so timer 0 is still off after it and
-`INTR-TICK`, which would write it with 3, never runs; and it neither writes
-destination 4 nor reads source 17.
+listener. System 1001 on 323, on the CADR, runs none. System 2000 on
+microcode 2000 runs them at four addresses through its boot and a moment
+after on revision 10, each a control-store word that carries them, and
+each a read of source 15, the microsecond clock: in `RESET-MACHINE`, the
+start of its wait for the file device, at `READ-MICROSECOND-CLOCK`, in
+`XUSLDB`, and at 20346. It writes no destination 3 to 7 and reads no
+source 17, and timer 0 is on at the end, turned on through the register
+page (`system_2000_uses_the_clocks_codes_only_where_its_microcode_does`).
 
 `tests/interval_timers.rs` holds, for each timer, the periodic grid to the
 nanosecond with late clears and a period written under a raised flag, the
@@ -387,7 +393,7 @@ more, 0 unless the library says otherwise.
 refusal, `ILONG`'s ticks, the grid, the divider's hold and a checkpoint;
 `quux_has_no_speed_bits` in `tests/quux.rs` the speed bits;
 `quux_runs_on_sync_alone` in `tests/cli.rs` the flags; and
-`system_1002_runs_at_its_ticks` in `tests/system_1002.rs` System 1002 at
+`system_2000_runs_at_its_ticks` in `tests/system_2000.rs` System 2000 at
 four ticks and at three.
 
 ## The memory port and the device registers
@@ -412,7 +418,7 @@ control store (Q2).
 | The frame buffer | `17000000` up to MONO TV's buffer's end: on the memory bus with main memory, cached. The software reads it back (`BITBLT` combines with the destination, scrolling copies), and the display only reads it, which a write-through cache keeps current |
 | The cache | always fitted: 4K words (`--cache <words>` another size) |
 | A device register | MONO TV's at `17377760`, block-disk's at `17377774`, the feature and register page at `17377000`: never cached, taken at the edge and answered a microcycle on, two microcycles in all |
-| Nothing there | past main memory's or the frame buffer's end, between the registers, the old Unibus window: fails at once, in the microcycle, reading 0 and setting word 101's NXM bit, with no timeout. A write there does not read back, which the microcode's memory-size probe, `MEM-SIZE-LOOP` in `uc-cold-disk.lisp`, relies on; nothing in System 1002 depends on how long a failed access takes (muir-sys, read) |
+| Nothing there | past main memory's or the frame buffer's end, between the registers, the old Unibus window: fails at once, in the microcycle, reading 0 and setting word 101's NXM bit, with no timeout. A write there does not read back, which the microcode's memory-size probe, `MEM-SIZE-LOOP` in `uc-cold-disk.lisp`, relies on; nothing in QUUX's System 1002 depends on how long a failed access takes (muir-sys, read; **unverified** for System 2000) |
 | Block-disk | its words move at START, and the cache is invalidated; a transfer reads the processor's writes made before START and, after DONE, no read hits a word from before it |
 
 The bus interface's registers all have homes on QUUX already: the
@@ -523,9 +529,9 @@ the memory cache is invalidated. The disk is a file in a standard format,
 the end of the disk, the NXM, a command it does not do, the registers on
 QUUX's bus and a checkpoint.
 
-muir-sys's boot PROM 1000, microcode 1000 and System 1002 address it by
-block: System 1002's band boots on it on `micro`, `rtl` and under `sync`,
-at 1024 by 768, 1280 by 1024 and 1920 by 1080 (`tests/system_1002.rs`). Lisp checks the disk address after a transfer
+muir-sys's PROM 2000, microcode 2000 and System 2000 address it by
+block: System 2000's band boots on it on `micro`, `rtl` and under `sync`,
+at 1024 by 768, 1280 by 1024 and 1920 by 1080 (`tests/system_2000.rs`). Lisp checks the disk address after a transfer
 against the last block it expected, and reads the command list pointer
 and the disk address after one; it does not read the fourth register,
 where the CADR's controller gave the ECC.
@@ -581,7 +587,7 @@ type GUIDs, whose first 32-bit words all differ:
 | retired: once `TEMP`; not to be used | `445976f2-34e4-4583-b750-75d28a080cba` |
 
 - **The name** is the partition's four-character Lisp name, a space and a
-  comment of up to 31 characters, `MCR1 UCADR 1000`: 36 characters, which
+  comment of up to 31 characters, `MCR1 UCADR 2000`: 36 characters, which
   is what a GPT name holds.
 - **The current microcode and the current band** carry attribute bit 48,
   the first of the bits a GPT leaves to the partition type.
@@ -604,29 +610,32 @@ software's to find. `diskpack`, MIT's label editor, is the CADR's; given a
 QUUX disk it says what the file is and that its partitions are made with
 sgdisk, and writes nothing (`quux_s_disk_is_named_and_left_alone` in
 `tests/diskpack.rs`). The boot PROM in `data/quux-promh.mcr`, the
-microcode and System 1002's band read the GPT; MIT's label in block 0 is
+microcode and System 2000's band read the GPT; MIT's label in block 0 is
 the CADR's.
 
-**System 1002's band is dev11, on a GPT disk in a dynamic VHD**: muir-sys's
-development band "System 1002 dev11", built from its commit `624ad92`, a
-T-300's 263,245 blocks with the current `MCR1` at block 17 holding
-microcode 1000 and the current `LOD4` the band, no FILE and no TEMP.
-QUUX boots the VHD as it is, a copy of it, the disk being written; the
-tests find it in the gitignored `ref/band-1002-dev11` and skip without it.
-It reaches its listener, drawn at the screen's own words a line, in 166 M
-microcycles on `micro` and 187.5 M on `rtl` at 1280 by 1024
-(`system_1002_runs_on_mono_tv`, measured to the half million). It
-restores its own band: `(si:disk-restore 4)`, answered `yes`, reads 20,832
-blocks of `LOD4` in 26 M microcycles and is back at the listener 139 M
-later, on `micro` (`system_1002_restores_its_band_to_the_listener`). That
+**System 2000's band is on a GPT disk in a dynamic VHD**: muir-sys's
+development band, built from its commit `3b1dcf2`, a T-300's 263,245
+blocks with the current `MCR1` at block 17, "MCR1 UCADR 2000", holding
+microcode 2000 and the current `LOD4`, "LOD4 System 2000", the band, no
+FILE and no TEMP (`band_2000_is_system_2000_on_microcode_2000`). QUUX
+boots the VHD as it is, a copy of it, the disk being written; the tests
+find it in the gitignored `ref/band-2000` and skip without it. Its `SYS:`
+is on the file device, which the tests serve the band's tree through. It
+reaches its listener, drawn at the screen's own words a line, in 166.5 M
+microcycles on `micro` and 188 M on `rtl` at 1280 by 1024, with 2000 in A
+memory's `A-VERSION` (`system_2000_runs_on_mono_tv`, measured to the half
+million). It restores its own band: `(si:disk-restore 4)`, answered
+`yes`, reads 21,216 blocks of `LOD4` in 27 M microcycles and is back at
+the listener 139 M later, on `micro`
+(`system_2000_restores_its_band_to_the_listener`). That
 test holds, at every microcycle in `DISK-AWAIT-READY`, the disk registers'
 virtual address `77377774` to their physical `17377774`, and block-disk to
 moving on every million microcycles. The cold boot's `COLD-FAKE-L2-MAP`
 maps the disk registers and the run light; when the two take one level-2
 slot, the disk registers' virtual address reaches another word, and the
 restore waits in `DISK-AWAIT-READY` for ever. On a microcode with that
-collision, System 1002 dev9's, the test fails at the first check, the
-address reaching `17117774`, and without it at the second (measured).
+collision, QUUX's System 1002 dev9's, the test fails at the first check,
+the address reaching `17117774`, and without it at the second (measured).
 
 How to make a disk with standard tools is in
 [the manual](manual.md#quuxs-disk).
@@ -715,7 +724,7 @@ Holds and write pulses:
   tests beside it).
 - **Nothing MIT's or muir-sys's microcode runs does either.** Counted on
   `rtl` over a boot of System 1001 and the profile harness's thirteen
-  workloads, on QUUX (microcode 1000) and on the CADR (System 1001's own
+  workloads, on QUUX (its microcode 1000) and on the CADR (System 1001's own
   microload, 324, which is 323 rebuilt): no dispatch write
   with `POPJ`, no map read in the microcycle a map store's write lands, and
   no hung microcycle whose pulse writes the dispatch memory or the map.
@@ -754,22 +763,18 @@ reaches it unchanged, and ends below the color TV's strap at `17200000`.
 System 1001 runs on it but draws its screen wrong: `shwarm.lisp` makes the
 main screen 768 by 963 at 24 words a line, and MONO TV scans 40, so each of
 its lines is spread over parts of several. On QUUX's microcode 1000 with the
-tick (`ref/ucode-1000-quux4`) the band reaches its listener on `micro` in
+tick, for revision 4, the band reaches its listener on `micro` in
 136 M microcycles, as on the CADR's board, measured by reading the rows the
 listener draws in at 24 words a line; its writes of the sync program's
 registers fail and leave the NXM bit set, and nothing stops over
-it. System 1002 sizes the main screen from the feature page's words 11 to 13,
-and draws it right: muir-sys's development band (`ref/band-1002-dev2`,
-muir-sys `8cf913e`, microcode 1000 for revision 4, no sync program and no
-speed bits) reaches its listener in
-11 M microcycles on both engines, its herald, listener and who line drawn at
-the screen's own words a line (`system_1002_runs_on_mono_tv` in
-`tests/system_1002.rs`) --- at 1920 by 1080, the size it was built at. A
-band fixes its screen's size when its window system loads, so that one
-run at another size draws 60-word lines into the raster anyway: at 1280 by
-1024 its lines spill into the next, which the test's check catches.
-**Unverified** until a band sizes its screen at boot: that System 1002
-runs right at every size the feature page can give.
+it. System 2000 sizes the main screen from the feature page's words 11 to 13
+at every boot, and draws it right: with no sync program and no speed
+bits, it reaches its listener with its herald,
+listener and who line drawn at the screen's own words a line and at no
+other width, at 1280 by 1024 on both engines
+(`system_2000_runs_on_mono_tv` in `tests/system_2000.rs`) and at 1024 by
+768 and 1920 by 1080 on `micro` (`system_2000_sizes_its_screen_at_boot`).
+**Unverified**: the sizes between, which no test boots.
 
 `tests/mono_tv.rs` holds the buffer's first and last words and the NXM past
 it on both engines, the bus interface's decode of the whole buffer, the
@@ -786,7 +791,7 @@ and jumps to 6. A reboot is a jump to 36000. The CADR keeps MIT's overlay:
 its PROM covers 0-777 until `PROMDISABLE` in the mode register, written at
 Unibus `766012`, lets the RAM show through.
 
-The PROM is muir-sys's version 1000 for block-disk and a GPT
+The PROM is muir-sys's PROM 2000 for block-disk and a GPT
 (`data/quux-promh.mcr`), MIT's `promh.text` changed so that a PDL buffer
 of any width boots, QUUX's 64 level-2 blocks are cleared, the disk is read
 by block number, nothing is saved, the microcode is found through the
@@ -826,12 +831,12 @@ first disk routine, is at 36600, and the code ends at 36646 (`promh.locs`,
 `I-MEM 36647`). `tests/quux_prom_saves_nothing.rs` boots it
 on both engines until the microcode's location 6 runs, on
 `data/quux-disk.img` with MIT's microcode 323 in its `MCR1` and on System
-1002 dev11's VHD with microcode 1000, and counts: no block written; the
-only stores are to word 777, the command list word, one a block read;
-every block read goes into pages 3-6; the disk file is byte for byte as it
-was; and pages 3-6 hold the main-memory section's four blocks. On dev11 it
-reads 115 blocks and reaches 6 after 1,019,903 microcycles on `micro` and
-1,135,559 on `rtl`.
+2000's VHD with microcode 2000, and counts: no block written; the only
+stores are to word 777, the command list word, one a block read; every
+block read goes into pages 3-6; the disk file is byte for byte as it was;
+and pages 3-6 hold the main-memory section's four blocks. On System
+2000's disk it reads 115 blocks and reaches 6 after 1,020,563 microcycles
+on `micro` and 1,136,279 on `rtl`.
 
 **Its file, like QUUX's microcode's, is in partition order** (contract
 Q8): MIT's `.mcr` with the two 16-bit halves of every 32-bit word swapped,
@@ -841,18 +846,21 @@ blocks, so that `dd` writes a microcode file into its partition with no
 conversion. muir-sys's `sys/sys/qwmcr.lisp` writes it.
 Swapped back, the PROM's file has MIT's `promh.mcr`'s four sections, its
 dispatch and A memory word for word MIT's, only the program QUUX's
-(`quux_s_prom_is_mit_s_promh_changed`); and System 1002 dev11's `MCR1`
-holds the hand-over's `ucadr.mcr` block for block, as `dd` put it there
-(`quux_s_prom_saves_nothing_on_system_1002_s_disk`). The CADR's `.mcr`
+(`quux_s_prom_is_mit_s_promh_changed`); and System 2000's `MCR1` holds
+the hand-over's `ucadr.mcr` block for block, as `dd` put it there
+(`quux_s_prom_saves_nothing_on_system_2000_s_disk`). The CADR's `.mcr`
 stays MIT's, and so does `diskpack`, which is the CADR's.
 
 `tests/quux_prom.rs` holds the start at 36000, the PROM read only, the RAM
 below live with no disable, the CADR's overlay, and the file read from
-36000 in partition order; `tests/system_1002.rs` boots System 1002 on it.
+36000 in partition order, and the built-in file byte for byte the
+hand-over's PROM 2000, whose symbols and error table say version 2000
+(`the_built_in_quux_prom_is_the_hand_over`, where `ref/band-2000` is
+present); `tests/system_2000.rs` boots System 2000 on it.
 `--prom` on `quux` takes a file in partition order assembled at 36000, and
 refuses one in MIT's order or assembled at 0.
 
-QUUX runs only muir-sys's latest System 1002 band. The PROMs assembled at
+QUUX runs only muir-sys's latest band, System 2000. The PROMs assembled at
 0, and System 1001 on QUUX, are retired with it.
 
 **For revision 10 it resets the devices and gives timer 0 its period**
@@ -865,25 +873,30 @@ no timer resets to a period. It turns no timer on. From power-on on `micro` the 
 628,981, and at location 6 timer 0 is off at period 16,667 with its
 interrupt enable 0 and timers 1 and 2 in their reset state
 (`m9_the_prom_resets_the_devices_and_writes_timer_0_s_period`). On it
-System 1002 dev11 reaches its listener with timer 0 off, its microcode's
-turn-on having gone to destination 3, and runs `INTR-TICK` no time in 10 s
-after it; a mouse move then leaves the band's `A-MOUSE-X` and `A-MOUSE-Y`
-as they were 100 ms later, recorded and not held
-(`m10_the_band_does_not_tick_on_revision_10`). A reboot, a
-jump to 36000 without `-RESET`, with timers 1 and 2 left on and up under
-their interrupt enables and the file device enabled with three READs of
-64 KiB and a CREATE-DIRECTORY queued, reaches the listener after 163,490,934
-microcycles with `INTR` run 1,462 times, against 164,119,902 and 1,462 for
-the same reboot with neither, with the timers off and the device disabled
-at location 6 and no queued command run
-(`m11_a_reboot_resets_the_timers_and_the_file_device`). On dev11's own PROM,
-which writes neither word, the same reboot takes 412,290,922 microcycles
-against 164,120,406, `INTR` running 8,811,697 times against 1,462, with the
-timers still on and the device still enabled at location 6 and its queued
-commands run (`m11_fails_on_dev11_s_prom`); and from power-on the band
-reaches its listener with timer 0 off at period 0 and `INTR-TICK` running no
-time in 10 s (`m12_the_old_prom_on_revision_10`). All on `micro`, in
-`tests/system_1002_timers.rs`.
+System 2000 reaches its listener with word 110 reading 401, timer 0 on,
+periodic, under its interrupt enable, and word 111 16,667, and runs
+`INTR-TICK` 600 times in 10 s after it; logged in, it writes `(3 2000
+"QUUX" "Experimental System 2000, microcode 2000")`, its microcode's
+version, the machine and the herald's line, and a `(time)` that moved 64
+sixtieths over a sleep of 60; a mouse move of -40, -30 then changes the
+band's `A-MOUSE-X` and `A-MOUSE-Y` by -40 and -27 within 100 ms, recorded
+and not held (`m10_the_band_ticks_and_says_it_is_system_2000`). A reboot, a jump
+to 36000 without `-RESET`, with timers 1 and 2 turned on and up under
+their interrupt enables while the machine is halted (the band turns off a
+timer 1 or 2 that interrupts, `INTR-TIMER-1-STRAY`) and the file device
+enabled with three READs of 64 KiB and a CREATE-DIRECTORY queued, reaches
+the listener after 163,791,594 microcycles with `INTR` run 1,901 times,
+against 164,320,562 and 1,901 for the same reboot with neither, with the
+timers off and the device disabled at location 6 and no queued command run
+(`m11_a_reboot_resets_the_timers_and_the_file_device`). On the PROM before
+Q11, dev11's, which writes neither word, the same reboot reaches location 6
+with timers 1 and 2 still on and the device still enabled, and fails the
+test's criterion (`m11_fails_on_the_prom_before_q11`); no queued command
+ran. From power-on on that PROM the band reaches its listener with word 110
+reading 401 and word 111 16,667, the period its microcode writes itself at
+`RESET-MACHINE` (`uc-cold-disk.lisp`), and `INTR-TICK` runs 600 times in
+10 s (`m12_the_prom_before_q11_on_revision_10`). All on `micro`, in
+`tests/system_2000_timers.rs`.
 
 ## The register page
 
@@ -1252,23 +1265,31 @@ Unibus register and a STATUS request sent and answered through the page.
 
 ## Its microcode
 
-**Microcode 1000 runs on both machines**, muir-sys's first change to MIT's
-323, made from System 1001's sources. At boot it reads functional source 16.
-Without the signature it is on a CADR: processor type 1, five-bit level-1
-entries, invalid block 37. With it, the type is the word's bits 3:0, 4, and
-from revision 1 on it reads the six-bit entry at `MAP(MD)<29:24>`, writes it
-in two deposits, `VMA<31:27>` and `VMA<24>`, and keeps block 77 as the
-invalid one. On both it keeps the reverse first-level map in system
-communication area words 640 to 737 and the swap-out CCWs at 440 to 457. It
-checks at boot that block 0's level-1 entry reads back as the invalid entry
-the MACHINE-ID promised, and stops at `MAP-WIDTH-MISMATCH` if it does not.
+**Microcode 2000 is QUUX's**, muir-sys's change to MIT's 323. At boot, at
+`RESET-MACHINE`, it reads functional source 16, and without QUUX's
+signature and a revision of 10 or more it halts at `MACHINE-NOT-QUUX-10`
+(`uc-cold-disk.lisp`): a CADR reads all ones there. On QUUX the type is
+the word's bits 3:0, 4; it reads the six-bit entry at `MAP(MD)<29:24>`,
+writes it in two deposits, `VMA<31:27>` and `VMA<24>`, and keeps block 77
+as the invalid one. It keeps the reverse first-level map in system
+communication area words 640 to 737 and the swap-out CCWs at 440 to 457
+(`uc-parameters.lisp`). It checks at boot that block 0's level-1 entry
+reads back as the invalid entry the MACHINE-ID promised, and stops at
+`MAP-WIDTH-MISMATCH` if it does not. `A-VERSION`, A memory's word 40, is
+2000 (`band_2000_is_system_2000_on_microcode_2000` and
+`system_2000_runs_on_mono_tv` in `tests/system_2000.rs`).
 
-`tests/system_1001.rs` holds it, with the microcode's files in the gitignored
-`ref/ucode-1000`: System 1001, the band as released, reaches its listener on
-QUUX on both engines with version 1000 and type 4, and on the CADR with
-version 1000 and type 1 and no level-1 entry above block 37. The band reads
-the error table for the running version at boot, `SYS: UBIN; UCADR TBL
-1000`, so the served `sys/ubin/ucadr.tbl` must be microcode 1000's.
+QUUX's microcode 1000, muir-sys's first change to MIT's 323, made from
+System 1001's sources, ran on both machines: without the signature it took
+the CADR's map, processor type 1, five-bit level-1 entries, invalid block
+37. `tests/system_1001.rs` holds that build, with its files in the
+gitignored `ref/ucode-1000`: System 1001, the band as released, reaches its
+listener on QUUX on both engines with version 1000 and type 4, and on the
+CADR with version 1000 and type 1 and no level-1 entry above block 37. The
+band reads the error table for the running version at boot, `SYS: UBIN;
+UCADR TBL 1000`, so the served `sys/ubin/ucadr.tbl` must be that
+microcode's. It is not the CADR's microcode 1000, muir-sys's change to 323
+for the CADR, which no test here runs.
 
 ## What the microcode had to do differently
 

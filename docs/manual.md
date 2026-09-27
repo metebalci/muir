@@ -1385,8 +1385,8 @@ A 1 GiB disk:
 ```
 qemu-img create -f raw quux.img 1G          # or: truncate -s 1G quux.img
 sgdisk \
-  -n 1:0:+256K -t 1:9e318cf5-a95b-4b3b-b2ad-9ae306b0e2da -c 1:"MCR1 UCADR 1000" -A 1:set:48 \
-  -n 2:0:+100M -t 2:a3b30470-c5d4-41c1-87a8-d26590424cb8 -c 2:"LOD1 System 1002.1" -A 2:set:48 \
+  -n 1:0:+256K -t 1:9e318cf5-a95b-4b3b-b2ad-9ae306b0e2da -c 1:"MCR1 UCADR 2000" -A 1:set:48 \
+  -n 2:0:+100M -t 2:a3b30470-c5d4-41c1-87a8-d26590424cb8 -c 2:"LOD1 System 2000.1" -A 2:set:48 \
   -n 3:0:+256M -t 3:4652bea5-06af-4bd9-b2bb-3541370151c8 -c 3:"PAGE" \
   -n 4:0:+600M -t 4:7afa9532-75de-409f-8dc8-fef9763511d5 -c 4:"FILE" \
   quux.img
@@ -1445,8 +1445,8 @@ with no GPT it halts at `ERROR-NO-GPT`, 36642
 given with `--prom` does not read the GPT, and one that saves page 0 to
 block 1 before it loads anything, as MIT's does, writes over sectors 2 and
 3, the start of the primary GPT's entry array, and breaks the primary table
-(muir-sys, measured). System 1002's band, dev11, is a disk made this way,
-as a dynamic VHD ([QUUX](quux.md#the-disk-file)).
+(muir-sys, measured). System 2000's band is a disk made this way, as a
+dynamic VHD ([QUUX](quux.md#the-disk-file)).
 
 ## The Chaosnet
 

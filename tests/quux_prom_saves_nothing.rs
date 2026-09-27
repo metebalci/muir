@@ -25,10 +25,10 @@
 //! `data/quux-disk.img`, the GPT disk sgdisk made, with MIT's microcode
 //! 323, `mit/sys/ubin/ucadr.mcr`, turned into partition order, in its
 //! current `MCR1`. The PROM does not care whose microcode it loads, only
-//! about its sections. The other is muir-sys's System 1002 dev11 disk,
-//! `ref/band-1002-dev11/pack-1002-dev11.vhd`, a dynamic VHD whose `MCR1`
-//! holds the hand-over's `ucadr.mcr` as it is; it skips when that is not
-//! present.
+//! about its sections. The other is muir-sys's System 2000 disk,
+//! `ref/band-2000/pack-2000.vhd`, a dynamic VHD whose `MCR1` holds the
+//! hand-over's `ucadr.mcr`, microcode 2000, as it is; it skips when that is
+//! not present.
 
 use std::path::Path;
 
@@ -211,20 +211,20 @@ fn quux_s_prom_saves_nothing_on_a_disk_made_here() {
     holds(&pack, "img", &mcr, &dir);
 }
 
-/// **The same on System 1002 dev11's disk**, the dynamic VHD as muir-sys
-/// handed it over, whose current `MCR1`, at block 17, holds the hand-over's
-/// partition-order microcode 1000 as `dd` put it there.
+/// **The same on System 2000's disk**, the dynamic VHD as muir-sys handed
+/// it over, whose current `MCR1`, at block 17, holds the hand-over's
+/// partition-order microcode 2000 as `dd` put it there.
 #[test]
-fn quux_s_prom_saves_nothing_on_system_1002_s_disk() {
-    let band = Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11");
-    let (vhd, ucode) = (band.join("pack-1002-dev11.vhd"), band.join("ucadr.mcr"));
+fn quux_s_prom_saves_nothing_on_system_2000_s_disk() {
+    let band = Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000");
+    let (vhd, ucode) = (band.join("pack-2000.vhd"), band.join("ucadr.mcr"));
     for p in [&vhd, &ucode] {
         if !p.exists() {
             eprintln!("skipped: {} is not present", p.display());
             return;
         }
     }
-    let dir = support::scratch("quux-prom-saves-nothing-1002");
+    let dir = support::scratch("quux-prom-saves-nothing-2000");
     let pack = dir.join("pack.vhd");
     std::fs::copy(&vhd, &pack).unwrap();
     let mcr = std::fs::read(&ucode).unwrap();

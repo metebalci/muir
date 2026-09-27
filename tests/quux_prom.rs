@@ -193,13 +193,14 @@ fn quux_s_prom_is_mit_s_promh_changed() {
 }
 
 /// **The built-in QUUX PROM is muir-sys's hand-over, byte for byte**, where
-/// the hand-over (`ref/prom-1002-q11`, the GPT PROM for revision 10, built
-/// from muir-sys `381edfb`) is present; and its symbols and error table put
-/// what [`GO`], [`LAST`], [`DISK_AWAIT_PACK`] and [`GPT_HALTS`] say where
-/// they say.
+/// the hand-over (`ref/band-2000`, whose `promh.*` are PROM 2000, the GPT
+/// PROM for revision 10, built from muir-sys `3b1dcf2`) is present; its
+/// symbols and error table say version 2000, 3720 octal; and they put what
+/// [`GO`], [`LAST`], [`DISK_AWAIT_PACK`] and [`GPT_HALTS`] say where they
+/// say.
 #[test]
 fn the_built_in_quux_prom_is_the_hand_over() {
-    let handed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/prom-1002-q11");
+    let handed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000");
     let Ok(bytes) = std::fs::read(handed.join("promh.mcr")) else {
         eprintln!("skipped: {} is not present", handed.display());
         return;
@@ -209,6 +210,11 @@ fn the_built_in_quux_prom_is_the_hand_over() {
     assert!(locs.contains(&format!("(I-MEM {:o})", LAST + 1)), "{locs}");
     let tbl = std::fs::read_to_string(handed.join("promh.tbl")).unwrap();
     let sym = std::fs::read_to_string(handed.join("promh.sym")).unwrap();
+    assert!(
+        tbl.contains(&format!("MICROCODE-ERROR-TABLE-VERSION-NUMBER {:o})", 2000)),
+        "version 2000 in promh.tbl"
+    );
+    assert!(sym.contains(&format!(" VERSION-NUMBER {:o} ", 2000)), "version 2000 in promh.sym");
     assert!(sym.contains(&format!("GO I-MEM {GO:o} ")), "GO in promh.sym");
     assert!(
         sym.contains(&format!("DISK-AWAIT-PACK I-MEM {DISK_AWAIT_PACK:o} ")),

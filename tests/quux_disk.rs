@@ -481,9 +481,9 @@ const RETIRED_TEMP: &str = "445976f2-34e4-4583-b750-75d28a080cba";
 #[test]
 fn the_fixtures_gpt_is_q8_s() {
     let want = [
-        (MICROCODE, 2048, 2559, "MCR1 UCADR 1000", true),
+        (MICROCODE, 2048, 2559, "MCR1 UCADR 2000", true),
         (MICROCODE, 2560, 3071, "MCR2 UCADR 999", false),
-        (BAND, 3072, 5119, "LOD1 System 1002.1", true),
+        (BAND, 3072, 5119, "LOD1 System 2000.1", true),
         (BAND, 5120, 7167, "LOD2 A comment that is 31 characters", false),
         (PAGE, 7168, 9215, "PAGE", false),
         (FILE, 9216, 16349, "FILE", false),

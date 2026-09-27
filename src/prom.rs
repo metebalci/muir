@@ -58,7 +58,7 @@ pub fn boot_prom() -> Vec<Insn> {
     parse_mcr(PROMH_9MCR).expect("mit/sys/ubin/promh.mcr")
 }
 
-/// QUUX's boot PROM, version 1000, at control store 36000 (contract Q2):
+/// QUUX's boot PROM, version 2000, at control store 36000 (contract Q2):
 /// muir-sys's `promh.text`, block-disk only, saving nothing and finding
 /// the microcode through the disk's GPT (contract Q8), in partition order. `data/README.md` has where it came from;
 /// `tests/quux_prom.rs` holds it.
