@@ -262,3 +262,55 @@ fn microcode_1000_runs_on_a_cadr_as_a_cadr() {
         );
     }
 }
+
+/// The SHA-256 of `path`, by `sha256sum`.
+fn sha256(path: &std::path::Path) -> String {
+    let out = std::process::Command::new("sha256sum").arg(path).output().expect("sha256sum");
+    assert!(out.status.success(), "sha256sum {}", path.display());
+    String::from_utf8(out.stdout).unwrap().split_whitespace().next().unwrap().to_string()
+}
+
+/// **A pack opened `ro` is a writable drive to the machine, and its file
+/// never changes.** `cadr --disk-pack <pack>,ro` boots the release's pack
+/// past MIT's boot PROM --- which writes block 1 on every boot
+/// (`SAVE-A-PAGE`, `mit/sys/ucadr/promh.text`) and takes the status word's
+/// read-only bit, `STATUS<7>`, for a disk error --- and runs as the same
+/// pack opened read-write does, microcycle for microcycle: both end at the
+/// same PC. The read-write copy's file has changed, so the run wrote; the
+/// read-only copy's has not.
+#[test]
+fn a_read_only_pack_boots_as_a_writable_one_and_its_file_never_changes() {
+    use support::{Run, cadr, text};
+    let Some(pack) = support::vendor(&["run", "release-1001-pack.img"]) else { return };
+    let dir = support::scratch("system-1001-ro");
+    let before = sha256(&pack);
+    let mut ends = Vec::new();
+    for spelled in ["ro", "rw"] {
+        let copy = dir.join(format!("{spelled}.img"));
+        std::fs::copy(&pack, &copy).unwrap();
+        let out = cadr()
+            .args(["--micro", "--disk-pack", &format!("{},{spelled}", copy.display())])
+            .args(["--stop-after", "20000000"])
+            .run();
+        let t = text(&out);
+        assert!(out.status.success(), "{spelled}:\n{t}");
+        let end = t
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("ran out at ") || l.starts_with("quit at "))
+            .unwrap_or_else(|| panic!("{spelled}: no end said:\n{t}"))
+            .to_string();
+        assert!(
+            end.starts_with("ran out at 20000000; PC ") && !end.contains("in the PROM"),
+            "{spelled}: past the PROM and running, not halted:\n{t}"
+        );
+        let after = sha256(&copy);
+        match spelled {
+            "ro" => assert_eq!(after, before, "the read-only pack's file changed"),
+            _ => assert_ne!(after, before, "the read-write run wrote nothing"),
+        }
+        std::fs::remove_file(&copy).unwrap();
+        ends.push(end);
+    }
+    assert_eq!(ends[0], ends[1], "ro and rw end at the same place");
+}

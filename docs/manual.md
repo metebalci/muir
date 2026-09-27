@@ -440,7 +440,7 @@ the address is all it has.
 Default: the same address as this machine's, which collides with nothing,
 the two cables never meeting.
 
-### `--debuggee-disk-pack <image>[,<unit>][,ro]`
+### `--debuggee-disk-pack <image>[,<unit>][,ro][,wp]`
 
 `cadr` only.
 
@@ -464,7 +464,7 @@ Default: the display above this machine's, `127.0.0.1:5901` when it is at
 
 **chip:** the disk controller, as MIT's board or as a model of it. QUUX's
 disk is block-disk, always, and `quux` has no such flag
-([`--disk-pack`](#--disk-pack-imageunitro)).
+([`--disk-pack`](#--disk-pack-imageunitrowp)).
 
 **The netlist runs the drive's real milliseconds.** Its sequencer waits on
 the drive's clocks and on its own delay lines, so the block it is reading
@@ -515,18 +515,24 @@ multiplexor and there is nothing to model it against.
 Default: off, with one pack in unit 0 and the jumpers on. The start says
 when it is fitted.
 
-### `--disk-pack <image>[,<unit>][,ro]`
+### `--disk-pack <image>[,<unit>][,ro][,wp]`
 
 The pack in a drive: its blocks end to end.
 
-After the image, in either order: the unit, and `ro` for the drive's
-read-only switch --- the status word says so, and a write faults. `rw`
-spells the switch off, which is where it stands without either.
+After the image, in any order: the unit, `ro`, and on `cadr` `wp`.
 
 Without `ro` the image is opened read-write and a written block goes into
-the file, as a drive writes its pack. With it the file is opened read-only
-and a written block stays in the run, so it reaches a checkpoint but not the
-image.
+the file, as a drive writes its pack; `rw` says so. With `ro` the file is
+opened read-only and the drive is a writable one to the machine all the
+same: a written block stays in the run and reads back, so it reaches a
+checkpoint but never the image. `ro` means the same on `cadr` and `quux`.
+
+`wp` is the Trident's read-only switch, `cadr`'s alone: the status word
+says so, `STATUS<7>`, and a write faults, so nothing reaches the image
+either, and it is opened read-only. MIT's boot PROM takes `STATUS<7>` for a
+disk error and halts at `ERROR-DISK-ERROR`, so a pack in a drive with the
+switch on does not boot. `wp` with `rw` is refused. Block-disk has no such
+switch, and `quux` refuses `wp`.
 
 The flag can come more than once, one pack to a unit, up to the eight the
 controller addresses. On the netlist disk controller a second pack, or one

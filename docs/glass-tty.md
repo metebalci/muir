@@ -187,8 +187,9 @@ The endpoint is nothing, a port, an address, or address:port. **Bound to the
 loopback unless an address says otherwise**, for the reason `--terminal` is:
 telnet offers no authentication at all, and a glass TTY on a routable
 address hands the machine's keyboard to whoever can reach it. `ro` is a
-client that may watch and not type, spelled as `--disk-pack` spells the
-drive's read-only switch because it means the same thing.
+client that may watch and not type, spelled as `--disk-pack` and
+`--file-root` spell a file muir never writes, because it means the same
+thing.
 
 The flag may be given more than once, and several clients may attach to each
 --- every client sees the same screen, and each keeps its own copy of what it

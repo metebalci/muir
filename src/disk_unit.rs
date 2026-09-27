@@ -81,8 +81,11 @@ pub struct Unit {
     /// ordinary Write replaces it, because the board writes a fresh
     /// checkword after every data field it writes.
     data_checkwords: HashMap<u32, [u8; 4]>,
-    /// MIT: "the read-only switch only applies when the drive is not
-    /// selected".  Nothing models the switch; a pack opened here is writable.
+    /// The drive's read-only switch, `STATUS<7>`: "Writing while the disk
+    /// is read-only causes a fault" (MIT), and nothing is written. Off
+    /// unless set: `cadr`'s `--disk-pack <image>,wp` sets it. Whether the
+    /// file is written is [`Unit::open`]'s and [`Unit::open_rw`]'s
+    /// business, not the switch's.
     pub read_only: bool,
     cylinder: u32,
     head: u32,

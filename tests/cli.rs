@@ -1504,6 +1504,58 @@ fn the_multiplexor_is_the_netlist_controllers_board() {
     );
 }
 
+/// Where the label `name` is in MIT's boot PROM, from its symbol table,
+/// `mit/sys/ubin/promh.sym`: a line `<name> I-MEM <octal>`.
+fn prom_label(name: &str) -> u16 {
+    let sym =
+        std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/mit/sys/ubin/promh.sym")).unwrap();
+    let sym = String::from_utf8_lossy(&sym);
+    let at = sym
+        .lines()
+        .find_map(|l| l.strip_prefix(name)?.trim().strip_prefix("I-MEM "))
+        .unwrap_or_else(|| panic!("{name} is not in promh.sym"));
+    u16::from_str_radix(at.trim(), 8).unwrap()
+}
+
+/// **`wp` is the Trident's read-only switch, and `ro` is not a switch.**
+/// MIT's boot PROM takes `STATUS<7>`, the switch, for a disk error ---
+/// `A-DISK-ERROR` has `<7:4>` in it, `mit/sys/ucadr/promh.text` --- and
+/// halts at `ERROR-DISK-ERROR` on its first disk command, before it has
+/// read a word. A pack opened `ro` is a writable drive to the machine, so
+/// the same PROM gets through its disk commands, writes block 1 and reads
+/// the label; a pack of zeros has none, and it halts at `ERROR-BAD-LABEL`
+/// instead. The pack is a T-300's size and sparse, and nothing needs
+/// `vendor/`.
+#[test]
+fn wp_is_the_drives_read_only_switch_and_ro_is_not() {
+    let dir = scratch("wp");
+    let pack = dir.join("zeros.img");
+    // A T-300: 815 cylinders, 19 heads, 17 blocks a track, 1 KiB a block.
+    const T300: u64 = 815 * 19 * 17 * 1024;
+    std::fs::File::create(&pack).unwrap().set_len(T300).unwrap();
+    for (spelled, halts_at, start) in [
+        ("wp", "ERROR-DISK-ERROR", "the read-only switch on: a write faults"),
+        ("ro", "ERROR-BAD-LABEL", "opened read-only: a written block stays in the run"),
+    ] {
+        let out = cadr()
+            .args(["--micro", "--disk-pack", &format!("{},{spelled}", pack.display())])
+            .args(["--stop-after", "5000000"])
+            .run();
+        let t = text(&out);
+        assert!(t.contains(start), "{spelled}: the start says what it is:\n{t}");
+        let pc = format!("PC {:o} in the PROM; ", prom_label(halts_at));
+        assert!(t.contains("the machine stopped itself"), "{spelled}: halted:\n{t}");
+        assert!(t.contains(&pc), "{spelled}: halted at {halts_at}, {pc}:\n{t}");
+    }
+    // QUUX's block-disk has no such switch, so `quux` has no `wp`.
+    refused_saying(
+        "quux",
+        &["--micro", "--disk-pack", "a.img,wp"],
+        "wp is the CADR's Trident's read-only switch, and block-disk has none",
+    );
+    refused_saying("cadr", &["--micro", "--disk-pack", "a.img,wp,rw"], "wp with rw");
+}
+
 /// **`kill -USR1` asks a running machine where it is, and it answers and
 /// goes on.**
 ///

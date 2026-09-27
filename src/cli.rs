@@ -72,12 +72,14 @@
 //! `disk-sys-100-0.img` --- and there is no default: no flag is a drive
 //! with no pack in it. The image is the pack's blocks end to end, 256 words of 32 bits
 //! each, in the geometry's order. It is opened read-write and written as a
-//! drive writes its pack. After the image, in either order, come the
+//! drive writes its pack. After the image, in any order, come the
 //! drive's unit --- 0 unless a DISK MULTIPLEXOR is fitted with
 //! `--disk-multiplexor`, the netlist controller having one port of its
-//! own --- and
-//! `ro`, the drive's read-only switch, `STATUS<7>`, with the file opened
-//! read-only behind it, and a write then faults as MIT says it does. With
+//! own ---; `ro`, the file opened read-only behind a drive that is
+//! writable all the same, a written block staying in the run and a
+//! checkpoint, as `quux`'s `ro` does; and `wp`, the drive's read-only
+//! switch, `STATUS<7>`, a write then faulting as MIT says it does and
+//! nothing reaching the file. With
 //! no pack at all the engines run the same PROM waiting on a drive that
 //! never answers, which measures the wait loop.
 //!
@@ -440,8 +442,8 @@ struct GlassAt {
 ///
 /// The endpoint is [`endpoint`]'s --- nothing, a port, an address, or
 /// address:port, on the loopback unless an address says otherwise --- and
-/// `ro` is the drive's read-only switch spelled as `--disk-pack` spells
-/// it, because it means the same thing: look and do not touch.
+/// `ro` is spelled as `--disk-pack` and `--file-root` spell it, because it
+/// means the same thing: look and do not touch.
 fn glass_spec(arg: Option<&str>) -> Result<GlassAt, String> {
     let mut endpoint_spec = None;
     let mut read_only = None;
@@ -654,28 +656,40 @@ fn window_address(flag: &str, spec: &str) -> u64 {
     at
 }
 
-/// A pack flag's argument: the image, and after commas in either order
-/// the drive's unit and `ro`, its read-only switch.
+/// A pack flag's argument: the image, and after commas in any order the
+/// drive's unit, `ro` for a file that is never written, and `wp`, the
+/// drive's read-only switch.
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct Pack {
     path: PathBuf,
     unit: usize,
+    /// The file is opened read-only: a written block stays in the run and
+    /// goes into a checkpoint. `ro`, and `wp` too, whose switch lets no
+    /// write reach the drive at all.
     read_only: bool,
+    /// The drive's read-only switch, `STATUS<7>`: `wp`, the CADR's alone.
+    write_protect: bool,
 }
 
-/// `<image>[,<unit>][,ro]`, the parts after the image in either order:
-/// unit 0 and read-write unless said, `rw` allowed for saying so.
+/// `<image>[,<unit>][,ro][,wp]`, the parts after the image in any order:
+/// unit 0, read-write and the switch off unless said, `rw` allowed for
+/// saying so. `wp` with `rw` is refused: the switch keeps every write from
+/// the file.
 fn pack_spec(arg: &str) -> Result<Pack, String> {
     let mut parts = arg.split(',');
     let path = match parts.next() {
         Some(p) if !p.is_empty() => PathBuf::from(p),
         _ => return Err("wants an image".into()),
     };
-    let (mut unit, mut read_only) = (None, None);
+    let (mut unit, mut read_only, mut write_protect) = (None, None, false);
     for part in parts {
         if part == "ro" || part == "rw" {
             if read_only.replace(part == "ro").is_some() {
                 return Err("ro or rw twice".into());
+            }
+        } else if part == "wp" {
+            if std::mem::replace(&mut write_protect, true) {
+                return Err("wp twice".into());
             }
         } else if !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()) {
             let u = part.parse().ok().filter(|&u| u < crate::disk_controller::UNITS);
@@ -684,10 +698,18 @@ fn pack_spec(arg: &str) -> Result<Pack, String> {
                 return Err("the unit twice".into());
             }
         } else {
-            return Err(format!("{part:?} is neither a unit nor ro"));
+            return Err(format!("{part:?} is neither a unit, ro nor wp"));
         }
     }
-    Ok(Pack { path, unit: unit.unwrap_or(0), read_only: read_only.unwrap_or(false) })
+    if write_protect && read_only == Some(false) {
+        return Err("wp with rw: the switch keeps every write from the file".into());
+    }
+    Ok(Pack {
+        path,
+        unit: unit.unwrap_or(0),
+        read_only: write_protect || read_only.unwrap_or(false),
+        write_protect,
+    })
 }
 
 /// `--chaos-udp-peer`'s argument, `<address>@<host>[:<port>]`: a
@@ -733,7 +755,7 @@ fn default_peer_spec(arg: &str) -> Option<SocketAddr> {
 /// fill is the controller's business and not the flag's: see
 /// `--disk-multiplexor`.
 fn pack_flag(flag: &str, arg: Option<String>) -> Pack {
-    let arg = arg.unwrap_or_else(|| usage(&format!("{flag} wants <image>[,<unit>][,ro]")));
+    let arg = arg.unwrap_or_else(|| usage(&format!("{flag} wants <image>[,<unit>][,ro][,wp]")));
     pack_spec(&arg).unwrap_or_else(|e| usage(&format!("{flag} {arg}: {e}")))
 }
 
@@ -1049,10 +1071,10 @@ const USAGE_CADR: &str = "usage: cadr [--micro|--rtl|--chip] [--chaos-address <a
             [--debug-cable-connect [<endpoint>|0x<address>]]
             [--debug-cable-listen [<endpoint>]] [--debug-in-process]
             [--debuggee-chaos-address <address>]
-            [--debuggee-disk-pack <image>[,<unit>][,ro]]
+            [--debuggee-disk-pack <image>[,<unit>][,ro][,wp]]
             [--debuggee-terminal [<endpoint>]]
             [--disk-controller netlist|model] [--disk-multiplexor]
-            [--disk-pack <image>[,<unit>][,ro]]
+            [--disk-pack <image>[,<unit>][,ro][,wp]]
             [--glass-tty [<endpoint>][,ro]]
             [--io-board netlist|model] [--keyboard-boot <keys>]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
@@ -1303,7 +1325,7 @@ const HELP: &[(Whose, &str)] = &[
     ),
     (
         Whose::Cadr,
-        "  --debuggee-disk-pack <image>[,<unit>][,ro]
+        "  --debuggee-disk-pack <image>[,<unit>][,ro][,wp]
                                rtl: the other machine's pack, as
                                --disk-pack.",
     ),
@@ -1343,19 +1365,22 @@ const HELP: &[(Whose, &str)] = &[
     ),
     (
         Whose::Cadr,
-        "  --disk-pack <image>[,<unit>][,ro]
+        "  --disk-pack <image>[,<unit>][,ro][,wp]
                                the pack in a drive: its blocks end to end. The
                                image is opened read-write, as a drive writes
-                               its pack. After the image, in either order: the
-                               unit, and ro for the drive's read-only switch
-                               --- the status word says so, a write faults,
-                               and the image is opened read-only, so a written
-                               block reaches a checkpoint rather than the
-                               file. Once for each pack, one to a unit, up to
-                               the eight the controller addresses. [default:
-                               unit 0; no pack unless one is named, which is a
-                               drive with no pack in it and a boot that waits
-                               on it for ever]",
+                               its pack. After the image, in any order: the
+                               unit; ro, the image opened read-only and the
+                               drive writable all the same, so a written
+                               block stays in the run and reaches a
+                               checkpoint rather than the file; and wp, the
+                               drive's read-only switch --- the status word
+                               says so, a write faults and nothing reaches
+                               the file, and MIT's boot PROM halts at
+                               ERROR-DISK-ERROR. Once for each pack, one to a
+                               unit, up to the eight the controller
+                               addresses. [default: unit 0; no pack unless
+                               one is named, which is a drive with no pack in
+                               it and a boot that waits on it for ever]",
     ),
     (
         Whose::Quux,
@@ -1365,9 +1390,9 @@ const HELP: &[(Whose, &str)] = &[
                                and command list as the CADR's controller, with
                                blocks by number, read and write only. The
                                image is opened read-write, as a drive writes
-                               its pack; ro is the drive's read-only switch
-                               --- a write faults, and the image is opened
-                               read-only, so a written block reaches a
+                               its pack; with ro it is opened read-only and
+                               the disk is writable all the same, so a
+                               written block stays in the run and reaches a
                                checkpoint rather than the file. [default: no
                                disk unless one is named, and a boot that waits
                                on it for ever]",
@@ -1907,10 +1932,10 @@ fn help(exe: &'static str) -> ! {
 /// The packs a run gets: the ones `--disk-pack` names, and nothing at all
 /// otherwise. There is no default, because which pack a drive holds is not
 /// something to guess: no flag is a drive with no pack in it, which the
-/// boot waits on for ever. The path, the unit and the drive's read-only
-/// switch, in the order the flags came.
-fn pack_choice(packs: &[Pack]) -> Vec<(PathBuf, usize, bool)> {
-    packs.iter().map(|p| (p.path.clone(), p.unit, p.read_only)).collect()
+/// boot waits on for ever. The path, the unit, whether the file is opened
+/// read-only and the drive's read-only switch, in the order the flags came.
+fn pack_choice(packs: &[Pack]) -> Vec<(PathBuf, usize, bool, bool)> {
+    packs.iter().map(|p| (p.path.clone(), p.unit, p.read_only, p.write_protect)).collect()
 }
 
 /// What a file of flags is called where the executable `exe` looks for
@@ -2408,7 +2433,7 @@ fn memory_size(boards: usize) -> String {
 
 /// Attaches each pack, [`pack_choice`], to its unit.
 fn attach(m: &mut Machine, packs: &[Pack]) {
-    for (p, unit, read_only) in pack_choice(packs) {
+    for (p, unit, read_only, write_protect) in pack_choice(packs) {
         if m.block_disk.is_some() && unit != 0 {
             fail(&format!(
                 "{}: block-disk has one pack, unit 0, and this is unit {unit}",
@@ -2431,11 +2456,12 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
             continue;
         }
         // A drive writes its pack, so the image is opened read-write and a
-        // written block goes into the file. `ro` is the drive's own
-        // read-only switch: the file is opened read-only behind it, a
+        // written block goes into the file. With `ro` the file is opened
+        // read-only and the drive is a writable one all the same: a
         // written block stays in memory for the run and goes into a
-        // checkpoint instead, and the machine sees the write fault as MIT
-        // says it does.
+        // checkpoint instead. `wp` is the drive's own read-only switch,
+        // `STATUS<7>`, and a write faults as MIT says it does, so nothing
+        // is written at all.
         let opened = if read_only {
             Unit::open(&p, Geometry::T300)
         } else {
@@ -2445,7 +2471,7 @@ fn attach(m: &mut Machine, packs: &[Pack]) {
             Ok(u) => u,
             Err(e) => fail(&format!("{}: {e}", p.display())),
         };
-        u.read_only = read_only;
+        u.read_only = write_protect;
         m.disk.attach(unit, u);
     }
 }
@@ -5281,6 +5307,11 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
             },
             (None, "--disk-pack") => {
                 let p = pack_flag("--disk-pack", args.next());
+                if p.write_protect && exe == "quux" {
+                    usage(
+                        "--disk-pack: wp is the CADR's Trident's read-only switch, and block-disk has none",
+                    );
+                }
                 if packs.iter().any(|q: &Pack| q.unit == p.unit) {
                     usage(&format!("--disk-pack: unit {} twice; one pack a drive", p.unit));
                 }
@@ -6300,7 +6331,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
         if chosen.is_empty() {
             writeln!(s, "pack: none; the boot waits on a drive that never answers").unwrap();
         }
-        for (p, unit, ro) in chosen {
+        for (p, unit, ro, wp) in chosen {
             // QUUX's disk says what its footer made it and its size, the
             // two things that are no longer a T-300's (contract Q8).
             let kind = match block_disk.then(|| crate::disk_image::probe(&p)) {
@@ -6317,8 +6348,10 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                 s,
                 "pack: {} in unit {unit}{kind}{}",
                 shown(&p),
-                if ro {
-                    ", the read-only switch on: nothing reaches the file"
+                if wp {
+                    ", the read-only switch on: a write faults, and nothing reaches the file"
+                } else if ro {
+                    ", opened read-only: a written block stays in the run, and nothing reaches the file"
                 } else {
                     ", written as the machine writes it"
                 }
@@ -6969,14 +7002,25 @@ mod tests {
     }
 
     #[test]
-    fn a_pack_is_an_image_then_its_unit_and_ro_in_either_order() {
-        let pack = |unit, read_only| Pack { path: PathBuf::from("a.img"), unit, read_only };
-        assert_eq!(pack_spec("a.img"), Ok(pack(0, false)));
-        assert_eq!(pack_spec("a.img,ro"), Ok(pack(0, true)));
-        assert_eq!(pack_spec("a.img,rw"), Ok(pack(0, false)));
-        assert_eq!(pack_spec("a.img,3"), Ok(pack(3, false)));
-        assert_eq!(pack_spec("a.img,3,ro"), Ok(pack(3, true)));
-        assert_eq!(pack_spec("a.img,ro,3"), Ok(pack(3, true)));
+    fn a_pack_is_an_image_then_its_unit_ro_and_wp_in_any_order() {
+        let pack = |unit, read_only, write_protect| Pack {
+            path: PathBuf::from("a.img"),
+            unit,
+            read_only,
+            write_protect,
+        };
+        assert_eq!(pack_spec("a.img"), Ok(pack(0, false, false)));
+        assert_eq!(pack_spec("a.img,ro"), Ok(pack(0, true, false)));
+        assert_eq!(pack_spec("a.img,rw"), Ok(pack(0, false, false)));
+        assert_eq!(pack_spec("a.img,3"), Ok(pack(3, false, false)));
+        assert_eq!(pack_spec("a.img,3,ro"), Ok(pack(3, true, false)));
+        assert_eq!(pack_spec("a.img,ro,3"), Ok(pack(3, true, false)));
+        // The switch lets nothing reach the file, which is opened read-only.
+        assert_eq!(pack_spec("a.img,wp"), Ok(pack(0, true, true)));
+        assert_eq!(pack_spec("a.img,wp,ro"), Ok(pack(0, true, true)));
+        assert_eq!(pack_spec("a.img,wp,2"), Ok(pack(2, true, true)));
+        assert!(pack_spec("a.img,wp,rw").is_err());
+        assert!(pack_spec("a.img,wp,wp").is_err());
         assert!(pack_spec("").is_err());
         assert!(pack_spec(",ro").is_err());
         assert!(pack_spec("a.img,ro,ro").is_err());
