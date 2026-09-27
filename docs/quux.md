@@ -427,7 +427,8 @@ a miss's line fill against a hit, a register never cached, nothing past
 main memory's end reading back on both engines, the disk's write never hit
 stale, and a checkpoint; `tests/quux_device_registers.rs` a register a
 microcycle longer than nothing, every empty range failing at once on both
-engines, and the frame buffer through the cache;
+engines, the frame buffer through the cache, and a register write held
+behind a register read keeping `MD` no longer than a main memory write;
 `quux_s_memory_port_and_its_timing` in `tests/cli.rs` the flag and the
 start's report.
 
@@ -690,7 +691,14 @@ Holds and write pulses:
   `tests/quux_device_registers.rs`,
   `a_start_held_behind_a_write_loads_md_after_the_write` and
   `a_fetch_right_after_a_write_waits_for_it` in
-  `tests/quux_memory_port.rs`). On the CADR nothing holds it: one cycle
+  `tests/quux_memory_port.rs`). A register write held behind a register
+  read does not put the read's word off: `MD` has it when the read's own
+  `READ IN PROGRESS` falls, 140 ns after its acknowledgement, and the
+  write's acknowledgement moves nothing, so a microcycle reading `MD`
+  after one filler takes 80 ns, two microcycles, as with a write of main
+  memory there
+  (`a_register_write_right_after_a_register_read_holds_md_no_longer` in
+  `tests/quux_device_registers.rs`). On the CADR nothing holds it: one cycle
   goes out for the two starts, with the second start's direction, page
   and `VMA<7:0>`, and the first is lost, measured on `chip` and held on
   `rtl` and `micro`

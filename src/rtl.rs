@@ -1669,8 +1669,23 @@ impl Rtl {
         // A read the memory cache answered ran no bus cycle: its word is at
         // the data paths with the acknowledgement, and nothing is left to
         // release ([`crate::cache`]).
+        //
+        // `-RDFINISH` is a pulse off every acknowledgement, and the first
+        // to reach a `READ IN PROGRESS` still up clears it: a write's
+        // acknowledgement, behind a read whose own pulse is already on its
+        // way down the delay line, does not put the read's off. On QUUX,
+        // whose processor holds a start right after a start, that is a
+        // register read and then a register write started in the next
+        // microcycle: the read's `READ IN PROGRESS` falls between two
+        // edges, and the write is acknowledged at the second, which this
+        // engine handles before it lets the fall take effect there
+        // ([`Rtl::after_memack`])
+        // (`a_register_write_right_after_a_register_read_holds_md_no_longer`,
+        // `tests/quux_device_registers.rs`).
         let (finish, release) = if ack.cached { (0, 0) } else { (RD_FINISH_NS, MFINISHD_NS) };
-        self.rd_finish_at = ack.at + finish;
+        let finish_at = ack.at + finish;
+        self.rd_finish_at =
+            if self.rd_in_progress { self.rd_finish_at.min(finish_at) } else { finish_at };
         // "Clears on MEMACK or RESET" --- through [`MFINISHD_NS`].
         self.mbusy_clear_at = ack.at + release;
         // `-MEMRQ` goes with `MBUSY`, and `-XBUS RQ` with it; a memory

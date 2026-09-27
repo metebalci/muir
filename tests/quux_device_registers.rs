@@ -223,3 +223,52 @@ fn a_start_right_after_a_start_waits_for_it() {
         assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0, "{name}: every cycle answered");
     }
 }
+
+/// **A register write started right behind a register read holds `MD` no
+/// longer than a main memory write there**: a read of the MACHINE-ID, a
+/// write of the register page's reserved word 105 in the next microcycle
+/// (held until the read has gone out), a filler, then `MD` read. The read's
+/// word is in `MD` when its own `READ IN PROGRESS` falls, which the write's
+/// acknowledgement does not put off: the microcycle reading `MD` takes two
+/// microcycles, 80 ns, as with a write of main memory behind the read ---
+/// muir-fpga's fabric's figure, which muir takes (Q7
+/// fixes a single register access at two microcycles and says nothing of one
+/// behind another). Both engines read the word and set no NXM bit; `micro`
+/// has no wait for `MD` to time.
+#[test]
+fn a_register_write_right_after_a_register_read_holds_md_no_longer() {
+    const WORD_105: u32 = 0o17377105;
+    const MEMORY: u32 = 0o1000;
+    let prom = [
+        Insn::new(ALU | SETM | m_src(1) | START_READ),
+        Insn::new(ALU | SETM | m_src(2) | START_WRITE),
+        filler(),
+        Insn::new(ALU | SETM | SRC_MD | a_dest(0o200)),
+    ];
+    // How long the microcycle reading `MD`, at 3, takes on `rtl`.
+    let md_microcycle = |behind: u32| {
+        let mut e = Rtl::new(machine(&prom, &[REGISTER, behind]));
+        e.boot();
+        let (mut from, mut to) = (None, None);
+        for _ in 0..4000 {
+            let (pc, ns) = (e.machine().opc, e.ns());
+            match pc {
+                3 => _ = from.get_or_insert(ns),
+                4 => _ = to.get_or_insert(ns),
+                STOP => return (e.machine().clone(), to.unwrap() - from.unwrap()),
+                _ => {}
+            }
+            e.step().unwrap();
+        }
+        panic!("the program never reached its end");
+    };
+    let (r, page) = md_microcycle(WORD_105);
+    let (_, memory) = md_microcycle(MEMORY);
+    assert_eq!(memory, 80, "main memory behind the read: MD read in two microcycles");
+    assert_eq!(page, 80, "word 105 behind the read: MD read in two microcycles");
+    let (e, _) = run(Micro::new(machine(&prom, &[REGISTER, WORD_105])), |_| 0);
+    for (name, m) in [("rtl", r), ("micro", e)] {
+        assert_eq!(m.amem[0o200], Geometry::QUUX.machine_id.unwrap(), "{name}: the word read");
+        assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0, "{name}: every cycle answered");
+    }
+}
