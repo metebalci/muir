@@ -12,10 +12,9 @@
 //!
 //! So each committed Markdown file is read here, and each relative link in
 //! it is held to a file that exists and, when it names one, to a heading that
-//! file has. The front page links into `docs/` by its GitHub address, and
-//! those are held the same way. Links out of the repository are not
-//! followed: whether another site is up is not something a test here can
-//! settle. Everything read is committed, so this never skips.
+//! file has. Links out of the repository are not followed: whether another
+//! site is up is not something a test here can settle. Everything read is
+//! committed, so this never skips.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -198,33 +197,4 @@ fn every_link_between_the_documents_leads_somewhere() {
     }
     assert!(wrong.is_empty(), "links that lead nowhere:\n{}", wrong.join("\n"));
     assert!(checked > 20, "{checked} links read: the reader is missing them");
-}
-
-/// **The front page's links into the repository lead somewhere too.** It
-/// is served on its own site, so it names each file by its GitHub address;
-/// the part after `blob/main/` or `tree/main/` is a path here, and an
-/// anchor on the repository's own address is a heading of `README.md`,
-/// which is the page GitHub shows there.
-#[test]
-fn the_front_page_links_into_the_repository_lead_somewhere() {
-    let page = root().join("pages/index.html");
-    let text = std::fs::read_to_string(&page).expect("the front page is committed");
-    let mut wrong = Vec::new();
-    let mut checked = 0;
-    for (prefix, from, lead) in [
-        ("https://github.com/metebalci/muir/blob/main/", "index", ""),
-        ("https://github.com/metebalci/muir/tree/main/", "index", ""),
-        ("https://github.com/metebalci/muir#", "README.md", "#"),
-    ] {
-        for piece in text.split(prefix).skip(1) {
-            let target = format!("{lead}{}", &piece[..piece.find('"').expect("an attribute ends")]);
-            checked += 1;
-            // Resolved as if written in a file at the root.
-            if let Some(why) = broken(&root().join(from), &target) {
-                wrong.push(format!("pages/index.html: {prefix}: {target}: {why}"));
-            }
-        }
-    }
-    assert!(wrong.is_empty(), "links that lead nowhere:\n{}", wrong.join("\n"));
-    assert!(checked > 5, "{checked} links read: the reader is missing them");
 }

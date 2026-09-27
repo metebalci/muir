@@ -18,7 +18,7 @@
 //!   digits, but not the bypass capacitors, resistor packs, busbars and
 //!   pull-up networks, which nothing here simulates.
 //!
-//! The README, `data/README.md` and `pages/index.html` quote the third.
+//! `data/README.md` and `docs/netlists.md` quote the third.
 //! **Reading those documents is `tests/documents.rs`**, which takes the
 //! number out of each and compares it with the netlist; what this file
 //! does is hold the netlists themselves to MIT's own three counts of the
@@ -61,8 +61,8 @@ const SIMPLETV: &str = include_str!("../data/SIMPLETV.netlist");
 const LISPMTV: &str = include_str!("../data/LISPMTV.netlist");
 const DM: &str = include_str!("../data/DM.netlist");
 
-/// **What is mounted on each board.** The numbers the README, `data/README.md`
-/// and the site quote, and the machine they add up to.
+/// **What is mounted on each board.** The numbers `data/README.md` and
+/// `docs/netlists.md` quote, and the machine they add up to.
 #[test]
 fn every_board_has_the_parts_the_docs_claim() {
     let cadr = netlist::parse(CADR).unwrap();
@@ -88,7 +88,7 @@ fn every_board_has_the_parts_the_docs_claim() {
         n.insert(name, count);
     }
 
-    // The machine the site draws: the processor pair, the bus interface,
+    // The whole machine: the processor pair, the bus interface,
     // the memory, the I/O board, the disk controller and both display
     // boards --- a SIMPLE TV as the main display and a LISPM TV beside it
     // as the color TV. The disk multiplexor is not in it, being fitted

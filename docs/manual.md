@@ -1,8 +1,8 @@
 # muir manual
 
 What muir does when you run it, every flag it takes, and what it is doing
-underneath. The front page, with the pictures and the short way in, is at
-[muir.metebalci.com](https://muir.metebalci.com/).
+underneath. The site, with the pictures and the short way in, is at
+[muir.metebalci.com/simulator/](https://muir.metebalci.com/simulator/).
 
 This file is the program itself. Beside it:
 
@@ -1557,7 +1557,7 @@ and the debugger costs that cycle when it runs on.
 
 ### The recording
 
-The acceptance test as it ran is at [muir.metebalci.com/lashup.html](https://muir.metebalci.com/lashup.html), the recording alone at the size the machines drew it.
+The acceptance test as it ran is at [muir.metebalci.com/simulator/lashup.html](https://muir.metebalci.com/simulator/lashup.html), the recording alone at the size the machines drew it.
 
 This is the recording itself, at the size the machines drew it, which is the
 size to read the screens at. Two machines on one canvas: 768 by 963 each, with

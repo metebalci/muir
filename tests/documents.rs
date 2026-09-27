@@ -3,17 +3,16 @@
 
 //! The numbers the documents quote about the netlists.
 //!
-//! `data/README.md` and `pages/index.html` each carry a table of the
-//! netlists and how many parts are on each board, and `data/README.md`
-//! carries the pages and the `part` records with them.
-//! `docs/netlists.md` says the same totals in prose.
+//! `data/README.md` carries a table of the netlists: the pages, the `part`
+//! records and how many parts are on each board. `docs/netlists.md` says
+//! the same totals in prose.
 //! **Nothing read any of them.** `tests/parts_mounted.rs` asserts the same
 //! figures against the netlists and says in a comment that the documents
 //! quote them, but it restates the constants rather than reading them, so
 //! the netlists were held to the numbers and the documents to nobody.
 //!
 //! That fails worse than a document nothing checks at all. Change a
-//! netlist, `parts_mounted` fails, somebody updates the constant, and three
+//! netlist, `parts_mounted` fails, somebody updates the constant, and both
 //! documents are wrong from that moment **with a green suite saying
 //! otherwise**: a second copy that nothing reconciles is worse than no
 //! copy, because it looks checked.
@@ -102,49 +101,8 @@ fn markdown(text: &str, columns: &[&str]) -> Table {
     panic!("no Markdown table with the columns {columns:?}");
 }
 
-/// The same, out of an HTML table: `<th>` for the header and `<td>` for
-/// each row, with any markup inside a cell taken off.
-fn html(text: &str, columns: &[&str]) -> Table {
-    let strip = |cell: &str| -> String {
-        let mut out = String::new();
-        let mut in_tag = false;
-        for c in cell.chars() {
-            match c {
-                '<' => in_tag = true,
-                '>' => in_tag = false,
-                c if !in_tag => out.push(c),
-                _ => {}
-            }
-        }
-        out.trim().to_string()
-    };
-    let cells = |row: &str, tag: &str| -> Vec<String> {
-        row.split(&format!("<{tag}"))
-            .skip(1)
-            .filter_map(|c| c.split_once('>').map(|(_, rest)| rest))
-            .filter_map(|c| c.split_once(&format!("</{tag}>")).map(|(cell, _)| strip(cell)))
-            .collect()
-    };
-    let rows: Vec<&str> = text.split("<tr>").skip(1).collect();
-    let head = rows
-        .iter()
-        .map(|r| cells(r, "th"))
-        .find(|h| !h.is_empty() && columns.iter().all(|c| h.iter().any(|x| x == c)));
-    let head = head.unwrap_or_else(|| panic!("no HTML table with the columns {columns:?}"));
-    // Every `<td>` row of that table: the rows before its header belong to
-    // an earlier table, and a later `<th>` row begins the next one.
-    let after: Vec<&str> = rows
-        .iter()
-        .skip_while(|r| cells(r, "th") != head)
-        .skip(1)
-        .take_while(|r| cells(r, "th").is_empty())
-        .copied()
-        .collect();
-    Table { columns: head, rows: after.iter().map(|r| cells(r, "td")).collect() }
-}
-
 /// How many devices are mounted on the board a netlist describes, which is
-/// what all three documents mean by a part. `tests/parts_mounted.rs` is the
+/// what both documents mean by a part. `tests/parts_mounted.rs` is the
 /// account of the three numbers a netlist can be counted by, and the
 /// counting itself is `support::parts_on`, shared with it rather than
 /// written again here.
@@ -182,34 +140,14 @@ fn the_data_inventory_counts_every_netlist_correctly() {
     assert_eq!(seen, netlists().len(), "a row for every netlist in data/");
 }
 
-/// **The part counts the front page and the netlists page quote are the
-/// netlists'.** The front page's table does not carry the disk multiplexor,
-/// which no engine runs, so what is checked is every row that is there and
-/// not that every netlist is a row --- `data/README.md` is the inventory and
-/// is held to that above.
-///
-/// The whole machine's total is quoted in prose rather than in a table, so
-/// it is read out of the sentence that makes the claim and summed here from
-/// the same netlists. The front page prints that total a second time as a
-/// numeral standing on its own, with the words beside it rather than round
-/// it, so that one is found by the name the page gives it --- and it is
-/// found, because a figure the reader sees first is the worst one to leave
-/// unchecked.
+/// **The part counts `docs/netlists.md` quotes are the netlists'.** The
+/// whole machine's total is quoted in prose rather than in a table, so it
+/// is read out of the sentence that makes the claim and summed here from
+/// the same netlists.
 #[test]
-fn the_site_and_the_netlists_page_quote_the_netlists_own_part_counts() {
-    const SITE: &str = include_str!("../pages/index.html");
+fn the_netlists_page_quotes_the_netlists_own_part_counts() {
     const NETLISTS: &str = include_str!("../docs/netlists.md");
     let files = netlists();
-    for (what, t) in [("pages/index.html", html(SITE, &["Netlist", "Board", "Parts"]))] {
-        let mut seen = 0;
-        for row in &t.rows {
-            let file = t.get(row, "Netlist");
-            let text = files.get(file).unwrap_or_else(|| panic!("{what}: no data/{file}"));
-            assert_eq!(t.number(row, "Parts"), parts(text), "{what}: {file}");
-            seen += 1;
-        }
-        assert!(seen >= 7, "{what}: {seen} netlists in the table");
-    }
 
     // A whole machine: the processor pair, the bus interface, one memory
     // board, the I/O board, the disk controller and both display boards ---
@@ -228,16 +166,6 @@ fn the_site_and_the_netlists_page_quote_the_netlists_own_part_counts() {
         + board("LISPMTV.netlist");
     let full = machine + 31 * memory;
     for (what, text, before, after, want) in [
-        ("pages/index.html", SITE, "own drawings: ", " on the processor", processor),
-        ("pages/index.html", SITE, "on the processor, ", " in the machine", machine),
-        (
-            "pages/index.html",
-            SITE,
-            "the SIMPLE TV and the color TV, and ",
-            " with all thirty-two",
-            full,
-        ),
-        ("pages/index.html", SITE, "id=\"whole-machine\">", "</p>", machine),
         (
             "docs/netlists.md",
             NETLISTS,
@@ -252,8 +180,8 @@ fn the_site_and_the_netlists_page_quote_the_netlists_own_part_counts() {
 }
 
 /// A document's prose as one flow. The column a Markdown paragraph wraps at
-/// and the indentation an HTML file carries are typography and not claims,
-/// so they are collapsed before a sentence is looked for.
+/// is typography and not a claim, so it is collapsed before a sentence is
+/// looked for.
 fn flowed(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -292,7 +220,6 @@ fn the_documents_say_how_many_netlists_there_are_in_words() {
     for (what, text) in [
         ("README.md", include_str!("../README.md")),
         ("data/README.md", include_str!("../data/README.md")),
-        ("pages/index.html", include_str!("../pages/index.html")),
         ("docs/manual.md", include_str!("../docs/manual.md")),
         ("docs/engines.md", include_str!("../docs/engines.md")),
         ("docs/machine.md", include_str!("../docs/machine.md")),
@@ -310,18 +237,16 @@ fn the_documents_say_how_many_netlists_there_are_in_words() {
 }
 
 /// **Two `chip` runs took System 100 from the pack to its who-line with
-/// every board a netlist**, and four documents quote how long each took:
-/// the front page, `docs/netlists.md`, `docs/engines.md` and
-/// `docs/manual.md`.
+/// every board a netlist**, and three documents quote how long each took:
+/// `docs/netlists.md`, `docs/engines.md` and `docs/manual.md`.
 ///
 /// Nothing here can measure a run again --- each is days of gate-level
 /// simulation --- so what the figures are held to is each other. That is
-/// the failure that would otherwise pass unseen: the front page and the
+/// the failure that would otherwise pass unseen: `docs/netlists.md` and the
 /// manual quoting two different boots of the same machine, each looking
 /// right where it stands.
 #[test]
 fn the_documents_agree_on_the_cold_boot_runs() {
-    const SITE: &str = include_str!("../pages/index.html");
     const NETLISTS: &str = include_str!("../docs/netlists.md");
     const ENGINES: &str = include_str!("../docs/engines.md");
     const MANUAL: &str = include_str!("../docs/manual.md");
@@ -340,23 +265,10 @@ fn the_documents_agree_on_the_cold_boot_runs() {
     /// controller's cable as well.
     const SECOND: Run = Run { days: 2, hours: 21, millions: 306 };
 
-    // **The front page says each run is more than 60 hours.** That is a
-    // claim about these figures rather than a fifth one, so it is held to
-    // them here instead of being read off the page as a number of its own.
-    for run in [&FIRST, &SECOND] {
-        assert!(run.days * 24 + run.hours > 60, "a run is over 60 hours of simulation");
-    }
-
     // `docs/engines.md` quotes the wall clock and not the microcycles, so
     // the wall clock is all that is read out of it. `docs/manual.md` quotes
     // the first run twice, and each is read.
     for (what, text, before, after, want) in [
-        ("pages/index.html", SITE, "simulation: ", " days", FIRST.days),
-        ("pages/index.html", SITE, "simulation: 2 days ", " hours", FIRST.hours),
-        ("pages/index.html", SITE, "2 days 14 hours and ", " million microcycles", FIRST.millions),
-        ("pages/index.html", SITE, "12 September 2026, and ", " days", SECOND.days),
-        ("pages/index.html", SITE, "2026, and 2 days ", " hours", SECOND.hours),
-        ("pages/index.html", SITE, "2 days 21 hours and ", " million", SECOND.millions),
         ("docs/netlists.md", NETLISTS, "It took ", " days", FIRST.days),
         ("docs/netlists.md", NETLISTS, "It took 2 days ", " hours", FIRST.hours),
         ("docs/netlists.md", NETLISTS, "2 days 14 hours and ", " million", FIRST.millions),

@@ -7,8 +7,8 @@ live in different backplanes and talk over five 40-wire flat cables that
 carry two independent buses and the master clock, which the processor
 supplies. Everything else in the machine hangs off one of those two buses.
 
-**The diagram of the whole machine is on the front page**, at
-[muir.metebalci.com/#machine](https://muir.metebalci.com/#machine): the
+**The diagram of the whole machine is on the site**, at
+[muir.metebalci.com/simulator/](https://muir.metebalci.com/simulator/): the
 processor and the bus interface, the Xbus and the Unibus and every board on
 them, the debug cable to a second machine, and what each of the models
 reaches outside muir. What follows is what that picture says.

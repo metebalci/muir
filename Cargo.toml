@@ -6,8 +6,8 @@ license = "AGPL-3.0-or-later"
 authors = ["Mete Balci"]
 description = "A simulator of the MIT CADR Lisp Machine, at three fidelity levels down to its TTL parts."
 repository = "https://github.com/metebalci/muir"
-homepage = "https://muir.metebalci.com"
-documentation = "https://muir.metebalci.com"
+homepage = "https://muir.metebalci.com/simulator/"
+documentation = "https://muir.metebalci.com/simulator/"
 readme = "README.md"
 
 [dependencies]

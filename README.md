@@ -11,8 +11,8 @@ There are three engines: `micro`, the fastest, with no timing model; `rtl`,
 on the machine's own clock, for ordinary use; and `chip`, which runs MIT's
 own drawings part by part. Rust, no crate dependencies.
 
-The front page is **[muir.metebalci.com](https://muir.metebalci.com)**, and
-[the manual](docs/manual.md) is the rest.
+The site is **[muir.metebalci.com/simulator/](https://muir.metebalci.com/simulator/)**,
+and [the manual](docs/manual.md) is the rest.
 
 ## Quick start
 
@@ -82,8 +82,6 @@ when a boot with no host stops to ask for the date.
     examples/  development tools; none is part of the simulator.
                examples/README.md
     tools/     fetching, and one script per board to re-extract a netlist
-    pages/     the front page and the recording, published by
-               .github/workflows/pages.yml
     docs/      the manual, and findings about the machine read from mit/,
                each claim cited to its file and held by a test where one
                can. docs/README.md
