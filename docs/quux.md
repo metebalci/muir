@@ -25,7 +25,7 @@ differences, what it needed:
 |---|---|---|---|---|
 | Six-bit level-1 map entry | nothing: MIT's PROM boots it; PROM 2000 also clears QUUX's 64 blocks | 2000: the six-bit read, the two-deposit write, invalid block 77, the reverse first-level map moved to system communication area 640-737 and the swap-out CCWs to 440-457 | nothing: System 1001 runs unchanged | CC's remote debugger (`CADR-DEBUGGER`) still assumes the CADR's map |
 | MACHINE-ID in functional source 16 | nothing | 2000 reads it at boot and halts at `MACHINE-NOT-QUUX-10` on anything but QUUX from revision 10 | `PROCESSOR-TYPE-CODE` is 4 | nothing |
-| The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
+| The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | System 2000 reads it: the PDL buffer's length, word 3, at every boot (muir-sys `sys/sys2/proces.lisp:268-274`); MONO TV's size and buffer address, words 11 to 13 (`sys/sys/ltop.lisp:118-125`); and whether the file device and the real-time clock are there, word 15 (`sys/io/fdev.lisp:155`, `sys/io1/time.lisp:463`) | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 2000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The clocks: the microsecond clock in the processor, and the interval timers on the register page, timer 0 the tick | writes reset devices and timer 0's period, 16,667 µs (revision 10) | 2000 writes timer 0's period at `RESET-MACHINE`, turns the tick on at `BEG06` and clears it in `INTR-TICK` through word 110, and turns off timer 1 or 2 if one interrupts | nothing: it reads the microsecond clock, and no timer | nothing |
 | Reset devices, word 104 of the register page | writes it before it reads the disk (revision 10) | 2000 writes it at `RESET-MACHINE`, at every start of the microcode, a `%DISK-RESTORE`'s too, in place of `PROG.UNIBUS.RESET` | nothing | nothing |
@@ -35,7 +35,7 @@ differences, what it needed:
 | No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and QUUX's 1000 never do either, counted (below) | nothing | nothing |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
 | MONO TV, the display | nothing | 2000: the run light in MONO TV's buffer, no TV vertical flag | System 2000 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
-| The real-time clock | nothing | nothing | does not read it yet | `--rtc` |
+| The real-time clock | nothing | nothing | System 2000 sets the time from it at boot, ahead of the network, when word 15 `<0>` of the feature page says it is there, and its wall clock reads it from then on (muir-sys `sys/io1/time.lisp:461-471`, `:493`, `:691-696`) | `--rtc` |
 | The file device | nothing | 2000 waits at `RESET-MACHINE` for it to be quiet, word 161 `<1>`, after reset devices | System 2000's `SYS:` is on it, HOST's `/sys` and `/site` (`site/sys.translations`) | `--file-root` |
 
 ## What each change measured

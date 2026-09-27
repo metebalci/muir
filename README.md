@@ -1,9 +1,9 @@
-# muir
+# muir-sim
 
 A simulator of the MIT CADR Lisp Machine, down to the chips.
 
 The CADR is the second-generation MIT Lisp Machine, designed around 1978 by
-Tom Knight, David Moon, Jack Holloway and Guy Steele. muir models it far
+Tom Knight, David Moon, Jack Holloway and Guy Steele. muir-sim models it far
 enough down that the software written *for the hardware* runs --- the MIT
 diagnostics, the console program CC, and two machines lashed together with
 one debugging the other. That lashup is the acceptance test, and it passes.
@@ -31,7 +31,7 @@ sum.
     tools/fetch-system-100.sh
 
 A Lisp Machine took its files and the date from a host on the Chaosnet, and
-a CADR had no such server in it, so muir has none either.
+a CADR had no such server in it, so muir-sim has none either.
 [ozd](https://github.com/metebalci/ozd) is that host. Build it beside muir-sim
 and start it in a shell of its own, serving System 100's sources:
 
@@ -39,7 +39,14 @@ and start it in a shell of its own, serving System 100's sources:
     (cd ../ozd && cargo build --release)
     mkdir -p vendor/run/oz/lispm
     ../ozd/target/release/ozd --address 3060 --name MIT-OZ,OZ,system=UNIX \
-        --root $PWD/vendor/run/oz --root tree=$PWD/vendor/system-100-0/sys,ro
+        --root $PWD/vendor/run/oz --root tree=$PWD/vendor/system-100-0/sys,ro \
+        --file-dates mit --timezone 5
+
+`--file-dates mit --timezone 5` has ozd give a file's dates as System 100
+writes them, in its site's zone, 5 hours west of Greenwich
+(`sys/site/site.lisp:99`, `(:TIMEZONE 5)`). ozd's default, plain UTC, is
+for System 1002 and later, and a band of System 100 read through it has
+every file date off by that zone.
 
 Then start the machine. System 100's host table puts the machine at 3050 and
 its host at 3060; ozd has UDP port 42042, so the machine takes 42043.
@@ -58,12 +65,12 @@ when a boot with no host stops to ask for the date.
 
 | | |
 |---|---|
-| [The manual](docs/manual.md) | Running muir: what a run says, every flag, flags in a file, the prompt, the terminal, what a run can write, the Chaosnet and the two-machine lashup |
+| [The manual](docs/manual.md) | Running muir-sim: what a run says, every flag, flags in a file, the prompt, the terminal, what a run can write, the Chaosnet and the two-machine lashup |
 | [Making a pack](docs/diskpack.md) | `diskpack`, the third binary: a pack of one's own, its partitions, and bands loaded and dumped |
 | [How the engines work](docs/engines.md) | `micro`, `rtl` and `chip`: what each computes, how fast each runs, and what each models board by board |
 | [The machine it models](docs/machine.md) | The processor, the bus interface, the two buses and every board on them |
 | [Where the netlists come from](docs/netlists.md) | MIT's drawings and wire lists, how a board becomes a netlist, and what each is checked against |
-| [The Chaosnet board](docs/chaosnet.md) | The interface on the I/O board, its cable, and what muir has of it |
+| [The Chaosnet board](docs/chaosnet.md) | The interface on the I/O board, its cable, and what muir-sim has of it |
 | [The TV board](docs/tv.md) | The SIMPLE TV, the LISPM TV and the color TV |
 | [The keyboard boot sequence](docs/keyboard-boot.md) | The chord that boots the machine, from the keyboard's firmware to the processor |
 | [Sources and attribution](docs/sources.md) | What this is built on, related projects, how it was written, and the license |
@@ -94,5 +101,5 @@ Public License**, version 3 or, at your option, any later version; see
 `LICENSE`. `mit/` is MIT's work and `tools/soap4/` came from `ams/cadr4`:
 [the license](docs/sources.md#license) says what is whose.
 
-muir is implemented entirely by [Claude Code](https://claude.com/claude-code),
+muir-sim is implemented entirely by [Claude Code](https://claude.com/claude-code),
 on Anthropic's Opus and Fable models.
