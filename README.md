@@ -20,19 +20,19 @@ Install `rustup`, then open a new shell so `cargo` is on the path:
 
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-Build muir and fetch [System 100](https://tumbleweed.nu/system-100-0-release/),
+Build muir-sim and fetch [System 100](https://tumbleweed.nu/system-100-0-release/),
 the release it boots. The compiler version is pinned in `rust-toolchain.toml`,
 and the release lands in `vendor/`, every file checked against its SHA-256
 sum.
 
-    git clone https://github.com/metebalci/muir
-    cd muir
+    git clone https://github.com/metebalci/muir-sim
+    cd muir-sim
     cargo build --release
     tools/fetch-system-100.sh
 
 A Lisp Machine took its files and the date from a host on the Chaosnet, and
 a CADR had no such server in it, so muir has none either.
-[ozd](https://github.com/metebalci/ozd) is that host. Build it beside muir
+[ozd](https://github.com/metebalci/ozd) is that host. Build it beside muir-sim
 and start it in a shell of its own, serving System 100's sources:
 
     git clone https://github.com/metebalci/ozd ../ozd

@@ -27,8 +27,8 @@ build and the tests read is committed, so `cargo test` passes on a fresh
 clone with nothing fetched.
 
 ```text
-git clone https://github.com/metebalci/muir
-cd muir
+git clone https://github.com/metebalci/muir-sim
+cd muir-sim
 cargo build --release
 tools/fetch-system-100.sh
 ```
@@ -36,12 +36,12 @@ tools/fetch-system-100.sh
 The engines boot from a pack, which is not part of the repository.
 `tools/fetch-system-100.sh` puts the System 100 pack and the release's
 sources under `vendor/`, where the tests look, and checks every file against
-its SHA-256 sum. They come from muir's own GitHub release
-[`system-100-0`](https://github.com/metebalci/muir/releases/tag/system-100-0),
+its SHA-256 sum. They come from muir-sim's own GitHub release
+[`system-100-0`](https://github.com/metebalci/muir-sim/releases/tag/system-100-0),
 so that the bytes the tests were written against stay the bytes: the pack
 byte for byte as [upstream](https://tumbleweed.nu/lm-3/) publishes it, and
 the script says exactly what it fetched and from where. Everything in it is
-under the AGPL, muir's own license. Without it, every test needing a pack
+under the AGPL, muir-sim's own license. Without it, every test needing a pack
 skips and says so. Windows is untested; the script is POSIX shell, so use
 WSL.
 

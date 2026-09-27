@@ -20,7 +20,7 @@
 # with the release's README beside them, which carries its license, the
 # GNU Affero General Public License, version 3 or later --- muir's own.
 #
-# The files come from muir's own GitHub release `system-100-0`, a mirror of
+# The files come from muir-sim's own GitHub release `system-100-0`, a mirror of
 # the release as published at https://tumbleweed.nu/system-100-0-release/
 # and fetched from there on 31 August 2026, byte for byte under the
 # upstream names. The mirror is there so that the bytes the tests were
@@ -47,7 +47,7 @@
 
 set -eu
 muir=$(cd "$(dirname "$0")/.." && pwd)
-base=${SYSTEM_100_BASE:-https://github.com/metebalci/muir/releases/download/system-100-0}
+base=${SYSTEM_100_BASE:-https://github.com/metebalci/muir-sim/releases/download/system-100-0}
 rel=$muir/vendor/system-100-0
 run=$muir/vendor/run
 
