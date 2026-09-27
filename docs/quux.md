@@ -21,7 +21,7 @@ differences, what it needed:
 | MACHINE-ID in functional source 16 | nothing | 1000 reads it at boot and runs as either machine | `PROCESSOR-TYPE-CODE` is 4 | nothing |
 | The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | does not read it yet | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 1000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
-| The clocks: the microsecond clock in the processor, and the interval timers on the register page, timer 0 the tick | writes reset devices and timer 0's period, 16,667 µs (revision 10) | 1000 turns the tick on at `BEG06` and clears it in `INTR-TICK` through destination 3, the destination 3 alias | nothing: it reads the microsecond clock, and no timer | nothing |
+| The clocks: the microsecond clock in the processor, and the interval timers on the register page, timer 0 the tick | writes reset devices and timer 0's period, 16,667 µs (revision 10) | 1000 for revision 10 (muir-sys `c3a162a`) turns the tick on at `BEG06` and clears it in `INTR-TICK` through word 110; dev11's 1000 does both through Q1's destination 3, which writes only M at revision 10, so it has no tick there | nothing: it reads the microsecond clock, and no timer | nothing |
 | Reset devices, word 104 of the register page | writes it before it reads the disk (revision 10) | 1000 still pulses `PROG.UNIBUS.RESET`, which resets nothing on QUUX | nothing | nothing |
 | Block-disk | muir-sys's PROM 1000 for block-disk, which no longer boots the CADR controller | 1000 for block-disk: the disk routines by block number, no cylinder, head or sector | System 1002: the partitions, the band and the disk routines by block number | block-disk is `quux`'s only disk; `--disk-controller`, the CADR's controller, is `cadr`'s |
 | The memory cache (`--cache`) | nothing | nothing | nothing | `--cache`; the profile harness's `MUIR_CACHE` |
@@ -303,20 +303,14 @@ after it: `SINTR` is registered at the edge that ends the waiting
 microcycle, with the flags as they stand then (the case muir-fpga measured
 on Q1's timers).
 
-**The destination 3 alias** (contract Q11, a proposed term): functional
-destination 3 is timer 0's control, as Q1's tick control was, for the
-microcode that turns its tick on and clears it there, microcode 1000 of
-System 1002. `<0>` on, and a write with `<1>` set clears the flag; a write
-that turns timer 0 on also makes it periodic and sets its interrupt enable,
-since Q1's tick interrupted whenever it was on; one that leaves it on or
-turns it off leaves the interrupt enable as it was. `<3:2>`, Q1's interval
-timer's, and the rest are ignored, and no other timer is touched. A write
-lands at the edge that ends its microcycle and is in that edge's own
-`SINTR`, which leaves out a flag it takes down; at an edge that also takes
-a register write, destination 3 is taken first. **Functional destination 4
-writes only M, and functional source 17 reads all ones**, on QUUX as on the
-CADR: Q1's interval timer, whose period and status they were up to
-revision 9, is gone, the page's timers taking its place.
+**Functional destinations 3 and 4 write only M, and functional source 17
+reads all ones**, on QUUX at revision 10 as on the CADR: Q1's tick control,
+its interval timer's period and their status, which they were up to
+revision 9, are gone, and every timer is reached through the register page
+alone. A write of destination 3 changes no timer, also at an edge that
+takes a register write, and takes no flag out of any `SINTR`. So
+microcode that turns its tick on through destination 3, as System 1002
+dev11's does, has no tick at revision 10.
 
 **The microsecond clock** is functional source 15: the microseconds since
 power-on, 32 bits, wrapping, one read giving the whole word.
@@ -328,11 +322,13 @@ nowhere, by a scan of every control-store word, and running shows the same
 of what the OA registers make at run time: `tests/unused_codes.rs` reads
 every executed microinstruction as it stood in `IR` through a boot to the
 listener. System 1001 on 323, on the CADR, runs none. System 1002 on its
-microcode 1000 runs them at four addresses through its boot and a moment after, each a
-control-store word that carries them: destination 3 at `BEG06`, the tick's
-turn-on, and in `INTR-TICK`, its clear, and source 15 at
+microcode 1000, dev11's, runs them at three addresses through its boot and
+a moment after on revision 10, each a control-store word that carries them:
+destination 3 at `BEG06`, the tick's turn-on, and source 15 at
 `READ-MICROSECOND-CLOCK` and in `XUSLDB`. It writes destination 3 with 1
-and 3 alone, and neither writes destination 4 nor reads source 17.
+alone, which reaches M alone, so timer 0 is still off after it and
+`INTR-TICK`, which would write it with 3, never runs; and it neither writes
+destination 4 nor reads source 17.
 
 `tests/interval_timers.rs` holds, for each timer, the periodic grid to the
 nanosecond with late clears and a period written under a raised flag, the
@@ -340,11 +336,13 @@ one-shot's one rise, the mode taken at turn-on, the independence of the
 three, every reset on both engines, the interrupt under `<8>` and not
 without it on both engines and inside a wait for `MD`, the layout,
 destination 4 and source 17 on QUUX, a checkpoint resumed to the same
-rises, the alias, and on `rtl` the shared edge: destination 3 before a
-register write, its `SINTR`, and a read's flags as they stood at its edge.
-`tests/tick.rs` holds the tick through the alias at the PROM's period, the
-microsecond clock against each engine's time (under `sync` too) and across
-its wrap, and the CADR's all ones.
+rises, destination 3 changing no timer on either engine, and on `rtl` the
+shared edge: destination 3 changing nothing beside a register write, nor
+its `SINTR`, nor a read's flags, which are as they stood at its edge.
+`tests/tick.rs` holds the tick as timer 0 at the PROM's period, turned on
+through word 110 and not through destination 3, the microsecond clock
+against each engine's time (under `sync` too) and across its wrap, and the
+CADR's all ones.
 
 ## QUUX drops the delay lines
 
@@ -728,7 +726,7 @@ Holds and write pulses:
 **QUUX's display is MONO TV**, a monochrome frame buffer: 1280 by 1024 unless
 `--mono-tv-size` gives another size, one bit a pixel. It is the frame buffer and one register, and nothing else: no sync
 program, no color map, and no interrupt, the machine's clock being the
-processor's tick. It is `quux`'s only display, and `--tv-board`, the choice
+tick, timer 0 of the interval timers. It is `quux`'s only display, and `--tv-board`, the choice
 between the CADR's two boards, is `cadr`'s alone.
 
 | | |
@@ -863,19 +861,19 @@ QUUX. After it maps the register page and writes error stop, and before
 its first disk command, it writes word 104 with 1, reset devices, so that
 a reboot starts the microcode with no timer on, the file device disabled
 and block-disk idle; and then word 111 with 16,667, timer 0's period, since
-no timer resets to a period and the band's tick, turned on through
-destination 3, rises only at the period the PROM wrote. It turns no timer
-on. From power-on on `micro` the two writes come at microcycles 628,973 and
+no timer resets to a period. It turns no timer on. From power-on on `micro` the two writes come at microcycles 628,973 and
 628,981, and at location 6 timer 0 is off at period 16,667 with its
 interrupt enable 0 and timers 1 and 2 in their reset state
 (`m9_the_prom_resets_the_devices_and_writes_timer_0_s_period`). On it
-System 1002 dev11 reaches its listener with timer 0 on, periodic, under its
-interrupt enable, and runs `INTR-TICK` 600 times in 10 s after it, the mouse
-reaching the cursor (`m10_the_band_ticks_through_the_alias`). A reboot, a
+System 1002 dev11 reaches its listener with timer 0 off, its microcode's
+turn-on having gone to destination 3, and runs `INTR-TICK` no time in 10 s
+after it; a mouse move then leaves the band's `A-MOUSE-X` and `A-MOUSE-Y`
+as they were 100 ms later, recorded and not held
+(`m10_the_band_does_not_tick_on_revision_10`). A reboot, a
 jump to 36000 without `-RESET`, with timers 1 and 2 left on and up under
 their interrupt enables and the file device enabled with three READs of
-64 KiB and a CREATE-DIRECTORY queued, reaches the listener after 162,990,934
-microcycles with `INTR` run 2,087 times, against 163,719,902 and 2,090 for
+64 KiB and a CREATE-DIRECTORY queued, reaches the listener after 163,490,934
+microcycles with `INTR` run 1,462 times, against 164,119,902 and 1,462 for
 the same reboot with neither, with the timers off and the device disabled
 at location 6 and no queued command run
 (`m11_a_reboot_resets_the_timers_and_the_file_device`). On dev11's own PROM,
@@ -883,7 +881,7 @@ which writes neither word, the same reboot takes 412,290,922 microcycles
 against 164,120,406, `INTR` running 8,811,697 times against 1,462, with the
 timers still on and the device still enabled at location 6 and its queued
 commands run (`m11_fails_on_dev11_s_prom`); and from power-on the band
-reaches its listener with timer 0 on at period 0 and `INTR-TICK` running no
+reaches its listener with timer 0 off at period 0 and `INTR-TICK` running no
 time in 10 s (`m12_the_old_prom_on_revision_10`). All on `micro`, in
 `tests/system_1002_timers.rs`.
 
@@ -938,9 +936,9 @@ the word; revision 10's boot PROM writes it before it reads the disk.
 clear changing nothing in the machine's state, a write of 1 leaving every
 device as `PROG.UNIBUS.RESET` does from the same state and every timer
 reset with the keyboard and mouse kept, what the file device had due
-running first, a destination 3 write at the same edge undone, `SINTR` at
-the write's edge and at the next, and `<28>` resetting nothing on QUUX on
-both engines.
+running first, a destination 3 write at the same edge or the next turning
+no timer on, `SINTR` at the write's edge and at the next, and `<28>`
+resetting nothing on QUUX on both engines.
 
 ## The real-time clock
 

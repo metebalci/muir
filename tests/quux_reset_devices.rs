@@ -251,19 +251,20 @@ fn engine_machine(prom: &[Insn], m_words: &[(usize, u32)]) -> Machine {
     m
 }
 
-/// **M4, a destination 3 write at the edge that takes a reset-devices
-/// write is undone** (`rtl`): the alias's turn-on goes first at the shared
-/// edge, and the reset after it; a microcycle later, the turn-on stands.
+/// **M4, a destination 3 write by a reset-devices write** (`rtl`): Q1's
+/// turn-on, 1, written to destination 3 at the edge that takes a
+/// reset-devices write, or a microcycle later, leaves timer 0 off:
+/// destination 3 writes only M at revision 10.
 #[test]
-fn m4_reset_devices_undoes_a_destination_3_write_at_its_edge() {
+fn m4_a_destination_3_write_by_reset_devices_turns_nothing_on() {
     for gap in [0usize, 1] {
         let mut prom = vec![
             Insn::new(ALU | SETM | m_src(2) | MD),
             Insn::new(ALU | SETM | m_src(1) | START_WRITE),
         ];
         prom.extend(vec![filler(); gap]);
-        let alias = Insn::new(ALU | SETM | m_src(3) | DEST_3);
-        prom.push(alias);
+        let dest_3 = Insn::new(ALU | SETM | m_src(3) | DEST_3);
+        prom.push(dest_3);
         let mut r = Rtl::new(engine_machine(&prom, &[(1, va(0o104)), (2, 1), (3, 1)]));
         r.boot();
         let mut edge = None;
@@ -271,7 +272,7 @@ fn m4_reset_devices_undoes_a_destination_3_write_at_its_edge() {
             let ir = r.ir();
             let taken = r.bus_answered_at();
             r.step().unwrap();
-            if ir == alias.raw() && edge.is_none() {
+            if ir == dest_3.raw() && edge.is_none() {
                 edge = Some(r.ns());
                 if gap == 0 {
                     assert_eq!(r.bus_answered_at(), Some(r.ns()), "the reset taken at the edge");
@@ -281,7 +282,9 @@ fn m4_reset_devices_undoes_a_destination_3_write_at_its_edge() {
             }
         }
         assert!(edge.is_some());
-        assert_eq!(r.machine().timers.timer[0].on, gap == 1, "destination 3 {gap} microcycles on");
+        let m = r.machine();
+        assert_eq!(m.timers.timer[0], IntervalTimer::RESET, "destination 3 {gap} microcycles on");
+        assert_eq!(m.mmem[0o37], 1, "destination 3 {gap} microcycles on wrote M 37");
     }
 }
 

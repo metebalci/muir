@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! System 1002 dev11 on QUUX revision 10 (contract Q11): the boot PROM's
-//! reset devices and timer 0's period (M9), the band ticking through the
-//! destination 3 alias (M10), a reboot that resets timers 1 and 2 and the
-//! file device (M11, and the Q9 amendment's R3), and the old PROM on
-//! revision 10 (M12, a record).
+//! reset devices and timer 0's period (M9), the band on revision 10 with no
+//! tick, its microcode's destination 3 writing only M (M10), a reboot that
+//! resets timers 1 and 2 and the file device (M11, and the Q9 amendment's
+//! R3), and the old PROM on revision 10 (M12, a record). dev11's microcode
+//! turns its tick on through Q1's destination 3, which revision 10 does not
+//! have; a band that ticks on revision 10 needs the Q11 microcode, which
+//! reaches timer 0 through the register page.
 //!
 //! The band is the gitignored `ref/band-1002-dev11` (muir-sys's hand-over,
 //! `tests/system_1002.rs`), named by digest; without it the tests skip and
@@ -243,26 +246,22 @@ fn m9_the_prom_resets_the_devices_and_writes_timer_0_s_period() {
 }
 
 /// **M10, the current band on revision 10 with the new PROM** (System 1002
-/// dev11, named by digest): it boots to its listener; after `BEG06` word
-/// 110 reads on, periodic, interrupt enable set, through the destination 3
-/// alias; over 10 s of simulated time after the listener `INTR-TICK`
-/// executes 600 ± 1 times; and a mouse move reaches the cursor. (The
-/// unused-codes run's values are `tests/unused_codes.rs`'s.)
+/// dev11, named by digest): it boots to its listener; there word 110 reads
+/// 0, timer 0 off, its microcode's turn-on at `BEG06` having gone to
+/// destination 3, which writes only M; word 111 reads the PROM's 16,667;
+/// and over 10 s of simulated time after the listener `INTR-TICK` executes
+/// not once. Whether a mouse move reaches the cursor with no tick is
+/// recorded. (The unused-codes run's values are `tests/unused_codes.rs`'s.)
 #[test]
-fn m10_the_band_ticks_through_the_alias() {
+fn m10_the_band_does_not_tick_on_revision_10() {
     let Some((_dir, pack, root)) = band("q11-m10") else { return };
-    m10(&pack, &root, &muir::prom::quux_boot_prom());
-}
-
-fn m10(pack: &Path, root: &Path, prom: &[Insn]) {
-    let (tick, beg06) = (ucadr("INTR-TICK"), ucadr("BEG06"));
-    let mut e = Micro::new(quux(pack, prom, root));
+    let tick = ucadr("INTR-TICK");
+    let mut e = Micro::new(quux(&pack, &muir::prom::quux_boot_prom(), &root));
     e.boot();
-    let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root.to_path_buf(), 400_000_000);
+    let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root.clone(), 400_000_000);
     eprintln!("listener after {ran} microcycles");
-    let _ = beg06;
     let m = e.machine_mut();
-    assert_eq!(m.bus_read(control(0)) & !2, 0o401, "word 110: on, periodic, <8>");
+    assert_eq!(m.bus_read(control(0)), 0, "word 110: timer 0 off");
     assert_eq!(m.bus_read(period(0)), Timers::TICK_PERIOD_US, "word 111");
     let t0 = e.machine().ns;
     let mut ticks = 0u32;
@@ -271,8 +270,8 @@ fn m10(pack: &Path, root: &Path, prom: &[Insn]) {
         ticks += (e.executed() == Some(tick)) as u32;
     }
     eprintln!("INTR-TICK ran {ticks} times in 10 s");
-    assert!(ticks.abs_diff(600) <= 1, "{ticks} ticks in 10 s");
-    // The mouse.
+    assert_eq!(ticks, 0, "INTR-TICK in 10 s");
+    // The mouse, a record.
     use muir::quux_input::KeyboardMouse;
     let (ax, ay) = (a_mem("A-MOUSE-X"), a_mem("A-MOUSE-Y"));
     let at = |e: &Micro| (e.machine().amem[ax], e.machine().amem[ay]);
@@ -282,9 +281,7 @@ fn m10(pack: &Path, root: &Path, prom: &[Insn]) {
     while e.machine().ns < t1 + 100_000_000 {
         e.step().unwrap();
     }
-    let after = at(&e);
-    eprintln!("mouse {before:?} -> {after:?}");
-    assert_ne!(after, before, "the mouse move reached the cursor");
+    eprintln!("mouse {before:?} -> {:?}", at(&e));
 }
 
 /// Commands to queue on a machine, later.
@@ -491,7 +488,8 @@ fn m11_fails_on_dev11_s_prom() {
 
 /// **M12, a record**: the old PROM, dev11's, on revision 10 from power-on:
 /// whether the listener is reached, and `INTR-TICK`'s executions over 10 s
-/// after it (expected 0: timer 0's period is 0). Not a pass condition.
+/// after it (expected 0: timer 0 is never turned on, and its period is 0).
+/// Not a pass condition.
 #[test]
 fn m12_the_old_prom_on_revision_10() {
     let Some((_dir, pack, root)) = band("q11-m12") else { return };

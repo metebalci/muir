@@ -737,11 +737,10 @@ impl Micro {
                     self.m.bus_reset();
                 }
             }
-            // QUUX's destination 3 alias: timer 0's control, as Q1's tick
-            // control (`machine::Timers::alias`). On the CADR, and for
-            // destination 4 on QUUX too since revision 10, a code that
-            // writes only M.
-            0o3 if self.m.geometry.tick => self.m.timers.alias(self.m.ns, data),
+            // Destinations 3 and 4 write only M, on the CADR and on QUUX
+            // since revision 10 (contract Q11): Q1's tick control and
+            // interval period are gone, and the register page's timers
+            // take their place (`machine::Timers`).
             // Pdl Buffer Top, Push, (Index), Index, Pointer
             // The word is written in the next microcycle's write phase,
             // [`Micro::land_writes`].

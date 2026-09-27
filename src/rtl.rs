@@ -601,7 +601,6 @@ struct Read {
     destmdr: bool,
     destlc: bool,
     destintctl: bool,
-    desttickctl: bool,
     destimod0: bool,
     destimod1: bool,
     destpdlp: bool,
@@ -1118,10 +1117,8 @@ impl Rtl {
         let low_group = destm && !bit(ir, 23) && !bit(ir, 22);
         let destlc = low_group && d19 == 1;
         let destintctl = low_group && d19 == 2;
-        // QUUX's destination 3 alias, timer 0's control (`machine::Timers`);
-        // on the CADR the low group decodes no 3, and on neither machine
-        // 4, and only M is written.
-        let desttickctl = low_group && d19 == 3 && self.m.geometry.tick;
+        // The low group decodes no 3 or 4, on the CADR and on QUUX since
+        // revision 10 (contract Q11), and only M is written.
         let mid_group = destm && !bit(ir, 23) && bit(ir, 22);
         let destpdltop = mid_group && d19 == 0;
         let destpdl_p = mid_group && d19 == 1;
@@ -1512,7 +1509,6 @@ impl Rtl {
             destmdr,
             destlc,
             destintctl,
-            desttickctl,
             destimod0,
             destimod1,
             destpdlp,
@@ -2358,12 +2354,6 @@ impl Rtl {
             self.lc = (self.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
         }
         // page FLAG
-        // The destination 3 alias lands at this edge, before a register
-        // write the port takes here, which lands with this edge's time in
-        // the next microcycle's `bus_cycle` (contract Q11, rule 10).
-        if r.desttickctl {
-            self.m.timers.alias(self.ns, r.ob);
-        }
         if r.destintctl {
             self.lc_byte_mode = bit(r.ob as u64, 29);
             let reset = bit(r.ob as u64, 28);

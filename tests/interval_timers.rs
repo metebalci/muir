@@ -4,8 +4,9 @@
 //! QUUX's interval timers (contract Q11, revision 10): timer 0, 1 and 2 on
 //! the register page, each with its control and status at word 110 + 2k and
 //! its period at 111 + 2k; word 100 `<0>`, `<1>` and `<7>` their
-//! interrupts, each the flag under the timer's interrupt enable; and
-//! functional destination 3, the destination 3 alias, as timer 0's control.
+//! interrupts, each the flag under the timer's interrupt enable. Q1's
+//! functional destinations 3 and 4 write only M and its source 17 reads all
+//! ones, as on the CADR: no timer is reached but through the page.
 //!
 //! The rules are held on [`Machine`] at exact instants, where a word is
 //! read or written at [`Machine::ns`]; the instants the engines give those
@@ -543,14 +544,16 @@ fn m7_the_page_s_layout_and_q1_s_codes_at_revision_10() {
 /// **M8, a checkpoint**: taken in the middle of a period of each timer,
 /// with a one-shot that has risen and one timer's `<8>` clear, it resumes
 /// to the same rises, on both engines. The program clears timer 0 through
-/// destination 3 and polls word 112 in a loop, so that timer 0 rises
-/// again and again; the resumed and the original machines' timers are
-/// compared after every microcycle.
+/// word 110 and polls word 112 in a loop, so that timer 0 rises again and
+/// again; the resumed and the original machines' timers are compared after
+/// every microcycle.
 #[test]
 fn m8_a_checkpoint_resumes_to_the_same_rises() {
     use muir::checkpoint::{Reader, Writer};
     let prom = [
-        Insn::new(ALU | SETM | m_src(3) | DEST_3),
+        Insn::new(ALU | SETM | m_src(2) | MD),
+        Insn::new(ALU | SETM | m_src(4) | START_WRITE),
+        filler(),
         Insn::new(ALU | SETM | m_src(1) | START_READ),
         filler(),
         filler(),
@@ -558,7 +561,8 @@ fn m8_a_checkpoint_resumes_to_the_same_rises() {
         Insn::new(JUMP | target(0) | ALWAYS | N),
     ];
     for engine_name in ["micro", "rtl"] {
-        let make = || engine(engine_name, engine_machine(&prom, &[(1, va(0o112)), (3, 3)]));
+        let words = [(1, va(0o112)), (2, ON | CLEAR | IE), (4, va(0o110))];
+        let make = || engine(engine_name, engine_machine(&prom, &words));
         let mut e = make();
         e.boot();
         let m = e.machine_mut();
@@ -617,55 +621,69 @@ fn run_marking(r: &mut Rtl, marker: Insn, steps: usize) -> u64 {
     at.expect("the marker ran")
 }
 
-/// **M13, the shared edge, writes** (`rtl`): destination 3 written with 0 in
-/// the microcycle whose ending edge takes a write of word 110 with `401`:
-/// timer 0 is on afterwards, the register write being taken second; and
-/// the reverse pair, destination 3 with 1 against a word 110 write of 0,
-/// leaves it off. The turn-on's period starts from that edge.
+/// **M13, the shared edge, writes** (`rtl`): destination 3 written in the
+/// microcycle whose ending edge takes a write of word 110 changes nothing
+/// at that edge either, timer 0 being what the register write alone makes
+/// it. Word 110 written with `401` against destination 3 with 0 turns it
+/// on, periodic under its interrupt enable, its period from that edge;
+/// written with 0 against destination 3 with 1, Q1's turn-on, it stays
+/// off; and on and up under its interrupt enable, written with `401`
+/// against destination 3 with 3, Q1's clear, its flag stays up.
 #[test]
-fn m13_at_a_shared_edge_destination_3_goes_first() {
-    let alias = Insn::new(ALU | SETM | m_src(3) | DEST_3);
+fn m13_at_a_shared_edge_destination_3_changes_nothing() {
+    let dest_3 = Insn::new(ALU | SETM | m_src(3) | DEST_3);
     let prom = [
         Insn::new(ALU | SETM | m_src(2) | MD),
         Insn::new(ALU | SETM | m_src(1) | START_WRITE),
-        alias,
+        dest_3,
     ];
-    for (word, dest3, on) in [(0o401, 0, true), (0, 1, false)] {
+    for (up, word, dest3) in [(false, 0o401, 0), (false, 0, 1), (true, 0o401, 3)] {
         let mut r = Rtl::new(engine_machine(&prom, &[(1, va(0o110)), (2, word), (3, dest3)]));
         r.boot();
         let m = r.machine_mut();
         let at = m.ns;
         write(m, at, period(0), 100);
-        let edge = run_marking(&mut r, alias, 40);
+        if up {
+            m.timers.timer[0] = IntervalTimer {
+                on: true,
+                one_shot: false,
+                interrupt_enable: true,
+                period_us: 100,
+                deadline_ns: 0,
+            };
+        }
+        let edge = run_marking(&mut r, dest_3, 40);
         let t = r.machine().timers.timer[0];
-        assert_eq!(t.on, on, "word 110 {word:o} against destination 3 {dest3}");
-        if on {
-            assert_eq!(t.deadline_ns, edge + 100 * US, "the period starts at the shared edge");
-            assert!(t.interrupt_enable && !t.one_shot);
+        let what = format!("word 110 {word:o} against destination 3 {dest3}, up {up}");
+        assert_eq!(t.on, word & ON != 0, "{what}");
+        if up {
+            assert!(t.flag(r.ns()), "{what}: the flag still up");
+        } else if t.on {
+            assert_eq!(t.deadline_ns, edge + 100 * US, "{what}: the period from the edge");
+            assert!(t.interrupt_enable && !t.one_shot, "{what}");
         }
     }
 }
 
 /// **M13, `SINTR` at the shared edge** (`rtl`): with timer 0's flag up
-/// under its interrupt enable, destination 3 written with 3 at the edge
-/// that takes a write of word 110 leaves the flag out of that edge's
-/// `SINTR`: the jump after it is not taken. Written with 1, which clears
-/// nothing, it is.
+/// under its interrupt enable, destination 3 written with 3, Q1's clear, at
+/// the edge that takes a write of word 110 leaves the flag in that edge's
+/// `SINTR`: the jump after it is taken, as it is with 1.
 #[test]
-fn m13_sintr_at_the_shared_edge_leaves_out_what_destination_3_clears() {
-    let alias = Insn::new(ALU | SETM | m_src(3) | DEST_3);
+fn m13_sintr_at_the_shared_edge_keeps_what_destination_3_does_not_clear() {
+    let dest_3 = Insn::new(ALU | SETM | m_src(3) | DEST_3);
     let prom = [
         Insn::new(ALU | SETM | m_src(6) | INTERRUPT_CONTROL),
         Insn::new(ALU | SETM | m_src(2) | MD),
         Insn::new(ALU | SETM | m_src(1) | START_WRITE),
-        alias,
+        dest_3,
         Insn::new(JUMP | target(7) | PGF_OR_INT | N),
         Insn::new(JUMP | target(5) | ALWAYS | N),
         filler(),
         Insn::new(ALU | SETO | m_dest(5)),
         Insn::new(JUMP | target(8) | ALWAYS | N),
     ];
-    for (dest3, taken) in [(3, false), (1, true)] {
+    for dest3 in [3, 1] {
         let mut r = Rtl::new(engine_machine(
             &prom,
             &[(1, va(0o110)), (2, 0o401), (3, dest3), (6, 1 << 27)],
@@ -678,23 +696,23 @@ fn m13_sintr_at_the_shared_edge_leaves_out_what_destination_3_clears() {
             period_us: 1000,
             deadline_ns: 0,
         };
-        run_marking(&mut r, alias, 40);
-        assert_eq!(r.machine().mmem[5] == !0, taken, "destination 3 written with {dest3}");
+        run_marking(&mut r, dest_3, 40);
+        assert_eq!(r.machine().mmem[5], !0, "destination 3 written with {dest3}: taken");
     }
 }
 
 /// **M13, reads at the shared edge** (`rtl`), each for word 100 and word
 /// 110, with timer 0 on under its interrupt enable. A read gives the flags
 /// as they stood at the edge that takes its cycle:
-/// - its flag up, destination 3 written with 3 in the microcycle whose
-///   ending edge takes the read: the flag down, the clear taken first (and
-///   up, written with 1);
+/// - its flag up, destination 3 written with 3, Q1's clear, or with 1, in
+///   the microcycle whose ending edge takes the read: up, destination 3
+///   clearing nothing;
 /// - a rise one fabric tick, 10 ns, after that edge: down;
 /// - a rise on that edge itself: up.
 #[test]
 fn m13_a_read_gives_the_flags_as_they_stood_at_its_edge() {
-    let alias = Insn::new(ALU | SETM | m_src(3) | DEST_3);
-    let mut prom = vec![Insn::new(ALU | SETM | m_src(1) | START_READ), alias];
+    let dest_3 = Insn::new(ALU | SETM | m_src(3) | DEST_3);
+    let mut prom = vec![Insn::new(ALU | SETM | m_src(1) | START_READ), dest_3];
     prom.extend([filler(); 12]);
     prom.push(Insn::new(ALU | SETM | SRC_MD | a_dest(0o200)));
     prom.push(Insn::new(JUMP | target(prom.len() as u64) | ALWAYS | N));
@@ -711,33 +729,34 @@ fn m13_a_read_gives_the_flags_as_they_stood_at_its_edge() {
             let mut r = Rtl::new(engine_machine(&prom, &[(1, va(word)), (3, dest3)]));
             r.boot();
             r.machine_mut().timers.timer[0] = timer(deadline);
-            let edge = run_marking(&mut r, alias, 60);
+            let edge = run_marking(&mut r, dest_3, 60);
             (edge, flag_of(word, r.machine().amem[0o200]))
         };
-        assert_eq!(run(3, 0).1, 0, "word {word:o}: the clear at the read's edge goes first");
-        assert_eq!(run(1, 0).1, 1, "word {word:o}: no clear, the flag up");
+        assert_eq!(run(3, 0).1, 1, "word {word:o}: destination 3 with 3, the flag up");
+        assert_eq!(run(1, 0).1, 1, "word {word:o}: destination 3 with 1, the flag up");
         let (edge, _) = run(1, u64::MAX);
         assert_eq!(run(1, edge + 10), (edge, 0), "word {word:o}: a rise 10 ns after the edge");
         assert_eq!(run(1, edge), (edge, 1), "word {word:o}: a rise on the edge");
     }
 }
 
-/// **The destination 3 alias**: on both engines, a write of 1 turns timer 0
-/// on, periodic, with its interrupt enable set, and touches no other
-/// timer; a write of 3 clears its flag; a write that leaves it on keeps its
-/// interrupt enable, and one that turns it off does too; `<3:2>`, Q1's
-/// interval timer's, are ignored.
+/// **Destination 3 writes only M** at revision 10, on both engines, as on
+/// the CADR: whatever timer 0's state and whatever the word --- Q1's turn-on
+/// 1 with `<3:2>` set, 1, 0 and the clear 3 --- every timer is left exactly
+/// as it was, flag and next rise included, and M 37 gets the word.
 #[test]
-fn the_destination_3_alias_is_timer_0_s_control() {
+fn destination_3_writes_only_m_at_revision_10() {
     let prom =
         [Insn::new(ALU | SETM | m_src(3) | DEST_3), Insn::new(JUMP | target(1) | ALWAYS | N)];
     for engine_name in ["micro", "rtl"] {
-        for (before, v, after) in [
-            // (timer 0 before: on, one-shot, <8>, deadline), the write, after.
-            ((false, true, false, u64::MAX), 1 | 0o14, (true, false, true)),
-            ((true, false, false, 0), 1, (true, false, false)),
-            ((true, false, true, 0), 0, (false, false, true)),
-            ((true, true, false, 0), 3, (true, true, false)),
+        for (before, v) in [
+            // Timer 0 before: on, one-shot, <8>, deadline; the write.
+            ((false, true, false, u64::MAX), 1 | 0o14),
+            ((false, false, false, u64::MAX), 1),
+            ((true, false, false, 0), 1),
+            ((true, false, true, 0), 0),
+            ((true, true, false, 0), 3),
+            ((true, false, true, 0), 3),
         ] {
             let m = engine_machine(&prom, &[(3, v)]);
             let mut e = engine(engine_name, m);
@@ -750,26 +769,13 @@ fn the_destination_3_alias_is_timer_0_s_control() {
                 period_us: 1000,
                 deadline_ns: before.3,
             };
-            let others = [m.timers.timer[1], m.timers.timer[2]];
+            let timers = m.timers;
             for _ in 0..10 {
                 e.step().unwrap();
             }
-            let t = e.machine().timers.timer[0];
-            let now = e.machine().ns;
-            assert_eq!(
-                (t.on, t.one_shot, t.interrupt_enable),
-                after,
-                "{engine_name}: {before:?} written with {v:o}"
-            );
-            if v & 2 != 0 {
-                assert!(!t.flag(now), "{engine_name}: cleared");
-            }
             let m = e.machine();
-            assert_eq!(
-                [m.timers.timer[1], m.timers.timer[2]],
-                others,
-                "{engine_name}: timers 1, 2"
-            );
+            assert_eq!(m.timers, timers, "{engine_name}: {before:?} written with {v:o}");
+            assert_eq!(m.mmem[0o37], v, "{engine_name}: destination 3 wrote M 37");
         }
     }
 }

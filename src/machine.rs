@@ -86,8 +86,7 @@ pub struct Geometry {
     pub muldiv: bool,
     /// Whether the machine has QUUX's clocks ([`Timers`]): the interval
     /// timers on the register page, words 110-115, their interrupts in word
-    /// 100 and reset devices at word 104 (contract Q11); functional
-    /// destination 3, the destination 3 alias on timer 0; and the
+    /// 100 and reset devices at word 104 (contract Q11); and the
     /// microsecond clock, functional source 15 (contract Q1).
     pub tick: bool,
     /// Whether the mode register has `SPEED1` and `SPEED0`, which choose the
@@ -153,8 +152,8 @@ impl Geometry {
     /// [`crate::memory_port`]); its boot
     /// PROM at control store 36000 and the register page (contract Q2, [`Geometry::prom_base`],
     /// [`Machine::interrupt_sources`]); the microsecond clock in the
-    /// processor, functional source 15, and timer 0 reached as the tick
-    /// through functional destination 3 ([`Timers`]); `MUL` and
+    /// processor, functional source 15, and timer 0 of the interval timers
+    /// the tick ([`Timers`]); `MUL` and
     /// `DIV` in one instruction each, ALU
     /// functions 42 and 43 ([`crate::muldiv`]); a PDL buffer of 16K words,
     /// its pointer and index 14 bits; and a level-1 entry of six bits, 64 blocks of level 2 and so 63
@@ -418,17 +417,16 @@ impl IntervalTimer {
     }
 }
 
-/// QUUX's clocks in the processor: the three interval timers of contract
-/// Q11 ([`IntervalTimer`], revision 10), timer 0 of them the tick that
-/// takes the place of the CADR display's vertical interrupt, and the
-/// microsecond clock of contract Q1, functional source 15
+/// QUUX's clocks: the three interval timers of contract Q11 on the
+/// register page ([`IntervalTimer`], revision 10), timer 0 of them the tick
+/// that takes the place of the CADR display's vertical interrupt, and the
+/// microsecond clock of contract Q1 in the processor, functional source 15
 /// ([`Timers::microseconds`]).
 ///
-/// **The destination 3 alias** ([`Timers::alias`]): functional destination
-/// 3 is timer 0's control as Q1's tick control was, for the microcode of
-/// the bands revision 10 runs, which turns its tick on and clears it there.
-/// Destination 4 writes only M and source 17 reads all ones, as on the
-/// CADR: Q1's interval timer is gone, and the page's timers take its place.
+/// Every timer is reached through the register page alone. Q1's
+/// functional destinations 3 and 4 write only M and its source 17 reads all
+/// ones, as on the CADR: Q1's tick control, interval timer and status are
+/// gone, and the page's timers take their place.
 ///
 /// None of this is the CADR's: page SOURCE decodes no destination 3 or 4
 /// and no source 15 or 17. Microcode 323 neither writes the one nor reads
@@ -491,21 +489,6 @@ impl Timers {
             t.write_control(now, v)
         }
         true
-    }
-
-    /// A write of functional destination 3 at `now`, the destination 3
-    /// alias: Q1's tick control on timer 0. `<0>` on, and a write with
-    /// `<1>` set clears the flag; a write that turns it on also makes it
-    /// periodic and sets its interrupt enable, since Q1's tick interrupted
-    /// whenever it was on; one that leaves it on or turns it off leaves the
-    /// interrupt enable as it was. `<3:2>`, Q1's interval timer's, and the
-    /// rest are ignored, and no other timer is touched.
-    pub fn alias(&mut self, now: u64, v: u32) {
-        let t = &mut self.timer[0];
-        let turns_on = v & IntervalTimer::ON != 0 && !t.on;
-        let enable =
-            if turns_on || t.interrupt_enable { IntervalTimer::INTERRUPT_ENABLE } else { 0 };
-        t.write_control(now, v & (IntervalTimer::ON | IntervalTimer::FLAG) | enable);
     }
 
     /// Source 15 at `now`: the microseconds since power-on, 32 bits,

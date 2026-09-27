@@ -40,7 +40,8 @@ fn uses_the_codes(ir: u64) -> bool {
 /// those among them whose control-store word did not; and, of what ran,
 /// every value written to destination 3, the destination 4 writes and the
 /// source 17 reads, as `(address, value)`, the value being the output bus
-/// the console reads for the instruction in `IR` before it executes.
+/// the console reads for the instruction in `IR` before it executes; and
+/// whether timer 0 was on at the end.
 #[derive(Default)]
 struct Found {
     used: Vec<u16>,
@@ -48,6 +49,7 @@ struct Found {
     dest_3: Vec<(u16, u32)>,
     dest_4: Vec<(u16, u32)>,
     source_17: Vec<u16>,
+    timer_0_on: bool,
 }
 
 /// Which of destinations 3 and 4 `ir` writes, or source 17 reads.
@@ -111,6 +113,7 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> Found {
         }
     }
     assert!(support::lit_rows(&e, 84..130) > 400, "the listener never came");
+    found.timer_0_on = e.machine().timers.timer[0].on;
     found
 }
 
@@ -119,10 +122,11 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> Found {
 /// instruction the OA registers make writes destinations 3 to 7 or reads
 /// sources 15 or 17. Its microcode, 1000 for Q8 (dev11), uses them at
 /// the tick's own sites. And what it writes (contract Q11, M10): to
-/// destination 3, the destination 3 alias at revision 10, 1 and 3 only,
-/// Q1's tick on and its clear; to destination 4 nothing; and it reads
-/// source 17 nowhere --- so Q1's interval timer, which revision 10 drops,
-/// had no user.
+/// destination 3 1 alone, Q1's tick on at `BEG06`, which at revision 10
+/// writes only M, so that timer 0 is still off at the end and `INTR-TICK`,
+/// where its clear, 3, is written, never runs; to destination 4 nothing;
+/// and it reads source 17 nowhere --- so Q1's interval timer, which
+/// revision 10 drops, had no user.
 #[test]
 fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
     let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-1002-dev11");
@@ -165,11 +169,10 @@ fn system_1002_uses_the_tick_s_codes_only_where_its_microcode_does() {
     values.sort();
     values.dedup();
     eprintln!("1002: destination 3 written {} times, with {values:?}", found.dest_3.len());
-    assert!(values.contains(&1), "BEG06's turn-on, 1");
-    assert!(values.contains(&3), "INTR-TICK's clear, 3");
-    assert!(values.iter().all(|v| [1, 3].contains(v)), "destination 3 only 1 and 3: {values:?}");
+    assert_eq!(values, [1], "destination 3 only BEG06's turn-on, 1, and no INTR-TICK clear");
     assert!(found.dest_4.is_empty(), "destination 4 written: {:?}", found.dest_4);
     assert!(found.source_17.is_empty(), "source 17 read at {}", octal(&found.source_17));
+    assert!(!found.timer_0_on, "destination 3's writes turned timer 0 on");
 }
 
 /// **System 1001 on MIT's 323, on the CADR, never runs them at all**, the
