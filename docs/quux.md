@@ -638,24 +638,26 @@ microcode and System 2000's band read the GPT; MIT's label in block 0 is
 the CADR's.
 
 **System 2000's band is on a GPT disk in a dynamic VHD**: muir-sys's
-development band for revision 11, its microcode and PROM from muir-sys
-`02c0bb3`, a T-300's 263,245
+development band for revision 12, its microcode from muir-sys `11a1a85`
+and its PROM from `02c0bb3`, a T-300's 263,245
 blocks with the current `MCR1` at block 17, "MCR1 UCADR 2000", holding
 microcode 2000 and the current `LOD4`, "LOD4 System 2000", the band, no
 FILE and no TEMP (`band_2000_is_system_2000_on_microcode_2000`). QUUX
 boots the VHD as it is, a copy of it, the disk being written; the tests
 find it in the gitignored `ref/band-2000` and skip without it. Its `SYS:`
 is on the file device, which the tests serve the band's tree through. It
-reaches its listener, drawn at the screen's own words a line, in 164.5 M
-microcycles on `micro` and 183.5 M on `rtl` at 1280 by 1024, with 2000 in A
+reaches its listener, drawn at the screen's own words a line, in 156.5 M
+microcycles on `micro` and 165.5 M on `rtl` at 1280 by 1024, with 2000 in A
 memory's `A-VERSION` (`system_2000_runs_on_the_video_controller`, measured to the half
 million). It restores its own band: `(si:disk-restore 4)`, answered
 `yes`, reads 18,593 blocks of `LOD4` in 24 M microcycles and is back at
-the listener 140.5 M later, on `micro`
+the listener 131.5 M later, on `micro`
 (`system_2000_restores_its_band_to_the_listener`). That
 test holds, at every microcycle in `DISK-AWAIT-READY`, the disk registers'
 virtual address `77777600` to their physical `17777600`, and block-disk to
-moving on every million microcycles. The cold boot's `COLD-FAKE-L2-MAP`
+moving on every million microcycles; and after it the MACRO-DISPATCH
+register enabled again by the restored microcode, and returns fused
+again. The cold boot's `COLD-FAKE-L2-MAP`
 maps the disk registers and the run light; when the two take one level-2
 slot, the disk registers' virtual address reaches another word, and the
 restore waits in `DISK-AWAIT-READY` for ever. On a microcode with that
@@ -929,8 +931,8 @@ to 36000 without `-RESET`, with timers 1 and 2 turned on and up under
 their interrupt enables while the machine is halted (the band turns off a
 timer 1 or 2 that interrupts, `INTR-TIMER-1-STRAY`) and the file device
 enabled with three READs of 64 KiB and a CREATE-DIRECTORY queued, reaches
-the listener after 161,791,968 microcycles with `INTR` run 1,892 times,
-against 162,320,936 and 1,892 for the same reboot with neither, with the
+the listener after 153,696,634 microcycles with `INTR` run 1,873 times,
+against 154,225,602 and 1,872 for the same reboot with neither, with the
 timers off and the device disabled at location 6 and no queued command run
 (`m11_a_reboot_resets_the_timers_and_the_file_device`). All on `micro`, in
 `tests/system_2000_timers.rs`.
@@ -1446,13 +1448,14 @@ each engine's fused returns.
 Over the profile harness's twelve workloads (`examples/profile.rs` on
 `rtl`, System 2000 with microcode 2000 writing the register and the
 entries itself, `MUIR_H8A=microcode`, a 4K-word cache and the Arty
-Z7-20's memory timing), the fused return with the prefetch takes 7.07%
-fewer microcycles, and 7.70% less time, than without it. The prefetch
+Z7-20's memory timing), the fused return with the prefetch takes 7.02%
+fewer microcycles, and 7.58% less time, than without it. The prefetch
 takes the next word at 73.5% of the fetches answered from main memory,
 and a fused return uses it at 28.4% of the macroinstructions.
 `MUIR_PREFETCH=page` fits it with a page's reach, which looks in the next
 line too when the cache holds it and needs a second read port of the
-cache: 9.47% fewer microcycles on the same workloads.
+cache: 9.51% fewer microcycles and 10.27% less time on the same
+workloads.
 `MUIR_PREFETCH=off` takes it out.
 
 **The operand address.** When the entry has the operand bit and the
@@ -1488,12 +1491,83 @@ word before that write, where today's path has the main loop's dispatch
 and push in between. The machine does not check these rules;
 `tests/support/macro_dispatch.rs` does, over a run.
 
-Microcode 2000 keeps the rule where no entry has the operand bit. It
-stores to a local or an argument by PDL-INDEX in the microcycle after a
-main-loop return (`QSTLOC` and `QSTARG`, `uc-macrocode.lisp:327-334`, and,
-more rarely, `QVMALCL`, `XCTO1` and `MAKE-STACK-CLOSURE`), so with the operand bit on any entry that store can
-land at the next instruction's operand; System 2000 then does not reach
-its listener on `rtl` or `micro`.
+**Microcode 2000 fills the memory and keeps the rule itself.** At every
+start of the microcode, a cold or warm boot through the PROM and a
+`%DISK-RESTORE`, and before its first main-loop return, `RESET-MACHINE`
+reads feature word 17 and, where it is not 0, writes every entry with
+`OPDTB`'s entry for its opcode, the operand bit clear; then the register
+with `QMLP`, `A-LOCALP`'s and `M-AP`'s addresses and the enable; then
+`A-LOCALP` and `M-AP` with their own values, which loads the base copies;
+and then, over the generic entries, 36 entries for handlers of its own
+(`uc-cold-disk.lisp:65-171` in muir-sys's release 2000). Destinations 5
+to 7 are written there and nowhere else. A specialised handler runs only
+from a fused return, so only where the entry's conditions hold; otherwise
+the main loop's dispatch runs the generic one, and the two give the same
+results:
+
+| Macroinstructions | Handlers (`uc-macrocode.lisp`) | Indexes | Operand bit | Run in the profile below |
+|---|---|---|---|---:|
+| MOVE to the PDL of a local or an argument | `QIMOVE-PDL-OPERAND` | 425, 426 | yes | 2,489,177 |
+| POP and MOVEM into a local or an argument | `QIPOP-OPERAND`, `QIMVM-OPERAND` | 1735, 1736; 1535, 1536 | yes | 706,462; 107,758 |
+| BR, BR-NIL and BR-NOT-NIL, by the offset's sign | `QIBRN-BR-POS` and its five fellows | 140-147, 340-347, 540-547 | no | 1,848,904 |
+| SETE-1+, + and < of a local or an argument, on fixnums | `QISP1-OPERAND`, `QIADD-OPERAND`, `QILSP-OPERAND` | 1525, 1526; 315, 316; 525, 526 | yes | 399,531; 35,339; 24,509 |
+
+Over the twelve workloads below, 5.61 M of the 15.95 M macroinstructions
+ran one, 35.2%.
+
+No `POPJ-AFTER-NEXT` of it stores in the PDL at PDL-INDEX, or writes
+PDL-INDEX, `A-LOCALP`, M 31 or the location counter, in the
+microinstruction after it: at 29 returns the write is made before the
+return, among them `QSTLOC` and `QSTARG`, the stores into a local or an
+argument (`uc-macrocode.lisp:355-377`), and at 24 of those a no-op
+follows the return, one microcycle more. And no return that can pop the
+main loop's word has a call or a jump in the microinstruction after it,
+where the micro stack would move and the next handler would not run.
+With every entry the generic handler and the operand bit on every
+halfword whose `<8:0>` is a register and a delta, the band reaches its
+listener too, the checkers finding nothing.
+
+**What it saves.** Over the profile harness's twelve workloads on `rtl`
+(four ticks, a 4K-word cache, the Arty Z7-20's memory timing, the
+real-time clock counted from a fixed second, `cons` after an untimed
+first `cons`), System 2000 on revision 12 against the same band on
+revision 11. Time is the microcycles' 40 ns each and the time stalled on
+the memory, which a microcycle count leaves out:
+
+| Workload | Revision 11 microcycles | Revision 12 microcycles | Fewer | Revision 11 time | Revision 12 time | Less |
+|---|---:|---:|---:|---:|---:|---:|
+| compile | 22,557,000 | 20,806,000 | 7.8% | 977.6 ms | 902.1 ms | 7.7% |
+| calls-ack | 45,054,000 | 39,104,000 | 13.2% | 1885.9 ms | 1625.4 ms | 13.8% |
+| calls-fib | 36,898,000 | 33,648,000 | 8.8% | 1556.6 ms | 1410.6 ms | 9.4% |
+| cons | 47,934,000 | 47,334,000 | 1.3% | 1958.9 ms | 1932.8 ms | 1.3% |
+| arith-muldiv | 36,204,000 | 27,304,000 | 24.6% | 1571.9 ms | 1195.3 ms | 24.0% |
+| float | 19,538,000 | 16,890,000 | 13.6% | 827.2 ms | 716.4 ms | 13.4% |
+| array | 38,988,000 | 27,588,000 | 29.2% | 1647.9 ms | 1167.0 ms | 29.2% |
+| sort | 87,984,000 | 77,084,000 | 12.4% | 3675.5 ms | 3203.6 ms | 12.8% |
+| bignum | 15,844,000 | 13,994,000 | 11.7% | 670.8 ms | 590.9 ms | 11.9% |
+| intern | 49,194,000 | 43,144,000 | 12.3% | 2098.3 ms | 1843.6 ms | 12.1% |
+| print-scroll | 39,004,000 | 35,606,000 | 8.7% | 1667.8 ms | 1517.2 ms | 9.0% |
+| compile-again | 13,538,000 | 12,088,000 | 10.7% | 585.6 ms | 522.4 ms | 10.8% |
+| **all twelve** | 452,737,000 | 394,590,000 | 12.8% | 19124.1 ms | 16627.4 ms | 13.1% |
+
+At the DE25-Nano's memory timing, all twelve take 12.7% fewer
+microcycles and 12.4% less time. The memory's stalls are 5.3% of
+revision 11's time at the Arty's timing and 9.0% at the DE25's.
+
+The parts, each as a share of revision 11's microcycles and time at the
+Arty's timing, measured by taking them out one at a time: the fused
+return to the generic handlers alone (every entry `OPDTB`'s, filled by
+the harness, `MUIR_H8A=generic`) without the prefetch, 3.00% and 2.75%;
+the specialised handlers on top, without the prefetch, 3.26% and 3.17%;
+and the prefetch on top of both, 6.58% and 7.13%. The prefetch and the
+handlers gain from each other: the prefetch with the generic handlers
+alone saves 3.90% and 4.75%, and the handlers with the prefetch 5.94% and
+5.55%. The 24 no-ops the rule costs run 2,639,638 microcycles on revision
+11, 0.58% of its microcycles, and 1,427,815 on revision 12, 0.36%;
+`QSTLOC`'s is 64%
+of it on revision 11, and it falls on revision 12 because the
+specialised handlers make their stores in their own return. Two runs of
+the same configuration give the same counts, microcycle for microcycle.
 
 -RESET clears the enable and nothing else, and every control-store write
 clears it too, wherever it lands: the entries name control-store
@@ -1532,16 +1606,23 @@ location counter dropping it, and a word that should have been dropped
 found by the checkers; a page's reach taking the next line's word and
 never the next page's; -RESET dropping it; and `rtl` saved at every
 microcycle of a run and loaded into another running on to the same end.
-`tests/system_2000.rs` holds System 2000 reaching its listener on revision
-12 in the same microcycles and nanoseconds, with the same memories, as on
-revision 11, on both engines; booting with the memory filled from its
-`OPDTB` and enabled from its `QMLP`, `A-LOCALP` and `M-AP`, with returns
-fused, the rules kept after every one, the main loop's handler run next
-and the base copies equal to their memory after every microcycle; and
-booting with
-the register enabled and every entry poisoned to `ILLOP` before the PROM
-loads the microcode, nothing fused. `tests/unused_codes.rs` holds that it
-writes none of destinations 5 to 7.
+`tests/system_2000.rs` holds microcode 2000 as it was before it wrote the
+register reaching its listener on revision 12 in the same microcycles and
+nanoseconds, with the same memories, as on revision 11, on both engines,
+and, booted with the register enabled and every entry poisoned to `ILLOP`
+before the PROM loads it, nothing fused. It holds System 2000 on its
+microcode booting on both engines with the register written as above and
+36 specialised entries, returns fused, operand addresses loaded, the
+rules kept after every fused return, the main loop's handler run next,
+the operand address right, the base copies equal to their memory after
+every microcycle and, on `rtl`, M 31 main memory's word after every
+return fused on the prefetched word; the same with the generic fill and
+the operand bit; the same band booted with the register enabled and
+every entry poisoned, every entry written again and returns fused; and,
+after a `%DISK-RESTORE`, the register enabled again and returns fused
+again. `tests/unused_codes.rs` holds that it writes destinations 5 to 7
+only between `RESET-MACHINE-MACRO-DISPATCH-FILL` and
+`RESET-MACHINE-MACRO-DISPATCH-DONE`.
 
 ## Its microcode
 

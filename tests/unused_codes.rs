@@ -128,10 +128,11 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> Found {
 /// sources 15 or 17. Its microcode, 2000, the Q11 microcode, uses them at
 /// its own sites. And what it writes (contract Q11): nothing to
 /// destination 3 or 4, its tick being timer 0 on the register page, which
-/// is on at the end; nothing to destinations 5 to 7, so that it runs on
-/// revision 12 with the MACRO-DISPATCH register never written and its fused
-/// return off (contract H8a); and it reads source 17 nowhere --- so Q1's
-/// interval timer, which revision 10 drops, has no user.
+/// is on at the end; destinations 5 to 7 only in `RESET-MACHINE`'s fill of
+/// the MACRO DISPATCH MEMORY, from `RESET-MACHINE-MACRO-DISPATCH-FILL` up
+/// to `RESET-MACHINE-MACRO-DISPATCH-DONE` in its `ucadr.sym` (contract
+/// H8a); and it reads source 17 nowhere --- so Q1's interval timer, which
+/// revision 10 drops, has no user.
 #[test]
 fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
     let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000");
@@ -178,7 +179,25 @@ fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
     assert!(made.is_empty(), "made by the OA registers at {}", octal(made));
     assert!(found.dest_3.is_empty(), "destination 3 written: {:?}", found.dest_3);
     assert!(found.dest_4.is_empty(), "destination 4 written: {:?}", found.dest_4);
-    assert!(found.dest_5_to_7.is_empty(), "destinations 5 to 7 written: {:?}", found.dest_5_to_7);
+    let symbols =
+        muir::sym::parse(&std::fs::read_to_string(from.join("ucadr.sym")).unwrap()).unwrap();
+    let at = |name| {
+        symbols
+            .address(muir::sym::Space::IMem, name)
+            .unwrap_or_else(|| panic!("{name} in ucadr.sym")) as u16
+    };
+    let fill = at("RESET-MACHINE-MACRO-DISPATCH-FILL")..at("RESET-MACHINE-MACRO-DISPATCH-DONE");
+    let mut sites: Vec<u16> = found.dest_5_to_7.iter().map(|&(pc, _)| pc).collect();
+    sites.sort();
+    sites.dedup();
+    eprintln!("2000: destinations 5 to 7 written at {}", octal(&sites));
+    assert!(!sites.is_empty(), "destinations 5 to 7 never written");
+    let outside: Vec<u16> = sites.iter().copied().filter(|pc| !fill.contains(pc)).collect();
+    assert!(
+        outside.is_empty(),
+        "destinations 5 to 7 written outside the fill at {}",
+        octal(&outside)
+    );
     assert!(found.source_17.is_empty(), "source 17 read at {}", octal(&found.source_17));
     assert!(found.timer_0_on, "timer 0 on at the end");
 }

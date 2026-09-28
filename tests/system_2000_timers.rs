@@ -53,9 +53,9 @@ const FDEV_STATUS: u32 = PAGE + 0o161;
 
 /// The hand-over's files this names, by their SHA-256 in its `SHA256SUMS`.
 const DIGESTS: [(&str, &str); 4] = [
-    (PACK, "3d325f4ea400020edeb1a6fb4eb808af8447a22b09391435e282f6563ff4ff38"),
-    (TREE, "15f04570391fc171b3f17890459851ca370dfebc1e18f657453fbee40afea8f3"),
-    ("ucadr.sym", "beb4263abac41f24260e60a29e68bbdd0b87361d7324676ce48759645a8290d5"),
+    (PACK, "510be9584a7c293a039a4255fa3abcd60f6613cdeb9e0ac3e6d4ff51b140d1f3"),
+    (TREE, "e508edd7e69359fe1774c5850eb14c543f14edc248493c4a45f23c8c0d22f369"),
+    ("ucadr.sym", "e92ca3e5db5f4f972fa1be987760a33c6f14d5f86cadeb07c137b73ff170b7a7"),
     ("promh.mcr", "1fcb62bc6d8cf8e1170a422e1401a2261043d1d1c1f9fb5f3f9450fdc0a54058"),
 ];
 

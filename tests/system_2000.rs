@@ -4,17 +4,23 @@
 //! System 2000 on QUUX with the video controller: muir-sys's development band on
 //! microcode 2000, which sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-2000` (muir-sys's Q13 hand-over for
-//! revision 11, whose microcode and PROM sources are muir-sys `02c0bb3`'s;
-//! contracts Q8, Q11 and Q13): a GPT disk as a dynamic VHD, which QUUX boots as it is,
+//! It is in the gitignored `ref/band-2000` (muir-sys's hand-over of its
+//! main `11a1a85` for contract H8a, on revision 12; contracts Q8, Q11, Q13
+//! and H8a): a GPT disk as a dynamic VHD, which QUUX boots as it is,
 //! with microcode 2000 in its current `MCR1`, "MCR1 UCADR 2000", and the
 //! band, "LOD4 System 2000", in its current `LOD4`; PROM 2000, the PROM it
 //! was built and tested with, which is muir's built-in
 //! `data/quux-promh.mcr` byte for byte (`tests/quux_prom.rs`); and the
 //! tree it was built from, `release-2000/`. No TV sync program, no speed
 //! bits, and no CADR disk controller: QUUX's disk is block-disk. The band
-//! takes the screen's size from the feature page at every boot. Without it
-//! the tests skip and say so.
+//! takes the screen's size from the feature page at every boot. Its
+//! microcode fills the MACRO DISPATCH MEMORY and writes the MACRO-DISPATCH
+//! register at `RESET-MACHINE`, at every start, with specialised handlers
+//! for some entries. The band before, microcode 2000 with nothing of H8a
+//! (muir-sys's Q13 hand-over for revision 11, whose microcode and PROM
+//! sources are muir-sys `02c0bb3`'s), is `ref/band-2000-q13`: the tests of
+//! a microcode that never writes the register boot it. Without a band the
+//! tests skip and say so.
 
 use std::path::PathBuf;
 
@@ -33,7 +39,12 @@ const CHAOS: (u16, u16) = (0o177201, 0o177200);
 /// A copy of the disk, which the machine writes, and the served tree, in a
 /// scratch directory.
 fn band_2000(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND);
+    band_in(BAND, name)
+}
+
+/// The same for the band in `band`, a directory of the tree.
+fn band_in(band: &str, name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
+    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(band);
     if !from.join(PACK).exists() {
         eprintln!("skipped: {} is not present", from.display());
         return None;
@@ -64,6 +75,9 @@ fn band_2000(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
 /// The band, muir-sys's hand-over: its disk, its tree, and the directory
 /// the tree unpacks to.
 const BAND: &str = "ref/band-2000";
+/// Microcode 2000 and System 2000 as they were before contract H8a: the
+/// microcode writes none of destinations 5 to 7.
+const BAND_Q13: &str = "ref/band-2000-q13";
 const PACK: &str = "pack-2000.vhd";
 const TREE: &str = "tree-2000.tar.gz";
 const RELEASE: &str = "release-2000";
@@ -261,10 +275,9 @@ fn system_2000_runs_at_its_ticks() {
 }
 
 /// `DISK-AWAIT-READY`, where microcode 2000 waits for block-disk to be
-/// ready (the hand-over's `ucadr.sym`: `DISK-AWAIT-READY I-MEM 25036`,
-/// where it was before revision 11 too; the microcode revision 11 added
-/// is after it).
-const DISK_AWAIT_READY: u16 = 0o25036;
+/// ready, from the band's `ucadr.sym` ([`band_symbol`]): it moves as the
+/// microcode before it grows.
+const DISK_AWAIT_READY: &str = "DISK-AWAIT-READY";
 
 /// Block-disk's registers as the microcode addresses them, virtual
 /// (`DISK-REGS-ADDRESS-BASE`, `77777600` since contract Q13), and where
@@ -296,6 +309,7 @@ fn system_2000_restores_its_band_to_the_listener() {
     let Some((_dir, pack, root)) = band_2000("system-2000-restore") else {
         return;
     };
+    let await_ready = band_symbol(DISK_AWAIT_READY, "I-MEM");
     let lod4 = support::gpt_partition(&mut muir::disk_image::Disk::open(&pack).unwrap(), "LOD4");
     let mut m = quux(&pack, &root);
     m.block_disk.as_mut().unwrap().log = Some(Vec::new());
@@ -314,12 +328,12 @@ fn system_2000_restores_its_band_to_the_listener() {
         |e: &Micro| e.machine().block_disk.as_ref().unwrap().log.as_ref().unwrap().len();
     let from = transfers(&e);
     // The band read, until the screen goes dark for the boot.
-    let mut n = 0u64;
+    let (mut n, mut waited) = (0u64, 0u64);
     while support::lit_rows(&e, 84..130) > 400 {
         let (before, mut waiting) = (transfers(&e), 0);
         for _ in 0..1_000_000 {
             e.step().unwrap();
-            if e.pc() == DISK_AWAIT_READY {
+            if e.pc() == await_ready {
                 waiting += 1;
                 let at = e.machine().translate(DISK_REGS.0).physical;
                 assert_eq!(
@@ -330,6 +344,7 @@ fn system_2000_restores_its_band_to_the_listener() {
             }
         }
         n += 1_000_000;
+        waited += waiting;
         assert!(
             transfers(&e) > before,
             "block-disk still after {n} microcycles, {waiting} of the last million at \
@@ -343,8 +358,13 @@ fn system_2000_restores_its_band_to_the_listener() {
         .iter()
         .filter(|t| !t.write && (lod4.first..lod4.first + lod4.blocks).contains(&t.block))
         .count();
-    eprintln!("band read, {band_reads} blocks of LOD4, after {n} microcycles");
+    eprintln!(
+        "band read, {band_reads} blocks of LOD4, after {n} microcycles, {waited} at \
+         DISK-AWAIT-READY ({await_ready:o})"
+    );
+    assert!(waited > 0, "DISK-AWAIT-READY, {await_ready:o}, never ran: the check held nothing");
     assert!(band_reads > 0, "LOD4 read");
+    let fused = e.machine().macro_dispatch.fused;
     let again = support::wait_for_the_prompt_within(&mut e, 400_000_000);
     eprintln!("listener again after {} microcycles more", again);
     assert!(
@@ -352,12 +372,22 @@ fn system_2000_restores_its_band_to_the_listener() {
         "the listener again, at the screen's words a line; the screen is {}",
         shot(&e, "restored")
     );
+    // The restore writes the control store, which clears the enable, and
+    // the restored microcode's `RESET-MACHINE` writes the register again.
+    let d = &e.machine().macro_dispatch;
+    assert_eq!(d.register >> 31, 1, "the register enabled again after the restore");
+    assert!(d.fused > fused, "returns fused again after the restore");
 }
 
 /// The control store or dispatch memory address of a symbol of the band's
 /// microcode, from its `ucadr.sym`: `QMLP I-MEM 124`.
 fn band_symbol(name: &str, space: &str) -> u16 {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND).join("ucadr.sym");
+    band_symbol_in(BAND, name, space)
+}
+
+/// The same for the band in `band`.
+fn band_symbol_in(band: &str, name: &str, space: &str) -> u16 {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(band).join("ucadr.sym");
     let text = std::fs::read_to_string(&path).unwrap();
     text.lines()
         .find_map(|l| {
@@ -385,14 +415,16 @@ fn machine_state<E: Engine>(e: &E) -> impl PartialEq + std::fmt::Debug + use<E> 
     )
 }
 
-/// Boots the band on revision 12 and on revision 11 (`Geometry::QUUX_11`)
-/// with `make`, to the listener, and holds the two to each other.
+/// Boots microcode 2000 as it was before contract H8a (`BAND_Q13`) on
+/// revision 12 and on revision 11 (`Geometry::QUUX_11`) with `make`, to
+/// the listener, and holds the two to each other.
 fn revision_12_runs_as_revision_11<E: Engine>(engine: &str, make: impl Fn(Machine) -> E) {
     let mut ran = Vec::new();
     let mut states = Vec::new();
     for geometry in [Geometry::QUUX_11, Geometry::QUUX] {
         let revision = geometry.machine_id.unwrap() >> 4 & 0o7777;
-        let Some((_dir, pack, root)) = band_2000(&format!("system-2000-rev-{engine}-{revision}"))
+        let Some((_dir, pack, root)) =
+            band_in(BAND_Q13, &format!("system-2000-rev-{engine}-{revision}"))
         else {
             return;
         };
@@ -423,13 +455,13 @@ fn revision_12_runs_as_revision_11<E: Engine>(engine: &str, make: impl Fn(Machin
     assert!(states[1] == states[0], "{engine}: revision 12 leaves revision 11's state");
 }
 
-/// **Revision 12 runs microcode 2000 as revision 11 does** (contract H8a
-/// §6 item 1), on `rtl`: microcode 2000 writes none of destinations 5 to 7
-/// (`tests/unused_codes.rs`), so the MACRO-DISPATCH register stays as
-/// -RESET leaves it, disabled, and the band reaches its listener in the
-/// same microcycles and nanoseconds with the same memories, stacks and
-/// screen. The MACHINE-ID differs, and microcode 2000 asks only for 11 or
-/// more (`uc-cold-disk.lisp:16-23`).
+/// **Revision 12 runs a microcode that never writes the register as
+/// revision 11 does** (contract H8a §6 item 1), on `rtl`: microcode 2000
+/// as it was before H8a (`BAND_Q13`) writes none of destinations 5 to 7,
+/// so the MACRO-DISPATCH register stays as -RESET leaves it, disabled, and
+/// the band reaches its listener in the same microcycles and nanoseconds
+/// with the same memories, stacks and screen. The MACHINE-ID differs, and
+/// microcode 2000 asks only for 11 or more (`uc-cold-disk.lisp:16-23`).
 #[test]
 fn revision_12_runs_microcode_2000_as_revision_11_does_on_rtl() {
     revision_12_runs_as_revision_11("rtl", Rtl::new);
@@ -445,10 +477,16 @@ fn revision_12_runs_microcode_2000_as_revision_11_does_on_micro() {
 /// microcode is loaded, and no main-loop return has been made. Not while
 /// the PROM loads the microcode: on `rtl` a control-store write's second
 /// microcycle stands at the address written, `QMLP`'s among them, and the
-/// PC goes back into the PROM, at 36000 up, after it.
-fn to_the_main_loop(e: &mut impl Engine, qmlp: u16) {
+/// PC goes back into the PROM, at 36000 up, after it. With `enabled`, also
+/// not before the MACRO-DISPATCH register is enabled, which the band's
+/// microcode does at `RESET-MACHINE`, before its first main-loop return.
+fn to_the_main_loop(e: &mut impl Engine, qmlp: u16, enabled: bool) {
+    use muir::machine::macro_dispatch::ENABLE;
     for _ in 0..100_000_000 {
-        if e.machine().opc == qmlp && e.pc() < muir::machine::QUUX_PROM_BASE {
+        if e.machine().opc == qmlp
+            && e.pc() < muir::machine::QUUX_PROM_BASE
+            && (!enabled || e.machine().macro_dispatch.register & ENABLE != 0)
+        {
             return;
         }
         e.step().unwrap();
@@ -456,84 +494,170 @@ fn to_the_main_loop(e: &mut impl Engine, qmlp: u16) {
     panic!("QMLP never ran");
 }
 
-/// Boots the band on `make`'s engine with the MACRO DISPATCH MEMORY filled
-/// with the generic handlers and enabled once the microcode is loaded, as
-/// its microcode does not yet do, under the checkers of
-/// `support::macro_dispatch`; and says how many returns fused. The entries
-/// have no operand bit: microcode 2000 stores to a local or an argument in
-/// the microcycle after a main-loop return (`QSTLOC`, `QSTARG`,
-/// `uc-macrocode.lisp:327-334`), a write the rule of §3.3 forbids where
-/// the next entry has it; the checkers count those apart.
-fn boots_with_the_fused_return<E: Executes>(engine: &str, make: impl Fn(Machine) -> E) {
+/// Who fills the MACRO DISPATCH MEMORY for [`boots_with_the_fused_return`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Fill {
+    /// The band's microcode, at `RESET-MACHINE`: the generic handlers and
+    /// its specialised ones.
+    Microcode,
+    /// The test, once the microcode has filled it: every entry the generic
+    /// handler, `OPDTB`'s, with the operand bit on every halfword whose
+    /// `<8:0>` is a register and a delta (`fill_generic`).
+    Generic,
+}
+
+/// The entries whose handler, `<13:0>`, is not `OPDTB`'s for their
+/// opcode: the specialised ones.
+fn specialised_entries(m: &Machine, opdtb: u16) -> usize {
+    m.macro_dispatch
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|&(k, &x)| x & 0o37777 != m.dmem[opdtb as usize + (k >> 3 & 0o37)] & 0o37777)
+        .count()
+}
+
+/// Boots the band on `make`'s engine with the MACRO DISPATCH MEMORY as
+/// `fill` says, under the checkers of `support::macro_dispatch`, from the
+/// first main-loop return with the register enabled; and says how many
+/// returns fused.
+fn boots_with_the_fused_return<E: Executes>(engine: &str, make: impl Fn(Machine) -> E, fill: Fill) {
     let (qmlp, opdtb) = (band_symbol("QMLP", "I-MEM"), band_symbol("OPDTB", "D-MEM"));
     let (localp, ap) = (band_symbol("A-LOCALP", "A-MEM"), band_symbol("M-AP", "M-MEM"));
-    let Some((_dir, pack, root)) = band_2000(&format!("system-2000-fused-{engine}")) else {
+    let Some((_dir, pack, root)) = band_2000(&format!("system-2000-fused-{engine}-{fill:?}"))
+    else {
         return;
     };
     let mut e = make(quux(&pack, &root));
     e.boot();
-    to_the_main_loop(&mut e, qmlp);
-    fill_generic(e.machine_mut(), qmlp, opdtb, localp, ap as u8, false);
+    to_the_main_loop(&mut e, qmlp, true);
+    let word = muir::machine::macro_dispatch::word(qmlp, localp, ap as u8);
+    assert_eq!(e.machine().macro_dispatch.register, word, "{engine}: the microcode's register");
+    let specialised = specialised_entries(e.machine(), opdtb);
+    if fill == Fill::Generic {
+        fill_generic(e.machine_mut(), qmlp, opdtb, localp, ap as u8, true);
+    }
     let mut e = Checked::new(e);
     let n = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
     let m = e.machine();
     let c = &e.checker.counts;
-    eprintln!("{engine}: listener after {n} steps, {} fused returns", m.macro_dispatch.fused);
-    eprintln!("{engine}: {}", c.report(|pc| format!("{pc:o}")));
-    assert!(drawn_at_its_words_a_line(&e), "{engine}: the listener, fused");
-    assert!(m.macro_dispatch.fused > 0, "{engine}: returns fused");
-    assert_eq!(c.fused, m.macro_dispatch.fused, "{engine}: every one checked");
-    assert!(c.operand_candidates > 0, "{engine}: LOCAL and ARG operands");
-    assert_eq!(c.problems(), 0, "{engine}: the rule of §3.3 kept and every check met");
-    assert_eq!(
-        m.macro_dispatch.register >> 31,
-        1,
-        "{engine}: still enabled, no control-store write since"
+    eprintln!(
+        "{engine}, {fill:?}: listener after {n} steps, {} fused returns; the microcode's fill \
+         had {specialised} specialised entries",
+        m.macro_dispatch.fused
     );
+    eprintln!("{engine}, {fill:?}: {}", c.report(|pc| format!("{pc:o}")));
+    assert!(drawn_at_its_words_a_line(&e), "{engine}, {fill:?}: the listener, fused");
+    assert!(m.macro_dispatch.fused > 0, "{engine}, {fill:?}: returns fused");
+    assert_eq!(c.fused, m.macro_dispatch.fused, "{engine}, {fill:?}: every one checked");
+    assert!(c.operand_loads > 0, "{engine}, {fill:?}: operand addresses loaded");
+    assert_eq!(c.problems(), 0, "{engine}, {fill:?}: the rule of §3.3 kept and every check met");
+    assert_eq!(m.macro_dispatch.register, word, "{engine}, {fill:?}: still enabled");
+    let now = specialised_entries(m, opdtb);
+    match fill {
+        Fill::Microcode => {
+            assert!(specialised > 0, "{engine}: the microcode's specialised entries");
+            assert_eq!(now, specialised, "{engine}: the entries as the microcode left them");
+        }
+        Fill::Generic => assert_eq!(now, 0, "{engine}: the generic entries kept"),
+    }
     assert_eq!(microcode_version(&e), 2000);
 }
 
 /// **System 2000 boots with the fused return** (contract H8a §6 items 4-6),
-/// on `rtl`: its MACRO DISPATCH MEMORY filled from its own `OPDTB` and the
-/// register enabled with its `QMLP`, `A-LOCALP` and `M-AP`, it reaches the
-/// listener with returns fused and the register still enabled; the
+/// on `rtl`: its microcode fills the MACRO DISPATCH MEMORY, with its
+/// specialised handlers, and enables the register with its `QMLP`,
+/// `A-LOCALP` and `M-AP` before its first main-loop return, and it reaches
+/// the listener with returns fused and the register still enabled; the
 /// microcycle after every fused return keeps the rule of §3.3, the
 /// handler's first microinstruction reads no PDL word that microcycle
-/// writes, the handler the main loop would have reached runs next, and the
-/// base copies equal `A-LOCALP` and `M-AP` after every microcycle.
+/// writes, the handler the main loop would have reached runs next, the
+/// operand address is right wherever the entry has the operand bit, the
+/// base copies equal `A-LOCALP` and `M-AP` after every microcycle, and
+/// M 31 is main memory's word after every return fused on the prefetched
+/// word.
 #[test]
 fn system_2000_boots_with_the_fused_return_on_rtl() {
-    boots_with_the_fused_return("rtl", Rtl::new);
+    boots_with_the_fused_return("rtl", Rtl::new, Fill::Microcode);
 }
 
 /// The same on `micro`.
 #[test]
 fn system_2000_boots_with_the_fused_return_on_micro() {
-    boots_with_the_fused_return("micro", Micro::new);
+    boots_with_the_fused_return("micro", Micro::new, Fill::Microcode);
 }
 
-/// **A stale MACRO DISPATCH MEMORY never runs** (contract H8a §6 item 3):
-/// with the register enabled for System 2000's own main loop and every
-/// entry poisoned to `ILLOP`, left over from before the boot, the PROM's
-/// load of the microcode --- control-store writes --- clears the enable,
-/// and the band reaches its listener with nothing fused. Left enabled, the
-/// first main-loop return would go to `ILLOP`.
+/// **System 2000 boots with the generic handlers and the operand bit on
+/// every LOCAL and ARG entry** (contract H8a §6 item 5), on `rtl`: the
+/// test fills every entry with `OPDTB`'s, the operand bit on every halfword
+/// whose `<8:0>` is a register and a delta, once the microcode has
+/// enabled the register, and the checkers find nothing, the stores to a
+/// local or an argument having left the microcycle after a main-loop
+/// return.
 #[test]
-fn a_stale_macro_dispatch_memory_never_runs() {
-    let (qmlp, illop) = (band_symbol("QMLP", "I-MEM"), band_symbol("ILLOP", "I-MEM"));
-    let Some((_dir, pack, root)) = band_2000("system-2000-stale") else {
-        return;
-    };
+fn system_2000_boots_with_the_generic_operand_fill_on_rtl() {
+    boots_with_the_fused_return("rtl", Rtl::new, Fill::Generic);
+}
+
+/// The same on `micro`.
+#[test]
+fn system_2000_boots_with_the_generic_operand_fill_on_micro() {
+    boots_with_the_fused_return("micro", Micro::new, Fill::Generic);
+}
+
+/// Boots the band in `band` on `micro` with the register enabled for its
+/// own main loop and every entry poisoned to `ILLOP`, left over from before
+/// the boot, to the listener; returns the engine and `ILLOP`'s address.
+fn boots_from_a_stale_memory(band: &str, name: &str) -> Option<(Micro, u16)> {
+    let (qmlp, illop) =
+        (band_symbol_in(band, "QMLP", "I-MEM"), band_symbol_in(band, "ILLOP", "I-MEM"));
+    let (_dir, pack, root) = band_in(band, name)?;
     let mut e = Micro::new(quux(&pack, &root));
     e.boot();
     // After -BOOT's reset, which clears the enable too.
     e.machine_mut().macro_dispatch.entries.fill(illop as u32);
     set_register(e.machine_mut(), muir::machine::macro_dispatch::word(qmlp, 0, 0));
     let n = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-    eprintln!("listener after {n} steps");
+    eprintln!("{band}: listener after {n} steps");
+    assert!(drawn_at_its_words_a_line(&e), "{band}: the listener");
+    Some((e, illop))
+}
+
+/// **A stale MACRO DISPATCH MEMORY never runs** (contract H8a §6 item 3):
+/// with the register enabled for the main loop of microcode 2000 as it was
+/// before H8a (`BAND_Q13`), which never writes it, and every entry
+/// poisoned to `ILLOP`, left over from before the boot, the PROM's load of
+/// the microcode --- control-store writes --- clears the enable, and the
+/// band reaches its listener with nothing fused. Left enabled, the first
+/// main-loop return would go to `ILLOP`.
+#[test]
+fn a_stale_macro_dispatch_memory_never_runs() {
+    let Some((e, illop)) = boots_from_a_stale_memory(BAND_Q13, "system-2000-stale") else {
+        return;
+    };
     let d = &e.machine().macro_dispatch;
-    assert!(drawn_at_its_words_a_line(&e), "the listener");
     assert_eq!(d.fused, 0, "nothing fused");
     assert_eq!(d.register >> 31, 0, "the enable cleared");
     assert!(d.entries.iter().all(|&x| x == illop as u32), "the entries kept");
+}
+
+/// **The band's microcode fills a stale MACRO DISPATCH MEMORY again**: the
+/// same start with the band's own microcode, which writes every entry and
+/// the register at `RESET-MACHINE`, reaches its listener with returns
+/// fused, no entry left poisoned and the register its own.
+#[test]
+fn a_stale_macro_dispatch_memory_is_filled_again() {
+    let (qmlp, localp, ap) = (
+        band_symbol("QMLP", "I-MEM"),
+        band_symbol("A-LOCALP", "A-MEM"),
+        band_symbol("M-AP", "M-MEM"),
+    );
+    let Some((e, illop)) = boots_from_a_stale_memory(BAND, "system-2000-stale-filled") else {
+        return;
+    };
+    let d = &e.machine().macro_dispatch;
+    assert!(d.fused > 0, "returns fused");
+    assert_eq!(d.register, muir::machine::macro_dispatch::word(qmlp, localp, ap as u8));
+    let poisoned = d.entries.iter().filter(|&&x| x == illop as u32).count();
+    assert_eq!(poisoned, 0, "entries left poisoned");
 }
