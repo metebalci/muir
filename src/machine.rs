@@ -341,12 +341,15 @@ impl Geometry {
 /// mode chooses the halfword), or steps the location counter itself
 /// (`LCINC`: a `NEXT INSTR` the microcycle before, or a dispatch's
 /// `IR<24>`), and when the entry has R or P. A return that needs a fetch
-/// is not fused, unless `rtl` has the cache-only prefetch fitted
-/// (`crate::memory_port`, contract H8a §3.5, off by default):
-/// then it fuses on the prefetched word when that is the next word in
-/// sequence and condition 6, which the main loop tests on the fetch path,
-/// is false, and M 31 takes the word as the prefetch's form says. `micro`
-/// has no cache, and no prefetch.
+/// fuses on the word revision 12's cache-only prefetch holds
+/// (`crate::memory_port`, contract H8a §3.5), when that is the next word
+/// in sequence and condition 6, which the main loop tests on the fetch
+/// path, is false; M 31, a register beside M memory, takes the word at the
+/// end of the microcycle after the return, [`MacroDispatch::m31`]. The
+/// prefetch looks in the cache's line, and `micro` has no cache: there a
+/// return that needs a fetch never fuses. So on revision 12 `rtl` fuses
+/// more returns than `micro` does and takes fewer microcycles, and the two
+/// leave the same state wherever the microcode keeps the rule below.
 ///
 /// **The operand address** (contract H8a §3.4). When a fused return's entry
 /// has the operand bit and the halfword's register, `<8:6>`, is LOCAL (5)
@@ -486,9 +489,10 @@ pub struct MacroDispatch {
     /// The operand address armed by a fused return, loaded into PDL-INDEX
     /// at the end of the next microcycle.
     pub operand: Option<Operand>,
-    /// The prefetched word a fused return on the fetch path arms when M 31
-    /// is a register beside M memory (`crate::memory_port::M31Load`, `rtl`
-    /// alone), loaded into it at the end of the next microcycle.
+    /// The prefetched word a fused return on the fetch path arms for M 31,
+    /// a register beside M memory (`crate::memory_port`, `rtl` alone),
+    /// loaded into it at the end of the next microcycle. Kept in a
+    /// checkpoint.
     pub m31: Option<u32>,
     /// How many returns have been fused: a count for the profile and the
     /// tests, not kept in a checkpoint.

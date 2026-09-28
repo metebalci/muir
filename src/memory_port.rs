@@ -33,20 +33,22 @@
 //! The words themselves come from [`crate::machine::Machine`], as with the
 //! bus interface; the port says only when.
 //!
-//! **The cache-only prefetch** (contract H8a §3.5, form 2; off
-//! unless [`MemoryPort::set_prefetch`] fits it, and in no revision): when a
-//! macroinstruction fetch's read is answered from main memory at physical
-//! word `p`, the word at `p + 1` is taken into a one-word buffer with its
-//! virtual and physical addresses, if the cache holds it and it is in the
-//! same page. Nothing else happens: no memory cycle, no map lookup, no
-//! arbitration, so it cannot fault. [`Reach::Line`] looks only in the line
-//! the fetch has just read or filled, whose four words the fabric's cache
-//! puts out together; [`Reach::Page`] looks in the next line too, which is
-//! a second lookup of the cache's RAMs. The buffer is dropped by a write
-//! of the location counter, a store to its word, a transfer by block-disk
-//! or the file device, a map write, and -RESET; a checkpoint does not keep
-//! it, so a restore drops it too. What uses it is the fused return
-//! (`crate::machine::macro_dispatch`), in `rtl` alone.
+//! **The cache-only prefetch** (contract H8a §3.5, revision 12, with
+//! [`Reach::Line`]): when a macroinstruction fetch's read is answered from
+//! main memory at physical word `p`, the word at `p + 1` is taken into a
+//! one-word buffer with its virtual and physical addresses, if it is in the
+//! line the fetch has just read or filled, whose four words the fabric's
+//! cache puts out together. Nothing else happens: no memory cycle, no map
+//! lookup, no arbitration and no second read of the cache's RAMs, so it
+//! cannot fault. [`Reach::Page`], which looks in the next line too when the
+//! cache holds it, never past the page, is no revision's: a measurement's
+//! option ([`MemoryPort::set_prefetch`]), needing a second cache read
+//! port. The buffer is dropped by a write of the location counter, a store
+//! to its word, a transfer by block-disk or the file device, a map write,
+//! and -RESET; a checkpoint keeps it, with a fetch's address the port is
+//! yet to answer. What uses it is the fused return
+//! (`crate::machine::macro_dispatch`), in `rtl` alone: `micro` has no
+//! cache, and no prefetch.
 
 use crate::busint::{Ack, Responder};
 use crate::cache::{Cache, CacheConfig, MemoryTiming};
@@ -58,34 +60,17 @@ pub enum Reach {
     /// Only in the line the fetch read: the next word when the fetched one
     /// is not its line's last. The fabric's cache has that line's words out
     /// of its RAMs already, so this needs no second read of them.
+    /// Revision 12's ([`Reach::REVISION_12`]).
     Line,
     /// Anywhere in the fetched word's page that the cache holds: the next
-    /// line's word is a lookup of its own, a second read port.
+    /// line's word is a lookup of its own, a second read port. No
+    /// revision's; for measurement.
     Page,
 }
 
-/// How the fused return that takes the prefetched word loads M 31
-/// (contract H8a §3.5's open design point).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum M31Load {
-    /// (a) M 31 is a register beside M memory, which reads of A and M
-    /// address 31 take: loaded at the edge ending the microcycle after the
-    /// return, as the operand address is, so that microcycle reads the old
-    /// word and the handler the new one.
-    Register,
-    /// (b) M 31 is written through M memory's one write port, in the write
-    /// pulse of the microcycle after the return: the return falls back
-    /// when its own microinstruction has an A or M destination, whose write
-    /// that pulse carries. That microcycle's own reads of A or M 31 pass
-    /// the new word around, as they would a write of the return's.
-    FreePort,
-}
-
-/// The prefetch's form, when it is fitted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Prefetch {
-    pub reach: Reach,
-    pub m31: M31Load,
+impl Reach {
+    /// The prefetch revision 12 has: the line's reach.
+    pub const REVISION_12: Reach = Reach::Line;
 }
 
 /// The word the prefetch holds.
@@ -134,11 +119,10 @@ pub struct PrefetchCounts {
     /// Fused returns that took the buffered word.
     pub used: u64,
     /// Returns that would have fused on the buffered word but for a
-    /// condition of the fetch path: condition 6 true; under
-    /// [`M31Load::FreePort`], the port taken by the return's own write; and
-    /// a store started in the microcycle before, whose compare with the
-    /// word's address is yet to be made.
-    pub refused: [u64; 3],
+    /// condition of the fetch path: condition 6 true, and a store started
+    /// in the microcycle before, whose compare with the word's address is
+    /// yet to be made.
+    pub refused: [u64; 2],
 }
 
 /// Where the port's cycle is.
@@ -180,10 +164,10 @@ pub struct MemoryPort {
     /// [`MemoryPort::keep_timing_model`]. Not in a checkpoint.
     model: TimingModel,
     /// The prefetch, if fitted, its word, the cycle's virtual word address
-    /// when it is a macroinstruction fetch, and its counts. None of it in a
-    /// checkpoint: the form is the engine's setting, as the timing model
-    /// is, and a restore drops the word.
-    prefetch: Option<Prefetch>,
+    /// when it is a macroinstruction fetch, and its counts. A checkpoint
+    /// keeps the word and the address; the reach is the engine's, as the
+    /// timing model is, and the counts are the profile's.
+    prefetch: Option<Reach>,
     prefetched: Option<Prefetched>,
     fetch_vaddr: Option<u32>,
     pub prefetch_counts: PrefetchCounts,
@@ -216,13 +200,14 @@ impl MemoryPort {
         }
     }
 
-    /// The cache-only prefetch fitted, or taken out: `None`, the default.
-    pub fn set_prefetch(&mut self, prefetch: Option<Prefetch>) {
+    /// The cache-only prefetch fitted with its reach, or taken out: `None`
+    /// until the engine fits revision 12's. A word held is dropped.
+    pub fn set_prefetch(&mut self, prefetch: Option<Reach>) {
         self.prefetch = prefetch;
         self.prefetched = None;
     }
 
-    pub fn prefetch(&self) -> Option<Prefetch> {
+    pub fn prefetch(&self) -> Option<Reach> {
         self.prefetch
     }
 
@@ -251,7 +236,7 @@ impl MemoryPort {
     /// the read, whose line the cache then holds.
     pub fn read_answered(&mut self, main: &[u32]) {
         let Some(vaddr) = self.fetch_vaddr.take() else { return };
-        let Some(prefetch) = self.prefetch else { return };
+        let Some(reach) = self.prefetch else { return };
         if !self.memory || self.write {
             return;
         }
@@ -265,7 +250,7 @@ impl MemoryPort {
             return;
         }
         let same_line = !next.is_multiple_of(line);
-        if !same_line && (prefetch.reach == Reach::Line || !self.cache.holds(next)) {
+        if !same_line && (reach == Reach::Line || !self.cache.holds(next)) {
             c.not_held += 1;
             return;
         }
@@ -434,11 +419,11 @@ impl MemoryPort {
             memory_free_at,
             buffer_free_at,
             model: _,
-            // The prefetch's form is the engine's setting, and a restore
-            // drops its word (see the module's account).
+            // The prefetch's reach is the engine's setting; its counts are
+            // the profile's.
             prefetch: _,
-            prefetched: _,
-            fetch_vaddr: _,
+            prefetched,
+            fetch_vaddr,
             prefetch_counts: _,
         } = self;
         match *state {
@@ -465,6 +450,12 @@ impl MemoryPort {
         w.u64(timing.write_ns);
         w.u64(*memory_free_at);
         w.u64(*buffer_free_at);
+        w.opt(*prefetched, |w, p| {
+            w.u32(p.vaddr);
+            w.u32(p.phys);
+            w.u32(p.word);
+        });
+        w.opt(*fetch_vaddr, |w, v| w.u32(v));
     }
 
     pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
@@ -488,6 +479,16 @@ impl MemoryPort {
         self.timing = MemoryTiming { read_ns: r.u64()?, write_ns: r.u64()? };
         self.memory_free_at = r.u64()?;
         self.buffer_free_at = r.u64()?;
+        // The word the prefetch held, and a fetch it is to look past; kept
+        // only where the engine has the prefetch fitted.
+        let prefetched = r.opt(|r| {
+            Ok(Prefetched { vaddr: r.u32()? & 0x00ff_ffff, phys: r.u32()?, word: r.u32()? })
+        })?;
+        let fetch_vaddr = r.opt(|r| Ok(r.u32()? & 0x00ff_ffff))?;
+        if self.prefetch.is_some() {
+            self.prefetched = prefetched;
+            self.fetch_vaddr = fetch_vaddr;
+        }
         Ok(())
     }
 }

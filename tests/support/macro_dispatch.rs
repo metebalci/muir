@@ -33,10 +33,10 @@
 //!   own write pulse, after its read, where today's path runs the main
 //!   loop's dispatch and push in between.
 //!
-//! - **The prefetched word** (contract H8a §3.5, `rtl` with the prefetch
-//!   fitted): a fused return that needs a fetch took its word from the
-//!   prefetch's buffer, and the microcycle after it starts the stream's
-//!   fetch of that word. After it, M 31 holds main memory's word at the
+//! - **The prefetched word** (contract H8a §3.5, revision 12 on `rtl`): a
+//!   fused return that needs a fetch took its word from the prefetch's
+//!   buffer, and the microcycle after it starts the stream's fetch of that
+//!   word. After it, M 31 holds main memory's word at the
 //!   fetch's address, translated through the map as it then stands: a
 //!   buffer that missed a store, a transfer or a map write fails this.
 //! - **Returns by a handler a fused return ran**, with no main loop
@@ -217,8 +217,8 @@ pub struct Counts {
     pub prefetched: u64,
     pub stale_words: u64,
     /// Microcycles after a fused return on the fetch path that read A or
-    /// M 31: under the prefetch's (b) they find the new word, where today's
-    /// path has the old one there.
+    /// M 31: they find the old word, as on today's path, M 31 being loaded
+    /// at the end of that microcycle.
     pub m31_reads_after: u64,
     /// Fused returns made by a handler a fused return ran, with no main
     /// loop between, by the handler's address, and by the returning

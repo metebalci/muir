@@ -506,7 +506,10 @@ impl Micro {
     /// dispatch's `IR<24>`, which has stepped the counter already.
     ///
     /// Fused only where today's return goes to the main loop's dispatch,
-    /// no fetch needed, and nothing in this microinstruction changes what
+    /// no fetch needed (this engine has no cache, so not revision 12's
+    /// prefetch, which `rtl` fuses on: the two differ in timing there, not
+    /// in results, where the microcode keeps the rule after a fused
+    /// return), and nothing in this microinstruction changes what
     /// that dispatch would see: no push, no pop by the functional source,
     /// no write of M 31 or INTERRUPT-CONTROL, and no step of the counter in
     /// this microcycle (`LCINC`: `NEXT INSTRD`, or the dispatch's

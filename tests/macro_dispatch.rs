@@ -17,6 +17,14 @@
 //! LOCAL or ARG, PDL-INDEX is loaded with the operand's address at the end
 //! of the microcycle after the return.
 //!
+//! On `rtl`, revision 12 has the cache-only prefetch too, with the line's
+//! reach (contract H8a §3.5): a return that needs the next word in sequence
+//! fuses when the fetch before left it in the buffer. `micro` has no cache
+//! and fuses only the returns that need no fetch, so on revision 12 the two
+//! engines fuse different returns and take different microcycles, and leave
+//! the same state wherever the handlers keep §3.3's rule; the tests that
+//! compare them count each engine's fused returns ([`fused_on`]).
+//!
 //! The main loop here is made as microcode 2000's `QMLP` is
 //! (`uc-macrocode.lisp:9-13`): the condition-6 call, `M-INST-BUFFER <- MD`,
 //! `(DISPATCH-XCT-NEXT M-INST-OP OPDTB)` on the halfword's `<13:9>`, and the
@@ -118,18 +126,21 @@ const OPERANDS: [u32; 14] = [
 ];
 
 /// What [`RECORD`] pushes over [`OPERANDS`] with the operand bit in its
-/// entries: in pairs, PDL-INDEX at the handler's first microcycle and in
-/// the microcycle after its return. The second halfwords with LOCAL or ARG
-/// find the operand's address, masked to fourteen bits; every other push
-/// finds [`SENTINEL`], the microcycle after a return included.
-fn operand_records() -> Vec<u32> {
+/// entries, on `engine`: in pairs, PDL-INDEX at the handler's first
+/// microcycle and in the microcycle after its return. The second halfwords
+/// with LOCAL or ARG find the operand's address, masked to fourteen bits;
+/// on `rtl` so does the second word's first halfword, ARG with delta 0,
+/// whose return fuses on the prefetched word (the first word's fetch left
+/// the second, in its line, in the buffer). Every other push finds
+/// [`SENTINEL`], the microcycle after a return included.
+fn operand_records(engine: &str) -> Vec<u32> {
     let s = SENTINEL;
     vec![
         s,
         s,
         (LOCALP + 7) & 0o37777,
         s,
-        s,
+        if engine == "rtl" { AP + 1 } else { s },
         s,
         AP + 1 + 5,
         s,
@@ -405,11 +416,16 @@ fn machine(s: Setup) -> Machine {
 }
 
 /// Runs an engine until opcode 7's handler has run, and gives the machine
-/// back with the microcycles it took.
+/// back with the microcycles it took. The machine is taken eight
+/// microcycles later, in opcode 7's loop, which lets what the last
+/// microcycles started land: a fetch a fused return on `rtl`'s fetch path
+/// started, into MD, and the write of the microcycle after a return into
+/// opcode 7, into the PDL buffer.
 fn run<E: Engine>(mut e: E) -> (u64, Machine) {
     e.boot();
     for n in 0..20_000 {
         if e.machine().opc == STOP {
+            e.run(8);
             return (n, e.machine().clone());
         }
         e.step().unwrap();
@@ -451,16 +467,47 @@ fn state(m: &Machine) -> impl PartialEq + std::fmt::Debug {
     )
 }
 
-/// How many returns fuse in [`PROGRAM`]: a return into the second
-/// halfword of a word, which needs no fetch, from a handler whose return
-/// fuses (opcode 7's never returns), into an entry with R and P clear (not
-/// 5 or 6).
+/// How many returns fuse in [`PROGRAM`] with no fetch: a return into the
+/// second halfword of a word, which needs no fetch, from a handler whose
+/// return fuses (opcode 7's never returns), into an entry with R and P
+/// clear (not 5 or 6). Both engines fuse these.
 fn fusing(returns_fuse: impl Fn(u32) -> bool) -> u64 {
     let op = |h: u32| h >> 9 & 0o37;
     (1..PROGRAM.len())
         .filter(|&k| k % 2 == 1 && op(PROGRAM[k - 1]) != 7)
         .filter(|&k| returns_fuse(op(PROGRAM[k - 1])) && !matches!(op(PROGRAM[k]), 5 | 6))
         .count() as u64
+}
+
+/// **The returns into [`PROGRAM`] that fuse on the prefetched word**, by
+/// halfword: into a word's first halfword, which needs a fetch, where the
+/// word is not the first of its line of four (the line the fetch before it
+/// filled holds it, and the line's reach looks nowhere else), from a
+/// handler whose return fuses into an entry with R and P clear. `rtl`
+/// fuses these on revision 12 as well; `micro`, with no cache, does not.
+fn fusing_prefetched(returns_fuse: impl Fn(u32) -> bool) -> Vec<usize> {
+    let op = |h: u32| h >> 9 & 0o37;
+    (2..PROGRAM.len())
+        .step_by(2)
+        .filter(|&k| !(CODE as usize + k / 2).is_multiple_of(4))
+        .filter(|&k| op(PROGRAM[k - 1]) != 7 && returns_fuse(op(PROGRAM[k - 1])))
+        .filter(|&k| !matches!(op(PROGRAM[k]), 5 | 6))
+        .collect()
+}
+
+/// How many returns in [`PROGRAM`] fuse on `engine` at revision 12: those
+/// that need no fetch, and on `rtl` those its prefetch holds the word for.
+fn fused_on(engine: &str, returns_fuse: impl Fn(u32) -> bool + Copy) -> u64 {
+    let prefetched = if engine == "rtl" { fusing_prefetched(returns_fuse).len() } else { 0 };
+    fusing(returns_fuse) + prefetched as u64
+}
+
+/// The microcycles the fused returns of [`fused_on`] save on `engine`: two
+/// for one that needs no fetch (`QMLP+2` and `QMLP+3`), four for one on the
+/// fetch path (`QMLP` to `QMLP+3`).
+fn saved_on(engine: &str, returns_fuse: impl Fn(u32) -> bool + Copy) -> u64 {
+    let prefetched = if engine == "rtl" { fusing_prefetched(returns_fuse).len() } else { 0 };
+    2 * fusing(returns_fuse) + 4 * prefetched as u64
 }
 
 /// **Destinations 5 to 7 write the register, the index and the entry**
@@ -513,10 +560,11 @@ fn destinations_5_to_7_write_the_register_the_index_and_the_entry() {
 /// **A fused return skips the main loop's dispatch and push**, on both
 /// engines: the program leaves the same state with the MACRO DISPATCH
 /// MEMORY holding the generic handlers as without it, two microcycles
-/// fewer for each fused return. A POPJ, a jump with R (while
-/// [`macro_dispatch::JUMP_RETURNS_FUSE`] says so) and a dispatch whose
-/// entry has R all fuse; an entry with N fuses and pops the word, as the
-/// main loop's nopped push would have left it popped.
+/// fewer for each fused return that needs no fetch, and on `rtl` four
+/// fewer for each on the fetch path, which its prefetch fuses. A POPJ, a
+/// jump with R (while [`macro_dispatch::JUMP_RETURNS_FUSE`] says so) and a
+/// dispatch whose entry has R all fuse; an entry with N fuses and pops the
+/// word, as the main loop's nopped push would have left it popped.
 #[test]
 fn a_fused_return_skips_the_dispatch_and_the_push() {
     let off = both(Setup::off());
@@ -527,9 +575,15 @@ fn a_fused_return_skips_the_dispatch_and_the_push() {
         assert_eq!(counts(m_off)[..6], COUNTS, "{name}: every macroinstruction ran once");
         assert_eq!(state(m_on), state(m_off), "{name}: the same state");
         assert_eq!(m_off.macro_dispatch.fused, 0, "{name}: nothing fused while disabled");
-        assert_eq!(m_on.macro_dispatch.fused, fused, "{name}");
-        assert_eq!(n_off - n_on, 2 * fused, "{name}: two microcycles a fused return");
+        assert_eq!(m_on.macro_dispatch.fused, fused_on(name, fuses), "{name}");
+        assert_eq!(n_off - n_on, saved_on(name, fuses), "{name}");
     }
+    // The engines leave the same state, `rtl` in fewer microcycles. `rtl`
+    // keeps the location counter in its own counters, not in the machine.
+    let (mut micro, mut rtl) = (on[0].2.clone(), on[1].2.clone());
+    (micro.lc, rtl.lc) = (0, 0);
+    assert_eq!(state(&micro), state(&rtl), "micro and rtl");
+    assert!(on[1].1 < on[0].1, "rtl fuses the returns micro does and more");
 }
 
 /// **A dispatch's R return fuses** (contract H8a): the returns from
@@ -541,7 +595,7 @@ fn a_dispatch_return_fuses() {
     assert!(fusing(fuses) > without_3, "the program has dispatch returns to fuse");
     for (name, _, m) in both(Setup::on()) {
         assert_eq!(counts(&m)[2], COUNTS[2], "{name}");
-        assert_eq!(m.macro_dispatch.fused, fusing(fuses), "{name}");
+        assert_eq!(m.macro_dispatch.fused, fused_on(name, fuses), "{name}");
     }
 }
 
@@ -552,12 +606,17 @@ fn a_dispatch_return_fuses() {
 #[test]
 fn the_entry_for_the_halfword_is_taken() {
     // Opcode 2 with register 5 in a word's second halfword, after a
-    // handler whose return fuses.
+    // handler whose return fuses; and on `rtl`, in a first halfword whose
+    // return fuses on the prefetched word (none here: the one first
+    // halfword that has it starts a line).
     let special: u64 =
         (1..PROGRAM.len()).filter(|&k| k % 2 == 1 && PROGRAM[k] == hw(2, 5)).count() as u64;
+    let prefetched =
+        fusing_prefetched(fuses).into_iter().filter(|&k| PROGRAM[k] == hw(2, 5)).count() as u64;
     assert!(special >= 2, "the program has the halfword where it fuses");
     for (name, _, m) in both(Setup { specialised: true, ..Setup::on() }) {
         let c = counts(&m);
+        let special = special + if name == "rtl" { prefetched } else { 0 };
         assert_eq!(c[6] as u64, special, "{name}: the specialised handler");
         assert_eq!(c[1] + c[6], COUNTS[1], "{name}: opcode 2 ran as often");
         assert_eq!(c[..1], COUNTS[..1], "{name}");
@@ -571,21 +630,21 @@ fn the_entry_for_the_halfword_is_taken() {
 
 /// **Each case that is not fused runs today's path**: a return that pops
 /// the main loop's word while its own microinstruction writes M 31,
-/// pushes, or writes INTERRUPT-CONTROL is not fused, and the run is the
-/// disabled one's, microcycle for microcycle, less two for each return that
-/// still fuses. The needed fetch and the entries with R or P are in every
-/// run: [`fusing`] counts them out.
+/// pushes, or writes INTERRUPT-CONTROL is not fused, on the fetch path
+/// either, and the run is the disabled one's, microcycle for microcycle,
+/// less what each return that still fuses saves. The needed fetch and the
+/// entries with R or P are in every run: [`fused_on`] counts them out.
 #[test]
 fn a_return_that_writes_m31_pushes_or_writes_interrupt_control_is_not_fused() {
     for pop in [Pop::WritesM31, Pop::Pushes, Pop::WritesInterruptControl] {
         let off = both(Setup { pop, ..Setup::off() });
         let on = both(Setup { pop, ..Setup::on() });
-        let fused = fusing(|op| op != 1 && fuses(op));
+        let not_1 = |op| op != 1 && fuses(op);
         for ((name, n_off, m_off), (_, n_on, m_on)) in off.iter().zip(on.iter()) {
             assert_eq!(counts(m_off)[..6], COUNTS, "{pop:?}, {name}");
             assert_eq!(state(m_on), state(m_off), "{pop:?}, {name}: the same state");
-            assert_eq!(m_on.macro_dispatch.fused, fused, "{pop:?}, {name}");
-            assert_eq!(n_off - n_on, 2 * fused, "{pop:?}, {name}");
+            assert_eq!(m_on.macro_dispatch.fused, fused_on(name, not_1), "{pop:?}, {name}");
+            assert_eq!(n_off - n_on, saved_on(name, not_1), "{pop:?}, {name}");
         }
     }
 }
@@ -594,7 +653,8 @@ fn a_return_that_writes_m31_pushes_or_writes_interrupt_control_is_not_fused() {
 /// with the sequence break up, the main loop's call on condition 6 is
 /// taken at every fetch with the fused return as without it, and the
 /// returns that need no fetch fuse all the same, as today's main loop goes
-/// to `QMLP+2` for them without testing it.
+/// to `QMLP+2` for them without testing it. So `rtl`'s prefetch fuses
+/// none here, and the engines fuse the same returns.
 #[test]
 fn condition_6_is_tested_on_the_fetch_path() {
     let off = both(Setup { sequence_break: true, ..Setup::off() });
@@ -624,11 +684,14 @@ fn another_main_loop_is_not_fused() {
 }
 
 /// **Revision 11 has none of it, nor has the CADR**: the register written
-/// with the enable changes nothing there, destination 5 writing only M.
+/// with the enable changes nothing there, destination 5 writing only M,
+/// and `rtl` has no prefetch.
 #[test]
 fn revision_11_and_the_cadr_have_none_of_it() {
     let off = both(Setup::off());
     for geometry in [Geometry::QUUX_11, Geometry::CADR] {
+        let r = Rtl::new(machine(Setup { geometry, ..Setup::on() }));
+        assert_eq!(r.prefetch(), None, "{geometry:?}");
         let on = both(Setup { geometry, ..Setup::on() });
         for ((name, n_off, m_off), (_, n_on, m_on)) in off.iter().zip(on.iter()) {
             assert_eq!(counts(m_on)[..6], COUNTS, "{geometry:?}, {name}");
@@ -781,8 +844,10 @@ fn revision_12_says_so() {
 fn a_jump_return_fuses_as_the_switch_says() {
     let jumps = fusing(|_| true) - fusing(|op| op != 2);
     assert!(jumps > 0, "the program has jump returns to fuse");
-    let want = fusing(|_| true) - if macro_dispatch::JUMP_RETURNS_FUSE { 0 } else { jumps };
     for (name, _, m) in both(Setup::on()) {
+        let jumps = fused_on(name, |_| true) - fused_on(name, |op| op != 2);
+        let all = fused_on(name, |_| true);
+        let want = all - if macro_dispatch::JUMP_RETURNS_FUSE { 0 } else { jumps };
         assert_eq!(m.macro_dispatch.fused, want, "{name}");
     }
 }
@@ -791,6 +856,16 @@ fn a_jump_return_fuses_as_the_switch_says() {
 /// pointer has counted them.
 fn records(m: &Machine) -> Vec<u32> {
     m.pdl[1..=m.pdl_pointer as usize].to_vec()
+}
+
+/// [`RECORD`]'s returns over [`OPERANDS`] that fuse on `engine`, and of
+/// them those into [`RECORD`] again. On `micro` the four into second
+/// halfwords, each into [`RECORD`]. On `rtl` five more on the fetch path,
+/// its prefetch holding the second, third, fourth, sixth and seventh
+/// words (the fifth starts a line): of those, the second's and the
+/// fourth's first halfwords are [`RECORD`].
+fn record_returns(engine: &str) -> (u64, u64) {
+    if engine == "rtl" { (4 + 5, 4 + 2) } else { (4, 4) }
 }
 
 /// **The operand address** (contract H8a §3.4, §6 item 4), on both engines:
@@ -802,13 +877,17 @@ fn records(m: &Machine) -> Vec<u32> {
 /// from A and M memory, and `M-AP` or `A-LOCALP` written by the popping
 /// microinstruction itself is the new one. A register other than LOCAL and ARG, and a
 /// return that is not fused, load nothing; and the run takes the same
-/// microcycles as without the operand bit.
+/// microcycles as without the operand bit. On `rtl` the returns into the
+/// first halfwords of the second, third, fourth, sixth and seventh words
+/// fuse too, on the prefetched word (the fifth starts a line), and one of
+/// them, ARG, loads.
 #[test]
 fn a_fused_return_loads_the_operand_address() {
     let plain = both(Setup { operand: false, ..Setup::operands() });
     for ((name, n, m), (_, n_plain, _)) in both(Setup::operands()).iter().zip(plain.iter()) {
-        assert_eq!(records(m), operand_records(), "{name}");
-        assert_eq!(m.macro_dispatch.fused, 6, "{name}: the six second halfwords");
+        assert_eq!(records(m), operand_records(name), "{name}");
+        let fused = if *name == "rtl" { 6 + 5 } else { 6 };
+        assert_eq!(m.macro_dispatch.fused, fused, "{name}: the six second halfwords");
         assert_eq!(n, n_plain, "{name}: no microcycle more or less");
     }
 }
@@ -818,7 +897,7 @@ fn a_fused_return_loads_the_operand_address() {
 /// with the MACRO DISPATCH MEMORY disabled.
 #[test]
 fn without_the_operand_bit_pdl_index_is_unchanged() {
-    let sentinels = vec![SENTINEL; operand_records().len()];
+    let sentinels = vec![SENTINEL; operand_records("micro").len()];
     for setup in
         [Setup { operand: false, ..Setup::operands() }, Setup { register: 0, ..Setup::operands() }]
     {
@@ -853,16 +932,19 @@ fn run_checked<E: Executes>(mut e: Checked<E>) -> (u64, Counts) {
 /// would have dispatched to runs next, the micro stack is where the return
 /// left it, PDL-INDEX is the operand address where one is armed, and the
 /// base copies equal `A-LOCALP` and `M-AP` after every microcycle, `M-AP`
-/// stepping under them.
+/// stepping under them. `rtl` fuses more, on the prefetched word
+/// ([`a_fused_return_loads_the_operand_address`] for the operands).
 #[test]
 fn the_checkers_find_the_programs_clean() {
-    for (s, fused, loads) in
-        [(Setup::on(), fusing(fuses), 0), (Setup::operands(), 6, 5), (Setup::off(), 0, 0)]
-    {
-        for (name, c) in checked(s) {
+    for (s, fused, loads) in [
+        (Setup::on(), [fused_on("micro", fuses), fused_on("rtl", fuses)], [0, 0]),
+        (Setup::operands(), [6, 6 + 5], [5, 6]),
+        (Setup::off(), [0, 0], [0, 0]),
+    ] {
+        for (k, (name, c)) in checked(s).into_iter().enumerate() {
             assert_eq!(c.problems(), 0, "{name}: {}", c.report(|_| String::new()));
-            assert_eq!(c.fused, fused, "{name}");
-            assert_eq!(c.operand_loads, loads, "{name}");
+            assert_eq!(c.fused, fused[k], "{name}");
+            assert_eq!(c.operand_loads, loads[k], "{name}");
             assert!(c.unarmed.is_empty(), "{name}");
         }
     }
@@ -912,9 +994,11 @@ fn the_rule_checker_decodes_each_forbidden_write() {
 /// [`RECORD`]'s return writing INTERRUPT-CONTROL, the MACRO-DISPATCH
 /// register, PDL-INDEX, the PDL buffer at PDL-INDEX, `A-LOCALP` or `M-AP`
 /// --- each with what it held, or the sentinel, so
-/// that the program runs on --- every one of the four fused returns from
-/// that handler is a violation of that kind; the last three are allowed,
-/// and counted apart, where the entry has no operand bit.
+/// that the program runs on --- every one of the fused returns from that
+/// handler is a violation of that kind, four on `micro` and nine on `rtl`
+/// ([`record_returns`]); the last three are allowed, and counted apart,
+/// where the entry has no operand bit: without it, and on `rtl` in the
+/// returns into the handlers that are not [`RECORD`].
 #[test]
 fn the_rule_checker_finds_each_forbidden_write() {
     let cases = [
@@ -929,15 +1013,27 @@ fn the_rule_checker_finds_each_forbidden_write() {
         for operand in [true, false] {
             let s = Setup { slot: Some(slot), operand, ..Setup::operands() };
             for (name, c) in checked(s) {
-                let (forbidden, allowed) = if operand || !kind.operand_only() {
-                    (&c.violations, &c.unarmed)
+                let (returns, into_record) = record_returns(name);
+                let (forbidden, allowed) = if !kind.operand_only() {
+                    (returns, 0)
+                } else if operand {
+                    (into_record, returns - into_record)
                 } else {
-                    (&c.unarmed, &c.violations)
+                    (0, returns)
                 };
-                assert!(allowed.is_empty(), "{kind:?}, operand bit {operand}, {name}");
-                let sites: Vec<_> = forbidden.iter().collect();
                 let want = (kind, RECORD_AT as u16 + 2, RECORD_SLOT as u16);
-                assert_eq!(sites, [(&want, &4)], "{kind:?}, operand bit {operand}, {name}");
+                let at = |n: u64| if n == 0 { vec![] } else { vec![(want, n)] };
+                let what = format!("{kind:?}, operand bit {operand}, {name}");
+                assert_eq!(
+                    c.violations.clone().into_iter().collect::<Vec<_>>(),
+                    at(forbidden),
+                    "{what}"
+                );
+                assert_eq!(
+                    c.unarmed.clone().into_iter().collect::<Vec<_>>(),
+                    at(allowed),
+                    "{what}"
+                );
                 assert_eq!(c.problems() - c.violations.values().sum::<u64>(), 0, "{name}");
             }
         }
@@ -951,12 +1047,18 @@ fn the_rule_checker_finds_each_forbidden_write() {
 /// This is why the rule of §3.3 forbids it when the entry has the operand
 /// bit, as `QSTLOC` and `QSTARG` (`uc-macrocode.lisp:327-334`) do it: the
 /// store to a local would go to the next instruction's operand instead.
-/// Without the operand bit it lands where it was aimed.
+/// Without the operand bit it lands where it was aimed. On `rtl` the
+/// return into the second word's first halfword, ARG with delta 0, fuses
+/// too, on the prefetched word: its handler finds PDL-INDEX at `M-AP` + 1
+/// and pushes it, and the write lands there. The engines differ in those
+/// two words, and only there, the handler observing PDL-INDEX and breaking
+/// the rule.
 #[test]
 fn a_pdl_write_by_index_after_a_fused_return_lands_at_the_operand_address() {
     let mark = 0o525252;
     let slot = ALU | SETA | a_src(0o55) | fd(0o12);
     let loaded = [(LOCALP + 7) & 0o37777, AP + 1 + 5, (LOCALP + 0o77) & 0o37777];
+    let prefetched = AP + 1;
     for operand in [true, false] {
         let s = Setup { slot: Some(slot), operand, ..Setup::operands() };
         // The mark in A memory 55, which `machine` leaves zero.
@@ -966,12 +1068,23 @@ fn a_pdl_write_by_index_after_a_fused_return_lands_at_the_operand_address() {
         };
         let (_, micro) = run(Micro::new(with_mark(machine(s))));
         let (_, rtl) = run(Rtl::new(with_mark(machine(s))));
-        assert!(micro.pdl == rtl.pdl, "operand bit {operand}: the engines agree");
-        for at in loaded {
-            let want = if operand { mark } else { 0 };
-            assert_eq!(micro.pdl[at as usize], want, "operand bit {operand}: PDL {at:o}");
+        let want = if operand { mark } else { 0 };
+        for (name, m) in [("micro", &micro), ("rtl", &rtl)] {
+            for at in loaded {
+                assert_eq!(m.pdl[at as usize], want, "operand bit {operand}, {name}: PDL {at:o}");
+            }
+            assert_eq!(m.pdl[SENTINEL as usize], mark, "operand bit {operand}, {name}");
         }
-        assert_eq!(micro.pdl[SENTINEL as usize], mark, "operand bit {operand}");
+        assert_eq!(micro.pdl[prefetched as usize], 0, "operand bit {operand}");
+        assert_eq!(rtl.pdl[prefetched as usize], want, "operand bit {operand}");
+        // The third push, the second word's first halfword's.
+        let pushed = if operand { AP + 1 } else { SENTINEL };
+        assert_eq!((micro.pdl[3], rtl.pdl[3]), (SENTINEL, pushed), "operand bit {operand}");
+        let (mut a, mut b) = (micro.pdl, rtl.pdl);
+        for at in [prefetched as usize, 3] {
+            (a[at], b[at]) = (0, 0);
+        }
+        assert!(a == b, "operand bit {operand}: the engines agree elsewhere");
     }
 }
 
@@ -1038,9 +1151,10 @@ fn destination_5_does_not_load_the_base_copies() {
 /// path runs the main loop's dispatch and push in between. With
 /// [`RECORD`]'s handler reading the PDL buffer first, by the pointer or
 /// by the index, and the microcycle after its return pushing, writing at
-/// the pointer, or writing by PDL-INDEX, each of the four fused returns
-/// from that handler into it is counted where the addresses meet, with the
-/// operand bit and without; a read at the other address is not.
+/// the pointer, or writing by PDL-INDEX, each fused return from that
+/// handler into it is counted where the addresses meet (four on `micro`,
+/// six on `rtl`, [`record_returns`]), with the operand bit and without; a
+/// read at the other address is not.
 #[test]
 fn the_checker_finds_a_pdl_read_of_the_write_after_a_return() {
     let read_pointer = ALU | SETM | src(0o25) | m_dest(0o36);
@@ -1060,12 +1174,13 @@ fn the_checker_finds_a_pdl_read_of_the_write_after_a_return() {
             let s = Setup { slot: Some(slot), first: Some(first), operand, ..Setup::operands() };
             for (name, c) in checked(s) {
                 let what = format!("{found:?}, operand bit {operand}, {name}");
-                assert_eq!(c.pdl_writes_after, 4, "{what}: the four writes seen");
+                let (returns, into_record) = record_returns(name);
+                assert_eq!(c.pdl_writes_after, returns, "{what}: every write seen");
                 let sites: Vec<_> = c.pdl_reads_of_writes.iter().collect();
                 match found {
                     Some(at) => {
                         let want = (at, RECORD_AT as u16 + 2, RECORD_SLOT as u16, RECORD_AT as u16);
-                        assert_eq!(sites, [(&want, &4)], "{what}");
+                        assert_eq!(sites, [(&want, &into_record)], "{what}");
                     }
                     None => assert!(sites.is_empty(), "{what}"),
                 }
@@ -1122,15 +1237,11 @@ fn the_generic_fill_arms_only_a_register_and_a_delta() {
 
 // --- The cache-only prefetch (contract H8a §3.5, `rtl` alone) ---
 
-use muir::memory_port::{Drop, M31Load, Prefetch, PrefetchCounts, Reach};
+use muir::memory_port::{Drop, PrefetchCounts, Reach};
 
-/// The prefetch's four forms.
-const FORMS: [Prefetch; 4] = [
-    Prefetch { reach: Reach::Page, m31: M31Load::Register },
-    Prefetch { reach: Reach::Page, m31: M31Load::FreePort },
-    Prefetch { reach: Reach::Line, m31: M31Load::Register },
-    Prefetch { reach: Reach::Line, m31: M31Load::FreePort },
-];
+/// The prefetch's two reaches: the line's, revision 12's, and the page's,
+/// a measurement's.
+const FORMS: [Reach; 2] = [Reach::Line, Reach::Page];
 
 /// A change made to the machine once, after the first microcycle that
 /// executes an address.
@@ -1147,14 +1258,14 @@ struct Ran {
     checked: Counts,
 }
 
-/// Runs `s` on `rtl` under the checkers, the prefetch fitted as `prefetch`
-/// says, until opcode 7's handler has run, and then eight microcycles more
+/// Runs `s` on `rtl` under the checkers, the prefetch fitted with the reach
+/// `prefetch` gives or taken out, until opcode 7's handler has run, and then eight microcycles more
 /// in its loop, which let a fetch the fused return started land in MD (a
 /// handler that writes MD or starts a cycle waits for it, `-WAIT`'s
 /// `DESTMEM AND MBUSY.SYNC`). The microcycles counted are those to the
 /// handler. `touch`, when given, runs once after the first microcycle that
 /// executes its address, with the machine.
-fn run_prefetched(s: Setup, prefetch: Option<Prefetch>, touch: Touch) -> Ran {
+fn run_prefetched(s: Setup, prefetch: Option<Reach>, touch: Touch) -> Ran {
     let mut r = Rtl::new(machine(s));
     r.set_prefetch(prefetch);
     let mut e = Checked::new(r);
@@ -1183,34 +1294,15 @@ fn run_prefetched(s: Setup, prefetch: Option<Prefetch>, touch: Touch) -> Ran {
     panic!("the program never reached its end");
 }
 
-/// **The returns into [`PROGRAM`] that fuse on the prefetched word**: into
-/// a word's first halfword, which needs a fetch, where the word is not
-/// the first of its line of four (the line the fetch before it filled
-/// holds it; the next line is in the cache on no first pass), from a
-/// handler whose return fuses into an entry with R and P clear; under
-/// (b), only a return whose microinstruction writes neither A nor M, the
-/// jump (opcode 2) and the dispatch (opcode 3) here.
-fn fusing_prefetched(m31: M31Load) -> Vec<usize> {
-    let op = |h: u32| h >> 9 & 0o37;
-    (2..PROGRAM.len())
-        .step_by(2)
-        .filter(|&k| !(CODE as usize + k / 2).is_multiple_of(4))
-        .filter(|&k| op(PROGRAM[k - 1]) != 7 && fuses(op(PROGRAM[k - 1])))
-        .filter(|&k| !matches!(op(PROGRAM[k]), 5 | 6))
-        .filter(|&k| m31 == M31Load::Register || matches!(op(PROGRAM[k - 1]), 2 | 3))
-        .collect()
-}
-
 /// **With the prefetch, a return that needs the next word in sequence
 /// fuses** when the buffer holds it: the program leaves the state it
 /// leaves without the prefetch, four microcycles fewer for each such
 /// return (`QMLP` to `QMLP+3`), with no memory cycle of the prefetch's
-/// own, and the checkers find M 31 main memory's word after each. Under
-/// (b) the returns whose microinstruction writes A or M fall back, the
-/// write port being theirs. A fused return that follows a handler a fused
-/// return ran is counted as that handler's own return; without the
-/// prefetch there is none, the second halfword's successor always needing
-/// a fetch.
+/// own, and the checkers find M 31 main memory's word after each. The
+/// page's reach fuses the same here: the next line is in the cache on no
+/// first pass. A fused return that follows a handler a fused return ran is
+/// counted as that handler's own return; without the prefetch there is
+/// none, the second halfword's successor always needing a fetch.
 #[test]
 fn the_prefetch_fuses_a_return_that_needs_a_fetch() {
     let off = run_prefetched(Setup::on(), None, None);
@@ -1218,7 +1310,7 @@ fn the_prefetch_fuses_a_return_that_needs_a_fetch() {
     assert_eq!(off.checked.handler_returns.values().sum::<u64>(), 0, "none without it");
     for form in FORMS {
         let on = run_prefetched(Setup::on(), Some(form), None);
-        let expected = fusing_prefetched(form.m31);
+        let expected = fusing_prefetched(fuses);
         let k = expected.len() as u64;
         assert!(k >= 4, "{form:?}: the program fuses {k} on the fetch path");
         assert_eq!(state(&on.m), state(&off.m), "{form:?}: the same state");
@@ -1239,21 +1331,17 @@ fn the_prefetch_fuses_a_return_that_needs_a_fetch() {
         let own = fused_into.iter().filter(|&&j| fused_into.contains(&(j - 1))).count() as u64;
         assert!(own >= k, "{form:?}");
         assert_eq!(on.checked.handler_returns.values().sum::<u64>(), own, "{form:?}");
-        let refused_port = fusing_prefetched(M31Load::Register).len() as u64 - k;
-        assert_eq!(on.counts.refused, [0, refused_port, 0], "{form:?}");
-        if form.m31 == M31Load::FreePort {
-            assert!(refused_port >= 2, "{form:?}: the port refuses some");
-        }
+        assert_eq!(on.counts.refused, [0, 0], "{form:?}");
     }
 }
 
-/// **Under (a) the microcycle after the return reads the old M 31, under
-/// (b) the new one**: with that microcycle of opcode 3's dispatch return
-/// adding M 31 into A 57, (a) leaves every word as without the prefetch,
-/// and (b) A 57 alone differs, the prefetched word having been passed
-/// around from the write port; the checkers count those reads.
+/// **The microcycle after the return reads the old M 31**, as it does on
+/// the path the return skips: M 31 is a register beside M memory, loaded
+/// with the prefetched word at the edge ending that microcycle. With that
+/// microcycle of opcode 3's dispatch return adding M 31 into A 57, every
+/// word is as without the prefetch; the checkers count those reads.
 #[test]
-fn the_microcycle_after_reads_m31_as_the_form_says() {
+fn the_microcycle_after_reads_the_old_m31() {
     fn slot_reads_m31(m: &mut Machine) {
         m.imem[0o216] =
             Insn::new(ALU | muir::isa::asm::ADD | m_src(0o31) | a_src(0o57) | a_dest(0o57));
@@ -1263,15 +1351,7 @@ fn the_microcycle_after_reads_m31_as_the_form_says() {
     for form in FORMS {
         let on = run_prefetched(s, Some(form), None);
         assert!(on.checked.m31_reads_after >= 1, "{form:?}: opcode 3 returns on the fetch path");
-        let (mut a, mut b) = (off.m.amem, on.m.amem);
-        match form.m31 {
-            M31Load::Register => assert_eq!(a, b, "{form:?}"),
-            M31Load::FreePort => {
-                assert_ne!(a[0o57], b[0o57], "{form:?}: the new word passed around");
-                (a[0o57], b[0o57]) = (0, 0);
-                assert_eq!(a, b, "{form:?}: and nothing else");
-            }
-        }
+        assert_eq!(off.m.amem, on.m.amem, "{form:?}");
     }
 }
 
@@ -1289,12 +1369,7 @@ fn condition_6_refuses_the_prefetched_word() {
         assert_eq!(on.m.macro_dispatch.fused, fusing(fuses), "{form:?}");
         assert_eq!(on.n, off.n, "{form:?}");
         assert_eq!(on.counts.used, 0, "{form:?}");
-        // Condition 6 is tested before the port.
-        assert_eq!(
-            on.counts.refused[0],
-            fusing_prefetched(M31Load::Register).len() as u64,
-            "{form:?}"
-        );
+        assert_eq!(on.counts.refused, [fusing_prefetched(fuses).len() as u64, 0], "{form:?}");
     }
 }
 
@@ -1430,7 +1505,7 @@ fn a_store_a_map_write_a_transfer_and_an_lc_write_drop_the_word() {
             let on = run_prefetched(s, Some(form), touch);
             assert_eq!(state(&on.m), state(&off.m), "program {k}, {form:?}");
             assert_eq!(on.checked.problems(), 0, "program {k}, {form:?}: {:?}", on.checked.first);
-            let dropped = on.counts.dropped[why as usize] + (k == 0) as u64 * on.counts.refused[2];
+            let dropped = on.counts.dropped[why as usize] + (k == 0) as u64 * on.counts.refused[1];
             assert!(dropped >= 1, "program {k}, {form:?}: {:?}", on.counts);
         }
     }
@@ -1444,7 +1519,7 @@ fn a_store_a_map_write_a_transfer_and_an_lc_write_drop_the_word() {
 fn the_checkers_find_a_stale_prefetched_word() {
     let program: &'static [u32] = &INVALIDATE[4];
     let s = Setup { program, patch: Some(invalidators), ..Setup::on() };
-    let on = run_prefetched(s, Some(FORMS[0]), Some((0o214, unflagged)));
+    let on = run_prefetched(s, Some(Reach::Line), Some((0o214, unflagged)));
     assert!(on.checked.stale_words >= 1, "{:?}", on.checked);
     assert!(on.checked.problems() >= 1);
 }
@@ -1485,8 +1560,8 @@ fn the_page_reach_takes_the_next_line_and_never_the_next_page() {
     {
         let s = Setup { program: &LINES, code, patch: Some(patch), ..Setup::on() };
         let off = run_prefetched(s, None, None);
-        let page = run_prefetched(s, Some(FORMS[0]), None);
-        let line = run_prefetched(s, Some(FORMS[2]), None);
+        let page = run_prefetched(s, Some(Reach::Page), None);
+        let line = run_prefetched(s, Some(Reach::Line), None);
         for (form, on) in [("page", &page), ("line", &line)] {
             assert_eq!(state(&on.m), state(&off.m), "{code:o}, {form}");
             assert_eq!(on.checked.problems(), 0, "{code:o}, {form}: {:?}", on.checked.first);
@@ -1503,11 +1578,10 @@ fn the_page_reach_takes_the_next_line_and_never_the_next_page() {
     }
 }
 
-/// **-RESET drops the buffered word**, as a restore does.
+/// **-RESET drops the buffered word.**
 #[test]
 fn reset_drops_the_prefetched_word() {
     let mut r = Rtl::new(machine(Setup::on()));
-    r.set_prefetch(Some(FORMS[0]));
     r.boot();
     let mut n = 0;
     while r.prefetched().is_none() {
@@ -1522,14 +1596,97 @@ fn reset_drops_the_prefetched_word() {
     assert_eq!(r.prefetch_counts().unwrap().dropped[Drop::Reset as usize], 1);
 }
 
+/// **Revision 12 has the prefetch, with the line's reach, and nothing else
+/// has**: `rtl` fits it on revision 12 from the start, and runs
+/// [`PROGRAM`] exactly as with [`Reach::Line`] fitted by hand, fusing the
+/// returns [`fusing_prefetched`] names on top of those `micro` fuses, in
+/// four microcycles fewer each; revision 11 and the CADR have none, their
+/// buffer never filled.
+#[test]
+fn revision_12_takes_the_prefetch() {
+    let r = Rtl::new(machine(Setup::on()));
+    assert_eq!(r.prefetch(), Some(Reach::Line));
+    assert_eq!(Reach::REVISION_12, Reach::Line);
+    let line = run_prefetched(Setup::on(), Some(Reach::Line), None);
+    let off = run_prefetched(Setup::on(), None, None);
+    let (n, m) = run(Rtl::new(machine(Setup::on())));
+    assert_eq!(n, line.n, "the default is the line's reach");
+    assert_eq!(m.macro_dispatch.fused, line.m.macro_dispatch.fused);
+    let k = fusing_prefetched(fuses).len() as u64;
+    assert!(k >= 4);
+    assert_eq!(m.macro_dispatch.fused, fusing(fuses) + k);
+    assert_eq!(off.n - n, 4 * k);
+    let (_, micro) = run(Micro::new(machine(Setup::on())));
+    assert_eq!(micro.macro_dispatch.fused, fusing(fuses), "micro has no prefetch");
+    for geometry in [Geometry::QUUX_11, Geometry::CADR] {
+        let s = Setup { geometry, ..Setup::on() };
+        let mut r = Rtl::new(machine(s));
+        assert_eq!(r.prefetch(), None, "{geometry:?}");
+        r.boot();
+        while r.machine().opc != STOP {
+            r.step().unwrap();
+            assert_eq!(r.prefetched(), None, "{geometry:?}");
+        }
+        if geometry == Geometry::QUUX_11 {
+            assert_eq!(r.prefetch_counts(), Some(PrefetchCounts::default()), "nothing taken");
+        }
+    }
+}
+
+/// **A checkpoint keeps the prefetched word, a fetch the port is yet to
+/// answer, and M 31's word armed** (contract H8a §3.6): `rtl` saved at
+/// every microcycle of [`PROGRAM`] on revision 12, and loaded into another,
+/// saves the same file and runs on to the same end, in the same
+/// microcycles, as the run never saved; among those microcycles are ones
+/// with a word buffered and ones with M 31's word armed.
+#[test]
+fn a_checkpoint_keeps_the_prefetched_word_and_the_armed_m31() {
+    use muir::checkpoint::{Reader, Writer};
+    fn to_the_end(mut e: Rtl) -> (u64, Vec<u8>) {
+        let mut n = 0;
+        while e.machine().opc != STOP {
+            e.step().unwrap();
+            n += 1;
+            assert!(n < 20_000);
+        }
+        e.run(8);
+        let mut w = Writer::new();
+        e.save(&mut w);
+        (n, w.finish())
+    }
+    let (total, _) = run(Rtl::new(machine(Setup::on())));
+    let (mut buffered, mut armed) = (0, 0);
+    for at in 1..total {
+        let mut straight = Rtl::new(machine(Setup::on()));
+        straight.boot();
+        straight.run(at);
+        buffered += straight.prefetched().is_some() as u32;
+        armed += straight.machine().macro_dispatch.m31.is_some() as u32;
+        let mut w = Writer::new();
+        straight.save(&mut w);
+        let body = w.finish();
+        let mut resumed = Rtl::new(machine(Setup::on()));
+        resumed.boot();
+        let mut r = Reader::new(&body);
+        resumed.load(&mut r).unwrap();
+        r.done().unwrap();
+        assert_eq!(resumed.prefetched(), straight.prefetched(), "at {at}");
+        let mut w = Writer::new();
+        resumed.save(&mut w);
+        assert!(w.finish() == body, "at {at}: loads and saves as itself");
+        assert!(to_the_end(straight) == to_the_end(resumed), "at {at}: the same end");
+    }
+    assert!(buffered > 0 && armed > 0, "{buffered} {armed}");
+}
+
 /// **A call in the microcycle after a fused return returns to the
 /// handler**: microcode 2000's `XTFIXP` returns by `(POPJ-AFTER-NEXT
 /// ...)` with `(CALL-NOT-EQUAL M-TEM A-4 XFALSE)` after it, a call with N
 /// whose return is the POPJ's target, the main loop or, fused, the
 /// handler. With opcode 1's POPJ followed by such a call, counting in
 /// M 27, the program leaves the state it leaves without the fused return
-/// but for the dead words above the micro stack's pointer, two microcycles
-/// fewer for each; the checkers count the stack moved and
+/// but for the dead words above the micro stack's pointer, the microcycles
+/// [`saved_on`] says fewer; the checkers count the stack moved and
 /// the handler not next, which is what they found at `XTFIXP+10` in
 /// bignum with the prefetch's (a).
 #[test]
@@ -1555,7 +1712,8 @@ fn a_call_after_a_fused_return_returns_to_the_handler() {
         assert_eq!(m_off.mmem[0o27], COUNTS[0], "{name}: the call after every opcode 1");
         let (a, b) = (live(m_on), live(m_off));
         assert_eq!(state(&a), state(&b), "{name}: the same live state");
-        assert_eq!(n_off - n_on, 2 * m_on.macro_dispatch.fused, "{name}");
+        assert_eq!(m_on.macro_dispatch.fused, fused_on(name, fuses), "{name}");
+        assert_eq!(n_off - n_on, saved_on(name, fuses), "{name}");
     }
     for (name, c) in checked(Setup { patch: Some(call_after_opcode_1), ..Setup::on() }) {
         assert!(c.stack_moved >= 1 && c.wrong_handler == c.stack_moved, "{name}: {c:?}");

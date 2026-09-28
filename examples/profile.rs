@@ -31,12 +31,13 @@
 //! writes the register itself, and the checkers watch from its first
 //! main-loop return with the register enabled. Either way the run is
 //! watched by that file's checkers, each workload says what they counted,
-//! and the whole run's counts close the output. On `rtl`,
-//! `MUIR_PREFETCH=a` or `b` fits QUUX's cache-only prefetch
-//! (`muir::memory_port`, contract H8a §3.5), M 31 loaded as a register (a)
-//! or through M memory's write port (b), looking for the next word in the
-//! page; `a-line` and `b-line` look only in the fetched word's line; each
-//! workload then says what it took, and how often a fused return used it.
+//! and the whole run's counts close the output. On `rtl`, revision 12 has
+//! QUUX's cache-only prefetch (`muir::memory_port`, contract H8a §3.5),
+//! looking for the next word in the fetched word's line; each workload
+//! then says what it took, and how often a fused return used it. For
+//! measurement, `MUIR_PREFETCH=page` fits it with the page's reach, which
+//! is no revision's, and `MUIR_PREFETCH=off` takes it out; `line` is
+//! revision 12's own.
 //! `MUIR_RTC=<s>`
 //! counts QUUX's real-time clock from second `s` of the Unix epoch in the
 //! machine's own time, as `--rtc` does, in place of the host's clock, so
@@ -567,7 +568,7 @@ fn prefetch_since(
 fn prefetch_line(c: &muir::memory_port::PrefetchCounts) -> String {
     let taken = c.same_line + c.next_line;
     format!(
-        "prefetch: {} fetches answered, {taken} next words taken ({:.1}%: {} in the line, {} in the next), {} past the page, {} not held; dropped by LC {}, store {}, transfer {}, map {}, reset {}; used by {} fused returns; refused for condition 6 {}, the write port {}, a store starting {}",
+        "prefetch: {} fetches answered, {taken} next words taken ({:.1}%: {} in the line, {} in the next), {} past the page, {} not held; dropped by LC {}, store {}, transfer {}, map {}, reset {}; used by {} fused returns; refused for condition 6 {}, a store starting {}",
         c.fetches,
         100.0 * taken as f64 / c.fetches.max(1) as f64,
         c.same_line,
@@ -582,7 +583,6 @@ fn prefetch_line(c: &muir::memory_port::PrefetchCounts) -> String {
         c.used,
         c.refused[0],
         c.refused[1],
-        c.refused[2],
     )
 }
 
@@ -770,22 +770,15 @@ fn main() {
                     write_ns: w.parse().ok()?,
                 })
             });
-            // `MUIR_PREFETCH`: QUUX's cache-only prefetch, as the module
-            // doc says.
+            // `MUIR_PREFETCH`: QUUX's cache-only prefetch with another
+            // reach, or none, as the module doc says.
             let prefetch = std::env::var("MUIR_PREFETCH").ok().map(|v| {
-                use muir::memory_port::{M31Load, Prefetch, Reach};
-                let (m31, reach) = v.split_once('-').unwrap_or((v.as_str(), "page"));
-                Prefetch {
-                    m31: match m31 {
-                        "a" => M31Load::Register,
-                        "b" => M31Load::FreePort,
-                        _ => panic!("MUIR_PREFETCH={v}: a or b, then -line or -page"),
-                    },
-                    reach: match reach {
-                        "line" => Reach::Line,
-                        "page" => Reach::Page,
-                        _ => panic!("MUIR_PREFETCH={v}: a or b, then -line or -page"),
-                    },
+                use muir::memory_port::Reach;
+                match v.as_str() {
+                    "line" => Some(Reach::Line),
+                    "page" => Some(Reach::Page),
+                    "off" => None,
+                    _ => panic!("MUIR_PREFETCH={v}: line, page or off"),
                 }
             });
             profile(
@@ -800,7 +793,7 @@ fn main() {
                     }
                     e.set_cache(cache);
                     e.set_memory_timing(memory);
-                    if on_quux {
+                    if let (true, Some(prefetch)) = (on_quux, prefetch) {
                         e.set_prefetch(prefetch);
                     }
                     e

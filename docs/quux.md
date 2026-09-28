@@ -1406,12 +1406,54 @@ INSTR` steps it in the microcycle after. The step, and a fetch it starts,
 are the stream's as ever. Condition 6 is not tested, as the main loop does
 not test it on this path.
 
-It is today's return, `QMLP` or `QMLP+2`, whenever a fetch is needed, the
-entry has R or P, the word is another main loop's (`DMLP`'s), the
+It is today's return, `QMLP` or `QMLP+2`, whenever a fetch is needed and
+the prefetch (below) does not hold the word, the entry has R or P, the word is another main loop's (`DMLP`'s), the
 register is disabled, or the popping microinstruction pushes, pops by
 functional source 14, writes M 31 or INTERRUPT-CONTROL, or steps the
 location counter itself (a `NEXT INSTR` the microcycle before, or a
 dispatch's `IR<24>`).
+
+**The prefetch** (`src/memory_port.rs`, contract H8a §3.5). A return that
+needs a fetch fuses too when the next word is already in hand. When a
+macroinstruction fetch's read is answered from main memory at physical
+word *p*, the memory port takes the word at *p* + 1 into a one-word
+buffer, with its virtual and physical addresses, if it is in the line the
+fetch has just read or filled: the cache puts that line's four words out
+of its RAMs together, so taking one needs no memory cycle, no map lookup,
+no arbitration and no second read of the cache, and it cannot fault. A
+word in the next line is not taken, nor one in the next page. A return
+that needs a fetch fuses on the buffered word when that is the next word
+in sequence (`LC<25:2>`), condition 6 is false, and no store started in
+the microcycle before; with condition 6 true it runs `QMLP` as today,
+since the main loop tests condition 6 on this path. Such a return saves
+four microcycles, `QMLP` to `QMLP+3`, and the stream's fetch of the word
+starts as ever. M 31 is a register beside M memory, which reads of A and
+M address 31 take: it is loaded with the buffered word at the end of the
+microcycle after the return, as the operand address is, so that
+microcycle reads the old word, as on the path the return skips, and the
+handler the new one. The buffer is dropped by a write of the location
+counter, a store to its word, a transfer by block-disk or the file
+device, a map write, and -RESET. A checkpoint keeps the buffered word, a
+fetch the port is yet to answer, and M 31's word armed.
+
+Only `rtl` has the prefetch: it looks in the cache, and `micro` has none.
+On revision 12 `micro` fuses only the returns that need no fetch, and
+`rtl` those and the ones its prefetch holds the word for, so the two
+engines take different microcycles; they leave the same state wherever
+the microcode keeps the rule below, and the tests that compare them count
+each engine's fused returns.
+
+Over the profile harness's twelve workloads (`examples/profile.rs` on
+`rtl`, System 2000 with microcode 2000 writing the register and the
+entries itself, `MUIR_H8A=microcode`, a 4K-word cache and the Arty
+Z7-20's memory timing), the fused return with the prefetch takes 7.07%
+fewer microcycles, and 7.70% less time, than without it. The prefetch
+takes the next word at 73.5% of the fetches answered from main memory,
+and a fused return uses it at 28.4% of the macroinstructions.
+`MUIR_PREFETCH=page` fits it with a page's reach, which looks in the next
+line too when the cache holds it and needs a second read port of the
+cache: 9.47% fewer microcycles on the same workloads.
+`MUIR_PREFETCH=off` takes it out.
 
 **The operand address.** When the entry has the operand bit and the
 halfword's register, `<8:6>`, is LOCAL (5) or ARG (6) (`QADCM1`,
@@ -1463,7 +1505,8 @@ register, the index, the entries and the base copies.
 `tests/macro_dispatch.rs` holds, on both engines, a main loop made as
 `QMLP` is: the destinations' decode, on revision 12 and not on 11 or the
 CADR; the same state with the MACRO DISPATCH MEMORY holding the generic
-handlers as without it, two microcycles fewer for each fused return,
+handlers as without it, two microcycles fewer for each fused return that
+needs no fetch and, on `rtl`, four fewer for each on the fetch path,
 returns by a POPJ, a dispatch with R and, as the switch says, a jump with
 R fused and N honoured; the entry taken by the whole `<15:6>`; each case
 above that is not fused running today's path microcycle for microcycle;
@@ -1479,7 +1522,16 @@ return writes found; the generic fill's operand bit only on halfwords
 whose `<8:0>` is a register and a delta (of ND4, `PUSH-CDR-IF-CAR-EQUAL`
 and `PUSH-CDR-STORE-CAR-IF-CONS`, and not `PUSH-NUMBER`, whose `<8:0>` is
 an immediate); the enable cleared by -RESET and by a control-store write,
-the base copies kept; and the checkpoint.
+the base copies kept; and the checkpoint. On `rtl` it holds the prefetch:
+revision 12 fitting it with the line's reach and revision 11 and the CADR
+not at all; a return on the fetch path fused on the buffered word, with
+the same state and no memory cycle of its own, and M 31 main memory's
+word after it; the microcycle after reading the old M 31; condition 6
+refusing the word; a store, a map write, a transfer and a write of the
+location counter dropping it, and a word that should have been dropped
+found by the checkers; a page's reach taking the next line's word and
+never the next page's; -RESET dropping it; and `rtl` saved at every
+microcycle of a run and loaded into another running on to the same end.
 `tests/system_2000.rs` holds System 2000 reaching its listener on revision
 12 in the same microcycles and nanoseconds, with the same memories, as on
 revision 11, on both engines; booting with the memory filled from its
