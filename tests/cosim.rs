@@ -553,6 +553,71 @@ fn a_control_store_write_pushes_and_pops_on_both() {
     assert_eq!(em.imem[0o250].raw(), rm.imem[0o250].raw(), "both wrote the same word");
 }
 
+/// **A microinstruction that pushes and pops at once counts the stack
+/// pointer up once and pops the old top**, on both. Page CONTRL: `-SPCNT`
+/// is the open-collector 74S08 at 4D09 over `-SPUSH` and `-SPOP`, and page
+/// SPC's 74S169s at 4F23 and 4F28 take it on `-ENT` and `SPUSH` on `U/-D`:
+/// one count, up. The pop takes the stack's word at the pointer as it
+/// stands; the pushed word lands a microcycle later at the pointer counted
+/// up. A dispatch whose entry pushes does not pop for its M source at all,
+/// `IGNPOPJ` holding the pop off at the 74S64 at CONTRL 3E28.
+/// `a_push_and_a_pop_at_once_count_up_and_pop_the_old_top` in
+/// `tests/chip.rs` runs the same programs on the netlist, which gives the
+/// same words.
+///
+/// Each case pushes `X`, then runs its microinstruction; where control
+/// lands --- `X`, `Y` or straight on --- records the SPC pointer and word.
+#[test]
+fn a_push_and_a_pop_at_once_count_up_and_pop_the_old_top() {
+    use muir::isa::asm::DMEM_WRITE;
+    let (x, y) = (60, 80);
+    let here = |k: u64| Insn::new(JUMP | ALWAYS | target(k));
+    let ret = 6;
+    let cases: [(&str, u64, [u32; 3]); 5] = [
+        ("a POPJ with a push", ALU | SETM | m_src(2) | fdest(0o15) | POPJ, [y, 0, 0]),
+        ("the pop source into the push", ALU | SETM | src(0o14) | fdest(0o15), [0, 0, x]),
+        ("a call with the POPJ bit", JUMP | ALWAYS | P | target(y as u64) | POPJ, [ret, 0, 0]),
+        (
+            "a call off the pop source",
+            JUMP | ALWAYS | P | src(0o14) | target(y as u64),
+            [0, ret, 0],
+        ),
+        (
+            "a dispatch pushing, off the pop source",
+            DISPATCH | src(0o14) | d_addr(0o10),
+            [0, ret, 0],
+        ),
+    ];
+    for (what, insn, want) in cases {
+        let mut prom = vec![filler(); 90];
+        // The dispatch entry at 10: P, to Y.
+        prom[0] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o60) | d_addr(0o10));
+        prom[2] = Insn::new(ALU | SETM | m_src(1) | fdest(0o15));
+        prom[4] = Insn::new(insn);
+        prom[6] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o203));
+        prom[7] = here(7);
+        prom[x as usize] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o201));
+        prom[x as usize + 1] = here(x as u64 + 1);
+        prom[y as usize] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o202));
+        prom[y as usize + 1] = here(y as u64 + 1);
+        let set = |m: &mut Machine| {
+            m.mmem[1] = x;
+            m.mmem[2] = y;
+            m.amem[0o60] = (1 << 15) | y;
+        };
+        let (e, r) = both(&prom, &set, 40);
+        // Pointer 2 over the word, wherever it is recorded.
+        let want = want.map(|w| if w == 0 { 0 } else { (2 << 24) | w });
+        let got = |m: &Machine| [m.amem[0o201], m.amem[0o202], m.amem[0o203]];
+        assert_eq!(got(r.machine()), want, "{what}: rtl");
+        assert_eq!(got(e.machine()), want, "{what}: micro");
+        assert_eq!(e.machine().spcptr, r.machine().spcptr, "{what}: the pointer");
+        // The 19 bits the 82S21s at page SPC hold.
+        let stack = |m: &Machine| m.spc.map(|w| w & 0o1777777);
+        assert_eq!(stack(e.machine()), stack(r.machine()), "{what}: the stack");
+    }
+}
+
 /// **A read the map refuses leaves MD alone.** On the board a cycle starts
 /// only under `VMAOK`: `MBUSY` is set from `MEMSTART AND VMAOK` on page
 /// VCTL1, so nothing is requested and `MD` keeps its word, and `-VMAOK` in

@@ -2575,6 +2575,67 @@ fn a_fetch_right_after_a_write_loses_the_write() {
     assert!(same_but_the_bus(&micro, &chip), "micro: {micro:?}");
 }
 
+/// **A microinstruction that pushes and pops at once counts the stack
+/// pointer up once and pops the old top.** Page CONTRL: `-SPCNT` is the
+/// open-collector 74S08 at 4D09 over `-SPUSH` and `-SPOP`, and page SPC's
+/// 74S169s at 4F23 and 4F28 take it on `-ENT` and `SPUSH` on `U/-D`: one
+/// count per microcycle, up when a push is in it (`cadrwd/cadr4.wlr`,
+/// `-SPCNT` and `SPUSH`). The word the pop takes is the SPC bus, the 82S21s
+/// at the pointer as it stands; `SPCWPASS` passes only the push of the
+/// microcycle before, off `SPUSHD` at 3D26. The pushed word lands a
+/// microcycle later at the counted-up pointer.
+///
+/// Each case pushes `X` first, then runs one microinstruction that pushes
+/// and pops: a POPJ with the push destination, the pop source into the
+/// push destination, a call with the POPJ bit, and a call whose M source is
+/// the pop source. Where control lands records the SPC pointer and word.
+/// The last case is a dispatch whose entry has P and whose M source is the
+/// pop source: `IGNPOPJ` holds that pop off (page CONTRL, the 74S64 at
+/// 3E28 ANDs `-IGNPOPJ` into `POPJ OR SRCSPCPOPREAL`), so it only pushes.
+#[test]
+fn a_push_and_a_pop_at_once_count_up_and_pop_the_old_top() {
+    use microcode::*;
+    use muir::isa::Insn;
+    let fd = |d: u64| (d << 19) | (0o37 << 14);
+    // PROM addresses: the program starts at 20.
+    let (x, y) = (20 + 60, 20 + 80);
+    let here = |k: u64| JUMP | ALWAYS | target(20 + k);
+    let cases: [(&str, u64); 5] = [
+        ("a POPJ with a push", ALU | SETM | m_src(2) | fd(0o15) | POPJ),
+        ("the pop source into the push", ALU | SETM | src(0o14) | fd(0o15)),
+        ("a call with the POPJ bit", JUMP | ALWAYS | P | target(y) | POPJ),
+        ("a call off the pop source", JUMP | ALWAYS | P | src(0o14) | target(y)),
+        ("a dispatch pushing, off the pop source", DISPATCH | src(0o14) | d_addr(0o10)),
+    ];
+    let mut got = Vec::new();
+    for (what, insn) in cases {
+        let mut p = vec![filler(); 120];
+        // The dispatch entry at 10: P, to Y.
+        p[0] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o60) | d_addr(0o10));
+        p[2] = Insn::new(ALU | SETM | m_src(1) | fd(0o15));
+        p[4] = Insn::new(insn);
+        p[6] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o203));
+        p[7] = Insn::new(here(7));
+        p[60] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o201));
+        p[61] = Insn::new(here(61));
+        p[80] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o202));
+        p[81] = Insn::new(here(81));
+        let mut m = on_main_memory(&p, &[x as u32, y as u32]);
+        m.amem[0o60] = (1 << 15) | y as u32;
+        let [chip, rtl, micro] = left_after(&m, 150, &[0o201, 0o202, 0o203]);
+        got.push((what, chip, rtl, micro));
+    }
+    // Pointer 2 over the word; a call's return is past its delay slot.
+    let pd = |word: u64| (2 << 24) | word as u32;
+    let ret = 20 + 6;
+    let want = [[pd(y), 0, 0], [0, 0, pd(x)], [pd(ret), 0, 0], [0, pd(ret), 0], [0, pd(ret), 0]];
+    for ((what, chip, rtl, micro), want) in got.iter().zip(want) {
+        assert_eq!(chip.words, want, "{what}: the board");
+        assert_eq!(rtl.words, chip.words, "{what}: rtl");
+        assert_eq!(micro.words, chip.words, "{what}: micro");
+    }
+}
+
 /// **`PROG.BOOT`, bit 7 of a mode-register write, reboots the machine.**  The
 /// program writes `200` into `766012` every time round, so both engines trap
 /// to 0 again and again, in the same microcycle and with the same period.

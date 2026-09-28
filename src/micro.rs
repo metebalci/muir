@@ -178,6 +178,12 @@ pub struct Micro {
     /// keeps its return from being fused ([`Micro::main_loop_return`]).
     /// Set and used within one step.
     pushed: bool,
+    /// This microinstruction has pushed onto the SPC stack, and has popped
+    /// it. The pointer counts once a microcycle, so a push and a pop in one
+    /// microinstruction count it up once ([`Micro::push_spc`],
+    /// [`Micro::pop_spc`]). Set and used within one step.
+    spc_pushed: bool,
+    spc_popped: bool,
     /// A write of destination 5, 6 or 7 (`crate::machine::macro_dispatch`),
     /// made at the end of the step: `rtl` writes them at the edge, so the
     /// instruction that writes one reads the register and the memory as
@@ -247,6 +253,8 @@ impl Micro {
             opc_ck: false,
             trap: false,
             pushed: false,
+            spc_pushed: false,
+            spc_popped: false,
             macro_write: None,
             operand: None,
         }
@@ -396,8 +404,21 @@ impl Micro {
 
     /// A push onto the SPC stack: the pointer moves at the edge and the word
     /// waits for the next write phase.
+    ///
+    /// The pointer counts once a microcycle, and up when the microcycle
+    /// pushes, whatever else pops in it. Page CONTRL: `-SPCNT` is the
+    /// open-collector 74S08 at 4D09 over `-SPUSH` and `-SPOP`, and page
+    /// SPC's 74S169s at 4F23 and 4F28 take it on `-ENT` and `SPUSH` on
+    /// `U/-D` (`cadrwd/cadr4.wlr`, nets `-SPCNT` and `SPUSH`). So a pop
+    /// already taken in this microinstruction, by the functional source,
+    /// is no count of its own, and the push counts up from where the edge
+    /// found the pointer.
     fn push_spc(&mut self, word: u32) {
         self.pushed = true;
+        if self.spc_popped {
+            self.m.spcptr = (self.m.spcptr + 1) & 0o37;
+        }
+        self.spc_pushed = true;
         self.m.spcptr = (self.m.spcptr + 1) & 0o37;
         self.spc_write = Some((self.m.spcptr, word));
     }
@@ -405,13 +426,25 @@ impl Micro {
     /// A pop for the next address.  A word still waiting to be written is
     /// what the stack gives: `SPCWPASS` at CONTRL 3D21 puts it on the `SPC`
     /// bus, which feeds the next-address path.
+    ///
+    /// After a push in this microinstruction the pointer has counted up
+    /// and does not count down ([`Micro::push_spc`]), and the pop takes the
+    /// word at the pointer the edge found, below the pushed one:
+    /// `SPCWPASS` is `SPUSHD`'s, the push of the microcycle *before*,
+    /// registered by the 74S175 at CONTRL 3D26, and the pushed word is
+    /// written only in the next microcycle.
     fn pop_spc(&mut self) -> u32 {
+        if self.spc_pushed {
+            self.spc_popped = true;
+            return self.m.spc[(self.m.spcptr.wrapping_sub(1) & 0o37) as usize];
+        }
         let ptr = self.m.spcptr;
         let v = match self.spc_write {
             Some((p, word)) if p == ptr => word,
             _ => self.m.spc[ptr as usize],
         };
         self.m.spcptr = ptr.wrapping_sub(1) & 0o37;
+        self.spc_popped = true;
         v
     }
 
@@ -724,6 +757,7 @@ impl Micro {
             0o14 => {
                 let v = spc_word(&self.m);
                 self.m.spcptr = self.m.spcptr.wrapping_sub(1) & 0o37;
+                self.spc_popped = true;
                 v
             }
             // QUUX's MACHINE-ID, where it has one (`Geometry::QUUX`).
@@ -1306,6 +1340,9 @@ impl Micro {
             if !invert && self.jump_condition() {
                 let ret = if n { self.npc.wrapping_sub(1) } else { self.npc } & 0o37777;
                 self.push_spc(ret as u32);
+                // The pop is the next microcycle's, under `IWRITED`, and
+                // takes the pushed word through `SPCWPASS`.
+                self.spc_pushed = false;
                 self.pop_spc();
             }
             // The two microcycles the board spends on it, both nopped and
@@ -1581,6 +1618,8 @@ impl Engine for Micro {
             trap,
             // Set and used within one step.
             pushed: _,
+            spc_pushed: _,
+            spc_popped: _,
             macro_write: _,
             operand: _,
         } = self;
@@ -1835,6 +1874,8 @@ impl Engine for Micro {
 
         self.popj = self.p0.popj();
         self.pushed = false;
+        self.spc_pushed = false;
+        self.spc_popped = false;
         self.macro_write = None;
         self.aaddr = self.ir(32, 10) as u16;
         self.maddr = self.ir(26, 5) as u8;
