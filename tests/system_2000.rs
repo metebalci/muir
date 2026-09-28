@@ -522,12 +522,13 @@ fn specialised_entries(m: &Machine, opdtb: u16) -> usize {
 /// first main-loop return with the register enabled; and says how many
 /// returns fused.
 fn boots_with_the_fused_return<E: Executes>(engine: &str, make: impl Fn(Machine) -> E, fill: Fill) {
-    let (qmlp, opdtb) = (band_symbol("QMLP", "I-MEM"), band_symbol("OPDTB", "D-MEM"));
-    let (localp, ap) = (band_symbol("A-LOCALP", "A-MEM"), band_symbol("M-AP", "M-MEM"));
     let Some((_dir, pack, root)) = band_2000(&format!("system-2000-fused-{engine}-{fill:?}"))
     else {
         return;
     };
+    // The symbols after the band: without it the test skips.
+    let (qmlp, opdtb) = (band_symbol("QMLP", "I-MEM"), band_symbol("OPDTB", "D-MEM"));
+    let (localp, ap) = (band_symbol("A-LOCALP", "A-MEM"), band_symbol("M-AP", "M-MEM"));
     let mut e = make(quux(&pack, &root));
     e.boot();
     to_the_main_loop(&mut e, qmlp, true);
@@ -609,9 +610,10 @@ fn system_2000_boots_with_the_generic_operand_fill_on_micro() {
 /// own main loop and every entry poisoned to `ILLOP`, left over from before
 /// the boot, to the listener; returns the engine and `ILLOP`'s address.
 fn boots_from_a_stale_memory(band: &str, name: &str) -> Option<(Micro, u16)> {
+    let (_dir, pack, root) = band_in(band, name)?;
+    // The symbols after the band: without it the test skips.
     let (qmlp, illop) =
         (band_symbol_in(band, "QMLP", "I-MEM"), band_symbol_in(band, "ILLOP", "I-MEM"));
-    let (_dir, pack, root) = band_in(band, name)?;
     let mut e = Micro::new(quux(&pack, &root));
     e.boot();
     // After -BOOT's reset, which clears the enable too.
@@ -647,14 +649,14 @@ fn a_stale_macro_dispatch_memory_never_runs() {
 /// fused, no entry left poisoned and the register its own.
 #[test]
 fn a_stale_macro_dispatch_memory_is_filled_again() {
+    let Some((e, illop)) = boots_from_a_stale_memory(BAND, "system-2000-stale-filled") else {
+        return;
+    };
     let (qmlp, localp, ap) = (
         band_symbol("QMLP", "I-MEM"),
         band_symbol("A-LOCALP", "A-MEM"),
         band_symbol("M-AP", "M-MEM"),
     );
-    let Some((e, illop)) = boots_from_a_stale_memory(BAND, "system-2000-stale-filled") else {
-        return;
-    };
     let d = &e.machine().macro_dispatch;
     assert!(d.fused > 0, "returns fused");
     assert_eq!(d.register, muir::machine::macro_dispatch::word(qmlp, localp, ap as u8));
