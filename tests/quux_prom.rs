@@ -117,20 +117,23 @@ fn the_cadr_keeps_the_overlay() {
 /// Where 36000's `JUMP GO` goes: `GO`, at 36043 since muir-sys's commit
 /// `7c4bcb2` put the halts `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040 and
 /// `ERROR-BUFFER-NOT-LOADED` at 36042 before it, and still there in the GPT
-/// PROM of revision 10: the hand-over's symbol table `promh.sym` says `GO
+/// PROM of revision 11: the hand-over's symbol table `promh.sym` says `GO
 /// I-MEM 36043`
 /// ([`the_built_in_quux_prom_is_the_hand_over`]).
 const GO: u64 = 0o36043;
 
-/// The PROM's last word: the revision 10 PROM's `promh.locs` says `(I-MEM
+/// The PROM's last word: the revision 11 PROM's `promh.locs` says `(I-MEM
 /// 36647)`, the section's size, so the code is at 36000-36646, and 36646 is
 /// its last halt, `ERROR-ODD-MICR-START`, the disk routines and the halts
 /// after them following the reset devices and timer 0's period that the
-/// PROM writes for revision 10 (contract Q11).
+/// PROM writes since revision 10 (contract Q11). Revision 11's map change
+/// (contract Q13) put no-ops where the two writes that went were, so no
+/// address moved: its `promh.sym`, `promh.tbl` and `promh.locs` are
+/// revision 10's byte for byte.
 const LAST: usize = 0o36646;
 
 /// `DISK-AWAIT-PACK`, the first of the disk routines, which the new writes
-/// come before: 36600 in the revision 10 PROM's `promh.sym`.
+/// come before: 36600 in the revision 11 PROM's `promh.sym`.
 const DISK_AWAIT_PACK: u64 = 0o36600;
 
 /// The GPT PROM's own halts, after the disk routines, as its `promh.tbl`
@@ -142,6 +145,41 @@ const GPT_HALTS: [(u64, &str); 3] = [
     (0o36644, "ERROR-NO-CURRENT-MICR"),
     (0o36646, "ERROR-ODD-MICR-START"),
 ];
+
+/// `A-DISK-REGS`, where the PROM keeps block-disk's virtual address: A
+/// memory 62 in the hand-over's `promh.sym`, unchanged by revision 11.
+const A_DISK_REGS: usize = 0o62;
+
+/// **The built-in PROM maps the register page where revision 11 has it**
+/// (contract Q13 §5.2): run to `DISK-AWAIT-PACK`, its first disk routine,
+/// it has mapped virtual page 2 to physical page 37777, the register page
+/// at `17777400`, where revision 10's PROM mapped 36776; it keeps
+/// block-disk's registers at virtual 1200, words 200-203 of that page,
+/// where it kept 774; and virtual page 1, which named the old disk
+/// registers' page 36777, is mapped no more. A stale PROM fails this on
+/// every machine, with or without the hand-over.
+#[test]
+fn quux_s_prom_maps_the_register_page_at_37777() {
+    fn check<E: Engine>(mut e: E, name: &str) {
+        e.boot();
+        let mut n = 0u32;
+        while e.pc() != DISK_AWAIT_PACK as u16 {
+            e.step().unwrap();
+            n += 1;
+            assert!(n < 2_000_000, "{name}: not at DISK-AWAIT-PACK, at {:o}", e.pc());
+        }
+        let m = e.machine();
+        let entry = |virt: u32| m.l2_map[m.geometry.l2_index(m.l1_map[0], virt)];
+        assert_eq!(entry(0o1000) & 0o37777, 0o37777, "{name}: virtual page 2's physical page");
+        assert_ne!(entry(0o400) & 0o37777, 0o36777, "{name}: virtual page 1, the old disk page");
+        assert_eq!(m.amem[A_DISK_REGS], 0o1200, "{name}: A-DISK-REGS");
+    }
+    let mut m = Machine::new();
+    m.geometry = Geometry::QUUX;
+    m.load_prom(&muir::prom::quux_boot_prom());
+    check(Micro::new(m.clone()), "micro");
+    check(Rtl::new(m), "rtl");
+}
 
 /// **A QUUX PROM file is read from 36000, in partition order** (contracts
 /// Q2 and Q8): the assembler writes the control store section from 0, so
@@ -194,7 +232,7 @@ fn quux_s_prom_is_mit_s_promh_changed() {
 
 /// **The built-in QUUX PROM is muir-sys's hand-over, byte for byte**, where
 /// the hand-over (`ref/band-2000`, whose `promh.*` are PROM 2000, the GPT
-/// PROM for revision 10, built from muir-sys `3b1dcf2`) is present; its
+/// PROM for revision 11, from muir-sys `02c0bb3`'s `promh.text`) is present; its
 /// symbols and error table say version 2000, 3720 octal; and they put what
 /// [`GO`], [`LAST`], [`DISK_AWAIT_PACK`] and [`GPT_HALTS`] say where they
 /// say.

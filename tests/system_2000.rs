@@ -4,8 +4,9 @@
 //! System 2000 on QUUX with the video controller: muir-sys's development band on
 //! microcode 2000, which sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-2000` (muir-sys `3b1dcf2`, contracts
-//! Q8 and Q11): a GPT disk as a dynamic VHD, which QUUX boots as it is,
+//! It is in the gitignored `ref/band-2000` (muir-sys's Q13 hand-over for
+//! revision 11, whose microcode and PROM sources are muir-sys `02c0bb3`'s;
+//! contracts Q8, Q11 and Q13): a GPT disk as a dynamic VHD, which QUUX boots as it is,
 //! with microcode 2000 in its current `MCR1`, "MCR1 UCADR 2000", and the
 //! band, "LOD4 System 2000", in its current `LOD4`; PROM 2000, the PROM it
 //! was built and tested with, which is muir's built-in
@@ -259,7 +260,9 @@ fn system_2000_runs_at_its_ticks() {
 }
 
 /// `DISK-AWAIT-READY`, where microcode 2000 waits for block-disk to be
-/// ready (the hand-over's `ucadr.sym`: `DISK-AWAIT-READY I-MEM 25036`).
+/// ready (the hand-over's `ucadr.sym`: `DISK-AWAIT-READY I-MEM 25036`,
+/// where it was before revision 11 too; the microcode revision 11 added
+/// is after it).
 const DISK_AWAIT_READY: u16 = 0o25036;
 
 /// Block-disk's registers as the microcode addresses them, virtual

@@ -109,15 +109,18 @@ network decodes its five registers alone ([the register
 page](#the-register-page)); nothing answers at revision 10's addresses.
 
 **Software for revision 10 on a revision-11 machine** stops, measured on
-`micro` with `ref/band-2000` (the hand-over of PROM 2000, microcode 2000 and
-System 2000 for revision 10). Its PROM waits at `DISK-AWAIT-PACK` (36600) for
-ever, reading block-disk's status at `17377774`, where nothing answers, with
-word 101 `<0>` set. Its microcode, started at location 6 with the state its
-PROM leaves on revision 10, passes its own check, which asks for revision 10
-or more, and halts at `FILE-DEVICE-NOT-QUIET` (26525 in its `ucadr.sym`; the
-PC reads 26526) 2.00 s later, word 101 `<0>` set. On a revision-11 machine
-that halt means the microcode is not revision 11's: the file device is on
-the page and answers, but not at the address that microcode reads.
+`micro` and `rtl` with PROM 2000, microcode 2000 and System 2000 as muir-sys
+built them for revision 10. Their PROM, with revision 11's System 2000
+disk, waits at `DISK-AWAIT-PACK` (36600) for ever, reading block-disk's
+status at `17377774`, where nothing answers, with word 101 `<0>` set: still
+there after 50 M microcycles. Their microcode, loaded from their disk by
+revision 11's PROM, passes its own check, which asks for revision 10 or
+more, and halts at `FILE-DEVICE-NOT-QUIET` (26525 in its `ucadr.sym`; the
+PC reads 26526), word 101 `<0>` set, 2.07 s after power-on (30,053,391
+microcycles) on `micro` and 2.06 s (42,045,940) on `rtl`. On a
+revision-11 machine that halt means the microcode is not revision 11's: the
+file device is on the page and answers, but not at the address that
+microcode reads.
 
 `tests/quux.rs` holds the word on both engines and the CADR's all ones;
 `the_unassigned_sources_read_all_ones_on_the_board` in `tests/output_bus.rs`
@@ -309,7 +312,7 @@ interval timer are on the I/O board, on the Unibus (`764120`-`764124`).
 - **Reset**: power-on, `-RESET`, `-BOOT` and reset devices (below) each put
   every timer off, its flag down, periodic, interrupt enable 0 and period
   0. No timer has a period of its own: timer 0's 60 Hz, 16,667 µs, is
-  written by the boot PROM of revision 10 (contract Q11). The microsecond
+  written by the boot PROM since revision 10 (contract Q11). The microsecond
   clock moves on through every reset.
 - **Instants.** A timer word is read or written at the instant the
   register's cycle is taken, the edge the memory port takes it at (`rtl`:
@@ -325,13 +328,13 @@ microcycle, with the flags as they stand then (the case muir-fpga measured
 on Q1's timers).
 
 **Functional destinations 3 and 4 write only M, and functional source 17
-reads all ones**, on QUUX at revision 10 as on the CADR: Q1's tick control,
+reads all ones**, on QUUX since revision 10 as on the CADR: Q1's tick control,
 its interval timer's period and their status, which they were up to
 revision 9, are gone, and every timer is reached through the register page
 alone. A write of destination 3 changes no timer, also at an edge that
 takes a register write, and takes no flag out of any `SINTR`. So
 microcode that turns its tick on through destination 3, as QUUX's System
-1002 dev11's did, has no tick at revision 10.
+1002 dev11's did, has no tick since revision 10.
 
 **The microsecond clock** is functional source 15: the microseconds since
 power-on, 32 bits, wrapping, one read giving the whole word.
@@ -344,7 +347,7 @@ of what the OA registers make at run time: `tests/unused_codes.rs` reads
 every executed microinstruction as it stood in `IR` through a boot to the
 listener. System 1001 on 323, on the CADR, runs none. System 2000 on
 microcode 2000 runs them at four addresses through its boot and a moment
-after on revision 10, each a control-store word that carries them, and
+after on revision 11, each a control-store word that carries them, and
 each a read of source 15, the microsecond clock: in `RESET-MACHINE`, the
 start of its wait for the file device, at `READ-MICROSECOND-CLOCK`, in
 `XUSLDB`, and at 20346. It writes no destination 3 to 7 and reads no
@@ -629,19 +632,20 @@ microcode and System 2000's band read the GPT; MIT's label in block 0 is
 the CADR's.
 
 **System 2000's band is on a GPT disk in a dynamic VHD**: muir-sys's
-development band, built from its commit `3b1dcf2`, a T-300's 263,245
+development band for revision 11, its microcode and PROM from muir-sys
+`02c0bb3`, a T-300's 263,245
 blocks with the current `MCR1` at block 17, "MCR1 UCADR 2000", holding
 microcode 2000 and the current `LOD4`, "LOD4 System 2000", the band, no
 FILE and no TEMP (`band_2000_is_system_2000_on_microcode_2000`). QUUX
 boots the VHD as it is, a copy of it, the disk being written; the tests
 find it in the gitignored `ref/band-2000` and skip without it. Its `SYS:`
 is on the file device, which the tests serve the band's tree through. It
-reaches its listener, drawn at the screen's own words a line, in 166.5 M
-microcycles on `micro` and 188 M on `rtl` at 1280 by 1024, with 2000 in A
+reaches its listener, drawn at the screen's own words a line, in 164.5 M
+microcycles on `micro` and 183.5 M on `rtl` at 1280 by 1024, with 2000 in A
 memory's `A-VERSION` (`system_2000_runs_on_the_video_controller`, measured to the half
 million). It restores its own band: `(si:disk-restore 4)`, answered
-`yes`, reads 21,216 blocks of `LOD4` in 27 M microcycles and is back at
-the listener 139 M later, on `micro`
+`yes`, reads 18,593 blocks of `LOD4` in 24 M microcycles and is back at
+the listener 140.5 M later, on `micro`
 (`system_2000_restores_its_band_to_the_listener`). That
 test holds, at every microcycle in `DISK-AWAIT-READY`, the disk registers'
 virtual address `77777600` to their physical `17777600`, and block-disk to
@@ -816,9 +820,11 @@ The PROM is muir-sys's PROM 2000 for block-disk and a GPT
 (`data/quux-promh.mcr`), MIT's `promh.text` changed so that a PDL buffer
 of any width boots, QUUX's 64 level-2 blocks are cleared, the disk is read
 by block number, nothing is saved, the microcode is found through the
-GPT, and for revision 10 the devices are reset through the register page
-and timer 0 given its period (muir-sys's `sys/ucadr/promh.text` as
-committed in muir-sys `381edfb`), assembled at 36000. It sets error stop through the register page, not `766012`, and
+GPT, the devices are reset through the register page and timer 0 given
+its period (revision 10), and for revision 11 the register page is mapped
+at physical page 37777 with block-disk's registers at its words 200-203
+(muir-sys's `sys/ucadr/promh.text` as committed in muir-sys `02c0bb3`),
+assembled at 36000. It sets error stop through the register page, not `766012`, and
 halts at `ERROR-MICROCODE-TOO-BIG` if a microcode reaches 36000. The
 control store stays 16K words: jump targets are `IR<25:12>`, dispatch
 words carry 14 address bits, and `SPC<14>` is the macroinstruction-return
@@ -856,8 +862,8 @@ on both engines until the microcode's location 6 runs, on
 stores are to word 777, the command list word, one a block read; every
 block read goes into pages 3-6; the disk file is byte for byte as it was;
 and pages 3-6 hold the main-memory section's four blocks. On System
-2000's disk it reads 115 blocks and reaches 6 after 1,020,563 microcycles
-on `micro` and 1,136,279 on `rtl`.
+2000's disk it reads 115 blocks and reaches 6 after 1,020,937 microcycles
+on `micro` and 1,136,687 on `rtl`.
 
 **Its file, like QUUX's microcode's, is in partition order** (contract
 Q8): MIT's `.mcr` with the two 16-bit halves of every 32-bit word swapped,
@@ -881,10 +887,21 @@ present); `tests/system_2000.rs` boots System 2000 on it.
 `--prom` on `quux` takes a file in partition order assembled at 36000, and
 refuses one in MIT's order or assembled at 0.
 
+**For revision 11 it maps the register page at physical page 37777**
+(contract Q13): virtual page 2, which it uses for word 102 and for
+block-disk, names physical page 37777, the page at `17777400`; block-disk's
+registers are at virtual 1200, the page's words 200-203; and virtual page
+1 is not mapped. It differs from revision 10's PROM in five of its 1024
+words, two of them no-ops in the places of the two map writes it does not
+make, so every address in it is revision 10's PROM's. Run to
+`DISK-AWAIT-PACK` on both engines, the built-in PROM has written those
+three (`quux_s_prom_maps_the_register_page_at_37777` in
+`tests/quux_prom.rs`).
+
 QUUX runs only muir-sys's latest band, System 2000. The PROMs assembled at
 0, and System 1001 on QUUX, are retired with it.
 
-**For revision 10 it resets the devices and gives timer 0 its period**
+**Since revision 10 it resets the devices and gives timer 0 its period**
 (contract Q11). It pulses no `PROG.UNIBUS.RESET`, which resets nothing on
 QUUX. After it maps the register page and writes error stop, and before
 its first disk command, it writes word 104 with 1, reset devices, so that
@@ -906,18 +923,23 @@ to 36000 without `-RESET`, with timers 1 and 2 turned on and up under
 their interrupt enables while the machine is halted (the band turns off a
 timer 1 or 2 that interrupts, `INTR-TIMER-1-STRAY`) and the file device
 enabled with three READs of 64 KiB and a CREATE-DIRECTORY queued, reaches
-the listener after 163,791,594 microcycles with `INTR` run 1,901 times,
-against 164,320,562 and 1,901 for the same reboot with neither, with the
+the listener after 161,791,968 microcycles with `INTR` run 1,892 times,
+against 162,320,936 and 1,892 for the same reboot with neither, with the
 timers off and the device disabled at location 6 and no queued command run
-(`m11_a_reboot_resets_the_timers_and_the_file_device`). On the PROM before
-Q11, dev11's, which writes neither word, the same reboot reaches location 6
-with timers 1 and 2 still on and the device still enabled, and fails the
-test's criterion (`m11_fails_on_the_prom_before_q11`); no queued command
-ran. From power-on on that PROM the band reaches its listener with word 110
-reading 401 and word 111 16,667, the period its microcode writes itself at
-`RESET-MACHINE` (`uc-cold-disk.lisp`), and `INTR-TICK` runs 600 times in
-10 s (`m12_the_prom_before_q11_on_revision_10`). All on `micro`, in
+(`m11_a_reboot_resets_the_timers_and_the_file_device`). All on `micro`, in
 `tests/system_2000_timers.rs`.
+
+On revision 10, with revision 10's System 2000, the PROM before Q11,
+dev11's, which writes neither word, failed that criterion: the same reboot
+reached location 6 with timers 1 and 2 still on and the device still
+enabled, and no queued command ran. From power-on on that PROM the band
+reached its listener with word 110 reading 401 and word 111 16,667, the
+period its microcode writes itself at `RESET-MACHINE`
+(`uc-cold-disk.lisp`), and `INTR-TICK` ran 600 times in 10 s. That PROM
+maps revision 10's register page and cannot run on revision 11, so these
+two measurements are this record alone, with the tests that made them,
+`m11_fails_on_the_prom_before_q11` and
+`m12_the_prom_before_q11_on_revision_10`, in the repository's history.
 
 ## The register page
 
