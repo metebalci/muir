@@ -640,8 +640,18 @@ impl Micro {
     /// AUTOMATICALLY IF NO FETCH REQUIRED" --- and `rtl` makes it in the
     /// `POPJ`'s own read phase, off the counter before the edge steps it:
     /// `spcmung = SPC<14> && !needfetch`, `spc1a = spcmung || SPC<1>`.
+    ///
+    /// A pop the functional source takes too arms nothing, though the
+    /// return still takes `SPCMUNG`: page LCC's `NEXT.INSTR` is the 74S02
+    /// at 3E17 over `-SPOP` and the 74S00 at 3E07's `NAND(SPC14,
+    /// -SRCSPCPOPREAL)`, so `SPOP AND SPC14 AND NOT SRCSPCPOPREAL`,
+    /// registered as `NEXT.INSTRD` by the 74S175 at 3E12
+    /// (`cadrwd/cadr4.wlr`, nets `NEXT.INSTR`, `SPC14` and
+    /// `-SRCSPCPOPREAL`).
     fn pop_asks_for_a_fetch(&mut self, word: u32) -> u32 {
-        self.next_instr = true;
+        if !self.pops_by_source() {
+            self.next_instr = true;
+        }
         if self.needfetch() { word } else { word | 2 }
     }
 

@@ -2731,6 +2731,79 @@ fn two_pops_at_once_count_down_once_and_a_dispatch_without_r_pops_nothing() {
     }
 }
 
+/// **A return pop whose word has bit 14 up arms `NEXT INSTR` only when
+/// the functional source does not pop too.** Page LCC: `NEXT.INSTR` is the
+/// 74S02 at 3E17 over `-SPOP` and the 74S00 at 3E07's `NAND(SPC14,
+/// -SRCSPCPOPREAL)`, so `SPOP AND SPC14 AND NOT SRCSPCPOPREAL`, registered
+/// as `NEXT.INSTRD` by the 74S175 at 3E12, which steps the location
+/// counter and, with `NEEDFETCH` up, fetches (`cadrwd/cadr4.wlr`, nets
+/// `NEXT.INSTR`, `SPC14` and `-SRCSPCPOPREAL`).
+///
+/// Each case pushes `Y` and then `X` with bit 14 up, writes LC, which
+/// leaves `NEEDFETCH` up, and runs one microinstruction that reads the
+/// pop source and pops for a return: with the POPJ bit, as a jump with R,
+/// as a dispatch whose entry has R, as one whose entry has R and P, which
+/// only the source pops for, and as a POPJ pushing the popped word back.
+/// Where control lands records the SPC word and LC; no fetch goes out and
+/// LC stays where it was written.
+#[test]
+fn a_return_pop_with_the_pop_source_arms_no_fetch() {
+    use microcode::*;
+    use muir::isa::Insn;
+    let fd = |d: u64| (d << 19) | (0o37 << 14);
+    // PROM addresses: the program starts at 20.
+    let x = 20 + 60;
+    let y = 20 + 80;
+    let here = |k: u64| JUMP | ALWAYS | target(20 + k);
+    let cases: [(&str, u64); 5] = [
+        ("a POPJ off the pop source", ALU | SETM | src(0o14) | POPJ),
+        ("a return off the pop source", JUMP | ALWAYS | R | src(0o14)),
+        ("a dispatch returning, off the pop source", DISPATCH | src(0o14) | d_addr(0o10)),
+        ("a dispatch falling through, off the pop source", DISPATCH | src(0o14) | d_addr(0o12)),
+        ("a POPJ with the pop source into the push", ALU | SETM | src(0o14) | fd(0o15) | POPJ),
+    ];
+    let mut got = Vec::new();
+    for (what, insn) in cases {
+        let mut p = vec![filler(); 120];
+        // The dispatch entries: at 10 R, at 12 R and P.
+        p[0] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o60) | d_addr(0o10));
+        p[1] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o62) | d_addr(0o12));
+        p[2] = Insn::new(ALU | SETM | m_src(2) | fd(0o15));
+        p[3] = Insn::new(ALU | SETM | m_src(1) | fd(0o15));
+        p[4] = Insn::new(ALU | SETM | m_src(3) | fd(0o1));
+        p[5] = Insn::new(insn);
+        p[7] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o203));
+        p[8] = Insn::new(ALU | SETM | src(0o13) | a_dest(0o213));
+        p[9] = Insn::new(here(9));
+        p[60] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o201));
+        p[61] = Insn::new(ALU | SETM | src(0o13) | a_dest(0o211));
+        p[62] = Insn::new(here(62));
+        let mut m = on_main_memory(&p, &[x as u32 | (1 << 14), y as u32, 0o20 << 2]);
+        m.amem[0o60] = 1 << 16;
+        m.amem[0o62] = (1 << 16) | (1 << 15);
+        let [chip, rtl, micro] = left_after(&m, 150, &[0o201, 0o211, 0o203, 0o213]);
+        got.push((what, chip, rtl, micro));
+    }
+    // Pointer 1 over Y after one pop, pointer 3 over the pushed X after a
+    // push and a pop; LC as written, with `NEEDFETCH`, `LC<31>` of the source, up.
+    let popped = (1 << 24) | y as u32;
+    let pushed_back = (3 << 24) | x as u32 | (1 << 14);
+    let lc = (1 << 31) | (0o20 << 2);
+    let want = [
+        [popped, lc, 0, 0],
+        [popped, lc, 0, 0],
+        [popped, lc, 0, 0],
+        [0, 0, popped, lc],
+        [pushed_back, lc, 0, 0],
+    ];
+    for ((what, chip, rtl, micro), want) in got.iter().zip(want) {
+        assert_eq!(chip.words, want, "{what}: the board");
+        assert_eq!(chip.cycles, 0, "{what}: no fetch on the board");
+        assert_eq!(rtl, chip, "{what}: rtl");
+        assert!(same_but_the_bus(micro, chip), "{what}: micro: {micro:?}");
+    }
+}
+
 /// **`PROG.BOOT`, bit 7 of a mode-register write, reboots the machine.**  The
 /// program writes `200` into `766012` every time round, so both engines trap
 /// to 0 again and again, in the same microcycle and with the same period.

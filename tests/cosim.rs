@@ -702,6 +702,74 @@ fn two_pops_at_once_count_down_once_and_a_dispatch_without_r_pops_nothing() {
     }
 }
 
+/// **A return pop whose word has bit 14 up arms `NEXT INSTR` only when
+/// the functional source does not pop too**, on both. Page LCC:
+/// `NEXT.INSTR` is `SPOP AND SPC14 AND NOT SRCSPCPOPREAL`, the 74S02 at
+/// 3E17 over `-SPOP` and the 74S00 at 3E07, registered at 3E12; it steps
+/// LC and, with `NEEDFETCH` up, fetches.
+/// `a_return_pop_with_the_pop_source_arms_no_fetch` in `tests/chip.rs`
+/// runs the same programs on the netlist, which gives the same words and
+/// no fetch.
+///
+/// Each case pushes `Y` and `X` with bit 14 up, writes LC, and runs its
+/// microinstruction; where control lands --- `X` or straight on ---
+/// records the SPC word and LC.
+#[test]
+fn a_return_pop_with_the_pop_source_arms_no_fetch() {
+    use muir::isa::asm::DMEM_WRITE;
+    let (x, y) = (60, 80);
+    let here = |k: u64| Insn::new(JUMP | ALWAYS | target(k));
+    // Pointer 1 over Y after one pop, pointer 3 over the pushed X after a
+    // push and a pop; LC as written, with `NEEDFETCH`, `LC<31>` of the source, up.
+    let popped = (1 << 24) | y;
+    let lc = (1 << 31) | (0o20 << 2);
+    let at_x = [popped, lc, 0, 0];
+    let cases: [(&str, u64, [u32; 4]); 5] = [
+        ("a POPJ off the pop source", ALU | SETM | src(0o14) | POPJ, at_x),
+        ("a return off the pop source", JUMP | ALWAYS | R | src(0o14), at_x),
+        ("a dispatch returning, off the pop source", DISPATCH | src(0o14) | d_addr(0o10), at_x),
+        (
+            "a dispatch falling through, off the pop source",
+            DISPATCH | src(0o14) | d_addr(0o12),
+            [0, 0, popped, lc],
+        ),
+        (
+            "a POPJ with the pop source into the push",
+            ALU | SETM | src(0o14) | fdest(0o15) | POPJ,
+            [(3 << 24) | x | (1 << 14), lc, 0, 0],
+        ),
+    ];
+    for (what, insn, want) in cases {
+        let mut prom = vec![filler(); 90];
+        // The dispatch entries: at 10 R, at 12 R and P.
+        prom[0] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o60) | d_addr(0o10));
+        prom[1] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o62) | d_addr(0o12));
+        prom[2] = Insn::new(ALU | SETM | m_src(2) | fdest(0o15));
+        prom[3] = Insn::new(ALU | SETM | m_src(1) | fdest(0o15));
+        prom[4] = Insn::new(ALU | SETM | m_src(3) | LC);
+        prom[5] = Insn::new(insn);
+        prom[7] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o203));
+        prom[8] = Insn::new(ALU | SETM | src(0o13) | a_dest(0o213));
+        prom[9] = here(9);
+        prom[x as usize] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o201));
+        prom[x as usize + 1] = Insn::new(ALU | SETM | src(0o13) | a_dest(0o211));
+        prom[x as usize + 2] = here(x as u64 + 2);
+        let set = |m: &mut Machine| {
+            m.mmem[1] = x | (1 << 14);
+            m.mmem[2] = y;
+            m.mmem[3] = 0o20 << 2;
+            m.amem[0o60] = 1 << 16;
+            m.amem[0o62] = (1 << 16) | (1 << 15);
+        };
+        let (e, r) = both(&prom, &set, 40);
+        let got = |m: &Machine| [m.amem[0o201], m.amem[0o211], m.amem[0o203], m.amem[0o213]];
+        assert_eq!(got(r.machine()), want, "{what}: rtl");
+        assert_eq!(got(e.machine()), want, "{what}: micro");
+        assert_eq!(e.machine().spcptr, r.machine().spcptr, "{what}: the pointer");
+        assert_eq!(e.memory_cycles(), 0, "{what}: micro fetches nothing");
+    }
+}
+
 /// **A read the map refuses leaves MD alone.** On the board a cycle starts
 /// only under `VMAOK`: `MBUSY` is set from `MEMSTART AND VMAOK` on page
 /// VCTL1, so nothing is requested and `MD` keeps its word, and `-VMAOK` in
