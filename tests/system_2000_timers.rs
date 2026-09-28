@@ -47,7 +47,7 @@ const OLD_PROM: (&str, &str) = (
 /// LISPM-1 and OZ, as the release's `site/hosts.text` gives them.
 const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
-const PAGE: u32 = 0o17377000;
+const PAGE: u32 = 0o17777400;
 const fn control(k: usize) -> u32 {
     PAGE + 0o110 + 2 * k as u32
 }
@@ -140,7 +140,7 @@ fn a_mem(name: &str) -> usize {
     symbols.address(Space::AMem, name).unwrap_or_else(|| panic!("{name} in ucadr.sym")) as usize
 }
 
-/// QUUX with `prom` at 36000, the disk on block-disk, MONO TV at the
+/// QUUX with `prom` at 36000, the disk on block-disk, the video controller at the
 /// band's 1280 by 1024, and the file device serving `files` as HOST's `/`
 /// and `root`'s `sys` and `site`, the tree's, as `/sys` and `/site`, where
 /// the band's `SYS:` is (`site/sys.translations`).
@@ -152,8 +152,8 @@ fn quux(pack: &Path, prom: &[Insn], files: &Path, root: &Path) -> Machine {
     d.attach(muir::disk_image::Disk::open_rw(pack).expect("the pack"));
     m.block_disk = Some(d);
     m.geometry = muir::machine::Geometry::QUUX;
-    m.tv.set_board(Board::MonoTv);
-    m.tv.set_mono_tv_size(1280, 1024);
+    m.tv.set_board(Board::Video);
+    m.tv.set_video_size(1280, 1024);
     m.file_device.mounts.add(&files.display().to_string()).unwrap();
     for part in ["sys", "site"] {
         m.file_device.mounts.add(&format!("{part}={}", root.join(part).display())).unwrap();

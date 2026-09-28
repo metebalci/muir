@@ -7,7 +7,7 @@
 //! the device answers each, in order, with an entry in the response ring;
 //! the bytes move by DMA between main memory and the host's files. The
 //! registers are words 160-171 of the register page, and its interrupt is
-//! word 100 `<6>`. QUUX has it and the CADR does not.
+//! word 100 `<7>` (contract Q13). QUUX has it and the CADR does not.
 //!
 //! The registers ([`CONTROL`] to [`RESP_CONS`]): 160 control, `<0>` enable
 //! and `<8>` interrupt enable; 161 status, `<0>` enabled, `<1>` quiet,
@@ -61,8 +61,8 @@ pub const RESP_SIZE: u32 = 0o167;
 pub const RESP_PROD: u32 = 0o170;
 pub const RESP_CONS: u32 = 0o171;
 
-/// The device's bit in word 100.
-pub const INTERRUPT_BIT: u32 = 6;
+/// The device's bit in word 100 (contract Q13).
+pub const INTERRUPT_BIT: u32 = 7;
 
 /// A command's own time, before its buffers'. **Unverified**: an estimate
 /// of the boards' round trip --- the fabric raising Linux, a daemon doing a
@@ -648,7 +648,7 @@ impl FileDevice {
         self.cmd_cons != self.resp_cons || self.head_due.is_some_and(|d| d <= now)
     }
 
-    /// Word 100 `<6>` at `now`: a response waiting, under the interrupt
+    /// Word 100 `<7>` at `now`: a response waiting, under the interrupt
     /// enable. A level.
     pub fn interrupt_at(&self, now: u64) -> bool {
         self.interrupt_enable && self.waiting_at(now)

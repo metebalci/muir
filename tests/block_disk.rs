@@ -124,24 +124,38 @@ fn any_other_command_stops_by_error() {
     assert_eq!(main[0o1000], 0, "nothing moved");
 }
 
-/// **On QUUX the registers are block-disk's**, at `17377774`, when it is
-/// fitted: a read through the bus lands the block, and nothing times out.
+/// **On QUUX the registers are block-disk's, at words 200-203 of the
+/// register page**, `17777600` (contract Q13): 200 status and command, 201
+/// the last memory address and the command list pointer, 202 the disk
+/// address, 203 START. A read through them lands the block, and nothing
+/// fails; the CADR controller's old place, `17377774`, is nothing there.
 #[test]
 fn on_quux_the_registers_are_the_block_disk_s() {
+    const REGS: u32 = 0o17777600;
+    assert_eq!(block_disk::REGS, REGS);
     let mut m = Machine::new();
     m.geometry = MachineGeometry::QUUX;
     let mut d = BlockDisk::new(block_disk::BLOCK_NS);
     d.attach(pack());
     m.block_disk = Some(d);
     m.main[0o777] = 0o1000;
-    m.bus_write(block_disk::REGS + block_disk::CLP, 0o777);
-    m.bus_write(block_disk::REGS + block_disk::DA, 2);
-    m.bus_write(block_disk::REGS + block_disk::COMMAND, READ);
-    m.bus_write(block_disk::REGS + block_disk::START, 0);
+    m.bus_write(REGS + 1, 0o777);
+    m.bus_write(REGS + 2, 2);
+    m.bus_write(REGS, READ);
+    m.bus_write(REGS + 3, 0);
     assert_eq!(m.main[0o1000 + 9], 2 << 16 | 9);
-    assert_eq!(m.bus_read(block_disk::REGS + block_disk::DA), 2);
+    assert_eq!(m.bus_read(REGS + 2), 2, "the disk address");
+    assert_eq!(m.bus_read(REGS + 1), 0o1377, "the last memory address");
+    assert_eq!(m.bus_read(REGS + 3), 0, "START reads 0");
     assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0);
     assert!(m.dma_written, "the cache is told memory was written");
+    m.ns += block_disk::BLOCK_NS;
+    assert_eq!(m.bus_read(REGS) & 1, 1, "not active");
+    for old in 0o17377774..=0o17377777 {
+        m.bus_error = 0;
+        assert_eq!(m.bus_read(old), 0, "{old:o}");
+        assert_eq!(m.bus_error, bus_error::XBUS_NXM, "{old:o}: nothing there");
+    }
 }
 
 /// **A checkpoint keeps it**: registers, the transfer's end, and the blocks

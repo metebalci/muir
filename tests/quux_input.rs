@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! QUUX's keyboard and mouse (contract Q3), on the register page at
-//! `17377000`: word 120 the keyboard's status, 121 its data, 122 the mouse,
+//! `17777400`: word 120 the keyboard's status, 121 its data, 122 the mouse,
 //! 123 the mouse's status. No CADR keyboard timing and no quadrature: a
 //! FIFO of 64 of the key words the CADR's keyboard gives, and the CADR's
 //! twelve-bit mouse counts with the host's motion added to them.
@@ -10,7 +10,7 @@
 use muir::machine::{Geometry, Machine, bus_error};
 use muir::quux_input::KeyboardMouse;
 
-const PAGE: u32 = 0o17377000;
+const PAGE: u32 = 0o17777400;
 const INTERRUPTS: u32 = PAGE + 0o100;
 const KBD_STATUS: u32 = PAGE + 0o120;
 const KBD_DATA: u32 = PAGE + 0o121;
@@ -25,20 +25,20 @@ fn quux() -> Machine {
 }
 
 /// **Key words come out of word 121 in the order they went in**, each the
-/// word itself; word 120's `<0>` says one is waiting, and an empty FIFO
-/// reads 0 there and in 121.
+/// word itself in `<23:0>`, `<31:24>` reading 0 (contract Q13); word 120's
+/// `<0>` says one is waiting, and an empty FIFO reads 0 there and in 121.
 #[test]
 fn keys_come_out_in_order() {
     let mut m = quux();
     assert_eq!((m.bus_read(KBD_STATUS) & 1, m.bus_read(KBD_DATA)), (0, 0), "empty");
-    for w in [0o101, 0o1234567, 0o15] {
+    for w in [0o101, 0o1234567, 0o15, 0xff12_3456] {
         m.quux_input.press(w);
     }
     assert_eq!(m.bus_read(KBD_STATUS) & 1, 1);
     assert!(m.quux_input.key_waiting(), "as the host sees it too");
-    let got: Vec<u32> = (0..3).map(|_| m.bus_read(KBD_DATA)).collect();
+    let got: Vec<u32> = (0..4).map(|_| m.bus_read(KBD_DATA)).collect();
     assert!(!m.quux_input.key_waiting());
-    assert_eq!(got, [0o101, 0o1234567, 0o15]);
+    assert_eq!(got, [0o101, 0o1234567, 0o15, 0x12_3456]);
     assert_eq!(m.bus_read(KBD_STATUS) & 1, 0, "taken");
     assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0);
 }
@@ -79,24 +79,24 @@ fn the_mouse_counts_and_its_buttons() {
     assert_eq!(m.quux_input.mouse_buttons_held(), 0o5);
 }
 
-/// **Each interrupts under its own enable, in word 100**: `<3>` the
-/// keyboard, a word waiting under 120's `<8>`; `<4>` the mouse, a change
+/// **Each interrupts under its own enable, in word 100**: `<4>` the
+/// keyboard, a word waiting under 120's `<8>`; `<5>` the mouse, a change
 /// under 123's `<8>`. The processor's interrupt pending follows.
 #[test]
 fn each_interrupts_under_its_enable() {
     let mut m = quux();
     m.quux_input.press(0o101);
     m.quux_input.mouse_move(1, 0);
-    assert_eq!(m.bus_read(INTERRUPTS) & 0o30, 0, "neither enabled");
+    assert_eq!(m.bus_read(INTERRUPTS) & 0o60, 0, "neither enabled");
     assert!(!m.interrupt());
     m.bus_write(KBD_STATUS, ENABLE);
-    assert_eq!(m.bus_read(INTERRUPTS) & 0o30, 0o10, "the keyboard");
+    assert_eq!(m.bus_read(INTERRUPTS) & 0o60, 0o20, "the keyboard");
     assert!(m.interrupt());
     m.bus_write(MOUSE_STATUS, ENABLE);
-    assert_eq!(m.bus_read(INTERRUPTS) & 0o30, 0o30, "and the mouse");
+    assert_eq!(m.bus_read(INTERRUPTS) & 0o60, 0o60, "and the mouse");
     m.bus_read(KBD_DATA);
     m.bus_read(MOUSE);
-    assert_eq!(m.bus_read(INTERRUPTS) & 0o30, 0, "both taken");
+    assert_eq!(m.bus_read(INTERRUPTS) & 0o60, 0, "both taken");
     assert!(!m.interrupt());
     assert_eq!(m.bus_read(KBD_STATUS) & ENABLE, ENABLE, "the enable reads back");
 }
@@ -164,12 +164,13 @@ fn a_checkpoint_keeps_it() {
     }
 }
 
-/// **The CADR has none of it**: words 120-123 time out, as the page does.
+/// **The CADR has none of it**: words 120-123 time out, as the page does,
+/// in the CADR's Unibus window.
 #[test]
 fn the_cadr_has_none_of_it() {
     let mut m = Machine::new();
     m.bus_read(KBD_DATA);
-    assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0);
+    assert_eq!(m.bus_error, bus_error::UNIBUS_NXM);
 }
 
 mod support;
@@ -196,7 +197,7 @@ fn both_engines_read_the_fifo() {
         words[..prom.len()].copy_from_slice(&prom);
         m.load_prom(&words);
         support::prom_program_in_ram(&mut m);
-        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
         m.mmem[1] = (1 << 8) | 0o121;
         m.quux_input.press(0o101);
         m.quux_input.press(0o102);

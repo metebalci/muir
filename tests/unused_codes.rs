@@ -156,8 +156,8 @@ fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
     d.attach(muir::disk_image::Disk::open_rw(&pack).unwrap());
     m.block_disk = Some(d);
     m.geometry = Geometry::QUUX;
-    m.tv.set_board(Board::MonoTv);
-    m.tv.set_mono_tv_size(1280, 1024);
+    m.tv.set_board(Board::Video);
+    m.tv.set_video_size(1280, 1024);
     // The file device serving the tree's `sys` and `site` as HOST's `/sys`
     // and `/site`, where the band's `SYS:` is (`site/sys.translations`).
     m.file_device.mounts.add(&root.display().to_string()).unwrap();

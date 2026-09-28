@@ -740,7 +740,7 @@ fn profile<E: Profiled>(
     let files = label_files(&sources.join("sys/ucadr"));
 
     let mut m = if on_quux {
-        // QUUX's own PROM at 36000, the pack on block-disk, MONO TV, and
+        // QUUX's own PROM at 36000, the pack on block-disk, the video controller, and
         // the file device serving the root as HOST's `/` and its `sys` and
         // `site` as `/sys` and `/site`, where the band's `SYS:` is.
         let mut m = muir::machine::Machine::new();
@@ -748,7 +748,7 @@ fn profile<E: Profiled>(
         let mut d = muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS);
         d.attach(muir::disk_image::Disk::open_rw(&copy).unwrap());
         m.block_disk = Some(d);
-        m.tv.set_board(muir::tv::Board::MonoTv);
+        m.tv.set_board(muir::tv::Board::Video);
         m.file_device.mounts.add(&root.display().to_string()).unwrap();
         for part in ["sys", "site"] {
             m.file_device.mounts.add(&format!("{part}={}", root.join(part).display())).unwrap();

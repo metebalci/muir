@@ -4,7 +4,7 @@
 //! QUUX's file device (contract Q9, revision 9): host folders served to the
 //! machine through two rings in main memory, a command ring the processor
 //! fills and a response ring the device fills, with the registers at words
-//! 160-171 of the register page and its interrupt at word 100 `<6>`
+//! 160-171 of the register page and its interrupt at word 100 `<7>`
 //! ([`muir::file_device`]).
 //!
 //! A scripted driver ([`Dev`]) writes commands into the rings in main
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use muir::file_device::{self, Mounts, op, status};
 use muir::machine::{Geometry, Machine};
 
-const PAGE: u32 = 0o17377000;
+const PAGE: u32 = 0o17777400;
 const CONTROL: u32 = PAGE + 0o160;
 const STATUS: u32 = PAGE + 0o161;
 const CMD_BASE: u32 = PAGE + 0o162;
@@ -441,7 +441,7 @@ fn the_registers_read_and_write_as_the_layout_says() {
     assert_eq!(m.bus_error, 0, "nothing timed out");
     let mut cadr = Machine::new();
     assert_eq!(cadr.bus_read(CONTROL), 0);
-    assert_ne!(cadr.bus_error & muir::machine::bus_error::XBUS_NXM, 0, "the CADR has none");
+    assert_eq!(cadr.bus_error, muir::machine::bus_error::UNIBUS_NXM, "the CADR has none");
 }
 
 /// **An enable checks the rings**: a base off a line, a size over 8 and a
@@ -601,7 +601,7 @@ fn a_full_response_ring_holds_the_next_command() {
     assert_eq!(d.m.bus_read(RESP_PROD), 2);
 }
 
-/// **Word 100 `<6>` is a level under 160 `<8>`**: up while a response
+/// **Word 100 `<7>` is a level under 160 `<8>`**: up while a response
 /// waits and the enable is on, the processor's interrupt with it; cleared by
 /// consuming the response, or by the enable going off. Status `<8>` shows the
 /// same ungated. The level is known from the due time, before anything
@@ -617,15 +617,15 @@ fn the_interrupt_is_a_level_under_its_enable() {
     assert!(!d.m.interrupt_at(due - 1));
     assert!(d.m.interrupt_at(due), "known from the due time");
     d.m.ns = due;
-    assert_eq!(d.m.interrupt_sources(), 1 << 6);
-    assert_eq!(d.m.bus_read(INTERRUPTS), 1 << 6);
+    assert_eq!(d.m.interrupt_sources(), 1 << 7);
+    assert_eq!(d.m.bus_read(INTERRUPTS), 1 << 7);
     assert_ne!(d.m.bus_read(STATUS) & 0x100, 0);
     d.m.bus_write(CONTROL, 1);
     assert_eq!(d.m.bus_read(INTERRUPTS), 0, "the enable off");
     assert!(!d.m.interrupt());
     assert_ne!(d.m.bus_read(STATUS) & 0x100, 0, "status <8> ungated");
     d.m.bus_write(CONTROL, 0x101);
-    assert_eq!(d.m.bus_read(INTERRUPTS), 1 << 6, "a level: up again");
+    assert_eq!(d.m.bus_read(INTERRUPTS), 1 << 7, "a level: up again");
     d.m.bus_write(RESP_CONS, 1);
     assert_eq!(d.m.bus_read(INTERRUPTS), 0, "consumed");
     assert_eq!(d.m.bus_read(STATUS) & 0x100, 0);
@@ -714,7 +714,7 @@ fn a_prog_unibus_reset_leaves_the_device_as_it_was() {
         ]);
         d.m.load_prom(&words);
         support::prom_program_in_ram(&mut d.m);
-        d.m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+        d.m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
         d.m.mmem[1] = 1 << 28;
         d.m.mmem[3] = (1 << 8) | 0o100;
         let mut e: Box<dyn Engine> = match engine {
@@ -1398,7 +1398,7 @@ mod engines {
         m.load_prom(&words);
         support::prom_program_in_ram(&mut m);
         // Virtual page 1 the register page, 2 the command ring, 3 buffer B.
-        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
         m.l2_map[2] = (1 << 23) | (1 << 22) | (CMD_RING >> 8);
         m.l2_map[3] = (1 << 23) | (1 << 22) | (BUF_B >> 8);
         m.mmem[1] = (1 << 8) | 0o164;
@@ -1455,7 +1455,7 @@ mod engines {
         }
         let m = e.machine();
         assert_eq!(m.amem[0o200], answered, "{name}: the program saw word 170 move");
-        assert_eq!(m.amem[0o201], 1 << 6, "{name}: and word 100 <6>");
+        assert_eq!(m.amem[0o201], 1 << 7, "{name}: and word 100 <7>");
         assert_eq!(m.amem[0o202], u32::from_le_bytes(*b"0123"), "{name}: and the data in B");
     }
 

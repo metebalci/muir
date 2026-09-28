@@ -16,13 +16,15 @@
 //!   processor. No memory boards, no setup or deskew, no refresh. The
 //!   nominal timing is a floor: a board slower on an access waits, muir
 //!   answers at it.
-//! - **A device register**, never cached: the display's, block-disk's, the
-//!   feature and register page. There is no bus: the register decode takes
-//!   the cycle at the edge and answers it a microcycle on, a register
-//!   access taking two microcycles in all.
-//! - **Nothing**, past main memory's or the frame buffer's end, between the
-//!   registers, or in the old Unibus window: a decode miss, failing at
-//!   once, with the NXM bit. No timeout.
+//! - **A device register**, never cached: a word of the register page at
+//!   `17777400`, the video controller's and block-disk's among them
+//!   (contract Q13). There is no bus: the register decode takes the cycle
+//!   at the edge and answers it a microcycle on, a register access taking
+//!   two microcycles in all.
+//! - **Nothing**, past main memory's or the frame buffer's end, or anywhere
+//!   else from `17000000` up below the register page, the old Unibus window
+//!   included: a decode miss, failing at once, with the NXM bit. No
+//!   timeout.
 //!
 //! There is nothing to arbitrate: the processor is the only requester in
 //! muir. Block-disk moves its words at START, which its contract allows,

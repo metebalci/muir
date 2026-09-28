@@ -143,7 +143,11 @@ impl Geometry {
         file_device: false,
     };
 
-    /// QUUX's, revision 10: three interval timers and reset devices on the
+    /// QUUX's, revision 11: the register page at the last page of the
+    /// physical space, `17777400`, with block-disk and the video controller
+    /// on it and word 100 in its final order (contract Q13,
+    /// [`Geometry::FEATURE_PAGE`], [`Machine::interrupt_sources`]); three
+    /// interval timers and reset devices on the
     /// register page (contract Q11, [`Timers`], [`Machine::reset_devices`]);
     /// a real-time clock and a file device on the
     /// register page (contract Q9, [`Rtc`], [`crate::file_device`]); main memory and the frame buffer on its own port
@@ -169,13 +173,15 @@ impl Geometry {
     /// 16K PDL buffer, then the multiply and divide, then the tick, then the
     /// clocks of contract Q1, then Q2's register page and PROM, then Q6's
     /// memory port, then Q7's device registers, then Q9's real-time clock and
-    /// file device, then Q11's interval timers and reset devices --- and
+    /// file device, then Q11's interval timers and reset devices, then Q13's
+    /// register page at `17777400` with block-disk and the video
+    /// controller on it --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
         l1_bits: 6,
         pdl_bits: 14,
-        machine_id: Some((0x5155 << 16) | (10 << 4) | 4),
+        machine_id: Some((0x5155 << 16) | (11 << 4) | 4),
         muldiv: true,
         tick: true,
         speed_bits: false,
@@ -211,11 +217,19 @@ impl Geometry {
         (1 << self.pdl_bits) - 1
     }
 
-    /// The Xbus I/O page a machine with a MACHINE-ID lists its sizes
-    /// in: physical `17377000`, just below the page the display's control
-    /// registers and the disk controller share. Nothing answers there on
-    /// the CADR.
-    pub const FEATURE_PAGE: u32 = 0o36776;
+    /// The page a machine with a MACHINE-ID lists its sizes in, its
+    /// register page: physical `17777400`, the last page of the physical
+    /// space, fixed there (contract Q13). The frame buffer may grow up to
+    /// below it. On the CADR it is the Unibus window's last page, Unibus
+    /// `777000`-`777776`, where nothing answers.
+    pub const FEATURE_PAGE: u32 = 0o37777;
+
+    /// Whether this machine has the register page, and with it QUUX's
+    /// decode of the space from `17000000` up ([`busint::decode_quux`]):
+    /// the frame buffer, the page, and nothing else.
+    pub fn has_register_page(self) -> bool {
+        self.machine_id.is_some()
+    }
 
     /// The word of the feature page at physical address `phys`, if this
     /// machine has one and `phys` is on it: the MACHINE-ID, then the
@@ -224,10 +238,11 @@ impl Geometry {
     /// which of `MUL` (bit 0) and `DIV` (bit 1) it has, and whether it has
     /// the tick, timer 0 (1); words 11 to 13, the main screen, are the
     /// display's ([`Machine::bus_read`]); word 14 the microsecond clock;
-    /// word 15 the devices of revision 9 by bits, `<0>` the real-time clock
-    /// and `<1>` the file device; word 16 the number of interval timers,
-    /// 3; every other word 0. Below revision 9 word 15 reads 0, and below
-    /// revision 10 word 16, as every unused word does. Read-only.
+    /// word 15 the optional devices, a bit each, `<0>` the real-time clock
+    /// and `<1>` the file device, a later optional device taking the next
+    /// bit; word 16 the number of interval timers, 3; every other word 0.
+    /// Below revision 9 word 15 reads 0, and below revision 10 word 16, as
+    /// every unused word does. Read-only, as every word 0-77 is.
     pub fn feature_word(self, phys: u32) -> Option<u32> {
         let id = self.machine_id?;
         if (phys >> 8) & 0o37777 != Self::FEATURE_PAGE {
@@ -246,8 +261,8 @@ impl Geometry {
             0o10 => self.tick as u32,
             // The microsecond clock (revision 5).
             0o14 => self.tick as u32,
-            // The devices of revision 9, by bits (contract Q9): `<0>` the
-            // real-time clock, `<1>` the file device.
+            // The optional devices, a bit each (contracts Q9, Q13): `<0>`
+            // the real-time clock, `<1>` the file device.
             0o15 => self.rtc as u32 | (self.file_device as u32) << 1,
             // The number of interval timers (contract Q11, revision 10).
             0o16 => self.tick as u32 * Timers::COUNT,
@@ -444,8 +459,8 @@ impl Timers {
     /// timer resets to it.
     pub const TICK_PERIOD_US: u32 = 16_667;
 
-    /// Word 100's bit for each timer: `<0>`, `<1>`, `<7>`.
-    pub const INTERRUPT_BITS: [u32; 3] = [1 << 0, 1 << 1, 1 << 7];
+    /// Word 100's bit for each timer: `<0>`, `<1>`, `<2>` (contract Q13).
+    pub const INTERRUPT_BITS: [u32; 3] = [1 << 0, 1 << 1, 1 << 2];
 
     /// How many there are, feature word 16.
     pub const COUNT: u32 = 3;
@@ -655,8 +670,8 @@ pub struct Machine {
     pub write_buffer: [u16; 16],
     /// Whether the last mapped access was permitted.
     pub vmaok: bool,
-    /// The disk controller, at `0o17377774`-`0o17377777` on the Xbus.  The
-    /// board is always there; whether a drive is plugged into it is
+    /// The disk controller, at `0o17377774`-`0o17377777` on the CADR's Xbus.
+    /// The board is always there; whether a drive is plugged into it is
     /// [`Controller::attach`].
     pub disk: Controller,
     /// The Chaosnet: this machine's address, and the link its cable
@@ -816,19 +831,21 @@ impl Machine {
         }
     }
 
-    /// QUUX's interrupt status, the register page's word 100: `<0>` timer
-    /// 0, `<1>` timer 1 and `<7>` timer 2, each its flag under its interrupt
-    /// enable (contract Q11); `<2>` block-disk's done under its enable;
-    /// `<3>` the keyboard and `<4>` the mouse ([`crate::quux_input`]); `<5>`
-    /// the network, the Chaosnet interface's request (contract Q4); `<6>`
-    /// the file device, a response waiting under its interrupt enable
-    /// (contract Q9).
+    /// QUUX's interrupt status, the register page's word 100, in the order
+    /// of contract Q13: `<0>`, `<1>` and `<2>` timers 0 to 2, each its flag
+    /// under its interrupt enable (contract Q11); `<3>` block-disk's done
+    /// under its enable, command `<11>`; `<4>` the keyboard and `<5>` the
+    /// mouse ([`crate::quux_input`]); `<6>` the network, the Chaosnet
+    /// interface's request (contract Q4); `<7>` the file device, a response
+    /// waiting under its interrupt enable (contract Q9). Every bit is a
+    /// level cleared at its source, so one write turns each off: a stray's
+    /// handler in the microcode relies on it (contract Q13, section 2).
     pub fn interrupt_sources(&self) -> u32 {
         (if self.geometry.tick { self.timers.interrupt_sources(self.ns) } else { 0 })
-            | (self.block_disk.as_ref().is_some_and(|d| d.interrupt_at(self.ns)) as u32) << 2
+            | (self.block_disk.as_ref().is_some_and(|d| d.interrupt_at(self.ns)) as u32) << 3
             | if self.geometry.machine_id.is_some() { self.quux_input.interrupts() } else { 0 }
             | (self.ioboard.chaos.as_ref().is_some_and(|c| c.interrupt_request().is_some()) as u32)
-                << 5
+                << 6
             | ((self.geometry.file_device && self.file_device.interrupt_at(self.ns)) as u32)
                 << crate::file_device::INTERRUPT_BIT
     }
@@ -1024,11 +1041,9 @@ impl Machine {
     /// list: the disk controller and the display on the Xbus, the bus
     /// interface's own registers and the I/O board on the Unibus. Every
     /// other I/O address times out.
+    ///
+    /// The CADR's alone: QUUX decodes by [`busint::decode_quux`].
     fn device(&mut self, phys: u32) -> Option<usize> {
-        // QUUX's feature page, a device of its own ([`Geometry::feature_word`]).
-        if self.geometry.feature_word(phys).is_some() {
-            return None;
-        }
         match busint::decode_for(
             phys,
             self.main.len(),
@@ -1431,7 +1446,7 @@ impl Machine {
     /// reset --- block-disk, the network (the I/O board's `-UB INIT`, its
     /// Chaosnet interface and serial line) and the file device as the
     /// CADR's `PROG.UNIBUS.RESET` resets its boards, [`Machine::bus_reset`],
-    /// which on QUUX nothing else calls; MONO TV, which has no vertical flag
+    /// which on QUUX nothing else calls; the video controller, which has no vertical flag
     /// and no interrupt, with nothing to show for it --- and every interval
     /// timer to its reset state ([`IntervalTimer::RESET`]). The keyboard and
     /// the mouse are not reset: a warm boot's key word is read by the
@@ -1447,11 +1462,15 @@ impl Machine {
 
     /// A read of a diagnostic register through this alone reads the open
     /// bus; the engines answer them.  See [`crate::spy`].
+    ///
+    /// **On QUUX the register page and the frame buffer are looked at
+    /// first** (contract Q13): the page is the last page of the old Unibus
+    /// window, and the buffer may reach up to below it. Everything else from
+    /// `17000000` up is nothing there ([`busint::decode_quux`]): the old
+    /// page at `17377000`, the CADR's display and disk registers after it,
+    /// and the rest of the Unibus window, which QUUX does not have
+    /// (contract Q5).
     pub fn bus_read(&mut self, phys: u32) -> u32 {
-        if !self.geometry.unibus && busint::unibus_address(phys).is_some() {
-            self.bus_error |= bus_error::XBUS_NXM;
-            return 0;
-        }
         if let Some(w) = self.geometry.feature_word(phys) {
             // Words 11 to 13 are the main screen, from the board fitted:
             // width in 31:16 and height in 15:0; bits a pixel in 31:16 and
@@ -1478,30 +1497,37 @@ impl Machine {
                     self.advance_file_device();
                     self.file_device.read(k, self.ns)
                 }
-                // The network (contract Q4): the Chaosnet interface's
-                // registers, word 140 + k being Unibus `764140` + 2k.
-                k @ 0o140..=0o147 => {
-                    let u = crate::chaos::interface::CSR + 2 * (k - 0o140);
-                    match ioboard::answers(u, false) {
-                        Some(r) => self.ioboard.read(r, self.ns) as u32,
-                        None => 0,
+                // The network (contract Q4): the Chaosnet interface's five
+                // registers (contract Q13).
+                k @ 0o140..=0o147 => match network_register(k, false) {
+                    Some(r) => self.ioboard.read(r, self.ns) as u32,
+                    None => 0,
+                },
+                // Block-disk (contract Q13), when it is fitted.
+                k @ 0o200..=0o203 => match self.block_disk.as_mut() {
+                    Some(d) => {
+                        d.advance(self.ns);
+                        d.read(k - 0o200)
                     }
-                }
+                    None => 0,
+                },
+                // The video controller's mode (contract Q13).
+                0o210 if self.tv.board() == tv::Board::Video => self.tv.read_control(0, self.ns),
                 k => self.quux_input.read(k).unwrap_or(w),
             };
         }
-        if let Some(r) = disk_controller::register(phys) {
-            // QUUX's block-disk, when it is fitted, in the CADR
-            // controller's place.
-            if let Some(d) = self.block_disk.as_mut() {
-                d.advance(self.ns);
-                return d.read(r);
-            }
-            self.disk.advance(self.ns);
-            return self.disk.read(r);
-        }
         if let Some(off) = self.tv.buffer_offset(phys) {
             return self.tv.read_buffer(off);
+        }
+        if self.geometry.has_register_page() {
+            return match self.quux_memory(phys) {
+                Some(a) => self.main[a],
+                None => 0,
+            };
+        }
+        if let Some(r) = disk_controller::register(phys) {
+            self.disk.advance(self.ns);
+            return self.disk.read(r);
         }
         if let Some(r) = self.tv_register(phys) {
             return self.tv.read_control(r, self.ns);
@@ -1535,14 +1561,24 @@ impl Machine {
         tv::control_register(phys).filter(|&r| self.tv.control_registers() >> r & 1 != 0)
     }
 
-    pub fn bus_write(&mut self, phys: u32, value: u32) {
-        if !self.geometry.unibus && busint::unibus_address(phys).is_some() {
-            self.bus_error |= bus_error::XBUS_NXM;
-            return;
+    /// On QUUX, past the register page and the frame buffer: main memory's
+    /// word, or nothing there, which sets word 101 `<0>`
+    /// ([`busint::decode_quux`]).
+    fn quux_memory(&mut self, phys: u32) -> Option<usize> {
+        match busint::decode_quux(phys, self.main.len(), self.tv.buffer_words()) {
+            busint::Responder::Memory(_) => Some(phys as usize),
+            _ => {
+                self.bus_error |= bus_error::XBUS_NXM;
+                None
+            }
         }
+    }
+
+    pub fn bus_write(&mut self, phys: u32, value: u32) {
         if let Some(log) = self.register_log.as_mut()
             && (self.geometry.feature_word(phys).is_some()
-                || disk_controller::register(phys).is_some())
+                || (!self.geometry.has_register_page()
+                    && disk_controller::register(phys).is_some()))
         {
             log.push((phys, value, self.cycles));
         }
@@ -1573,11 +1609,28 @@ impl Machine {
                     let (ns, drained) = (self.ns, self.write_buffer_empty_at);
                     self.file_device.write(k, value, ns, drained, &self.main);
                 }
+                // The network: the CSR and the write buffer; writes of its
+                // other words are ignored (contract Q13).
                 k @ 0o140..=0o147 => {
-                    let u = crate::chaos::interface::CSR + 2 * (k - 0o140);
-                    if let Some(r) = ioboard::answers(u, true) {
+                    if let Some(r) = network_register(k, true) {
                         self.ioboard.write(r, value as u16, self.ns);
                     }
+                }
+                // Block-disk (contract Q13): a transfer is a bus master
+                // reading and writing physical memory directly, which is
+                // why it is handed it, and it writes main memory behind
+                // the processor's back, so QUUX's cache is invalidated
+                // before its next cycle.
+                k @ 0o200..=0o203 => {
+                    if let Some(d) = self.block_disk.as_mut() {
+                        d.advance(self.ns);
+                        d.write(k - 0o200, value, &mut self.main);
+                        self.dma_written = true;
+                    }
+                }
+                // The video controller's mode (contract Q13).
+                0o210 if self.tv.board() == tv::Board::Video => {
+                    self.tv.write_control(0, value, self.ns);
                 }
                 k => {
                     self.quux_input.write(k, value);
@@ -1585,23 +1638,25 @@ impl Machine {
             }
             return;
         }
+        if let Some(off) = self.tv.buffer_offset(phys) {
+            self.tv.write_buffer(off, value);
+            return;
+        }
+        if self.geometry.has_register_page() {
+            if let Some(a) = self.quux_memory(phys) {
+                self.main[a] = value;
+                if let Some(log) = self.store_log.as_mut() {
+                    log.push(a as u32);
+                }
+            }
+            return;
+        }
         if let Some(r) = disk_controller::register(phys) {
             // A transfer is a bus master reading and writing physical memory
             // directly, which is why the controller is handed it.
-            if let Some(d) = self.block_disk.as_mut() {
-                d.advance(self.ns);
-                d.write(r, value, &mut self.main);
-            } else {
-                self.disk.advance(self.ns);
-                self.disk.write(r, value, &mut self.main);
-            }
-            // A transfer writes main memory behind the processor's back:
-            // QUUX's cache is invalidated before its next cycle.
+            self.disk.advance(self.ns);
+            self.disk.write(r, value, &mut self.main);
             self.dma_written = true;
-            return;
-        }
-        if let Some(off) = self.tv.buffer_offset(phys) {
-            self.tv.write_buffer(off, value);
             return;
         }
         if let Some(r) = self.tv_register(phys) {
@@ -1931,5 +1986,26 @@ impl Machine {
         self.cycles = r.u64()?;
         self.ns = r.u64()?;
         Ok(())
+    }
+}
+
+/// The Chaosnet interface's register a word of QUUX's register page names,
+/// read or written (contract Q4; contract Q13): 140 the CSR, read and
+/// written; 141 my address read and the write buffer written; 142 the read
+/// buffer, 143 the bit count and 145 START, each read only. Only these five
+/// are decoded: 144, 146 and 147 are reserved, where the CADR's board
+/// answers the CSR at `764150` and the bit count at `764156` as aliases,
+/// and a write of 142, 143 or 145 goes nowhere, where the board takes one
+/// of `764152` as the write buffer's ([`ioboard::answers`]).
+fn network_register(word: u32, write: bool) -> Option<u32> {
+    use crate::chaos::interface as chaos;
+    match (word, write) {
+        (0o140, _) => Some(chaos::CSR),
+        (0o141, false) => Some(chaos::MY_ADDRESS),
+        (0o141, true) => Some(chaos::WRITE_BUFFER),
+        (0o142, false) => Some(chaos::READ_BUFFER),
+        (0o143, false) => Some(chaos::BIT_COUNT),
+        (0o145, false) => Some(chaos::START),
+        _ => None,
     }
 }

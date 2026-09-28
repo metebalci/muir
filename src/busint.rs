@@ -1080,11 +1080,32 @@ pub fn decode_with(phys: u32, memory_words: usize, color_tv: bool) -> Responder 
     decode_for(phys, memory_words, color_tv, tv::BUFFER_WORDS, 0xff)
 }
 
-/// [`decode_with`] with the main display's buffer `tv_words` long: QUUX's
-/// MONO TV has one of its own size from the same start, 40,960 words at
-/// 1280 by 1024, which the CADR's two boards' 32K words do not reach the
-/// end of; and `tv_regs` its control registers that answer, a bit each
-/// (`Tv::control_registers`).
+/// [`decode_with`] with the main display's buffer `tv_words` long, and
+/// `tv_regs` its control registers that answer, a bit each
+/// (`Tv::control_registers`). QUUX does not decode by this, but by
+/// [`decode_quux`].
+/// **QUUX's decode** (contracts Q5, Q7 and Q13): `tv_words` of frame
+/// buffer from `17000000`, on the memory bus with main memory; the register
+/// page, `17777400`-`17777777`, a device; main memory below `17000000`, up
+/// to `memory_words`; and nothing else. Nothing answers at the old register
+/// page (`17377000`), the CADR's display and disk registers after it, or
+/// the rest of the old Unibus window below the page: an access there
+/// fails at once. The page is decided before the buffer, which may reach
+/// up to `17777377` ([`crate::tv::VIDEO_MAX_WORDS`]) and no further.
+pub fn decode_quux(phys: u32, memory_words: usize, tv_words: u32) -> Responder {
+    let page = (phys >> 8) & 0o37777;
+    if page == crate::machine::Geometry::FEATURE_PAGE {
+        Responder::Device
+    } else if phys.wrapping_sub(tv::BUFFER) < tv_words {
+        // The memory port reads no board number.
+        Responder::Memory(0)
+    } else if page < 0o36000 && (phys as usize) < memory_words {
+        Responder::Memory((phys >> 16) as u8)
+    } else {
+        Responder::NoXbus
+    }
+}
+
 pub fn decode_for(
     phys: u32,
     memory_words: usize,

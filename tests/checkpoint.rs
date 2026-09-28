@@ -150,8 +150,8 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// that loaded `IR`, or for a `DIV` of `MD` the end of the MD interlock ---
 /// which `a_checkpoint_keeps_the_divider_s_time` in `tests/muldiv.rs`
 /// holds, and version 32 QUUX's tick, which `a_checkpoint_keeps_the_tick`
-/// in `tests/tick.rs` holds, and version 33 MONO TV's size, which
-/// `another_size_is_followed_everywhere` in `tests/mono_tv.rs` holds, and
+/// in `tests/tick.rs` holds, and version 33 the video controller's size, which
+/// `another_size_is_followed_everywhere` in `tests/video.rs` holds, and
 /// version 34 `sync`'s ticks with the timing model, which
 /// `a_checkpoint_keeps_the_ticks` in `tests/sync_timing.rs` holds, and
 /// version 35 whether `rtl`'s write pulse has fired in a microcycle a
@@ -181,10 +181,14 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// revision 10, so that a version-45 checkpoint whose timer 0 a band turned
 /// on through destination 3 is refused rather than resumed with nothing to
 /// clear it, which `destination_3_writes_only_m_at_revision_10` in
-/// `tests/interval_timers.rs` holds.
+/// `tests/interval_timers.rs` holds, and version 47 QUUX's register page at
+/// `17777400` with block-disk and the video controller on it, word 100 in
+/// its final order and the display board named `video` (contract Q13,
+/// revision 11), so that a version-46 checkpoint of a revision-10 machine is
+/// refused rather than resumed on a page it does not know.
 #[test]
-fn the_format_is_version_46_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 46, "a new version needs its own tests");
+fn the_format_is_version_47_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 47, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -192,14 +196,14 @@ fn the_format_is_version_46_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 46u32.to_le_bytes());
+    assert_eq!(&good[at..at + 4], 47u32.to_le_bytes());
     for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 46"), "{err}");
+        assert!(err.contains("reads 47"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

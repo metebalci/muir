@@ -436,39 +436,46 @@ fn the_display_board_is_named_on_every_engine() {
     assert!(t.contains("TV model lispm-tv"), "chip with the model board:\n{t}");
 }
 
-/// **MONO TV is QUUX's, and QUUX's only**: it is QUUX's display, always,
-/// and the start says so; `--tv-board` is the CADR's choice between its
-/// two boards and not a flag of `quux`, and `mono-tv` is refused as a word
-/// of it on `cadr`.
+/// **The video controller is QUUX's, and QUUX's only**: it is QUUX's
+/// display, always, and the start says so; `--tv-board` is the CADR's
+/// choice between its two boards and not a flag of `quux`, and `video` is
+/// refused as a word of it on `cadr`. Its size is `--video-size`; the
+/// old `--mono-tv-size` is refused by both executables with a message
+/// naming the new flag (contract Q13).
 #[test]
-fn mono_tv_is_quux_s() {
-    refused_saying("cadr", &["--rtl", "--tv-board", "mono-tv"], "mono-tv is quux's");
+fn the_video_controller_is_quux_s() {
+    refused_saying("cadr", &["--rtl", "--tv-board", "video"], "video is quux's");
     for engine in ["--micro", "--rtl"] {
         let out = quux().args([engine, "--stop-after", "1"]).run();
         let t = text(&out);
         assert!(out.status.success(), "{engine}:\n{t}");
-        assert!(t.contains("tv: model mono-tv"), "{engine}: the start says the board:\n{t}");
+        assert!(t.contains("tv: model video"), "{engine}: the start says the board:\n{t}");
     }
-    for board in ["simple-tv", "lispm-tv", "mono-tv"] {
+    for board in ["simple-tv", "lispm-tv", "video"] {
         refused_saying("quux", &["--rtl", "--tv-board", board], "--tv-board is cadr's, not quux's");
     }
     // Its size is a flag of its own, and says so.
-    let out = quux().args(["--rtl", "--mono-tv-size", "1920x1080", "--stop-after", "1"]).run();
+    let out = quux().args(["--rtl", "--video-size", "1920x1080", "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
-    assert!(t.contains("tv: model mono-tv, 1920x1080"), "the start says the size:\n{t}");
+    assert!(t.contains("tv: model video, 1920x1080"), "the start says the size:\n{t}");
     refused_saying(
         "quux",
-        &["--mono-tv-size", "2560x1440"],
-        "--mono-tv-size: 2560 by 1440 is past 1920 by 1080",
+        &["--video-size", "2560x1440"],
+        "--video-size: 2560 by 1440 is past 1920 by 1080",
     );
-    refused_saying("quux", &["--mono-tv-size", "1921x1080"], "--mono-tv-size: a width of 1921");
-    refused_saying("quux", &["--mono-tv-size", "wide"], "--mono-tv-size wants");
-    refused_saying(
-        "cadr",
-        &["--mono-tv-size", "1920x1080"],
-        "--mono-tv-size is quux's, not cadr's",
-    );
+    refused_saying("quux", &["--video-size", "1921x1080"], "--video-size: a width of 1921");
+    refused_saying("quux", &["--video-size", "wide"], "--video-size wants");
+    refused_saying("cadr", &["--video-size", "1920x1080"], "--video-size is quux's, not cadr's");
+    for exe in ["quux", "cadr"] {
+        refused_saying(
+            exe,
+            &["--mono-tv-size", "1920x1080"],
+            &format!(
+                "--mono-tv-size is not a flag of {exe}: the video controller's size is --video-size"
+            ),
+        );
+    }
 }
 
 /// **QUUX drops the delay lines: its timing is `sync`, always.** A QUUX run
@@ -943,7 +950,7 @@ const CADR_ONLY: &[&str] = &[
     "--watch",
 ];
 const QUUX_ONLY: &[&str] =
-    &["--cache", "--file-root", "--memory-timing", "--mono-tv-size", "--rtc", "--sync-cycle-ticks"];
+    &["--cache", "--file-root", "--memory-timing", "--rtc", "--sync-cycle-ticks", "--video-size"];
 
 /// **A flag of the other executable is refused by name, saying whose it
 /// is**, before anything it takes is read: `--cache is quux's, not

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! QUUX's real-time clock (contract Q9, revision 9): word 103 of the
-//! register page, `17377103`, the time in whole seconds since 1970-01-01
+//! register page, `17777503`, the time in whole seconds since 1970-01-01
 //! UTC, unsigned 32 bits, read only. Live by default, the host's clock at
 //! each read; `--rtc <s>` ([`Rtc::Counted`]) starts it at second `s` and
 //! counts the machine's own time from there, holding at 2^32-1. The CADR
@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use muir::machine::{Geometry, Machine, Rtc, bus_error};
 
-const PAGE: u32 = 0o17377000;
+const PAGE: u32 = 0o17777400;
 const RTC: u32 = PAGE + 0o103;
 const SECOND: u64 = 1_000_000_000;
 
@@ -103,13 +103,13 @@ fn a_write_changes_nothing() {
 }
 
 /// **The CADR has no word 103**: nothing answers on the page there, and the
-/// read times out as any read of an empty I/O address does.
+/// read times out as any read of an empty Unibus address does.
 #[test]
 fn the_cadr_has_no_rtc() {
     let mut m = Machine::new();
     m.rtc = Rtc::Counted { start: 1_700_000_000, base_ns: 0 };
     assert_eq!(m.bus_read(RTC), 0);
-    assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "the read timed out");
+    assert_eq!(m.bus_error, bus_error::UNIBUS_NXM, "the read timed out");
 }
 
 /// **Feature word 15 says the RTC is there**, `<0>`, beside the file
@@ -179,7 +179,7 @@ fn both_engines_count_machine_seconds() {
         let mut words = vec![filler(); 1024];
         words[..prom.len()].copy_from_slice(&prom);
         m.load_prom(&words);
-        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
         m.mmem[1] = (1 << 8) | 0o103;
         m.rtc = Rtc::Counted { start: s, base_ns: 0 };
         m

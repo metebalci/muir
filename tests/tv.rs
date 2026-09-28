@@ -614,7 +614,7 @@ fn the_board_and_its_color_map_go_through_a_checkpoint() {
     assert_eq!(back.color_map()[5], [0o252, 0, 0]);
     assert_eq!(back.read_control(0, 0) & mode::SYNC_PROM_ENABLE, mode::SYNC_PROM_ENABLE);
 
-    // There are three boards, the CADR's two and QUUX's MONO TV, so a
+    // There are three boards, the CADR's two and QUUX's video controller, so a
     // fourth is a corrupt checkpoint and is refused rather than taken for
     // one of them.
     let mut wrong = body.clone();

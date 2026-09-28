@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! QUUX's keyboard and mouse (contract Q3), on the register page at
-//! `17377000`: word 120 the keyboard's status, 121 its data, 122 the mouse,
+//! `17777400`: word 120 the keyboard's status, 121 its data, 122 the mouse,
 //! 123 the mouse's status.
 //!
 //! The CADR's I/O board takes its keyboard's words off a serial line at the
@@ -16,7 +16,7 @@
 //! | Word | |
 //! |---|---|
 //! | 120 | `<0>` a key word is waiting, `<1>` the FIFO overflowed (a write clears it), `<8>` the keyboard's interrupt enable (written) |
-//! | 121 | a read takes the oldest key word; 0 when none is waiting |
+//! | 121 | a read takes the oldest key word, in `<23:0>`, `<31:24>` reading 0; 0 when none is waiting |
 //! | 122 | `<11:0>` the X count, `<27:16>` the Y count, `<14:12>` the buttons as the CADR's Y register has them; a read clears 123's `<0>` |
 //! | 123 | `<0>` the mouse moved or a button changed since 122 was read, `<8>` the mouse's interrupt enable (written) |
 //!
@@ -83,7 +83,9 @@ impl QuuxInput {
                     | (self.overflowed as u32) << 1
                     | if self.kbd_enable { ENABLE } else { 0 }
             }
-            KBD_DATA => self.fifo.pop_front().unwrap_or(0),
+            // The key word in `<23:0>`, as the CADR's keyboard gives it;
+            // `<31:24>` read 0 (contract Q13).
+            KBD_DATA => self.fifo.pop_front().unwrap_or(0) & 0xff_ffff,
             MOUSE => {
                 self.mouse_changed = false;
                 (self.y as u32) << 16 | (self.buttons as u32 & 7) << 12 | self.x as u32
@@ -108,11 +110,11 @@ impl QuuxInput {
         true
     }
 
-    /// The interrupt status's bits: `<3>` the keyboard, `<4>` the mouse,
-    /// each under its enable.
+    /// The interrupt status's bits: `<4>` the keyboard, `<5>` the mouse,
+    /// each under its enable (contract Q13).
     pub fn interrupts(&self) -> u32 {
-        ((self.kbd_enable && !self.fifo.is_empty()) as u32) << 3
-            | ((self.mouse_enable && self.mouse_changed) as u32) << 4
+        ((self.kbd_enable && !self.fifo.is_empty()) as u32) << 4
+            | ((self.mouse_enable && self.mouse_changed) as u32) << 5
     }
 
     /// Whether a key word is waiting to be read, word 120's `<0>`.

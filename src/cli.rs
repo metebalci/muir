@@ -1056,9 +1056,9 @@ const OWN_FLAGS: &[(&str, Whose)] = &[
     ("--cache", Whose::Quux),
     ("--file-root", Whose::Quux),
     ("--memory-timing", Whose::Quux),
-    ("--mono-tv-size", Whose::Quux),
     ("--rtc", Whose::Quux),
     ("--sync-cycle-ticks", Whose::Quux),
+    ("--video-size", Whose::Quux),
 ];
 
 /// `cadr`'s usage: its flags, in the order `--help` lists them.
@@ -1100,13 +1100,13 @@ const USAGE_QUUX: &str = "usage: quux [--micro|--rtl] [--cache <words>] [--chaos
             [--glass-tty [<endpoint>][,ro]] [--keyboard-boot <keys>]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
             [--keyboard-mapping-trace] [--main-memory-boards <n>]
-            [--memory-timing <r>,<w>] [--mono-tv-size <w>x<h>]
-            [--no-auto-boot] [--no-pace] [--pace] [--prom <file>]
-            [--resume <file>] [--rtc <unix-seconds>|host]
-            [--stop-after <microcycles>] [--stop-at <pc>]
-            [--stop-at-prom <pc>] [--sync-cycle-ticks <k>]
-            [--terminal [<endpoint>]] [--tv-capture <gif>]
-            [--tv-capture-no-time] [-h|--help] [-V|--version]";
+            [--memory-timing <r>,<w>] [--no-auto-boot] [--no-pace]
+            [--pace] [--prom <file>] [--resume <file>]
+            [--rtc <unix-seconds>|host] [--stop-after <microcycles>]
+            [--stop-at <pc>] [--stop-at-prom <pc>]
+            [--sync-cycle-ticks <k>] [--terminal [<endpoint>]]
+            [--tv-capture <gif>] [--tv-capture-no-time]
+            [--video-size <w>x<h>] [-h|--help] [-V|--version]";
 
 /// What `-h` and `--help` print after the usage: each flag the executable
 /// takes, in the order the usage lists them --- the entries of the other
@@ -1747,10 +1747,10 @@ const HELP: &[(Whose, &str)] = &[
     ),
     (
         Whose::Quux,
-        "  --mono-tv-size <w>x<h>       MONO TV's size, QUUX's display: 1280 by 1024
-                               unless this says otherwise, one bit a pixel, no
-                               interrupt. The width a multiple of 32, the
-                               buffer at most 130,560 words. The feature page
+        "  --video-size <w>x<h>         the video controller's size, QUUX's display:
+                               1280 by 1024 unless this says otherwise, one
+                               bit a pixel, no interrupt. The width a multiple
+                               of 32, at most 1920 by 1080. The feature page
                                gives it to the software. [default: 1280x1024]",
     ),
     (
@@ -1880,6 +1880,11 @@ fn not_this_executables(flag: &str, exe: &str) -> Option<String> {
         (Whose::Cadr, "quux") => Some(format!("{flag} is cadr's, not quux's")),
         _ if flag == "--machine" => Some(format!(
             "--machine is not a flag of {exe}: the executable is the machine, cadr or quux"
+        )),
+        // The video controller's size before contract Q13 named its board
+        // MONO TV.
+        _ if flag == "--mono-tv-size" => Some(format!(
+            "--mono-tv-size is not a flag of {exe}: the video controller's size is --video-size"
         )),
         _ => None,
     }
@@ -2519,7 +2524,7 @@ fn machine(
     prom: &[Insn],
     packs: &[Pack],
     memory_boards: usize,
-    (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
+    (tv_board, video_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
     (geometry, block_disk, rtc, file_roots): (
         crate::machine::Geometry,
@@ -2542,7 +2547,7 @@ fn machine(
         m.block_disk = Some(crate::block_disk::BlockDisk::new(crate::block_disk::BLOCK_NS));
     }
     m.load_prom(prom);
-    m.tv.set_mono_tv_size(mono_tv_size.0, mono_tv_size.1);
+    m.tv.set_video_size(video_size.0, video_size.1);
     m.tv.set_board(tv_board);
     if color_tv.fitted() {
         m.fit_color_tv();
@@ -4249,7 +4254,7 @@ fn refuse_timing_model((path, _): &(PathBuf, Checkpoint), saved: TimingModel, fl
 fn resume_engine<E: Engine>(
     name: &str,
     e: &mut E,
-    (tv_board, mono_tv_size): (TvBoard, (usize, usize)),
+    (tv_board, video_size): (TvBoard, (usize, usize)),
     color_tv: ColorTv,
     (geometry, rtc): (crate::machine::Geometry, crate::machine::Rtc),
     resume: &(PathBuf, Checkpoint),
@@ -4279,12 +4284,12 @@ fn resume_engine<E: Engine>(
         ));
     }
     let (w, h, _) = e.machine().tv.screen();
-    if tv_board == TvBoard::MonoTv && (w, h) != mono_tv_size {
+    if tv_board == TvBoard::Video && (w, h) != video_size {
         usage(&format!(
-            "--resume {}: a MONO TV of {w}x{h}, and --mono-tv-size is {}x{}",
+            "--resume {}: a video controller of {w}x{h}, and --video-size is {}x{}",
             path.display(),
-            mono_tv_size.0,
-            mono_tv_size.1
+            video_size.0,
+            video_size.1
         ));
     }
     refuse_color_tv(path, e.machine().color_tv.is_some(), color_tv.fitted());
@@ -5171,9 +5176,9 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
     let mut io = true;
     let mut tv = true;
     // `None` until `--tv-board` names one: the machine's own display, the
-    // SIMPLE TV on the CADR and MONO TV on QUUX.
+    // SIMPLE TV on the CADR and the video controller on QUUX.
     let mut tv_board: Option<TvBoard> = None;
-    let mut mono_tv_size: Option<(usize, usize)> = None;
+    let mut video_size: Option<(usize, usize)> = None;
     let mut timing_model = TimingModel::Cadr;
     let mut timing_given = false;
     let mut sync_cycle_ticks: Option<u8> = None;
@@ -5453,22 +5458,23 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                     None => usage("--sync-cycle-ticks wants a count of 10 ns ticks, 1 to 255"),
                 }
             }
-            // The CADR's two boards; MONO TV is QUUX's display, always.
+            // The CADR's two boards; the video controller is QUUX's
+            // display, always.
             (None, "--tv-board") => match args.next().as_deref() {
                 Some("simple-tv") => tv_board = Some(TvBoard::SimpleTv),
                 Some("lispm-tv") => tv_board = Some(TvBoard::LispmTv),
-                Some("mono-tv") => {
-                    usage("--tv-board wants simple-tv or lispm-tv: mono-tv is quux's display")
+                Some("video") => {
+                    usage("--tv-board wants simple-tv or lispm-tv: video is quux's display")
                 }
                 _ => usage("--tv-board wants simple-tv or lispm-tv"),
             },
-            (None, "--mono-tv-size") => {
+            (None, "--video-size") => {
                 let v = args.next().unwrap_or_default();
                 let size =
                     v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
                 match size {
-                    Some(size) => mono_tv_size = Some(size),
-                    None => usage("--mono-tv-size wants <width>x<height>, such as 1280x1024"),
+                    Some(size) => video_size = Some(size),
+                    None => usage("--video-size wants <width>x<height>, such as 1280x1024"),
                 }
             }
             (None, "--color-tv") => {
@@ -5712,12 +5718,12 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
         }
     }
     // The display is the machine's: the SIMPLE TV unless `--tv-board`
-    // names the LISPM TV on the CADR, and MONO TV on QUUX, always --- the
+    // names the LISPM TV on the CADR, and the video controller on QUUX, always --- the
     // flag being `cadr`'s alone, refused on `quux` with the others.
     let tv_board = tv_board.unwrap_or(if geometry == crate::machine::Geometry::CADR {
         TvBoard::SimpleTv
     } else {
-        TvBoard::MonoTv
+        TvBoard::Video
     });
     // The grid is muir-fpga's, and it is `rtl`'s references its fabric is
     // held to; `micro` and `chip` keep the board's time.
@@ -5778,15 +5784,17 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
             ColorTv::Model
         }
     };
-    // MONO TV's size is the board's, and checked against the color TV's strap.
-    if mono_tv_size.is_some() && tv_board != TvBoard::MonoTv {
-        usage(&format!("--mono-tv-size is MONO TV's, and this run's board is {}", tv_board.name()));
+    // The video controller's size is the board's, and checked against the
+    // color TV's strap.
+    if video_size.is_some() && tv_board != TvBoard::Video {
+        usage(&format!(
+            "--video-size is the video controller's, and this run's board is {}",
+            tv_board.name()
+        ));
     }
-    let mono_tv_size =
-        mono_tv_size.unwrap_or((crate::tv::MONO_TV_WIDTH, crate::tv::MONO_TV_HEIGHT));
-    if let Err(e) = crate::tv::check_mono_tv_size(mono_tv_size.0, mono_tv_size.1, color_tv.fitted())
-    {
-        usage(&format!("--mono-tv-size: {e}"));
+    let video_size = video_size.unwrap_or((crate::tv::VIDEO_WIDTH, crate::tv::VIDEO_HEIGHT));
+    if let Err(e) = crate::tv::check_video_size(video_size.0, video_size.1, color_tv.fitted()) {
+        usage(&format!("--video-size: {e}"));
     }
     // The lashups asked for in as many words; the connector nobody placed
     // is not one, being there on every rtl and chip run.
@@ -6269,9 +6277,9 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
             // The board `--tv-board` chose, which the other engines run as
             // the model of; `chip` says it in the line above, beside
             // whether the board itself or its model is on the backplane.
-            if tv_board == TvBoard::MonoTv {
-                let (w, h) = mono_tv_size;
-                writeln!(s, "tv: model mono-tv, {w}x{h}").unwrap();
+            if tv_board == TvBoard::Video {
+                let (w, h) = video_size;
+                writeln!(s, "tv: model video, {w}x{h}").unwrap();
             } else {
                 writeln!(s, "tv: model {}", tv_board.name()).unwrap();
             }
@@ -6303,7 +6311,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
         if geometry == crate::machine::Geometry::QUUX {
             writeln!(
                 s,
-                "machine: quux, revision 10: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, a microsecond clock in the processor, the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, its devices reached by their registers, a real-time clock, a file device, three interval timers and reset devices"
+                "machine: quux, revision 11: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, a microsecond clock in the processor, the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, its devices reached by their registers, a real-time clock, a file device, three interval timers and reset devices, the register page at 17777400 with block-disk and the video controller on it"
             )
             .unwrap();
         }
@@ -6591,7 +6599,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                 &prom,
                 packs,
                 boards,
-                (tv_board, mono_tv_size),
+                (tv_board, video_size),
                 color_tv,
                 (geometry, block_disk, rtc, &file_roots),
             );
@@ -6609,7 +6617,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                 resume_engine(
                     "micro",
                     &mut e,
-                    (tv_board, mono_tv_size),
+                    (tv_board, video_size),
                     color_tv,
                     (geometry, rtc),
                     p,
@@ -6640,7 +6648,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                 &prom,
                 packs,
                 boards,
-                (tv_board, mono_tv_size),
+                (tv_board, video_size),
                 color_tv,
                 (geometry, block_disk, rtc, &file_roots),
             );
@@ -6669,7 +6677,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                         Some(crate::block_disk::BlockDisk::new(crate::block_disk::BLOCK_NS));
                 }
                 mb.load_prom(&prom);
-                mb.tv.set_mono_tv_size(mono_tv_size.0, mono_tv_size.1);
+                mb.tv.set_video_size(video_size.0, video_size.1);
                 mb.tv.set_board(tv_board);
                 if let Some(p) = debuggee_pack.as_ref() {
                     attach(&mut mb, std::slice::from_ref(p));
@@ -6717,7 +6725,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                     resume_engine(
                         "rtl",
                         &mut e,
-                        (tv_board, mono_tv_size),
+                        (tv_board, video_size),
                         color_tv,
                         (geometry, rtc),
                         p,
@@ -6765,7 +6773,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                     resume_engine(
                         "rtl",
                         &mut e,
-                        (tv_board, mono_tv_size),
+                        (tv_board, video_size),
                         color_tv,
                         (geometry, rtc),
                         p,
@@ -6802,7 +6810,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                     TvBoard::SimpleTv => nets.simpletv,
                     TvBoard::LispmTv => nets.lispmtv,
                     // Refused with `chip` above: QUUX has no netlist.
-                    TvBoard::MonoTv => unreachable!("MONO TV on chip"),
+                    TvBoard::Video => unreachable!("the video controller on chip"),
                 })
                 .unwrap()
             });

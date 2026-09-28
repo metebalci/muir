@@ -5,12 +5,12 @@
 //! register page. A write with `<0>` set resets every device, at the
 //! instant the write is taken --- the interval timers to their reset state,
 //! the file device, block-disk and the network as the CADR's
-//! `PROG.UNIBUS.RESET` resets them, MONO TV with nothing to show for it,
+//! `PROG.UNIBUS.RESET` resets them, the video controller with nothing to show for it,
 //! and the keyboard and mouse not at all; a write with `<0>` clear does
 //! nothing; the word reads 0. On QUUX `INTERRUPT-CONTROL<28>`,
 //! `PROG.UNIBUS.RESET`, drives nothing.
 
-use muir::block_disk::{self, BLOCK_NS, BlockDisk};
+use muir::block_disk::{BLOCK_NS, BlockDisk};
 use muir::disk_unit::Geometry as Pack;
 use muir::engine::Engine;
 use muir::isa::Insn;
@@ -25,7 +25,7 @@ use muir::tv::Board;
 
 mod support;
 
-const PAGE: u32 = 0o17377000;
+const PAGE: u32 = 0o17777400;
 const INTERRUPTS: u32 = PAGE + 0o100;
 const RESET_DEVICES: u32 = PAGE + 0o104;
 const CHAOS_CSR: u32 = PAGE + 0o140;
@@ -35,6 +35,11 @@ const MOUSE_STATUS: u32 = PAGE + 0o123;
 const FDEV_CONTROL: u32 = PAGE + 0o160;
 const FDEV_STATUS: u32 = PAGE + 0o161;
 const FDEV_CMD_PROD: u32 = PAGE + 0o164;
+/// Block-disk's command, command list pointer and START, words 200, 201
+/// and 203 (contract Q13).
+const DISK_COMMAND: u32 = PAGE + 0o200;
+const DISK_CLP: u32 = PAGE + 0o201;
+const DISK_START: u32 = PAGE + 0o203;
 
 const fn control(k: usize) -> u32 {
     PAGE + 0o110 + 2 * k as u32
@@ -57,7 +62,7 @@ fn state(m: &Machine) -> Vec<u8> {
 /// their interrupt enables, timer 1 up; block-disk in the middle of a
 /// transfer under its interrupt enable; the Chaosnet interface's
 /// interrupt enables and loop back set; the file device enabled with a
-/// command queued whose due time is a millisecond on; MONO TV; and the
+/// command queued whose due time is a millisecond on; the video controller; and the
 /// keyboard's FIFO holding two key words and the mouse moved, both under
 /// their interrupt enables.
 fn busy() -> Machine {
@@ -68,7 +73,7 @@ fn busy() -> Machine {
 }
 
 fn make_busy(m: &mut Machine) {
-    m.tv.set_board(Board::MonoTv);
+    m.tv.set_board(Board::Video);
     let mut d = BlockDisk::new(BLOCK_NS);
     d.attach(muir::disk_image::Disk::blank(Pack::T300.blocks()));
     m.block_disk = Some(d);
@@ -80,9 +85,9 @@ fn make_busy(m: &mut Machine) {
     // Block-disk: four blocks from word 100's list, 400 us, the done
     // interrupt on.
     m.main[0o100..0o104].copy_from_slice(&[0o10 << 8 | 1, 0o11 << 8 | 1, 0o12 << 8 | 1, 0o13 << 8]);
-    m.bus_write(block_disk::REGS + block_disk::CLP, 0o100);
-    m.bus_write(block_disk::REGS + block_disk::COMMAND, 1 << 11);
-    m.bus_write(block_disk::REGS + block_disk::START, 0);
+    m.bus_write(DISK_CLP, 0o100);
+    m.bus_write(DISK_COMMAND, 1 << 11);
+    m.bus_write(DISK_START, 0);
     // The Chaosnet interface: receive and transmit interrupt enables, loop
     // back.
     m.bus_write(CHAOS_CSR, 0o62);
@@ -116,9 +121,9 @@ fn make_busy(m: &mut Machine) {
     // yet done.
     let up = m.bus_read(INTERRUPTS);
     assert_eq!(up & 0o3, 0o2, "timer 1 up, word 100 {up:o}");
-    assert_eq!(up & 0o4, 0, "block-disk in flight");
+    assert_eq!(up & 0o10, 0, "block-disk in flight");
     assert_ne!(m.bus_read(FDEV_STATUS) & 1, 0, "the file device enabled");
-    assert_eq!(up & 0o30, 0o30, "the keyboard and the mouse");
+    assert_eq!(up & 0o60, 0o60, "the keyboard and the mouse");
 }
 
 /// **M5, word 104 reads 0**, before a write and after one of 0 and of 1.
@@ -149,7 +154,7 @@ fn m5_a_write_with_bit_0_clear_changes_nothing() {
 /// **M5, reset devices against revision 9's `<28>`**: from the same busy
 /// machine, a write of word 104 with 1 leaves every device as revision 9's
 /// `PROG.UNIBUS.RESET` left it, `Machine::bus_reset` --- block-disk, the
-/// network, MONO TV and the file device, the whole machine's state compared
+/// network, the video controller and the file device, the whole machine's state compared
 /// --- and every timer in its reset state besides, which `<28>` never
 /// reached. The keyboard's FIFO, the mouse's counts and both their
 /// interrupt enables are kept: `bus_reset` never reached them either, and
@@ -175,13 +180,13 @@ fn m5_reset_devices_does_what_revision_9_s_28_did_and_resets_the_timers() {
     assert!(state(&with_timers) == state(&m), "every device as <28> left it");
     // Something was reset: the file device, block-disk, the network.
     assert_eq!(m.bus_read(FDEV_STATUS) & 1, 0, "the file device disabled");
-    assert_eq!(m.bus_read(block_disk::REGS + block_disk::COMMAND) & (1 << 11), 0);
+    assert_eq!(m.bus_read(DISK_COMMAND) & (1 << 11), 0);
     assert_eq!(m.bus_read(CHAOS_CSR) & 0o62, 0, "the network's enables");
     // Kept.
     let mut w = muir::checkpoint::Writer::new();
     m.quux_input.save(&mut w);
     assert!(w.finish() == input_before, "the keyboard and the mouse kept");
-    assert_eq!(m.bus_read(INTERRUPTS), 0o30, "the keyboard's and the mouse's alone");
+    assert_eq!(m.bus_read(INTERRUPTS), 0o60, "the keyboard's and the mouse's alone");
     assert_eq!(m.bus_read(KBD_DATA), 0o1234, "the FIFO kept");
 }
 
@@ -244,7 +249,7 @@ fn engine_machine(prom: &[Insn], m_words: &[(usize, u32)]) -> Machine {
     m.load_prom(&words);
     support::prom_program_in_ram(&mut m);
     m.l2_map[0] = (1 << 23) | (1 << 22);
-    m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+    m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
     for &(k, v) in m_words {
         m.mmem[k] = v;
     }
@@ -347,7 +352,7 @@ fn m5_prog_unibus_reset_drives_nothing_on_quux() {
         [
             m.bus_read(FDEV_CONTROL),
             m.bus_read(FDEV_STATUS) & 0xff_00ff,
-            m.bus_read(block_disk::REGS + block_disk::COMMAND),
+            m.bus_read(DISK_COMMAND),
             m.bus_read(CHAOS_CSR) & 0o62,
             m.bus_read(control(0)) & !2,
             m.bus_read(control(1)) & !2,

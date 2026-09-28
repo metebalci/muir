@@ -103,7 +103,7 @@ impl Recorder {
     /// A recorder for the main screen, with the machine's clock and the
     /// wall clock on a line below it if `show_time`. The canvas is the
     /// CADR's screen until the first sample, which sizes it to the screen
-    /// sampled: MONO TV's is its own.
+    /// sampled: the video controller's is its own.
     pub fn new(show_time: bool) -> Recorder {
         Recorder::of(WIDTH, show_time)
     }

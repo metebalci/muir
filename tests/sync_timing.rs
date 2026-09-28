@@ -143,7 +143,7 @@ fn a_div_is_held_in_sync_cycles() {
 /// timing `rtl` carries a pending write to `SPEEDCLK`, 60 ns into the cycle,
 /// for the speed synchronizer; a `sync` microcycle is shorter than that and
 /// has no synchronizer, so a write lands at the edge. Here the program
-/// writes MONO TV's first buffer word over and over, and each time it
+/// writes the video controller's first buffer word over and over, and each time it
 /// changes the machine's clock has reached the answer.
 #[test]
 fn a_write_lands_no_earlier_than_its_answer() {
@@ -160,7 +160,7 @@ fn a_write_lands_no_earlier_than_its_answer() {
     m.load_prom(&words);
     m.geometry = Geometry::QUUX;
     support::prom_program_in_ram(&mut m);
-    m.tv.set_board(muir::tv::Board::MonoTv);
+    m.tv.set_board(muir::tv::Board::Video);
     m.l2_map[1] = (1 << 23) | (1 << 22) | (0o17000000 >> 8);
     m.mmem[1] = 0o400;
     let mut e = Rtl::new(m);

@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! QUUX's device registers (contract Q7, revision 8). There is no device
-//! bus: the processor's register decode reaches the device registers ---
-//! MONO TV's, block-disk's and the feature and register page --- at their
-//! addresses, never cached, a register access taking one microcycle more
-//! than a failed one. An address nothing answers fails at once, reads 0 and
+//! QUUX's device registers (contract Q7, revision 8; contract Q13,
+//! revision 11). There is no device bus: the processor's register decode
+//! reaches the device registers --- the register page at `17777400`, with
+//! the feature page, the video controller's and block-disk's words on it
+//! --- at their addresses, never cached, a register access taking one
+//! microcycle more than a failed one. An address nothing answers fails at once, reads 0 and
 //! sets word 101's NXM bit: no timeout. The frame buffer is on the memory
 //! bus with main memory, through the cache.
 
@@ -40,7 +41,7 @@ fn reading(reads: &[u32]) -> Machine {
 fn machine(prom: &[Insn], addresses: &[u32]) -> Machine {
     let mut m = Machine::new();
     m.geometry = Geometry::QUUX;
-    m.tv.set_board(muir::tv::Board::MonoTv);
+    m.tv.set_board(muir::tv::Board::Video);
     let mut words = vec![filler(); 1024];
     words[..prom.len()].copy_from_slice(prom);
     words[STOP as usize] = Insn::new(JUMP | target(STOP as u64) | ALWAYS | N);
@@ -75,14 +76,19 @@ fn rtl(m: Machine) -> (Machine, u64) {
 }
 
 /// The feature page's word 0, the MACHINE-ID: a register that answers.
-const REGISTER: u32 = 0o17377000;
-/// Inside the register page's page, reserved: a register that answers 0.
-const RESERVED: u32 = 0o17377377;
+const REGISTER: u32 = 0o17777400;
+/// The register page's last word, reserved: a register that answers 0.
+const RESERVED: u32 = 0o17777777;
 
-/// Addresses nothing answers: past main memory's end, between the frame
-/// buffer and the register page, after the register page, between MONO
-/// TV's registers and block-disk's, and the old Unibus window.
-const EMPTY: [u32; 5] = [0o10000000, 0o17200000, 0o17377400, 0o17377770, 0o17400000];
+/// Addresses nothing answers (contract Q13): past main memory's end, past
+/// the frame buffer, the old register page at `17377000` and the page
+/// after it, the display's old mode register at `17377760`, between it and
+/// the disk's old registers, those at `17377774`, and the old Unibus
+/// window's first word and its last below the register page.
+const EMPTY: [u32; 9] = [
+    0o10000000, 0o17200000, 0o17377000, 0o17377400, 0o17377760, 0o17377770, 0o17377774, 0o17400000,
+    0o17777377,
+];
 
 /// **A register access takes a microcycle more than a failed one, and a
 /// failed one is at once**: the same program, reading the MACHINE-ID or an
@@ -177,7 +183,7 @@ fn the_frame_buffer_is_cached() {
 /// **A memory start in the microcycle right after another start waits for
 /// it** (QUUX's own interlock). A write of the MACHINE-ID, which goes
 /// nowhere, then a read of main memory in the next microcycle; the same
-/// after a write of MONO TV's mode register; a write of main memory, then
+/// after a write of the video controller's mode; a write of main memory, then
 /// a read of the mode register in the next. Each first cycle lands, with
 /// its own address, direction and word, and each second reads its own
 /// word, on both engines. On the CADR the board has no interlock there and
@@ -186,7 +192,7 @@ fn the_frame_buffer_is_cached() {
 /// `tests/chip.rs`).
 #[test]
 fn a_start_right_after_a_start_waits_for_it() {
-    const MODE: u32 = 0o17377760;
+    const MODE: u32 = 0o17777610;
     const WORD: u32 = 0o1000;
     let read = |m: u64, a: u64| {
         [
@@ -237,7 +243,7 @@ fn a_start_right_after_a_start_waits_for_it() {
 /// has no wait for `MD` to time.
 #[test]
 fn a_register_write_right_after_a_register_read_holds_md_no_longer() {
-    const WORD_105: u32 = 0o17377105;
+    const WORD_105: u32 = 0o17777505;
     const MEMORY: u32 = 0o1000;
     let prom = [
         Insn::new(ALU | SETM | m_src(1) | START_READ),

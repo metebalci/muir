@@ -982,20 +982,23 @@ and a checkpoint carries it.
 The two program alike but for mode bit 7, which reads the sync enable back
 on the LISPM TV and zero on the SIMPLE TV, where an ECO grounds it.
 
-QUUX's display is [MONO TV](quux.md), always, and `quux` has no such flag.
+QUUX's display is [the video controller](quux.md#the-video-controller),
+always, and `quux` has no such flag; `video` is refused as a word of it.
 
 Default: `simple-tv`.
 
-### `--mono-tv-size <width>x<height>`
+### `--video-size <width>x<height>`
 
 `quux` only.
 
-The size of MONO TV, QUUX's display: 1280 by 1024 unless this says
-otherwise, one bit a pixel, with no sync program and no interrupt. The
+The size of the video controller, QUUX's display: 1280 by 1024 unless this
+says otherwise, one bit a pixel, with no sync program and no interrupt. The
 width a multiple of 32, and at most 1920 by 1080, the largest QUUX
 supports.
 The start says it, the feature page gives it to the software, and a
 checkpoint carries it; a resume at another size is refused.
+`--mono-tv-size` is refused by both executables, the refusal naming
+`--video-size`.
 
 Default: `1280x1024`, the HDMI mode muir-fpga's QUUX boards drive.
 

@@ -107,43 +107,45 @@ pub const HEIGHT: usize = 963;
 /// --- 24 words of 32 bits is the 768 pixels of a line, one bit each.
 pub const WORDS_PER_LINE: usize = 24;
 
-/// MONO TV, QUUX's display: 1280 by 1024 unless `--mono-tv-size` says
-/// otherwise ([`check_mono_tv_size`]), one bit a pixel. Not the CADR's:
-/// a board of QUUX's own (`--tv-board mono-tv`), a frame buffer and a mode
-/// register with black-on-white in it, and nothing else --- no sync
-/// program, no color map and no interrupt, the machine's clock being the
-/// tick, timer 0 of the interval timers (`machine::Timers`).
-pub const MONO_TV_WIDTH: usize = 1280;
-/// Lines of MONO TV, at its default size.
-pub const MONO_TV_HEIGHT: usize = 1024;
+/// The video controller, QUUX's display, "video" for short: 1280 by 1024
+/// unless `--video-size` says otherwise ([`check_video_size`]), one bit a
+/// pixel. Not the CADR's: QUUX's own, its frame buffer its memory, and its
+/// mode, word 210 of the register page, with black-on-white in it
+/// (contract Q13); nothing else --- no sync program, no color map and no
+/// interrupt, the machine's clock being the tick, timer 0 of the interval
+/// timers (`machine::Timers`).
+pub const VIDEO_WIDTH: usize = 1280;
+/// Lines of the video controller's screen, at its default size.
+pub const VIDEO_HEIGHT: usize = 1024;
 /// 1280 pixels of one bit each are 40 words of 32, a whole number, which
 /// `BITBLT` needs of an array's first dimension (`sys/ucadr/uc-tv.lisp`,
 /// `BITBLT-DECODE-ARRAY`).
-pub const MONO_TV_WORDS_PER_LINE: usize = 40;
-/// MONO TV's buffer at its default size, 40,960 words from [`BUFFER`]: it
+pub const VIDEO_WORDS_PER_LINE: usize = 40;
+/// The video controller's buffer at its default size, 40,960 words from [`BUFFER`]: it
 /// ends at `17117777`, below the color TV's strap at `17200000`. The size
 /// is the HDMI mode muir-fpga's two QUUX boards drive.
-pub const MONO_TV_WORDS: u32 = (MONO_TV_HEIGHT * MONO_TV_WORDS_PER_LINE) as u32;
+pub const VIDEO_WORDS: u32 = (VIDEO_HEIGHT * VIDEO_WORDS_PER_LINE) as u32;
 
-/// The most a MONO TV buffer can be: Xbus I/O space from [`BUFFER`] up to
-/// QUUX's feature page at `17377000`, 130,560 words.
-pub const MONO_TV_MAX_WORDS: u32 = 0o17377000 - BUFFER;
+/// The most the video controller's buffer can be: from [`BUFFER`] up to
+/// QUUX's register page at `17777400`, 261,888 words (contract Q13). The
+/// address map fixes it, and nothing states it to software.
+pub const VIDEO_MAX_WORDS: u32 = 0o17777400 - BUFFER;
 
-/// The largest MONO TV: QUUX supports up to 1920 by 1080 (a
-/// revisable limit). Its 64,800 words also stay below the color TV's strap.
-pub const MONO_TV_MAX_SIZE: (usize, usize) = (1920, 1080);
+/// The largest video controller screen: QUUX supports up to 1920 by 1080
+/// (a revisable limit). Its 64,800 words also stay below the color TV's strap.
+pub const VIDEO_MAX_SIZE: (usize, usize) = (1920, 1080);
 
-/// Whether MONO TV can be `width` by `height`: a line a whole number of
+/// Whether the video controller can be `width` by `height`: a line a whole number of
 /// words, which `BITBLT` needs of a screen array's first dimension
 /// (`BITBLT-DECODE-ARRAY` in `sys/ucadr/uc-tv.lisp`); at most
-/// [`MONO_TV_MAX_SIZE`]; both at most 16 bits, as the feature page gives
-/// them; the buffer inside [`MONO_TV_MAX_WORDS`]; and, with the color TV
+/// [`VIDEO_MAX_SIZE`]; both at most 16 bits, as the feature page gives
+/// them; the buffer inside [`VIDEO_MAX_WORDS`]; and, with the color TV
 /// fitted, below its strap at `17200000`.
-pub fn check_mono_tv_size(width: usize, height: usize, color_tv: bool) -> Result<(), String> {
+pub fn check_video_size(width: usize, height: usize, color_tv: bool) -> Result<(), String> {
     if width == 0 || height == 0 || !width.is_multiple_of(32) {
         return Err(format!("a width of {width} is not a whole number of 32-bit words"));
     }
-    let (max_w, max_h) = MONO_TV_MAX_SIZE;
+    let (max_w, max_h) = VIDEO_MAX_SIZE;
     if width > max_w || height > max_h {
         return Err(format!("{width} by {height} is past {max_w} by {max_h}"));
     }
@@ -151,16 +153,21 @@ pub fn check_mono_tv_size(width: usize, height: usize, color_tv: bool) -> Result
         return Err(format!("{width} by {height} does not fit the feature page's 16-bit fields"));
     }
     let words = (width / 32 * height) as u64;
-    if words > MONO_TV_MAX_WORDS as u64 {
-        return Err(format!(
-            "{width} by {height} is {words} words, past the {MONO_TV_MAX_WORDS} below the feature page"
-        ));
-    }
+    check_video_words(words).map_err(|e| format!("{width} by {height} is {e}"))?;
     let color_words = (COLOR_TV.buffer - BUFFER) as u64;
     if color_tv && words > color_words {
         return Err(format!(
             "{width} by {height} is {words} words, over the color TV's buffer at 17200000"
         ));
+    }
+    Ok(())
+}
+
+/// The words bound of [`check_video_size`]: a buffer of `words` fits below
+/// the register page, at most [`VIDEO_MAX_WORDS`] (contract Q13).
+pub fn check_video_words(words: u64) -> Result<(), String> {
+    if words > VIDEO_MAX_WORDS as u64 {
+        return Err(format!("{words} words, past the {VIDEO_MAX_WORDS} below the register page"));
     }
     Ok(())
 }
@@ -264,10 +271,10 @@ pub enum Board {
     /// The four- and eight-bit board that replaced it in December 1980,
     /// `data/LISPMTV.netlist`.
     LispmTv,
-    /// QUUX's display, [`MONO_TV_WIDTH`] by [`MONO_TV_HEIGHT`] unless
-    /// [`Tv::set_mono_tv_size`] says otherwise: not the CADR's, and not on
-    /// its backplane.
-    MonoTv,
+    /// The video controller, QUUX's display, [`VIDEO_WIDTH`] by
+    /// [`VIDEO_HEIGHT`] unless [`Tv::set_video_size`] says otherwise: not
+    /// the CADR's, and not on its backplane.
+    Video,
 }
 
 impl Board {
@@ -277,7 +284,7 @@ impl Board {
         match self {
             Board::SimpleTv => "simple-tv",
             Board::LispmTv => "lispm-tv",
-            Board::MonoTv => "mono-tv",
+            Board::Video => "video",
         }
     }
 }
@@ -464,8 +471,8 @@ impl SyncRam {
 pub struct Tv {
     /// Which of the two boards this is: what mode bit 7 reads.
     board: Board,
-    /// MONO TV's width and height, when that is the board.
-    mono_tv_size: (usize, usize),
+    /// The video controller's width and height, when that is the board.
+    video_size: (usize, usize),
     /// Where on the Xbus it is strapped, and so which screen it is: the
     /// normal TV or the color TV.  The backplane's, not the software's:
     /// it does not change under a running machine.
@@ -512,7 +519,7 @@ impl Default for Tv {
         let timeline = Timeline::of(sync.program(), 0);
         Tv {
             board: Board::default(),
-            mono_tv_size: (MONO_TV_WIDTH, MONO_TV_HEIGHT),
+            video_size: (VIDEO_WIDTH, VIDEO_HEIGHT),
             strap: NORMAL_TV,
             buffer: vec![0; BUFFER_WORDS as usize],
             mode: 0,
@@ -563,7 +570,7 @@ impl Tv {
     pub fn set_board(&mut self, board: Board) {
         self.board = board;
         self.buffer = vec![0; self.buffer_words() as usize];
-        if board == Board::MonoTv {
+        if board == Board::Video {
             // No sync program: nothing presets a vertical flag.
             self.timeline = None;
             self.next_clr = u64::MAX;
@@ -574,23 +581,23 @@ impl Tv {
         }
     }
 
-    /// MONO TV's size, `--mono-tv-size`: [`check_mono_tv_size`] is the
+    /// The video controller's size, `--video-size`: [`check_video_size`] is the
     /// caller's. The buffer is made again, so this is for building a
     /// machine and not for a running one.
-    pub fn set_mono_tv_size(&mut self, width: usize, height: usize) {
-        self.mono_tv_size = (width, height);
-        if self.board == Board::MonoTv {
+    pub fn set_video_size(&mut self, width: usize, height: usize) {
+        self.video_size = (width, height);
+        if self.board == Board::Video {
             self.buffer = vec![0; self.buffer_words() as usize];
         }
     }
 
     /// The main screen it shows: width, height and words a line. The
     /// CADR's two boards show what System 100 hardwires, [`WIDTH`] by
-    /// [`HEIGHT`]; MONO TV its size.
+    /// [`HEIGHT`]; the video controller its size.
     pub fn screen(&self) -> (usize, usize, usize) {
         match self.board {
-            Board::MonoTv => {
-                let (w, h) = self.mono_tv_size;
+            Board::Video => {
+                let (w, h) = self.video_size;
                 (w, h, w / 32)
             }
             _ => (WIDTH, HEIGHT, WORDS_PER_LINE),
@@ -598,21 +605,20 @@ impl Tv {
     }
 
     /// Which of the eight control registers answer, a bit each: all of them
-    /// on the CADR's boards; on MONO TV the mode register, 0, and the color
-    /// map's write, 4, kept for a color display to come and taking no
-    /// writes yet. The CADR's sync program, 1 to 3, and the three that did
-    /// nothing, 5 to 7, are not there, and an access times out.
+    /// on the CADR's boards; none on the video controller, whose mode is
+    /// word 210 of QUUX's register page (contract Q13), reached as register
+    /// 0 by [`Tv::read_control`] and [`Tv::write_control`].
     pub fn control_registers(&self) -> u8 {
         match self.board {
-            Board::MonoTv => 0b0001_0001,
+            Board::Video => 0,
             _ => 0xff,
         }
     }
 
-    /// Words of its frame buffer: the CADR boards' 32K, or MONO TV's screen.
+    /// Words of its frame buffer: the CADR boards' 32K, or the video controller's screen.
     pub fn buffer_words(&self) -> u32 {
         match self.board {
-            Board::MonoTv => {
+            Board::Video => {
                 let (_, h, wpl) = self.screen();
                 (h * wpl) as u32
             }
@@ -841,7 +847,7 @@ impl Tv {
     /// set, if a frame has started since --- `-TVMA CLR` presets it once
     /// every [`FRAME_NS`], the frames counted from power-on.
     pub fn vert_flag(&self, ns: u64) -> bool {
-        self.board != Board::MonoTv && (self.flag_written || ns >= self.next_clr)
+        self.board != Board::Video && (self.flag_written || ns >= self.next_clr)
     }
 
     /// `SEND INTR`: the vertical flag with [`mode::INTERRUPT_ENABLE`] up,
@@ -855,9 +861,8 @@ impl Tv {
     /// has to read back; `INTRX0` reads it to find the vertical flag; and
     /// `SETUP-CPT` reads the sync program back through register 1.
     pub fn read_control(&self, register: u32, ns: u64) -> u32 {
-        if self.board == Board::MonoTv {
-            // Black-on-white and nothing else; register 4 reads 0, and the
-            // others do not answer ([`Tv::control_registers`]).
+        if self.board == Board::Video {
+            // The mode, word 210: black-on-white and nothing else.
             return if register == 0 { self.mode & mode::BOW } else { 0 };
         }
         match register {
@@ -892,7 +897,7 @@ impl Tv {
     /// RAM's selection, or a word of the RAM while it is selected --- runs
     /// it afresh ([`Tv::restart`]).
     pub fn write_control(&mut self, register: u32, v: u32, ns: u64) {
-        if self.board == Board::MonoTv {
+        if self.board == Board::Video {
             // Only black-on-white is kept; the rest has nowhere to go.
             if register == 0 {
                 self.mode = v & mode::BOW;
@@ -1059,7 +1064,7 @@ impl Tv {
         // against the checkpoint by name, as `--tv-board` is.
         let Tv {
             board,
-            mono_tv_size,
+            video_size,
             strap: _,
             buffer,
             mode,
@@ -1076,10 +1081,10 @@ impl Tv {
         w.u8(match board {
             Board::SimpleTv => 0,
             Board::LispmTv => 1,
-            Board::MonoTv => 2,
+            Board::Video => 2,
         });
-        w.u16(mono_tv_size.0 as u16);
-        w.u16(mono_tv_size.1 as u16);
+        w.u16(video_size.0 as u16);
+        w.u16(video_size.1 as u16);
         w.u32s(buffer);
         w.u32(*mode);
         sync.save(w);
@@ -1103,12 +1108,12 @@ impl Tv {
         let board = match r.u8()? {
             0 => Board::SimpleTv,
             1 => Board::LispmTv,
-            2 => Board::MonoTv,
+            2 => Board::Video,
             other => return Err(crate::checkpoint::bad(format!("display board {other}"))),
         };
         let size = (r.u16()? as usize, r.u16()? as usize);
-        if board != self.board || size != self.mono_tv_size {
-            self.mono_tv_size = size;
+        if board != self.board || size != self.video_size {
+            self.video_size = size;
             self.set_board(board);
         }
         r.u32s_into(&mut self.buffer)?;

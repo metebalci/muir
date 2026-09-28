@@ -4,10 +4,13 @@
 //! QUUX's block-disk: a disk of numbered blocks behind the CADR disk
 //! controller's own programming interface, `--disk-controller block-disk`.
 //!
+//! Its four registers are words 200-203 of the register page, `17777600`
+//! to `17777603` (contract Q13).
+//!
 //! What stays the CADR's (`sys/doc/disk.text`, and `crate::disk_controller`,
-//! which models MIT's board): the four registers at Xbus `17377774` to
-//! `17377777` --- status and command, the command list pointer, the disk
-//! address, and START --- and the command list itself, one command word a
+//! which models MIT's board): the four registers --- status and command,
+//! the command list pointer, the disk address, and START, in the order the
+//! CADR has them at Xbus `17377774` --- and the command list itself, one command word a
 //! 256-word block, `<23:8>` the page's physical address and `<0>` More; the
 //! done interrupt enable, command `<11>`; and the disk address left at the
 //! last block moved, or at the one that failed.
@@ -27,8 +30,9 @@
 use crate::disk_image::Disk;
 use crate::disk_unit::BLOCK_WORDS;
 
-/// The registers' first physical address, the CADR controller's.
-pub const REGS: u32 = crate::disk_controller::REGS;
+/// The registers' first physical address: word 200 of the register page
+/// (contract Q13).
+pub const REGS: u32 = 0o17777600;
 /// The four registers, by number. Status reads and command writes are the
 /// first; START is written, and reads 0.
 pub const STATUS: u32 = 0;

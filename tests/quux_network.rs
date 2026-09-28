@@ -3,9 +3,11 @@
 
 //! QUUX's network device (contract Q4): the CADR's Chaosnet interface,
 //! its registers in the same order and with the same bits, at words
-//! 140-147 of the register page (`17377000`), where the CADR has them at
-//! Unibus `764140`-`764156`: word 140 + k is Unibus `764140` + 2k. Its
-//! interrupt is word 100's `<5>`.
+//! 140-145 of the register page (`17777400`), where the CADR has them at
+//! Unibus `764140`-`764152`: word 140 + k is Unibus `764140` + 2k. Only
+//! its five real registers are decoded (contract Q13): 144, 146 and 147
+//! are reserved, where the CADR's board answers aliases. Its interrupt is
+//! word 100's `<6>` (contract Q13).
 
 use muir::chaos::interface::{self, csr};
 use muir::chaos::packet::{Packet, op};
@@ -13,7 +15,7 @@ use muir::machine::{Geometry, Machine, bus_error};
 
 mod support;
 
-const PAGE: u32 = 0o17377000;
+const PAGE: u32 = 0o17777400;
 const INTERRUPTS: u32 = PAGE + 0o100;
 const NET: u32 = PAGE + 0o140;
 
@@ -32,8 +34,8 @@ fn quux() -> Machine {
 /// on a CADR through its Unibus and on QUUX through the page (QUUX having
 /// no Unibus, contract Q5), give
 /// the same answers --- the CSR's writable bits, the address, the write
-/// buffer's words and the bit count they make, the read buffer, and the
-/// words that answer nothing on the CADR's board reading 0 here too.
+/// buffer's words and the bit count they make, the read buffer, and START
+/// --- at the five words QUUX decodes, 140-143 and 145.
 #[test]
 fn each_word_is_its_unibus_register() {
     let (mut a, mut b) = (Machine::new(), quux());
@@ -52,13 +54,13 @@ fn each_word_is_its_unibus_register() {
     let enables = (csr::RECEIVE_INT_ENABLE | csr::TRANSMIT_INT_ENABLE) as u32;
     let mut reads = Vec::new();
     both(0, Some(enables));
-    for k in 0..8 {
+    for k in [0, 1, 2, 3, 5] {
         reads.push(both(k, None));
     }
     for w in [0o400, 4, 0o3060, 0, 0o3050, 0o21, 1, 0, 0o3060] {
         both(1, Some(w));
     }
-    for k in 0..8 {
+    for k in [0, 1, 2, 3, 5] {
         reads.push(both(k, None));
     }
     for (n, (u, p)) in reads.iter().enumerate() {
@@ -72,7 +74,7 @@ fn each_word_is_its_unibus_register() {
 /// **A frame goes out and its answer comes back through the page**: a
 /// STATUS request to muir's own Chaosnet server, its words written to word
 /// 141 and sent by a read of 145, is answered; `RECEIVE DONE` comes up in
-/// word 140, word 100's `<5>` with the receive enable, and the answer's
+/// word 140, word 100's `<6>` with the receive enable, and the answer's
 /// words come out of 142.
 #[test]
 fn a_frame_goes_out_and_its_answer_comes_back() {
@@ -111,7 +113,7 @@ fn a_frame_goes_out_and_its_answer_comes_back() {
         }
     }
     assert!(done, "no answer came");
-    assert_ne!(m.bus_read(INTERRUPTS) & 1 << 5, 0, "the network's interrupt");
+    assert_ne!(m.bus_read(INTERRUPTS) & 1 << 6, 0, "the network's interrupt");
     // And it interrupts the processor through word 100 alone, as every
     // bit there does, with the Unibus interrupt's enable (766040) never
     // written: muir-sys's microcode for Q5 writes no Unibus address.
@@ -129,11 +131,45 @@ fn a_frame_goes_out_and_its_answer_comes_back() {
     assert_eq!((ans.opcode, ans.source, ans.dest), (op::ANS, host, me), "{ans:?}");
 }
 
-/// **The CADR has none of it on the page**: word 140 times out, its
-/// Chaosnet being on the Unibus.
+/// **Only the five real registers are decoded** (contract Q13): 144,
+/// 146 and 147 read 0, where the CADR's board answers the CSR at `764150`
+/// and the bit count at `764156`; and a write of 142, 143, 144, 145, 146 or
+/// 147 changes nothing in the machine, where the board takes the CSR at
+/// `764150` and the write buffer at `764152`. 140 and 141 are written: the
+/// CSR's enables read back, and a word written to 141 changes the machine.
+#[test]
+fn only_the_five_registers_are_decoded() {
+    let state = |m: &Machine| {
+        let mut w = muir::checkpoint::Writer::new();
+        m.save(&mut w);
+        w.finish()
+    };
+    let mut m = quux();
+    m.bus_write(NET, csr::RECEIVE_INT_ENABLE as u32);
+    let csr_now = m.bus_read(NET);
+    assert_ne!(csr_now, 0, "the CSR reads something to alias");
+    for k in [4, 6, 7] {
+        assert_eq!(m.bus_read(NET + k), 0, "word {:o} is reserved", 0o140 + k);
+    }
+    for k in [2, 3, 4, 5, 6, 7] {
+        let s = state(&m);
+        m.bus_write(NET + k, 0o177777);
+        assert!(state(&m) == s, "a write of word {:o} changed the machine", 0o140 + k);
+    }
+    assert_eq!(m.bus_read(NET), csr_now, "the CSR as it was");
+    assert_eq!(m.bus_error, 0, "every word answered");
+    let s = state(&m);
+    m.bus_write(NET + 1, 0o1234);
+    assert!(state(&m) != s, "141 written: the write buffer took the word");
+    m.bus_write(NET, 0);
+    assert_eq!(m.bus_read(NET) & csr::RECEIVE_INT_ENABLE as u32, 0, "140 written");
+}
+
+/// **The CADR has none of it on the page**: word 140 is in its Unibus
+/// window, where nothing answers, its Chaosnet being at `764140`.
 #[test]
 fn the_cadr_has_it_on_the_unibus_only() {
     let mut m = Machine::new();
     m.bus_read(NET);
-    assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0);
+    assert_eq!(m.bus_error, bus_error::UNIBUS_NXM);
 }

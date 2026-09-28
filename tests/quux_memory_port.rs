@@ -108,7 +108,7 @@ fn a_miss_fills_its_line_at_the_nominal_time() {
 #[test]
 fn a_device_register_is_never_cached() {
     use muir::quux_input::KeyboardMouse;
-    let data = 0o17377121;
+    let data = 0o17777521;
     let mut m = reading(Geometry::QUUX, &[data, data]);
     m.quux_input.press(0o101);
     m.quux_input.press(0o102);
@@ -263,7 +263,7 @@ fn cycles(e: &mut Rtl) -> Vec<Cycle> {
 /// answered and acknowledged at the edge.
 #[test]
 fn rtl_shows_the_memory_port_s_acknowledgement_and_grant() {
-    const REGISTER: u32 = 0o17377000;
+    const REGISTER: u32 = 0o17777400;
     const EMPTY: u32 = 0o17377400;
     let mut e = Rtl::new(reading(Geometry::QUUX, &[0o1000, 0o1001, REGISTER, EMPTY]));
     let cs = cycles(&mut e);

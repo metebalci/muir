@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! System 2000 on QUUX with MONO TV: muir-sys's development band on
+//! System 2000 on QUUX with the video controller: muir-sys's development band on
 //! microcode 2000, which sizes its main screen from the feature page.
 //!
 //! It is in the gitignored `ref/band-2000` (muir-sys `3b1dcf2`, contracts
@@ -76,7 +76,7 @@ fn quux(pack: &std::path::Path, root: &std::path::Path) -> Machine {
 }
 
 /// QUUX with its own boot PROM at 36000 (`data/quux-promh.mcr`), the disk
-/// on block-disk, MONO TV at `w` by `h`, and the file device serving
+/// on block-disk, the video controller at `w` by `h`, and the file device serving
 /// `root` as HOST's `/` and the tree's `sys` and `site` as `/sys` and
 /// `/site`, where the band's `SYS:` is (`site/sys.translations`).
 fn quux_at(pack: &std::path::Path, root: &std::path::Path, (w, h): (usize, usize)) -> Machine {
@@ -87,8 +87,8 @@ fn quux_at(pack: &std::path::Path, root: &std::path::Path, (w, h): (usize, usize
     d.attach(muir::disk_image::Disk::open_rw(pack).expect("the pack"));
     m.block_disk = Some(d);
     m.geometry = Geometry::QUUX;
-    m.tv.set_board(Board::MonoTv);
-    m.tv.set_mono_tv_size(w, h);
+    m.tv.set_board(Board::Video);
+    m.tv.set_video_size(w, h);
     serve(&mut m, root);
     m
 }
@@ -173,13 +173,13 @@ fn band_2000_is_system_2000_on_microcode_2000() {
     }
 }
 
-/// **System 2000 reaches its listener on QUUX with MONO TV, drawn at the
+/// **System 2000 reaches its listener on QUUX with the video controller, drawn at the
 /// screen's words a line**, on both engines, at the size muir-sys checked the
 /// band at ([`BAND_SIZE`]), with microcode 2000 in A memory: its listener is
-/// framed at MONO TV's words a line and at no other width, the CADR's 24
+/// framed at the video controller's words a line and at no other width, the CADR's 24
 /// among them, which is the band drawing for the screen it was given.
 #[test]
-fn system_2000_runs_on_mono_tv() {
+fn system_2000_runs_on_the_video_controller() {
     for engine in ["micro", "rtl"] {
         let Some((_dir, pack, root)) = band_2000(&format!("system-2000-{engine}")) else {
             return;
@@ -207,7 +207,7 @@ fn system_2000_runs_on_mono_tv() {
 
 /// **System 2000 sizes its screen at boot**: the same band, checked at
 /// [`BAND_SIZE`], booted at other sizes, draws its listener at each size's
-/// own words a line. 1920 by 1080 is the largest MONO TV QUUX supports.
+/// own words a line. 1920 by 1080 is the largest video controller screen QUUX supports.
 #[test]
 fn system_2000_sizes_its_screen_at_boot() {
     for size in [(1024, 768), (1920, 1080)] {
@@ -262,11 +262,10 @@ fn system_2000_runs_at_its_ticks() {
 /// ready (the hand-over's `ucadr.sym`: `DISK-AWAIT-READY I-MEM 25036`).
 const DISK_AWAIT_READY: u16 = 0o25036;
 
-/// The disk registers as the microcode addresses them, virtual
-/// (`DISK-REGS-ADDRESS-BASE NUMBER 77377774` in the hand-over's
-/// `ucadr.sym`), and
-/// where they are, physical: word 774 of the register page, 17377000.
-const DISK_REGS: (u32, u32) = (0o77377774, 0o17377774);
+/// Block-disk's registers as the microcode addresses them, virtual
+/// (`DISK-REGS-ADDRESS-BASE`, `77777600` since contract Q13), and where
+/// they are, physical: word 200 of the register page, `17777600`.
+const DISK_REGS: (u32, u32) = (0o77777600, 0o17777600);
 
 /// **System 2000 restores its own band and comes back to the listener**:
 /// booted at 1280 by 1024, `(si:disk-restore 4)` answered `yes` reads LOD4

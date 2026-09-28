@@ -143,7 +143,7 @@ fn the_tick_is_timer_0_on_the_page_and_not_destination_3() {
     ];
     let m = || {
         let mut m = machine(Geometry::QUUX, &prom, 16_667, [TICK_ON, TICK_CLEAR]);
-        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+        m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
         m.mmem[7] = TIMER_0_PERIOD;
         m.mmem[8] = TIMER_0_CONTROL;
         m.mmem[10] = 0o401;

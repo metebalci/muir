@@ -125,7 +125,7 @@ fn quux_answers_its_id_in_source_16() {
         Insn::new(ALU | SETM | src(0o36) | a_dest(0o202)),
         Insn::new(ALU | SETM | src(0o17) | a_dest(0o203)),
     ];
-    let id = (0x5155 << 16) | (10 << 4) | 4;
+    let id = (0x5155 << 16) | (11 << 4) | 4;
     for (geometry, want) in [(Geometry::QUUX, [id, id, !0]), (Geometry::CADR, [!0, !0, !0])] {
         let (e, r) = both(&prom, &|m: &mut Machine| m.geometry = geometry, 30);
         for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
@@ -137,9 +137,9 @@ fn quux_answers_its_id_in_source_16() {
     assert_eq!(Geometry::CADR.machine_id, None);
 }
 
-/// **QUUX lists its sizes in its feature page**, the Xbus I/O page at
-/// physical `17377000`, just below the page the display and the disk
-/// controller share: word 0 the MACHINE-ID again, then the level-1
+/// **QUUX lists its sizes in its feature page**, words 0-77 of the
+/// register page at physical `17777400`, the last page of the physical
+/// space (contract Q13): word 0 the MACHINE-ID again, then the level-1
 /// entry's bits, the level-2 map's entries, the PDL buffer's words, and the
 /// control store's, A memory's and dispatch memory's, then which of the
 /// multiply and divide it has (bit 0 `MUL`, bit 1 `DIV`), whether it has
@@ -147,8 +147,9 @@ fn quux_answers_its_id_in_source_16() {
 /// microsecond clock (revision 5), word 15, `<0>` the real-time clock
 /// and `<1>` the file device (revision 9), and word 16 the number of
 /// interval timers, 3 (revision 10); the rest reads 0. On
-/// the CADR nothing answers there, and a read times out as any read of an
-/// empty I/O address does, the Xbus NXM bit set.
+/// the CADR the page is in the Unibus window, where nothing answers, and a
+/// read times out as any read of an empty Unibus address does, the Unibus
+/// NXM bit set and not the Xbus one.
 #[test]
 fn quux_lists_its_sizes_in_its_feature_page() {
     use muir::isa::asm::{SRC_MD, START_READ, filler};
@@ -165,7 +166,7 @@ fn quux_lists_its_sizes_in_its_feature_page() {
     let set = |geometry: Geometry| {
         move |m: &mut Machine| {
             m.geometry = geometry;
-            m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+            m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
             for (k, &w) in words.iter().enumerate() {
                 m.mmem[1 + k] = (1 << 8) | w;
             }
@@ -181,7 +182,7 @@ fn quux_lists_its_sizes_in_its_feature_page() {
     }
     let (e, r) = both(&prom[..14], &set(Geometry::CADR), 400);
     for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
-        assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "CADR, {name}: the read timed out");
+        assert_eq!(m.bus_error, bus_error::UNIBUS_NXM, "CADR, {name}: the Unibus read timed out");
     }
 }
 

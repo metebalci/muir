@@ -2179,21 +2179,12 @@ impl Rtl {
                 // `tests/chip.rs`).
                 self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
                 self.bus_data = self.m.md;
-                let frame_buffer = crate::tv::BUFFER..crate::tv::BUFFER + self.m.tv.buffer_words();
-                self.bus_responder = if !self.m.geometry.unibus
-                    && frame_buffer.contains(&self.bus_addr)
-                {
-                    // QUUX's frame buffer is on the memory bus with main
-                    // memory, through the cache (contract Q7); the port
-                    // reads no board number.
-                    busint::Responder::Memory(0)
-                } else if self.m.geometry.feature_word(self.bus_addr).is_some() {
-                    // QUUX's feature page: device registers.
-                    busint::Responder::Device
-                } else if !self.m.geometry.unibus && busint::unibus_address(self.bus_addr).is_some()
-                {
-                    // QUUX has no Unibus: the window times out as Xbus.
-                    busint::Responder::NoXbus
+                self.bus_responder = if self.m.geometry.has_register_page() {
+                    // QUUX: its frame buffer on the memory bus with main
+                    // memory, through the cache (contract Q7); the register
+                    // page's device registers; nothing else from 17000000
+                    // up, the Unibus window included (contracts Q5, Q13).
+                    busint::decode_quux(self.bus_addr, self.m.main.len(), self.m.tv.buffer_words())
                 } else {
                     busint::decode_for(
                         self.bus_addr,

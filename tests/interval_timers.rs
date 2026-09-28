@@ -3,7 +3,7 @@
 
 //! QUUX's interval timers (contract Q11, revision 10): timer 0, 1 and 2 on
 //! the register page, each with its control and status at word 110 + 2k and
-//! its period at 111 + 2k; word 100 `<0>`, `<1>` and `<7>` their
+//! its period at 111 + 2k; word 100 `<0>`, `<1>` and `<2>` their
 //! interrupts, each the flag under the timer's interrupt enable. Q1's
 //! functional destinations 3 and 4 write only M and its source 17 reads all
 //! ones, as on the CADR: no timer is reached but through the page.
@@ -48,7 +48,7 @@ fn engine(name: &str, m: Machine) -> Box<dyn Timed> {
     }
 }
 
-const PAGE: u32 = 0o17377000;
+const PAGE: u32 = 0o17777400;
 const INTERRUPTS: u32 = PAGE + 0o100;
 const RESET_DEVICES: u32 = PAGE + 0o104;
 
@@ -60,8 +60,8 @@ const fn period(k: usize) -> u32 {
     PAGE + 0o111 + 2 * k as u32
 }
 
-/// Word 100's bit for timer `k`: `<0>`, `<1>`, `<7>`.
-const BIT: [u32; 3] = [1 << 0, 1 << 1, 1 << 7];
+/// Word 100's bit for timer `k`: `<0>`, `<1>`, `<2>` (contract Q13).
+const BIT: [u32; 3] = [1 << 0, 1 << 1, 1 << 2];
 
 /// The control word's bits.
 const ON: u32 = 1;
@@ -363,7 +363,7 @@ fn engine_machine(prom: &[Insn], m_words: &[(usize, u32)]) -> Machine {
     m.load_prom(&words);
     support::prom_program_in_ram(&mut m);
     m.l2_map[0] = (1 << 23) | (1 << 22);
-    m.l2_map[1] = (1 << 23) | (1 << 22) | 0o36776;
+    m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
     for &(k, v) in m_words {
         m.mmem[k] = v;
     }
@@ -501,7 +501,7 @@ fn m6_a_rise_during_a_wait_for_md_is_seen_by_the_jump_after() {
 
 /// **M7, the layout**: word 104 reads 0; words 110-115 as the contract has
 /// them, their reserved bits 0; feature word 16 is 3, the number of
-/// interval timers; MACHINE-ID is revision 10; and on QUUX, on both
+/// interval timers; MACHINE-ID is revision 11 (contract Q13); and on QUUX, on both
 /// engines, destination 4 writes only M and source 17 reads all ones.
 #[test]
 fn m7_the_page_s_layout_and_q1_s_codes_at_revision_10() {
@@ -518,7 +518,7 @@ fn m7_the_page_s_layout_and_q1_s_codes_at_revision_10() {
     assert_eq!(Geometry::QUUX.feature_word(PAGE + 0o16), Some(3), "feature word 16");
     assert_eq!(m.bus_read(PAGE + 0o16), 3);
     let id = Geometry::QUUX.machine_id.unwrap();
-    assert_eq!((id >> 16, (id >> 4) & 0o7777, id & 0o17), (0x5155, 10, 4), "MACHINE-ID");
+    assert_eq!((id >> 16, (id >> 4) & 0o7777, id & 0o17), (0x5155, 11, 4), "MACHINE-ID");
     // Destination 4 with a period, then source 17: M 3 gets destination
     // 4's word through M 37, and A 200 all ones.
     let prom = [

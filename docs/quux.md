@@ -24,8 +24,8 @@ differences, what it needed:
 | Difference | Boot PROM | Microcode | Lisp system | Tools |
 |---|---|---|---|---|
 | Six-bit level-1 map entry | nothing: MIT's PROM boots it; PROM 2000 also clears QUUX's 64 blocks | 2000: the six-bit read, the two-deposit write, invalid block 77, the reverse first-level map moved to system communication area 640-737 and the swap-out CCWs to 440-457 | nothing: System 1001 runs unchanged | CC's remote debugger (`CADR-DEBUGGER`) still assumes the CADR's map |
-| MACHINE-ID in functional source 16 | nothing | 2000 reads it at boot and halts at `MACHINE-NOT-QUUX-10` on anything but QUUX from revision 10 | `PROCESSOR-TYPE-CODE` is 4 | nothing |
-| The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | System 2000 reads it: the PDL buffer's length, word 3, at every boot (muir-sys `sys/sys2/proces.lisp:268-274`); MONO TV's size and buffer address, words 11 to 13 (`sys/sys/ltop.lisp:118-125`); and whether the file device and the real-time clock are there, word 15 (`sys/io/fdev.lisp:155`, `sys/io1/time.lisp:463`) | do not read it yet |
+| MACHINE-ID in functional source 16 | nothing | 2000 reads it at boot and halts at `MACHINE-NOT-QUUX-11` on anything but QUUX from revision 11 | `PROCESSOR-TYPE-CODE` is 4 | nothing |
+| The feature page | nothing | nothing: field widths are fixed when the microcode is assembled | System 2000 reads it: the PDL buffer's length, word 3, at every boot (muir-sys `sys/sys2/proces.lisp:268-274`); the video controller's size and buffer address, words 11 to 13 (`sys/sys/ltop.lisp:118-125`); and whether the file device and the real-time clock are there, word 15 (`sys/io/fdev.lisp:155`, `sys/io1/time.lisp:463`) | do not read it yet |
 | `MUL` and `DIV` in one instruction | nothing | 2000 uses them in `MPY`, `DIV` and `BIDIV`'s quotient; the 31-step loops still step; `MULTIPLY` and `DIVIDE` named in `cadsym` | nothing | nothing |
 | The clocks: the microsecond clock in the processor, and the interval timers on the register page, timer 0 the tick | writes reset devices and timer 0's period, 16,667 µs (revision 10) | 2000 writes timer 0's period at `RESET-MACHINE`, turns the tick on at `BEG06` and clears it in `INTR-TICK` through word 110, and turns off timer 1 or 2 if one interrupts | nothing: it reads the microsecond clock, and no timer | nothing |
 | Reset devices, word 104 of the register page | writes it before it reads the disk (revision 10) | 2000 writes it at `RESET-MACHINE`, at every start of the microcode, a `%DISK-RESTORE`'s too, in place of `PROG.UNIBUS.RESET` | nothing | nothing |
@@ -34,7 +34,7 @@ differences, what it needed:
 | No delay lines: `sync`, always | nothing | nothing | nothing | `--sync-cycle-ticks`; `--timing-model` is `cadr`'s |
 | No hung microcycle; the old word in a RAM's write cycle | nothing | nothing: microcode 324 and QUUX's 1000 never do either, counted (below) | nothing | nothing |
 | No speed bits | nothing | the mode register write at boot need not set them | nothing | nothing |
-| MONO TV, the display | nothing | 2000: the run light in MONO TV's buffer, no TV vertical flag | System 2000 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
+| The video controller, the display | nothing | 2000: the run light in the video controller's buffer, no TV vertical flag | System 2000 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
 | The real-time clock | nothing | nothing | System 2000 sets the time from it at boot, ahead of the network, when word 15 `<0>` of the feature page says it is there, and its wall clock reads it from then on (muir-sys `sys/io1/time.lisp:461-471`, `:493`, `:691-696`) | `--rtc` |
 | The file device | nothing | 2000 waits at `RESET-MACHINE` for it to be quiet, word 161 `<1>`, after reset devices | System 2000's `SYS:` is on it, HOST's `/sys` and `/site` (`site/sys.translations`) | `--file-root` |
 
@@ -90,7 +90,7 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 10 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, 9 the real-time clock and the file device, 10 the interval timers and reset devices | |
+| 15:4 | hardware revision: 11 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, 9 the real-time clock and the file device, 10 the interval timers and reset devices, 11 the register page at `17777400` with block-disk and the video controller on it, word 100 in its final order | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
@@ -102,7 +102,22 @@ unassigned since revision 10 (below). A machine is QUUX only if bits
 the last up to revision 9. Revision 10 does not contain revision 9: Q1's
 interval timer (destination 4, source 17) and the reset `PROG.UNIBUS.RESET`
 gave on QUUX are gone, the interval timers and reset devices taking their
-places (below).
+places (below). Revision 11 does not contain revision 10: the register page
+is at `17777400` and not `17377000`, block-disk's registers and the video
+controller's mode are on it, word 100's bits are in another order, and the
+network decodes its five registers alone ([the register
+page](#the-register-page)); nothing answers at revision 10's addresses.
+
+**Software for revision 10 on a revision-11 machine** stops, measured on
+`micro` with `ref/band-2000` (the hand-over of PROM 2000, microcode 2000 and
+System 2000 for revision 10). Its PROM waits at `DISK-AWAIT-PACK` (36600) for
+ever, reading block-disk's status at `17377774`, where nothing answers, with
+word 101 `<0>` set. Its microcode, started at location 6 with the state its
+PROM leaves on revision 10, passes its own check, which asks for revision 10
+or more, and halts at `FILE-DEVICE-NOT-QUIET` (26525 in its `ucadr.sym`; the
+PC reads 26526) 2.00 s later, word 101 `<0>` set. On a revision-11 machine
+that halt means the microcode is not revision 11's: the file device is on
+the page and answers, but not at the address that microcode reads.
 
 `tests/quux.rs` holds the word on both engines and the CADR's all ones;
 `the_unassigned_sources_read_all_ones_on_the_board` in `tests/output_bus.rs`
@@ -127,12 +142,12 @@ know the size.
 
 ## The feature page
 
-**QUUX lists its sizes in one page of device registers**, physical `17377000`
-to `17377377` (page 36776), just below the page the display's control
-registers and the disk controller share. It is read-only and read like any
-device register, through the map:
+**QUUX lists its sizes in words 0-77 of its register page**, physical
+`17777400` to `17777477` ([the register page](#the-register-page), page
+37777). They are read-only and read like any device register, through the
+map:
 
-| Word | QUUX, revision 10 |
+| Word | QUUX, revision 11 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -147,9 +162,9 @@ device register, through the map:
 | 12 | the main screen: bits a pixel in 31:16, words a line in 15:0 |
 | 13 | the main screen: its buffer's first physical address |
 | 14 | the microsecond clock: 1 |
-| 15 | the devices of revision 9, a bit each: 3, bit 0 the real-time clock and bit 1 the file device |
+| 15 | the optional devices, a bit each: 3, bit 0 the real-time clock and bit 1 the file device; a later optional device takes the next bit |
 | 16 | the number of interval timers: 3 |
-| 17-377 | 0 |
+| 17-77 | 0 |
 
 Word 15 reads 0 below revision 9, as every unused word does, so software
 decides by it whether the real-time clock and the file device are there;
@@ -157,17 +172,17 @@ word 16 reads 0 below revision 10, and so says whether the interval timers
 and reset devices are. Word 14 named Q1's interval timer too up to revision
 9, which revision 10 drops.
 
-Words 11 to 13 describe whichever display is fitted: MONO TV's 1280 by 1024,
+Words 11 to 13 describe whichever display is fitted: the video controller's 1280 by 1024,
 one bit a pixel, 40 words a line at `17000000`, or, on a QUUX run with a CADR
 board, that board's 768 by 963, one bit, 24 words a line at the same address.
 
-Nothing answers at that page on the CADR --- in muir's model of it the
-display answers pages 36000-36177, 36400-36577 and 36777, the disk controller
-36777, and nothing else in Xbus I/O space --- so a read there times out and
-sets the Xbus NXM bit, as a read of any empty I/O address does. Software
-reads source 16 first and the page only on QUUX, and so never waits for the
-timeout. `quux_lists_its_sizes_in_its_feature_page` in `tests/quux.rs` holds
-the page on QUUX and the timeout on the CADR, on both engines.
+On the CADR the page is the last of its Unibus window, Unibus
+`777000`-`777776`, where nothing answers: a read there times out and sets
+the Unibus NXM bit, `766044` `<3>`, as a read of any empty Unibus address
+does. Software reads source 16 first and the page only on QUUX, and so never
+waits for the timeout. `quux_lists_its_sizes_in_its_feature_page` in
+`tests/quux.rs` holds the page on QUUX and the timeout on the CADR, on both
+engines.
 
 ## Multiply and divide
 
@@ -288,7 +303,7 @@ interval timer are on the I/O board, on the Unibus (`764120`-`764124`).
   cleared reads as one armed and not yet risen, on with its flag down.
 - **The flag rises whatever the interrupt enable says**, so a timer can be
   polled through its word. Under `<8>`, it is the timer's bit of word 100
-  --- `<0>` timer 0, `<1>` timer 1, `<7>` timer 2 --- and is ORed into the
+  --- `<0>` timer 0, `<1>` timer 1, `<2>` timer 2 --- and is ORed into the
   interrupt pending that jump conditions 5 and 6 test: a level, down when
   the flag is cleared, the timer turned off or `<8>` cleared.
 - **Reset**: power-on, `-RESET`, `-BOOT` and reset devices (below) each put
@@ -415,10 +430,10 @@ control store (Q2).
 | | |
 |---|---|
 | Main memory | 380 ns a line fill and 290 ns a write (`MemoryTiming::NOMINAL`, the DE25-Nano's, the slower board's), one operation at a time, no setup, deskew or refresh; a floor, a board slower on an access waiting. `--memory-timing <read>,<write>`, `arty` or `de25` sets others, on `rtl` |
-| The frame buffer | `17000000` up to MONO TV's buffer's end: on the memory bus with main memory, cached. The software reads it back (`BITBLT` combines with the destination, scrolling copies), and the display only reads it, which a write-through cache keeps current |
+| The frame buffer | `17000000` up to the video controller's buffer's end, which the address map lets reach `17777377`, 261,888 words: on the memory bus with main memory, cached. The software reads it back (`BITBLT` combines with the destination, scrolling copies), and the display only reads it, which a write-through cache keeps current |
 | The cache | always fitted: 4K words (`--cache <words>` another size) |
-| A device register | MONO TV's at `17377760`, block-disk's at `17377774`, the feature and register page at `17377000`: never cached, taken at the edge and answered a microcycle on, two microcycles in all |
-| Nothing there | past main memory's or the frame buffer's end, between the registers, the old Unibus window: fails at once, in the microcycle, reading 0 and setting word 101's NXM bit, with no timeout. A write there does not read back, which the microcode's memory-size probe, `MEM-SIZE-LOOP` in `uc-cold-disk.lisp`, relies on; nothing in QUUX's System 1002 depends on how long a failed access takes (muir-sys, read; **unverified** for System 2000) |
+| A device register | a word of the register page, `17777400`-`17777777`, the feature page, block-disk's and the video controller's among them: never cached, taken at the edge and answered a microcycle on, two microcycles in all |
+| Nothing there | past main memory's or the frame buffer's end, and everything else from `17000000` up below the register page --- `17377000`-`17377777` and the old Unibus window among it: fails at once, in the microcycle, reading 0 and setting word 101's NXM bit, with no timeout. A write there does not read back, which the microcode's memory-size probe, `MEM-SIZE-LOOP` in `uc-cold-disk.lisp`, relies on; nothing in QUUX's System 1002 depends on how long a failed access takes (muir-sys, read; **unverified** for System 2000) |
 | Block-disk | its words move at START, and the cache is invalidated; a transfer reads the processor's writes made before START and, after DONE, no read hits a word from before it |
 
 The bus interface's registers all have homes on QUUX already: the
@@ -505,7 +520,7 @@ a page.
 
 | | CADR controller | block-disk |
 |---|---|---|
-| Registers, `17377774`-`17377777` | status and command, command list pointer, disk address, START | the same |
+| Registers | `17377774`-`17377777`: status and command, command list pointer, disk address, START | the same four, words 200-203 of the register page, `17777600`-`17777603` |
 | Command list | one word a block, `<23:8>` the page's physical address, `<0>` More | the same |
 | Disk address | cylinder `<27:16>`, head `<15:8>`, sector `<7:0>`, unit `<30:28>` | the block number, `<27:0>`; one pack, unit 0 |
 | Commands | read, read compare, write, read all, write all, seek, at ease, recalibrate, offset clear, reset | read, 0, and write, 11; any other stops by error |
@@ -527,7 +542,7 @@ a block's time each; a transfer writes main memory behind the processor, so
 the memory cache is invalidated. The disk is a file in a standard format,
 [below](#the-disk-file). `tests/block_disk.rs` holds the read, the write,
 the end of the disk, the NXM, a command it does not do, the registers on
-QUUX's bus and a checkpoint.
+QUUX's register page with nothing at the CADR's, and a checkpoint.
 
 muir-sys's PROM 2000, microcode 2000 and System 2000 address it by
 block: System 2000's band boots on it on `micro`, `rtl` and under `sync`,
@@ -623,13 +638,13 @@ find it in the gitignored `ref/band-2000` and skip without it. Its `SYS:`
 is on the file device, which the tests serve the band's tree through. It
 reaches its listener, drawn at the screen's own words a line, in 166.5 M
 microcycles on `micro` and 188 M on `rtl` at 1280 by 1024, with 2000 in A
-memory's `A-VERSION` (`system_2000_runs_on_mono_tv`, measured to the half
+memory's `A-VERSION` (`system_2000_runs_on_the_video_controller`, measured to the half
 million). It restores its own band: `(si:disk-restore 4)`, answered
 `yes`, reads 21,216 blocks of `LOD4` in 27 M microcycles and is back at
 the listener 139 M later, on `micro`
 (`system_2000_restores_its_band_to_the_listener`). That
 test holds, at every microcycle in `DISK-AWAIT-READY`, the disk registers'
-virtual address `77377774` to their physical `17377774`, and block-disk to
+virtual address `77777600` to their physical `17777600`, and block-disk to
 moving on every million microcycles. The cold boot's `COLD-FAKE-L2-MAP`
 maps the disk registers and the run light; when the two take one level-2
 slot, the disk registers' virtual address reaches another word, and the
@@ -730,30 +745,34 @@ Holds and write pulses:
   no hung microcycle whose pulse writes the dispatch memory or the map.
   The same counters fire on the test programs built to do each.
 
-## MONO TV, the display
+## The video controller
 
-**QUUX's display is MONO TV**, a monochrome frame buffer: 1280 by 1024 unless
-`--mono-tv-size` gives another size, one bit a pixel. It is the frame buffer and one register, and nothing else: no sync
-program, no color map, and no interrupt, the machine's clock being the
-tick, timer 0 of the interval timers. It is `quux`'s only display, and `--tv-board`, the choice
-between the CADR's two boards, is `cadr`'s alone.
+**QUUX's display is the video controller**, "video" for short, a monochrome
+frame buffer: 1280 by 1024 unless `--video-size` gives another size, one
+bit a pixel. The frame buffer is its memory. It is the frame buffer and one
+word of the register page, and nothing else: no sync program, no color map,
+and no interrupt, the machine's clock being the tick, timer 0 of the
+interval timers. It is `quux`'s only display, and `--tv-board`, the choice
+between the CADR's two boards, is `cadr`'s alone. MIT's "TV" names the
+CADR's boards.
 
 | | |
 |---|---|
 | Buffer | 40,960 words, physical `17000000`-`17117777`: 40 words a line, 1,024 lines |
 | Pixel | pixel `x` of line `y` is bit `x mod 32` of word `40 y + x / 32` (at the default size), the low bit leftmost, as on the CADR's TV |
-| Mode register, `17377760` | bit 2, black-on-white, reads back; every other bit reads 0 and a write of it is dropped |
-| Register 4, `17377764` | the color map's write, kept for a color display to come: answers, reads 0, and takes no writes yet |
-| Registers 1 to 3 and 5 to 7 | not there: the CADR's sync program and three that did nothing. An access fails at once and sets the NXM bit |
+| Mode, word 210 of the register page, `17777610` | bit 2, black-on-white, reads back; every other bit reads 0 and a write of it is dropped |
+| Words 211-217 | reserved: read 0, writes ignored |
+| The CADR's control registers, `17377760`-`17377767` | nothing there: an access fails at once and sets word 101 `<0>` |
 | Interrupt | none |
 
-**Its size is muir's to choose**, `--mono-tv-size <width>x<height>`: the width
+**Its size is muir's to choose**, `--video-size <width>x<height>`: the width
 a multiple of 32, and at most **1920 by 1080**, the largest QUUX supports
-(`a_size_is_checked` in `tests/mono_tv.rs`). That is 64,800 words, below the
-color TV's buffer at `17200000` and well below the feature page at
-`17377000`, the most the address space leaves below the registers (130,560 words). The feature page's
-words 11 to 13 give the size to the software. The table above is the default
-size.
+(`a_size_is_checked` in `tests/video.rs`). That is 64,800 words, below the
+color TV's buffer at `17200000`. The address map lets the buffer reach up to
+below the register page, `17777377`: 261,888 words
+(`the_buffer_reaches_up_to_the_page`), which no word states to the
+software. The feature page's words 11 to 13 give the size to the software.
+The table above is the default size.
 
 1280 bits a line is 40 whole words, which `BITBLT` needs of a screen array's
 first dimension (`BITBLT-DECODE-ARRAY` in `sys/ucadr/uc-tv.lisp`). The buffer
@@ -761,25 +780,27 @@ starts where the CADR's does, so the band's `IO-SPACE-VIRTUAL-ADDRESS`
 reaches it unchanged, and ends below the color TV's strap at `17200000`.
 
 System 1001 runs on it but draws its screen wrong: `shwarm.lisp` makes the
-main screen 768 by 963 at 24 words a line, and MONO TV scans 40, so each of
-its lines is spread over parts of several. On QUUX's microcode 1000 with the
-tick, for revision 4, the band reaches its listener on `micro` in
-136 M microcycles, as on the CADR's board, measured by reading the rows the
-listener draws in at 24 words a line; its writes of the sync program's
-registers fail and leave the NXM bit set, and nothing stops over
+main screen 768 by 963 at 24 words a line, and the video controller scans
+40, so each of its lines is spread over parts of several. On QUUX's
+microcode 1000 with the tick, for revision 4, the band reaches its listener
+on `micro` in 136 M microcycles, as on the CADR's board, measured by reading
+the rows the listener draws in at 24 words a line; its writes of the sync
+program's registers fail and leave the NXM bit set, and nothing stops over
 it. System 2000 sizes the main screen from the feature page's words 11 to 13
 at every boot, and draws it right: with no sync program and no speed
 bits, it reaches its listener with its herald,
 listener and who line drawn at the screen's own words a line and at no
 other width, at 1280 by 1024 on both engines
-(`system_2000_runs_on_mono_tv` in `tests/system_2000.rs`) and at 1024 by
-768 and 1920 by 1080 on `micro` (`system_2000_sizes_its_screen_at_boot`).
+(`system_2000_runs_on_the_video_controller` in `tests/system_2000.rs`) and
+at 1024 by 768 and 1920 by 1080 on `micro`
+(`system_2000_sizes_its_screen_at_boot`).
 **Unverified**: the sizes between, which no test boots.
 
-`tests/mono_tv.rs` holds the buffer's first and last words and the NXM past
-it on both engines, the bus interface's decode of the whole buffer, the
-pixel order and the terminal's frame, the registers there and not there,
-the absence of an interrupt over a second, and the feature page's three words.
+`tests/video.rs` holds the buffer's first and last words and the NXM past
+it on both engines, QUUX's decode of the whole buffer and of the largest
+one, the pixel order and the terminal's frame, word 210 and the reserved
+words after it, the CADR's registers answering nothing, the absence of an
+interrupt over a second, and the feature page's three words.
 
 ## Its boot PROM, in its own addresses
 
@@ -900,50 +921,97 @@ reading 401 and word 111 16,667, the period its microcode writes itself at
 
 ## The register page
 
-**QUUX's registers share the feature page**, `17377000`-`17377377` (revision
-6, contract Q2): the address space below it is full, pages 36000-36775 being the
-largest MONO TV buffer and 36777 the display's and disk's registers.
+**QUUX's device registers are on one page of 256 words**, the register
+page, physical `17777400`-`17777777`, the last page of the physical space
+(revision 11, contracts Q2 and Q13). It stays there if the physical space
+grows, and the frame buffer may grow up to below it. The microcode reaches
+word *w* at virtual `77777400` + *w*, and Lisp's `%xbus-read` at the offset
+`777400` + *w*. Each word answers in two microcycles ([the memory
+port](#the-memory-port-and-the-device-registers)).
 
-| Word | |
-|---|---|
-| 0-77 | the feature page, read only |
-| 100 | interrupt status, read only: `<0>` timer 0, the tick, `<1>` timer 1, `<2>` block-disk's done, `<3>` the keyboard, `<4>` the mouse, `<5>` the network, `<6>` the file device, `<7>` timer 2, each under its own enable |
-| 101 | error status: the bus errors, as `766044` gives them; a write clears them |
-| 102 | mode: `<0>` error stop, which the host can set too |
-| 103 | the real-time clock, read only (below) |
-| 104 | reset devices: a write with `<0>` set resets every device (below); a write with `<0>` clear does nothing; reads 0 |
-| 110-115 | the interval timers ([the clocks](#the-clocks)) |
-| 120-123 | the keyboard and the mouse (below) |
-| 140-147 | the network (below) |
-| 160-171 | the file device (below) |
-| others | reserved: read 0, writes ignored |
+| Words | Device | Words and bits |
+|---|---|---|
+| 000-077 | the feature page | read only ([above](#the-feature-page)); 17-77 read 0 |
+| 100-107 | the page's own words | 100: interrupt status, read only (below). 101: error status: `<0>` NXM is the only bit QUUX sets (`<3>` and `<5>`, the CADR's Unibus bits, read 0); a write of any value clears it. 102: mode, `<0>` error stop, read and written, which the host can set too. 103: the real-time clock, read only (below). 104: `RESET-DEVICES`, written, reads 0 (below). 105-107 reserved |
+| 110-117 | the interval timers | 110-115 ([the clocks](#the-clocks)); 116-117 reserved |
+| 120-137 | the keyboard and the mouse | 120-123 (below); 121 gives the key word in `<23:0>`, and `<31:24>` read 0. 124-137 reserved |
+| 140-157 | the network, the Chaosnet interface | 140: the CSR, read and written. 141: my address when read, the write buffer when written. 142: the read buffer, read only; a read advances it. 143: the bit count, read only. 145: START, read only; a read starts a transmission. Writes of 142, 143 and 145 are ignored. 144, 146, 147 and 150-157 reserved |
+| 160-177 | the file device | 160-171 (below); 172-177 reserved |
+| 200-207 | block-disk | 200: status when read, command when written. 201: the last memory address when read, the command list pointer when written. 202: the disk address, read and written. 203: START, written; reads 0. The bits are [block-disk's](#block-disk), the done interrupt's enable command `<11>`. 204-207 reserved |
+| 210-217 | the video controller | 210: mode, `<2>` black-on-white reads back, the other bits read 0 and a write of them is dropped. 211-217 reserved |
+| 220-377 | none | reserved |
 
-On the CADR nothing answers on the page. `tests/quux_registers.rs` holds
-each word, on the machine and through both engines' bus.
+**Reserved** means a read gives 0 and a write changes nothing. Everything
+else from `17000000` up below the page and past the frame buffer is
+**nothing there**: an access fails at once, reads 0 and sets word 101 `<0>`.
+That includes `17377000`-`17377777`, where the CADR's display and disk
+registers are, and the rest of the old Unibus window
+([No Unibus](#no-unibus)). On the CADR the page is inside the Unibus
+window, Unibus `777000`-`777776`, where nothing answers: an access sets the
+Unibus NXM bit, `766044` `<3>`.
 
-**Reset devices** (revision 10, contract Q11; a proposed term): a write of
-word 104 with `<0>` set resets every device, at the instant the write is
-taken. What the file device had due by then runs first, as for a write of
-its word 160; then
+**Word 100** says who interrupted, a bit each:
 
-| Device | What reset devices does |
+| Bit | Source | Up while | Cleared at the source by |
+|---|---|---|---|
+| `<0>` | timer 0, the tick | its flag and 110 `<8>` | a write with `<1>` set, turning the timer off, `<8>` off, a period write, `RESET-DEVICES` |
+| `<1>` | timer 1 | its flag and 112 `<8>` | as timer 0 |
+| `<2>` | timer 2 | its flag and 114 `<8>` | as timer 0 |
+| `<3>` | block-disk | not active and command `<11>` | a command write with `<11>` clear, START, `RESET-DEVICES` |
+| `<4>` | the keyboard | a key word waiting and 120 `<8>` | reading 121 until the FIFO is empty; `<8>` off |
+| `<5>` | the mouse | 123 `<0>` and 123 `<8>` | reading 122; `<8>` off |
+| `<6>` | the network | the Chaosnet interface's request, as the CADR's CSR gives it | as on the CADR, through 140-145; `RESET-DEVICES` |
+| `<7>` | the file device | 170 ≠ 171 and 160 `<8>` | writing 171 up to 170; `<8>` off; a disable; `RESET-DEVICES` |
+| `<31:8>` | reserved | never | --- |
+
+Each bit is a level, and their OR is the interrupt pending that jump
+conditions 5 and 6 test. So one write turns any of them off: 112 or 114
+written 0, 200 written 0 with the disk idle, 123 written 0, or 160 written
+back with `<8>` clear and `<0>` kept, which leaves the file device enabled.
+That is what a handler does for a bit it does not serve.
+
+**The page's convention** is for devices made for it: the enable in `<0>`
+and the interrupt enable in `<8>` of the control word. Devices moved onto it
+keep their own bits: block-disk the CADR disk controller's programming
+interface, the network the Chaosnet interface's. 160 `<8>` is taken only by
+a write that enables the file device or leaves it enabled.
+
+**How the flags clear**: a write of any value clears 101, 120 `<1>`, and 161
+`<2>` and `<3>` (the last two through any write of 160); a write with the bit
+set clears 110, 112 and 114 `<1>`; a read clears or consumes --- 121 pops,
+122 clears 123 `<0>`, 142 advances, 145 starts a transmission.
+
+`tests/quux_registers.rs` holds every word of the page in one table, on the
+machine and through both engines' map: its class and its value at power-on;
+a write of all ones to every reserved or read-only word leaving the
+machine's state byte for byte as it was; the words a read or a write of has
+an effect listed apart, each with the test that holds it; word 100's eight
+sources, each alone reading its own bit, and each turned off by one write;
+and every address of `17377000`-`17377777`, `17400000` and `17777377` failing
+at once on both engines.
+
+**`RESET-DEVICES`** (revision 10, contract Q11): a write of word 104 with
+`<0>` set resets every device, at the instant the write is taken. What the
+file device had due by then runs first, as for a write of its word 160; then
+
+| Device | What `RESET-DEVICES` does |
 |---|---|
 | The interval timers | every timer off, flag down, periodic, interrupt enable 0, period 0 |
 | The file device | disabled, status `<2>` and `<3>` cleared (below) |
 | Block-disk | command 0, its done interrupt's enable with it, and its errors cleared; not active at once, a transfer in flight ending there |
-| The network | the I/O board's `-UB INIT`: its writable status bits, the Chaosnet interface's reset and the serial line's |
-| MONO TV | nothing to show: it has no vertical flag and no interrupt |
+| The network | the Chaosnet interface reset, its CSR's writable bits cleared |
+| The video controller | nothing to show: it has no vertical flag and no interrupt |
 | The keyboard and mouse | nothing: the FIFO, the counts and both interrupt enables are kept, since a warm boot's key word is read by the microcode's location 6 after the PROM, which writes word 104, has run |
 | The real-time clock, the microsecond clock, words 101 and 102 | nothing |
 
-Block-disk, the network, MONO TV and the file device are reset as
-`PROG.UNIBUS.RESET` reset them up to revision 9 (`Machine::bus_reset`).
+Block-disk, the network, the video controller and the file device are reset
+as `PROG.UNIBUS.RESET` resets the CADR's boards (`Machine::bus_reset`).
 **On QUUX `INTERRUPT-CONTROL<28>`, `PROG.UNIBUS.RESET`, drives nothing**:
 the bit is written and read back through `LOCATION-COUNTER` as on the CADR,
 and resets no device; the CADR's still resets its boards. Nothing is held
 off `SINTR` at a write of word 104: its effect is in the `SINTR` of the edge
 after the one that takes it, as any register write's is. Anything may write
-the word; revision 10's boot PROM writes it before it reads the disk.
+the word; the boot PROM writes it before it reads the disk.
 
 `tests/quux_reset_devices.rs` holds word 104 reading 0, a write with `<0>`
 clear changing nothing in the machine's state, a write of 1 leaving every
@@ -1161,7 +1229,7 @@ all. The bases and sizes stay, and may be written before the next enable.
 `<2>` and `<3>` with it; `PROG.UNIBUS.RESET` reaches it no more. Power-on
 is disabled.
 
-**Word 100 `<6>`** is up while the interrupt enable is on and a response is
+**Word 100 `<7>`** is up while the interrupt enable is on and a response is
 waiting, 170 ≠ 171: a level, cleared by writing 171 up to 170 or by the
 enable going off. Status `<8>` is the same ungated.
 
@@ -1213,7 +1281,7 @@ keyboard's clock and counts its mouse's lines on `KB CLK^`.
 | Word | |
 |---|---|
 | 120 | keyboard status: `<0>` a key word is waiting, `<1>` the FIFO overflowed (a write clears it), `<8>` the interrupt enable |
-| 121 | a read takes the oldest key word, the same 32-bit word `764100`/`764102` give together on the CADR; 0 when none is waiting |
+| 121 | a read takes the oldest key word, the word `764100`/`764102` give together on the CADR, in `<23:0>`, `<31:24>` reading 0; 0 when none is waiting |
 | 122 | the mouse: `<11:0>` the X count, `<27:16>` the Y count, twelve bits each and wrapping as the CADR's counters do; `<14:12>` the buttons, as the CADR's Y register has them. A read clears 123's `<0>` |
 | 123 | mouse status: `<0>` moved or a button changed since 122 was read, `<8>` the interrupt enable |
 
@@ -1231,9 +1299,10 @@ terminal's delivery, the boot word, a checkpoint and both engines' reads.
 ## No Unibus
 
 **QUUX has no Unibus** (contract Q5). Every address of the CADR's Unibus
-window, physical page 37000 and up, answers nothing on QUUX: a read or a
-write fails as any empty address does, at once since Q7, the NXM bit set in
-word 101, and changes nothing. With it go, on QUUX, the I/O board (its keyboard,
+window, physical page 37000 and up, answers nothing on QUUX but its last
+page, `17777400`-`17777777`, which is [the register
+page](#the-register-page): a read or a write fails as any empty address does,
+at once since Q7, the NXM bit set in word 101, and changes nothing. With it go, on QUUX, the I/O board (its keyboard,
 mouse, clocks and Chaosnet interface now QUUX's own, contracts Q1-Q4; its
 serial port and general-purpose register dropped), the bus interface's
 Unibus side (the adapter, the Unibus map, its buffers, WRITE-THROUGH, the
@@ -1247,8 +1316,9 @@ keeps all of it: CC and the two-machine lashup are its acceptance test.
 
 muir-sys's microcode for Q5 makes no Unibus access over a boot and a while
 at the listener, counted on `micro`. `tests/quux_no_unibus.rs` holds the
-window's failures on the machine and through both engines' bus, the Unibus
-interrupt not reaching QUUX, and the CADR's Unibus unchanged;
+window's failures on the machine and through both engines' bus, its last
+page answering as the register page, the Unibus interrupt not reaching
+QUUX, and the CADR's Unibus unchanged;
 `quux_has_no_debug_cable` in `tests/cli.rs` the cable.
 
 ## The network
@@ -1258,16 +1328,20 @@ I/O board: its registers keep their order and their bits, word 140 + k being
 the CADR's Unibus `764140` + 2k --- 140 the CSR, 141 my address (read) and
 the write buffer (written), 142 the read buffer, 143 the bit count, 145
 START --- sixteen bits each in the bottom of the word, and its interrupt is
-word 100's `<5>`. muir's cable is the same: CHUDP to `ozd`,
-`--chaos-address`, `--chaos-udp-peer`. An Ethernet interface behind the same
-device is a later contract. `tests/quux_network.rs` holds each word to its
-Unibus register and a STATUS request sent and answered through the page.
+word 100's `<6>`. Only these five are decoded: 144, 146 and 147 are
+reserved, where the CADR's board answers the CSR at `764150` and the bit
+count at `764156`, and writes of 142, 143 and 145 are ignored, where the
+board takes one of `764152` as the write buffer's. muir's cable is the same:
+CHUDP to `ozd`, `--chaos-address`, `--chaos-udp-peer`. An Ethernet interface
+behind the same device is a later contract. `tests/quux_network.rs` holds
+each decoded word to its Unibus register, the reserved words and the ignored
+writes, and a STATUS request sent and answered through the page.
 
 ## Its microcode
 
 **Microcode 2000 is QUUX's**, muir-sys's change to MIT's 323. At boot, at
 `RESET-MACHINE`, it reads functional source 16, and without QUUX's
-signature and a revision of 10 or more it halts at `MACHINE-NOT-QUUX-10`
+signature and a revision of 11 or more it halts at `MACHINE-NOT-QUUX-11`
 (`uc-cold-disk.lisp`): a CADR reads all ones there. On QUUX the type is
 the word's bits 3:0, 4; it reads the six-bit entry at `MAP(MD)<29:24>`,
 writes it in two deposits, `VMA<31:27>` and `VMA<24>`, and keeps block 77
@@ -1277,7 +1351,7 @@ communication area words 640 to 737 and the swap-out CCWs at 440 to 457
 reads back as the invalid entry the MACHINE-ID promised, and stops at
 `MAP-WIDTH-MISMATCH` if it does not. `A-VERSION`, A memory's word 40, is
 2000 (`band_2000_is_system_2000_on_microcode_2000` and
-`system_2000_runs_on_mono_tv` in `tests/system_2000.rs`).
+`system_2000_runs_on_the_video_controller` in `tests/system_2000.rs`).
 
 QUUX's microcode 1000, muir-sys's first change to MIT's 323, made from
 System 1001's sources, ran on both machines: without the signature it took
