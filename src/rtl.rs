@@ -580,6 +580,12 @@ pub struct Rtl {
 /// nets it actually needs.
 struct Read {
     nop: bool,
+    /// A fused return (`machine::macro_dispatch`): `npc` is the MACRO
+    /// DISPATCH MEMORY's handler.
+    fused: bool,
+    /// QUUX's destination 5, 6 or 7, the MACRO-DISPATCH register and the
+    /// MACRO DISPATCH MEMORY's index and entry, written at the edge.
+    macro_write: Option<u32>,
     irdisp: bool,
     /// `-HALT`: misc function 1 decoded from `IR<11:10>`, unless nopped.
     halt: bool,
@@ -789,6 +795,8 @@ impl Rtl {
         // QUUX's interval timers: `-RESET` puts every one in its reset
         // state (contract Q11).
         self.m.timers = crate::machine::Timers::new();
+        // And QUUX's MACRO-DISPATCH enable (contract H8a).
+        self.m.macro_dispatch.disable();
         // CONTRL 3D26
         self.inop = false;
         self.spushd = false;
@@ -1118,7 +1126,12 @@ impl Rtl {
         let destlc = low_group && d19 == 1;
         let destintctl = low_group && d19 == 2;
         // The low group decodes no 3 or 4, on the CADR and on QUUX since
-        // revision 10 (contract Q11), and only M is written.
+        // revision 10 (contract Q11), and only M is written. From revision
+        // 12 QUUX decodes 5 to 7: the MACRO-DISPATCH register and the MACRO
+        // DISPATCH MEMORY's index and entry (`machine::macro_dispatch`);
+        // below it, and on the CADR, only M is written there too.
+        let macro_write =
+            (low_group && (5..=7).contains(&d19) && self.m.geometry.macro_dispatch).then_some(d19);
         let mid_group = destm && !bit(ir, 23) && bit(ir, 22);
         let destpdltop = mid_group && d19 == 0;
         let destpdl_p = mid_group && d19 == 1;
@@ -1405,6 +1418,47 @@ impl Rtl {
             || (jcalf && !jcond)
             || (dispenb && dp && !dr)
             || (irjump && !bit(ir, 6) && bit(ir, 8) && jcond);
+
+        // QUUX's fused return (`machine::macro_dispatch`): a return pop of
+        // the main loop's word where `SPCMUNG` would send it to the main
+        // loop's dispatch, no fetch needed, with nothing in this
+        // microinstruction that changes what the dispatch would see --- no
+        // push, no pop by the functional source, no write of M 31 or
+        // INTERRUPT-CONTROL, no step of the counter now (`LCINC`) --- goes
+        // to the MACRO DISPATCH MEMORY's handler for the halfword M 31 gives
+        // under the counter as `LCINC` steps it at the next edge, page
+        // SMCTL's gates on the stepped counter. M 31 is read as M is, with
+        // the pass-around from `L`.
+        let fused = if self.m.geometry.macro_dispatch
+            && spop
+            && !srcspcpopreal
+            && !spush
+            && !trap
+            && !self.iwrited
+            && !lcinc
+            && !needfetch
+            && bit(spc as u64, 14)
+            && !(destm && wadr_in & 0o37 == 0o31)
+            && !destintctl
+        {
+            let inc = if self.lc_byte_mode { 1 } else { 2 };
+            let lcs = self.lc.wrapping_add(inc) & 0o377777777;
+            let rotate = crate::machine::macro_dispatch::INDEX_ROTATE as u64;
+            let lc0b = bit(lcs as u64, 0) && self.lc_byte_mode;
+            let left = !(bit(lcs as u64, 1) ^ lc0b);
+            let sh4 = !(left ^ !bit(rotate, 4));
+            let sh3 = !(!bit(rotate, 3) ^ (!bit(lcs as u64, 0) && self.lc_byte_mode));
+            let shift = (sh4 as u32) << 4 | (sh3 as u32) << 3 | (rotate as u32 & 7);
+            let m31 =
+                if self.destmd && self.wadr & 0o37 == 0o31 { self.l } else { self.m.mmem[0o31] };
+            self.m.macro_dispatch.fused_return(spc, m31.rotate_left(shift))
+        } else {
+            None
+        };
+        let next_instr = spop && (!srcspcpopreal && bit(spc as u64, 14));
+        // The popped word stays, as the main loop's push would put it back,
+        // unless the entry's N would have nopped that push.
+        let spop = spop && !matches!(fused, Some((_, true)));
         let spcnt = spush | spop;
 
         let n = trap
@@ -1429,6 +1483,8 @@ impl Rtl {
         let spc_target = ((spc as u16) & 0o37774) | (spc1a as u16) << 1 | (spc as u16 & 1);
         let npc = if trap {
             self.m.reset_pc()
+        } else if let Some((handler, _)) = fused {
+            handler
         } else {
             match (pcs1 as u8) * 2 + pcs0 as u8 {
                 0 => spc_target,
@@ -1494,6 +1550,8 @@ impl Rtl {
 
         Read {
             nop,
+            fused: fused.is_some(),
+            macro_write,
             irdisp,
             halt: funct & 2 != 0,
             i,
@@ -1543,7 +1601,7 @@ impl Rtl {
             jcond,
             pcs1,
             pcs0,
-            next_instr: spop && (!srcspcpopreal && bit(spc as u64, 14)),
+            next_instr,
             newlc_in,
             qs1: bit(ir, 1) && iralu,
             qs0: bit(ir, 0) && iralu,
@@ -2343,6 +2401,14 @@ impl Rtl {
         } else {
             let inc = (r.lcinc && !self.lc_byte_mode) as u32 + r.lcinc as u32;
             self.lc = (self.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
+        }
+        // QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY
+        // (`machine::macro_dispatch`).
+        if let Some(code) = r.macro_write {
+            self.m.macro_dispatch.write(code, r.ob);
+        }
+        if r.fused {
+            self.m.macro_dispatch.fused += 1;
         }
         // page FLAG
         if r.destintctl {

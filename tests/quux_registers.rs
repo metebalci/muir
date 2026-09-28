@@ -213,7 +213,7 @@ use Class::*;
 fn table() -> [(Class, u32); 256] {
     let id = Geometry::QUUX.machine_id.unwrap();
     let mut t = [(Reserved, 0); 256];
-    // The feature page, 0-77: 0-16 the machine's, the rest 0.
+    // The feature page, 0-77: 0-17 the machine's, the rest 0.
     for (w, v) in [id, 6, 2048, 16384, 16384, 1024, 2048, 3, 1].into_iter().enumerate() {
         t[w] = (ReadOnly, v);
     }
@@ -223,7 +223,8 @@ fn table() -> [(Class, u32); 256] {
     t[0o14] = (ReadOnly, 1);
     t[0o15] = (ReadOnly, 3);
     t[0o16] = (ReadOnly, 3);
-    t[0o17..=0o77].fill((ReadOnly, 0));
+    t[0o17] = (ReadOnly, 1024);
+    t[0o20..=0o77].fill((ReadOnly, 0));
     // The page's own words.
     t[0o100] = (ReadOnly, 0);
     t[0o101] = (ReadWrite, 0);

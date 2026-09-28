@@ -37,6 +37,7 @@ differences, what it needed:
 | The video controller, the display | nothing | 2000: the run light in the video controller's buffer, no TV vertical flag | System 2000 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
 | The real-time clock | nothing | nothing | System 2000 sets the time from it at boot, ahead of the network, when word 15 `<0>` of the feature page says it is there, and its wall clock reads it from then on (muir-sys `sys/io1/time.lisp:461-471`, `:493`, `:691-696`) | `--rtc` |
 | The file device | nothing | 2000 waits at `RESET-MACHINE` for it to be quiet, word 161 `<1>`, after reset devices | System 2000's `SYS:` is on it, HOST's `/sys` and `/site` (`site/sys.translations`) | `--file-root` |
+| The fused return: the MACRO-DISPATCH register and the MACRO DISPATCH MEMORY, destinations 5 to 7 (revision 12) | nothing | nothing: 2000 writes none of destinations 5 to 7, so the fused return stays off | nothing | the profile harness's `MUIR_H8A` fills and enables it |
 
 ## What each change measured
 
@@ -90,7 +91,7 @@ no bus cycle:
 | Bits | QUUX | CADR |
 |---|---|---|
 | 31:16 | signature `0x5155` | nothing drives the M bus: all ones |
-| 15:4 | hardware revision: 11 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, 9 the real-time clock and the file device, 10 the interval timers and reset devices, 11 the register page at `17777400` with block-disk and the video controller on it, word 100 in its final order | |
+| 15:4 | hardware revision: 12 --- 1 the six-bit map, 2 the 16K PDL buffer, 3 the multiply and divide, 4 the tick, 5 the clocks, 6 the register page and the PROM at 36000, 7 the memory port, 8 the device registers, 9 the real-time clock and the file device, 10 the interval timers and reset devices, 11 the register page at `17777400` with block-disk and the video controller on it, word 100 in its final order, 12 the fused return | |
 | 3:0 | processor type: 4 | |
 
 Source 16 is one MIT left unassigned: the 74S138 on page SOURCE that
@@ -107,6 +108,9 @@ is at `17777400` and not `17377000`, block-disk's registers and the video
 controller's mode are on it, word 100's bits are in another order, and the
 network decodes its five registers alone ([the register
 page](#the-register-page)); nothing answers at revision 10's addresses.
+Revision 12 contains revision 11: it adds functional destinations 5 to 7
+and feature word 17 ([the fused return](#the-fused-return)), which below
+it write only M and read 0, and it runs microcode 2000 as revision 11 does.
 
 **Software for revision 10 on a revision-11 machine** stops, measured on
 `micro` and `rtl` with PROM 2000, microcode 2000 and System 2000 as muir-sys
@@ -150,7 +154,7 @@ know the size.
 37777). They are read-only and read like any device register, through the
 map:
 
-| Word | QUUX, revision 11 |
+| Word | QUUX, revision 12 |
 |---|---|
 | 0 | the MACHINE-ID, as source 16 gives it |
 | 1 | level-1 entry: 6 bits |
@@ -167,12 +171,14 @@ map:
 | 14 | the microsecond clock: 1 |
 | 15 | the optional devices, a bit each: 3, bit 0 the real-time clock and bit 1 the file device; a later optional device takes the next bit |
 | 16 | the number of interval timers: 3 |
-| 17-77 | 0 |
+| 17 | the MACRO DISPATCH MEMORY's entries: 1,024 |
+| 20-77 | 0 |
 
 Word 15 reads 0 below revision 9, as every unused word does, so software
 decides by it whether the real-time clock and the file device are there;
 word 16 reads 0 below revision 10, and so says whether the interval timers
-and reset devices are. Word 14 named Q1's interval timer too up to revision
+and reset devices are; word 17 reads 0 below revision 12, and so says
+whether the fused return is there. Word 14 named Q1's interval timer too up to revision
 9, which revision 10 drops.
 
 Words 11 to 13 describe whichever display is fitted: the video controller's 1280 by 1024,
@@ -1358,6 +1364,79 @@ CHUDP to `ozd`, `--chaos-address`, `--chaos-udp-peer`. An Ethernet interface
 behind the same device is a later contract. `tests/quux_network.rs` holds
 each decoded word to its Unibus register, the reserved words and the ignored
 writes, and a STATUS request sent and answered through the page.
+
+## The fused return
+
+**QUUX can run the next macroinstruction's handler straight from a
+return to the main loop** (revision 12, contract H8a). Microcode 2000's
+main loop, `QMLP` in `uc-macrocode.lisp:9-13`, is four microinstructions:
+a call on condition 6, `M-INST-BUFFER <- MD`, `(DISPATCH-XCT-NEXT M-INST-OP
+OPDTB)`, and the push of `A-MAIN-DISPATCH` back as that dispatch's
+XCT-NEXT. A return that pops `A-MAIN-DISPATCH` --- `<14>` and `QMLP` ---
+when no instruction fetch is needed goes to `QMLP+2`, the stream
+hardware's `SPCMUNG` stepping it over the first two (`uc-macrocode.lisp:6-7`):
+the dispatch and the push are two microcycles every such macroinstruction
+spends there.
+
+Functional destinations 5 to 7, which the CADR's low group leaves without
+a decoder output, are QUUX's from revision 12; below it, and on the CADR,
+they write only M. Like every functional destination they write M as
+well:
+
+| Destination | Writes |
+|---|---|
+| 5 | the MACRO-DISPATCH register: `<13:0>` the main loop's address, `<23:14>` the A-memory address of `A-LOCALP` and `<28:24>` the M-memory address of `M-AP` (kept, and read by nothing), `<31>` the enable; `<30:29>` reserved, written 0 and kept 0 |
+| 6 | the MACRO DISPATCH MEMORY's index, `<9:0>` |
+| 7 | the entry at the index, `<17:0>`: D-MEM's word, `<13:0>` the handler's address, `<14>` N, `<15>` P, `<16>` R, and `<17>` the operand bit (kept, and read by nothing) |
+
+The MACRO DISPATCH MEMORY has 1,024 entries, feature word 17, indexed by
+the halfword's `<15:6>`: its destination, opcode and register together.
+
+**A fused return** is a return --- a POPJ, a jump with R, or a dispatch
+whose entry has R --- that pops a word with `<14>` set and `<13:0>` the
+register's, with the register enabled and no fetch needed, so that today
+it would go to `QMLP+2`. When the entry for the next halfword has R and P
+clear, it goes to the entry's address instead, two microcycles sooner; the
+popped word stays on the stack, as the push would have put it back, unless
+the entry's N is set, which would have nopped the push. The next halfword
+is the one the main loop's dispatch would take: M 31 rotated as
+`IR<11:10>` = 3 rotates it, by the location counter as the pop's `NEXT
+INSTR` steps it in the microcycle after. The step, and a fetch it starts,
+are the stream's as ever. Condition 6 is not tested, as the main loop does
+not test it on this path.
+
+It is today's return, `QMLP` or `QMLP+2`, whenever a fetch is needed, the
+entry has R or P, the word is another main loop's (`DMLP`'s), the
+register is disabled, or the popping microinstruction pushes, pops by
+functional source 14, writes M 31 or INTERRUPT-CONTROL, or steps the
+location counter itself (a `NEXT INSTR` the microcycle before, or a
+dispatch's `IR<24>`). The microcycle after a fused return runs as it
+would have before the main loop's dispatch, which has been decided by
+then: it must not write the location counter, M 31 or destinations 5 to
+7. The machine does not check that.
+
+-RESET clears the enable and nothing else, and every control-store write
+clears it too, wherever it lands: the entries name control-store
+addresses, and a new microcode must not run on those another left, whether
+the PROM loaded it or a `%DISK-RESTORE` (which does not pass through the
+PROM). Reset devices, word 104, does not touch it. A checkpoint keeps the
+register, the index and the entries.
+
+`tests/macro_dispatch.rs` holds, on both engines, a main loop made as
+`QMLP` is: the destinations' decode, on revision 12 and not on 11 or the
+CADR; the same state with the MACRO DISPATCH MEMORY holding the generic
+handlers as without it, two microcycles fewer for each fused return,
+returns by a POPJ, a jump with R and a dispatch with R all fused and N
+honoured; the entry taken by the whole `<15:6>`; each case above that is
+not fused running today's path microcycle for microcycle; the enable
+cleared by -RESET and by a control-store write; and the checkpoint.
+`tests/system_2000.rs` holds System 2000 reaching its listener on revision
+12 in the same microcycles and nanoseconds, with the same memories, as on
+revision 11, on both engines; booting with the memory filled from its
+`OPDTB` and enabled from its `QMLP`, with returns fused; and booting with
+the register enabled and every entry poisoned to `ILLOP` before the PROM
+loads the microcode, nothing fused. `tests/unused_codes.rs` holds that it
+writes none of destinations 5 to 7.
 
 ## Its microcode
 

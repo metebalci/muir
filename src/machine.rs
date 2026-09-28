@@ -124,6 +124,11 @@ pub struct Geometry {
     /// 9): register page words 160-171 and word 100 `<6>`,
     /// [`crate::file_device`].
     pub file_device: bool,
+    /// Whether the machine has QUUX's MACRO-DISPATCH register, its MACRO
+    /// DISPATCH MEMORY and the fused return (contract H8a, revision 12):
+    /// functional destinations 5 to 7, [`macro_dispatch`]. Without it those
+    /// destinations write only M, as on the CADR.
+    pub macro_dispatch: bool,
 }
 
 impl Geometry {
@@ -141,9 +146,12 @@ impl Geometry {
         unibus: true,
         rtc: false,
         file_device: false,
+        macro_dispatch: false,
     };
 
-    /// QUUX's, revision 11: the register page at the last page of the
+    /// QUUX's, revision 12: the MACRO-DISPATCH register, the MACRO DISPATCH
+    /// MEMORY and the fused return (contract H8a, [`macro_dispatch`]),
+    /// functional destinations 5 to 7; the register page at the last page of the
     /// physical space, `17777400`, with block-disk and the video controller
     /// on it and word 100 in its final order (contract Q13,
     /// [`Geometry::FEATURE_PAGE`], [`Machine::interrupt_sources`]); three
@@ -175,13 +183,13 @@ impl Geometry {
     /// memory port, then Q7's device registers, then Q9's real-time clock and
     /// file device, then Q11's interval timers and reset devices, then Q13's
     /// register page at `17777400` with block-disk and the video
-    /// controller on it --- and
+    /// controller on it, then H8a's fused return --- and
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
         l1_bits: 6,
         pdl_bits: 14,
-        machine_id: Some((0x5155 << 16) | (11 << 4) | 4),
+        machine_id: Some((0x5155 << 16) | (12 << 4) | 4),
         muldiv: true,
         tick: true,
         speed_bits: false,
@@ -191,6 +199,17 @@ impl Geometry {
         unibus: false,
         rtc: true,
         file_device: true,
+        macro_dispatch: true,
+    };
+
+    /// QUUX at revision 11: [`Geometry::QUUX`] without H8a's fused return,
+    /// its MACHINE-ID saying 11, destinations 5 to 7 writing only M and
+    /// feature word 17 reading 0. The machine a revision-12 run is compared
+    /// with (contract H8a §6).
+    pub const QUUX_11: Geometry = Geometry {
+        machine_id: Some((0x5155 << 16) | (11 << 4) | 4),
+        macro_dispatch: false,
+        ..Geometry::QUUX
     };
 
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
@@ -240,9 +259,11 @@ impl Geometry {
     /// display's ([`Machine::bus_read`]); word 14 the microsecond clock;
     /// word 15 the optional devices, a bit each, `<0>` the real-time clock
     /// and `<1>` the file device, a later optional device taking the next
-    /// bit; word 16 the number of interval timers, 3; every other word 0.
-    /// Below revision 9 word 15 reads 0, and below revision 10 word 16, as
-    /// every unused word does. Read-only, as every word 0-77 is.
+    /// bit; word 16 the number of interval timers, 3; word 17 the MACRO
+    /// DISPATCH MEMORY's entries, 1,024; every other word 0.
+    /// Below revision 9 word 15 reads 0, below revision 10 word 16 and below
+    /// revision 12 word 17, as every unused word does. Read-only, as every
+    /// word 0-77 is.
     pub fn feature_word(self, phys: u32) -> Option<u32> {
         let id = self.machine_id?;
         if (phys >> 8) & 0o37777 != Self::FEATURE_PAGE {
@@ -266,8 +287,176 @@ impl Geometry {
             0o15 => self.rtc as u32 | (self.file_device as u32) << 1,
             // The number of interval timers (contract Q11, revision 10).
             0o16 => self.tick as u32 * Timers::COUNT,
+            // The MACRO DISPATCH MEMORY's entries (contract H8a, revision
+            // 12).
+            0o17 => self.macro_dispatch as u32 * macro_dispatch::ENTRIES as u32,
             _ => 0,
         })
+    }
+}
+
+/// **QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY, and the
+/// fused return** (contract H8a, revision 12). Functional destinations 5 to
+/// 7, which the CADR leaves to its low group with no decoder output, so
+/// that there they write only M, as on QUUX below revision 12.
+///
+/// **The register**, destination 5: `<13:0>` the main loop's address,
+/// microcode 2000's `QMLP`; `<23:14>` the A-memory address of `A-LOCALP`
+/// (`uc-parameters.lisp:1071`) and `<28:24>` the M-memory address of `M-AP`
+/// (`uc-parameters.lisp:384`), kept for contract H8a's operand address
+/// (§3.4) and read by nothing here; `<31>` the enable. `<30:29>` are reserved, written 0 and kept 0 here. -RESET clears
+/// the enable and nothing else, and so does every control-store write, so
+/// that no microcode runs on the entries another one left.
+///
+/// **The memory**, 1,024 entries indexed by the halfword's `<15:6>`, its
+/// destination, opcode and register together. Destination 6 writes the
+/// index, `<9:0>`, and destination 7 the entry at the index, `<17:0>`:
+/// D-MEM's word, `<13:0>` the handler's address, `<14>` N, `<15>` P and
+/// `<16>` R, and `<17>` the operand bit, kept for the operand address and
+/// read by nothing here. A reset leaves the index and the entries, as it
+/// leaves D-MEM.
+///
+/// **The fused return.** A microinstruction that pops the micro stack as a
+/// return --- a POPJ, a jump with R, or a dispatch whose entry has R --- and
+/// pops a word with `<14>` set and `<13:0>` the register's, with the
+/// register enabled and no instruction fetch needed, would go to the main
+/// loop's dispatch today: `QMLP+2`, where the stream hardware's `SPCMUNG`
+/// sends it (`uc-macrocode.lisp:6-7`). That dispatch is `(DISPATCH-XCT-NEXT
+/// M-INST-OP OPDTB)` and its XCT-NEXT the push of `A-MAIN-DISPATCH` back
+/// (`uc-macrocode.lisp:9-13`). When the entry for the next halfword has R
+/// and P clear, the return goes to the entry's address instead, two
+/// microcycles sooner: the popped word stays on the stack, as the push
+/// would put it back, unless the entry's N is set, which would have nopped
+/// the push. The next halfword is the one the main loop's dispatch would
+/// take: M 31, `M-INST-BUFFER`, rotated as `IR<11:10>` = 3 rotates it, by
+/// the location counter as the pop's `NEXT INSTR` steps it in the
+/// microcycle after, [`INDEX_ROTATE`]. The step, and the fetch it may
+/// start, are the stream's as ever.
+///
+/// Condition 6 is not tested: with no fetch the main loop goes to `QMLP+2`
+/// and does not test it either. The return runs today's path, `QMLP` or
+/// `QMLP+2`, when the pop is the functional source's, when the same
+/// microinstruction pushes, writes M 31 or INTERRUPT-CONTROL (whose byte
+/// mode chooses the halfword), or steps the location counter itself
+/// (`LCINC`: a `NEXT INSTR` the microcycle before, or a dispatch's
+/// `IR<24>`), and when the entry has R or P. A return that needs a fetch
+/// is never fused here: there is no prefetch (contract H8a §3.5).
+///
+/// The microcycle after a fused return must not write the location
+/// counter, M 31 or destinations 5 to 7 (contract H8a §3.3): the handler is
+/// chosen by then. A microcode that breaks the rule is changed, never
+/// covered by the hardware.
+pub mod macro_dispatch {
+    /// `<31>` of the register, the enable.
+    pub const ENABLE: u32 = 1 << 31;
+    /// The register's bits kept: `<31>` and `<28:0>`.
+    pub const REGISTER_BITS: u32 = ENABLE | 0o3777777777;
+    /// The MACRO DISPATCH MEMORY's entries.
+    pub const ENTRIES: usize = 1024;
+    /// An entry's bits: D-MEM's seventeen and the operand bit.
+    pub const ENTRY_BITS: u32 = 0o777777;
+    /// `<14>` of an entry, N.
+    pub const N: u32 = 1 << 14;
+    /// `<15>` of an entry, P.
+    pub const P: u32 = 1 << 15;
+    /// `<16>` of an entry, R.
+    pub const R: u32 = 1 << 16;
+    /// `<17>` of an entry, the operand bit.
+    pub const OPERAND: u32 = 1 << 17;
+    /// The rotate, as `IR<4:0>` under `IR<11:10>` = 3, that brings the
+    /// halfword's `<6>` to `<0>`, so that its `<15:6>` is the index: the
+    /// location counter chooses the halfword as it does for the main loop's
+    /// dispatch, whose `IR<4:0>` is 23 for `M-INST-OP`'s `<13:9>`.
+    pub const INDEX_ROTATE: u32 = 32 - 6;
+
+    /// The register's word for a main loop at `main`, `A-LOCALP` at A
+    /// memory's `localp` and `M-AP` at M memory's `ap`, enabled.
+    pub fn word(main: u16, localp: u16, ap: u8) -> u32 {
+        ENABLE | (ap as u32 & 0o37) << 24 | (localp as u32 & 0o1777) << 14 | main as u32 & 0o37777
+    }
+
+    /// The main loop's address, `<13:0>`.
+    pub fn main(register: u32) -> u32 {
+        register & 0o37777
+    }
+}
+
+/// QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY
+/// ([`macro_dispatch`]).
+#[derive(Clone)]
+pub struct MacroDispatch {
+    /// The register, destination 5.
+    pub register: u32,
+    /// The index destination 6 writes and destination 7 writes at.
+    pub index: u16,
+    /// The entries.
+    pub entries: Vec<u32>,
+    /// How many returns have been fused: a count for the profile and the
+    /// tests, not kept in a checkpoint.
+    pub fused: u64,
+}
+
+impl Default for MacroDispatch {
+    fn default() -> Self {
+        MacroDispatch { register: 0, index: 0, entries: vec![0; macro_dispatch::ENTRIES], fused: 0 }
+    }
+}
+
+impl MacroDispatch {
+    /// -RESET, and every control-store write: the enable cleared, the rest
+    /// kept.
+    pub fn disable(&mut self) {
+        self.register &= !macro_dispatch::ENABLE;
+    }
+
+    /// A write of functional destination 5, 6 or 7 (`code`).
+    pub fn write(&mut self, code: u32, data: u32) {
+        match code {
+            5 => self.register = data & macro_dispatch::REGISTER_BITS,
+            6 => self.index = (data & (macro_dispatch::ENTRIES as u32 - 1)) as u16,
+            7 => self.entries[self.index as usize] = data & macro_dispatch::ENTRY_BITS,
+            _ => unreachable!("destination {code:o} is not the MACRO DISPATCH MEMORY's"),
+        }
+    }
+
+    /// The fused return ([`macro_dispatch`]) for a pop of `popped`, with
+    /// `rotated` the word M 31 gives rotated by [`macro_dispatch::INDEX_ROTATE`]
+    /// under the location counter as the main loop's dispatch would see it:
+    /// the handler's address, and whether the popped word stays on the
+    /// stack. The engine has checked everything the microinstruction does;
+    /// `None` is today's return.
+    pub fn fused_return(&self, popped: u32, rotated: u32) -> Option<(u16, bool)> {
+        use macro_dispatch::{ENABLE, N, P, R, main};
+        if self.register & ENABLE == 0
+            || popped & (1 << 14) == 0
+            || popped & 0o37777 != main(self.register)
+        {
+            return None;
+        }
+        let entry = self.entries[(rotated & (macro_dispatch::ENTRIES as u32 - 1)) as usize];
+        if entry & (R | P) != 0 {
+            return None;
+        }
+        Some(((entry & 0o37777) as u16, entry & N == 0))
+    }
+
+    fn save(&self, w: &mut crate::checkpoint::Writer) {
+        w.u32(self.register);
+        w.u16(self.index);
+        w.u32s(&self.entries);
+    }
+
+    fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        self.register = r.u32()?;
+        self.index = r.u16()?;
+        r.u32s_into(&mut self.entries)?;
+        if self.index as usize >= macro_dispatch::ENTRIES {
+            return Err(crate::checkpoint::bad(format!(
+                "MACRO DISPATCH MEMORY index {:o}, wider than its ten bits",
+                self.index
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -703,6 +892,9 @@ pub struct Machine {
     pub ns: u64,
     /// QUUX's interval timers, where the geometry has them.
     pub timers: Timers,
+    /// QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY, where the
+    /// geometry has them ([`Geometry::macro_dispatch`]).
+    pub macro_dispatch: MacroDispatch,
     /// QUUX's real-time clock's setting, where the geometry has one
     /// ([`Geometry::rtc`]): live, or counted from `--rtc`'s start.
     pub rtc: Rtc,
@@ -782,6 +974,7 @@ impl Machine {
             dispatch_constant: 0,
             geometry: Geometry::CADR,
             timers: Timers::new(),
+            macro_dispatch: MacroDispatch::default(),
             rtc: Rtc::Host,
             dma_written: false,
             block_disk: None,
@@ -898,7 +1091,14 @@ impl Machine {
 
     /// A control-store write, `WRITE-I-MEM`: the RAM at `pc`, except where
     /// QUUX's PROM is, which nothing writes.
+    ///
+    /// Every control-store write clears QUUX's MACRO-DISPATCH enable,
+    /// wherever it lands ([`macro_dispatch`]): the entries name control-store
+    /// addresses, and a new microcode must not run on the old one's,
+    /// whether the PROM loaded it or a `%DISK-RESTORE`, which does not pass
+    /// through the PROM (contract H8a §3.6).
     pub fn write_imem(&mut self, pc: u16, w: Insn) {
+        self.macro_dispatch.disable();
         let pc = pc as usize & (IMEM_WORDS - 1);
         if self.geometry.prom_base.is_some_and(|base| pc >= base as usize) {
             return;
@@ -1766,6 +1966,7 @@ impl Machine {
             dispatch_constant,
             geometry,
             timers,
+            macro_dispatch,
             rtc,
             dma_written,
             block_disk,
@@ -1820,7 +2021,9 @@ impl Machine {
         w.u8(geometry.pdl_bits as u8);
         w.bool(geometry.muldiv);
         w.bool(geometry.tick);
+        w.bool(geometry.macro_dispatch);
         timers.save(w);
+        macro_dispatch.save(w);
         rtc.save(w);
         file_device.save(w);
         w.bool(*dma_written);
@@ -1904,17 +2107,21 @@ impl Machine {
         r.u32s_into(&mut self.l1_map)?;
         let (l1_bits, pdl_bits, muldiv) = (r.u8()? as u32, r.u8()? as u32, r.bool()?);
         let tick = r.bool()?;
+        let fused = r.bool()?;
         self.timers = Timers::load(r)?;
+        self.macro_dispatch.load(r)?;
         self.rtc = Rtc::load(r)?;
         self.file_device.load(r)?;
         self.dma_written = r.bool()?;
         // The CADR, or a QUUX with a PDL buffer of 1K to 16K words.
-        self.geometry = match (l1_bits, pdl_bits, muldiv, tick) {
-            (5, 10, false, false) => Geometry::CADR,
-            (6, 10..=14, true, true) => Geometry { pdl_bits, ..Geometry::QUUX },
+        // Revision 12, or 11 without the fused return.
+        self.geometry = match (l1_bits, pdl_bits, muldiv, tick, fused) {
+            (5, 10, false, false, false) => Geometry::CADR,
+            (6, 10..=14, true, true, true) => Geometry { pdl_bits, ..Geometry::QUUX },
+            (6, 10..=14, true, true, false) => Geometry { pdl_bits, ..Geometry::QUUX_11 },
             _ => {
                 return Err(crate::checkpoint::bad(format!(
-                    "a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer, multiply and divide {muldiv}, tick {tick}, is no machine's"
+                    "a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer, multiply and divide {muldiv}, tick {tick}, fused return {fused}, is no machine's"
                 )));
             }
         };

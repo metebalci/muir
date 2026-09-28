@@ -11,12 +11,22 @@
 //! file through the FILE service, which is how the run knows it is over:
 //! nothing here reads the screen.
 //!
-//!     cargo run --release --example profile -- [micro|rtl] [cadr|quux|quux-4k|quux-16k] [workload ...]
+//!     cargo run --release --example profile -- [micro|rtl] [cadr|quux|quux-11|quux-4k|quux-16k] [workload ...]
 //!
 //! The machine is the CADR unless `quux` is named: QUUX, as the `quux`
 //! executable runs it.
 //! `quux-4k` and `quux-16k` are QUUX with a PDL buffer of 4K or 16K words,
-//! the sizes being measured for its next revision.
+//! the sizes being measured for its next revision. `quux-11` is QUUX at
+//! revision 11, without the fused return (contract H8a).
+//!
+//! On QUUX, `MUIR_H8A` fills the MACRO DISPATCH MEMORY with the generic
+//! handlers, `OPDTB`'s entry for each index's opcode, and enables the
+//! MACRO-DISPATCH register with `QMLP`, once the microcode has reached its
+//! main loop, as a microcode that writes them would; the macroinstructions
+//! counted then include those a fused return dispatched. `MUIR_RTC=<s>`
+//! counts QUUX's real-time clock from second `s` of the Unix epoch in the
+//! machine's own time, as `--rtc` does, in place of the host's clock, so
+//! that the band's clock is the same in two runs.
 //! With no workloads named, all of them run, in the order below. For each,
 //! it prints the microcycles, the macroinstructions --- executions of
 //! `QMLP+2`, the dispatch on `M-INST-OP` (`uc-macrocode.lisp`) --- and their
@@ -206,6 +216,8 @@ fn category(label: &str, file: &str) -> String {
 
 struct Phase {
     cycles: u64,
+    /// Fused returns: macroinstructions dispatched without `QMLP+2`.
+    fused: u64,
     hist: Vec<u64>,
     /// Nanoseconds stalled in the step that executed each address.
     stall_hist: Vec<u64>,
@@ -343,6 +355,7 @@ fn run<E: Profiled>(
     let mut hist = vec![0u64; 1 << 14];
     let mut stall_hist = vec![0u64; 1 << 14];
     let cycles0 = e.machine().cycles;
+    let fused0 = e.machine().macro_dispatch.fused;
     let mut fetches = [[0u64; 2]; 2];
     let qmlp = syms.address(Space::IMem, "QMLP");
     let mut ops: HashMap<(u16, u16, u64), u64> = HashMap::new();
@@ -468,6 +481,7 @@ fn run<E: Profiled>(
     };
     Phase {
         cycles: e.machine().cycles - cycles0,
+        fused: e.machine().macro_dispatch.fused - fused0,
         hist,
         stall_hist,
         meters: after.iter().zip(&before).map(|(a, b)| a.wrapping_sub(*b)).collect(),
@@ -481,7 +495,7 @@ fn run<E: Profiled>(
 
 fn report(name: &str, p: &Phase, syms: &Symbols, files: &BTreeMap<String, String>, qmlp: u32) {
     let executed: u64 = p.hist.iter().sum();
-    let macros = p.hist[(qmlp + 2) as usize];
+    let macros = p.hist[(qmlp + 2) as usize] + p.fused;
     println!("== {name}");
     println!(
         "   {} microcycles, {} executed, {} macroinstructions, {:.1} microcycles each",
@@ -490,6 +504,13 @@ fn report(name: &str, p: &Phase, syms: &Symbols, files: &BTreeMap<String, String
         macros,
         p.cycles as f64 / macros.max(1) as f64
     );
+    if p.fused > 0 {
+        println!(
+            "   fused returns {} ({:.1}% of macroinstructions)",
+            p.fused,
+            100.0 * p.fused as f64 / macros as f64
+        );
+    }
     if let Some([stalled, bus, ns, hits, misses]) = p.bus {
         println!("   stalled {stalled} ns, {bus} memory cycles, {ns} ns in all");
         if hits + misses > 0 {
@@ -559,6 +580,7 @@ fn main() {
     let geometry = match args.first().map(String::as_str) {
         Some("cadr") => Some(Geometry::CADR),
         Some("quux") => Some(Geometry::QUUX),
+        Some("quux-11") => Some(Geometry::QUUX_11),
         Some("quux-4k") => Some(Geometry { pdl_bits: 12, ..Geometry::QUUX }),
         Some("quux-16k") => Some(Geometry { pdl_bits: 14, ..Geometry::QUUX }),
         _ => None,
@@ -758,8 +780,27 @@ fn profile<E: Profiled>(
         support::machine_with_pack(&copy)
     };
     m.geometry = geometry;
+    if let Some(s) = std::env::var("MUIR_RTC").ok().and_then(|v| v.parse().ok()) {
+        m.rtc = muir::machine::Rtc::Counted { start: s, base_ns: 0 };
+    }
     let mut e = make(m);
     e.boot();
+    // `MUIR_H8A`: the MACRO DISPATCH MEMORY filled from the microcode's
+    // own opcode table and enabled with its main loop, once it is loaded.
+    if on_quux && std::env::var_os("MUIR_H8A").is_some() {
+        let opdtb = syms.address(Space::DMem, "OPDTB").expect("OPDTB in the symbol table");
+        // Not while the PROM loads the microcode: on `rtl` a control-store
+        // write's second microcycle stands at the address written, and the
+        // PC goes back into the PROM after it.
+        while e.machine().opc != qmlp as u16 || e.pc() >= muir::machine::QUUX_PROM_BASE {
+            e.step().expect("halted before the main loop");
+        }
+        let m = e.machine_mut();
+        for (k, w) in m.macro_dispatch.entries.iter_mut().enumerate() {
+            *w = m.dmem[opdtb as usize + (k >> 3 & 0o37)];
+        }
+        m.macro_dispatch.register = muir::machine::macro_dispatch::word(qmlp as u16, 0, 0);
+    }
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS_1001, root.clone(), 400_000_000);
     eprintln!("listener after {ran} microcycles");
     let mut k = Keyboard::new();

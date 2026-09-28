@@ -501,7 +501,7 @@ fn m6_a_rise_during_a_wait_for_md_is_seen_by_the_jump_after() {
 
 /// **M7, the layout**: word 104 reads 0; words 110-115 as the contract has
 /// them, their reserved bits 0; feature word 16 is 3, the number of
-/// interval timers; MACHINE-ID is revision 11 (contract Q13); and on QUUX, on both
+/// interval timers; MACHINE-ID is revision 12 (contract H8a); and on QUUX, on both
 /// engines, destination 4 writes only M and source 17 reads all ones.
 #[test]
 fn m7_the_page_s_layout_and_q1_s_codes_at_revision_10() {
@@ -518,7 +518,7 @@ fn m7_the_page_s_layout_and_q1_s_codes_at_revision_10() {
     assert_eq!(Geometry::QUUX.feature_word(PAGE + 0o16), Some(3), "feature word 16");
     assert_eq!(m.bus_read(PAGE + 0o16), 3);
     let id = Geometry::QUUX.machine_id.unwrap();
-    assert_eq!((id >> 16, (id >> 4) & 0o7777, id & 0o17), (0x5155, 11, 4), "MACHINE-ID");
+    assert_eq!((id >> 16, (id >> 4) & 0o7777, id & 0o17), (0x5155, 12, 4), "MACHINE-ID");
     // Destination 4 with a period, then source 17: M 3 gets destination
     // 4's word through M 37, and A 200 all ones.
     let prom = [

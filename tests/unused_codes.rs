@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! What runs of the codes the CADR leaves unassigned and QUUX took for its
-//! clocks: functional destinations 3 to 7 and functional sources 15 and 17.
+//! clocks and its fused return: functional destinations 3 to 7 and
+//! functional sources 15 and 17.
 //!
 //! A scan of the control store finds which microinstructions carry them;
 //! an instruction the OA registers modify as it loads (`IMOD`) is made at
@@ -38,27 +39,30 @@ fn uses_the_codes(ir: u64) -> bool {
 
 /// What a run found: the addresses whose executed word used the codes;
 /// those among them whose control-store word did not; and, of what ran,
-/// every value written to destination 3, the destination 4 writes and the
-/// source 17 reads, as `(address, value)`, the value being the output bus
-/// the console reads for the instruction in `IR` before it executes; and
-/// whether timer 0 was on at the end.
+/// every value written to destination 3, the destination 4 writes, the
+/// destination 5 to 7 writes and the source 17 reads, as `(address,
+/// value)`, the value being the output bus the console reads for the
+/// instruction in `IR` before it executes; and whether timer 0 was on at
+/// the end.
 #[derive(Default)]
 struct Found {
     used: Vec<u16>,
     made: Vec<u16>,
     dest_3: Vec<(u16, u32)>,
     dest_4: Vec<(u16, u32)>,
+    dest_5_to_7: Vec<(u16, u32)>,
     source_17: Vec<u16>,
     timer_0_on: bool,
 }
 
-/// Which of destinations 3 and 4 `ir` writes, or source 17 reads.
-fn codes(ir: u64) -> (bool, bool, bool) {
+/// Which of destinations 3, 4, and 5 to 7 `ir` writes, or source 17
+/// reads.
+fn codes(ir: u64) -> (bool, bool, bool, bool) {
     let class = ir >> 43 & 3;
     let d = (class == 0 || class == 3) && ir >> 25 & 1 == 0;
     let dest = ir >> 19 & 0o37;
     let src = ir >> 31 & 1 == 1 && ir >> 26 & 0o17 == 0o17;
-    (d && dest == 3, d && dest == 4, src)
+    (d && dest == 3, d && dest == 4, d && (5..=7).contains(&dest), src)
 }
 
 /// Boots `m` to its listener on `rtl`, checking every executed
@@ -96,11 +100,12 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> Found {
         {
             let ob = ob.unwrap();
             match codes(ir) {
-                (true, _, _) => found.dest_3.push((pc, ob)),
-                (_, true, _) => found.dest_4.push((pc, ob)),
+                (true, _, _, _) => found.dest_3.push((pc, ob)),
+                (_, true, _, _) => found.dest_4.push((pc, ob)),
+                (_, _, true, _) => found.dest_5_to_7.push((pc, ob)),
                 _ => {}
             }
-            if codes(ir).2 {
+            if codes(ir).3 {
                 found.source_17.push(pc);
             }
             if !used.contains(&pc) {
@@ -123,8 +128,10 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> Found {
 /// sources 15 or 17. Its microcode, 2000, the Q11 microcode, uses them at
 /// its own sites. And what it writes (contract Q11): nothing to
 /// destination 3 or 4, its tick being timer 0 on the register page, which
-/// is on at the end; and it reads source 17 nowhere --- so Q1's interval
-/// timer, which revision 10 drops, has no user.
+/// is on at the end; nothing to destinations 5 to 7, so that it runs on
+/// revision 12 with the MACRO-DISPATCH register never written and its fused
+/// return off (contract H8a); and it reads source 17 nowhere --- so Q1's
+/// interval timer, which revision 10 drops, has no user.
 #[test]
 fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
     let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000");
@@ -171,6 +178,7 @@ fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
     assert!(made.is_empty(), "made by the OA registers at {}", octal(made));
     assert!(found.dest_3.is_empty(), "destination 3 written: {:?}", found.dest_3);
     assert!(found.dest_4.is_empty(), "destination 4 written: {:?}", found.dest_4);
+    assert!(found.dest_5_to_7.is_empty(), "destinations 5 to 7 written: {:?}", found.dest_5_to_7);
     assert!(found.source_17.is_empty(), "source 17 read at {}", octal(&found.source_17));
     assert!(found.timer_0_on, "timer 0 on at the end");
 }

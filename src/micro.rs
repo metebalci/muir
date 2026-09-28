@@ -173,6 +173,15 @@ pub struct Micro {
     /// trap is in `NOP` but not in `NOPA` (CONTRL 3E14, 3E23), so the
     /// cycle it kills can still be long.
     trap: bool,
+    /// The instruction being executed has pushed onto the SPC stack, which
+    /// keeps its return from being fused ([`Micro::main_loop_return`]).
+    /// Set and used within one step.
+    pushed: bool,
+    /// A write of destination 5, 6 or 7 (`crate::machine::macro_dispatch`),
+    /// made at the end of the step: `rtl` writes them at the edge, so the
+    /// instruction that writes one reads the register and the memory as
+    /// they stood. Set and used within one step.
+    macro_write: Option<(u32, u32)>,
 }
 
 impl Micro {
@@ -232,6 +241,8 @@ impl Micro {
             opc: [0; 8],
             opc_ck: false,
             trap: false,
+            pushed: false,
+            macro_write: None,
         }
     }
 
@@ -274,6 +285,8 @@ impl Micro {
             // `-RESET` and `-BOOT` put every interval timer in its reset
             // state (contract Q11).
             self.m.timers = crate::machine::Timers::new();
+            // `-RESET` clears QUUX's MACRO-DISPATCH enable (contract H8a).
+            self.m.macro_dispatch.disable();
             // `-RESET` clears `MEMSTART` (`Rtl::reset`).
             self.write_out = None;
         }
@@ -371,6 +384,7 @@ impl Micro {
     /// A push onto the SPC stack: the pointer moves at the edge and the word
     /// waits for the next write phase.
     fn push_spc(&mut self, word: u32) {
+        self.pushed = true;
         self.m.spcptr = (self.m.spcptr + 1) & 0o37;
         self.spc_write = Some((self.m.spcptr, word));
     }
@@ -412,15 +426,75 @@ impl Micro {
     /// enters byte mode; `tests/cosim.rs` holds the engines to each other
     /// on it.
     fn lc_byte_mode(&self) -> u32 {
-        let ir4 = self.ir(4, 1);
-        let ir3 = self.ir(3, 1);
-        let lc1 = (self.m.lc >> 1) & 1;
-        let lc0 = self.m.lc & 1;
+        self.lc_rotation(self.m.lc, self.ir(0, 5))
+    }
+
+    /// The rotate `IR<4:0>` = `rotate` gives under `IR<11:10>` = 3 with the
+    /// location counter at `lc`: [`Micro::lc_byte_mode`]'s gates.
+    fn lc_rotation(&self, lc: u32, rotate: u32) -> u32 {
+        let ir4 = (rotate >> 4) & 1;
+        let ir3 = (rotate >> 3) & 1;
+        let lc1 = (lc >> 1) & 1;
+        let lc0 = lc & 1;
         if self.m.byte_mode() {
-            self.ir(0, 3) | ((ir4 ^ lc1 ^ lc0 ^ 1) << 4) | ((ir3 ^ lc0 ^ 1) << 3)
+            (rotate & 7) | ((ir4 ^ lc1 ^ lc0 ^ 1) << 4) | ((ir3 ^ lc0 ^ 1) << 3)
         } else {
-            self.ir(0, 4) | ((ir4 ^ lc1 ^ 1) << 4)
+            (rotate & 0o17) | ((ir4 ^ lc1 ^ 1) << 4)
         }
+    }
+
+    /// A pop with `<14>` up: to the handler the MACRO DISPATCH MEMORY names
+    /// if the return is fused (`crate::machine::macro_dispatch`), and
+    /// otherwise as [`Micro::pop_asks_for_a_fetch`] says. `advance` is a
+    /// dispatch's `IR<24>`, which has stepped the counter already.
+    ///
+    /// Fused only where today's return goes to the main loop's dispatch,
+    /// no fetch needed, and nothing in this microinstruction changes what
+    /// that dispatch would see: no push, no pop by the functional source,
+    /// no write of M 31 or INTERRUPT-CONTROL, and no step of the counter in
+    /// this microcycle (`LCINC`: `NEXT INSTRD`, or the dispatch's
+    /// `IR<24>`). The counter steps a microcycle later, so the halfword is
+    /// chosen by it as stepped.
+    fn main_loop_return(&mut self, word: u32, advance: bool) -> u32 {
+        let target = self.pop_asks_for_a_fetch(word);
+        if !self.m.geometry.macro_dispatch
+            || self.needfetch()
+            || advance
+            || self.next_instrd
+            || self.pushed
+            || self.pops_by_source()
+            || self.writes_m31_or_interrupt_control()
+        {
+            return target;
+        }
+        let inc = if self.m.byte_mode() { 1 } else { 2 };
+        let stepped = (self.m.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
+        let rotate = self.lc_rotation(stepped, crate::machine::macro_dispatch::INDEX_ROTATE);
+        let rotated = rol(self.m.mmem[0o31], rotate);
+        match self.m.macro_dispatch.fused_return(word, rotated) {
+            Some((handler, keep)) => {
+                if keep {
+                    self.m.spcptr = (self.m.spcptr + 1) & 0o37;
+                }
+                self.m.macro_dispatch.fused += 1;
+                handler as u32
+            }
+            None => target,
+        }
+    }
+
+    /// Whether the instruction reads functional source 14, the SPC's pop:
+    /// `IR<31>`, and `IR<29:26>` 14 (`IR<30>` is in no decode).
+    fn pops_by_source(&self) -> bool {
+        self.p0.m_src_functional() && self.maddr & 0o17 == 0o14
+    }
+
+    /// Whether the instruction, an ALU or BYTE one with `IR<25>` clear,
+    /// writes M 31 (`IR<18:14>`) or INTERRUPT-CONTROL (`IR<23:19>` 2).
+    fn writes_m31_or_interrupt_control(&self) -> bool {
+        matches!(self.p0.op(), Op::Alu | Op::Byte)
+            && self.ir(25, 1) == 0
+            && (self.ir(14, 5) == 0o31 || self.ir(19, 5) == 0o2)
     }
 
     /// Steps the location counter, fetching the next instruction word when
@@ -741,6 +815,13 @@ impl Micro {
             // since revision 10 (contract Q11): Q1's tick control and
             // interval period are gone, and the register page's timers
             // take their place (`machine::Timers`).
+            // Destinations 5 to 7 are QUUX's MACRO-DISPATCH register and
+            // MACRO DISPATCH MEMORY's index and entry from revision 12
+            // (`machine::macro_dispatch`), written at the end of the step;
+            // below it, and on the CADR, they too write only M.
+            0o5..=0o7 if self.m.geometry.macro_dispatch => {
+                self.macro_write = Some((code as u32, data));
+            }
             // Pdl Buffer Top, Push, (Index), Index, Pointer
             // The word is written in the next microcycle's write phase,
             // [`Micro::land_writes`].
@@ -1197,7 +1278,7 @@ impl Micro {
         if r && cond {
             let mut t = self.pop_spc();
             if (t >> 14) & 1 != 0 {
-                t = self.pop_asks_for_a_fetch(t);
+                t = self.main_loop_return(t, false);
             }
             target = (t & 0o37777) as u16;
         }
@@ -1333,7 +1414,7 @@ impl Micro {
         if r {
             let mut t = self.pop_spc();
             if (t >> 14) & 1 != 0 {
-                t = self.pop_asks_for_a_fetch(t);
+                t = self.main_loop_return(t, advance);
             }
             target = t & 0o37777;
         }
@@ -1381,6 +1462,7 @@ impl Engine for Micro {
         // bottom of the control store.  `-BOOT` presets `RUN`.
         self.m.reset_console_registers();
         self.m.timers = crate::machine::Timers::new();
+        self.m.macro_dispatch.disable();
         self.m.clock_control.run = true;
         self.srun = true;
         self.npc = self.m.reset_pc();
@@ -1450,6 +1532,9 @@ impl Engine for Micro {
             opc,
             opc_ck,
             trap,
+            // Set and used within one step.
+            pushed: _,
+            macro_write: _,
         } = self;
         m.save(w);
         w.u64(p0.raw());
@@ -1701,6 +1786,8 @@ impl Engine for Micro {
         }
 
         self.popj = self.p0.popj();
+        self.pushed = false;
+        self.macro_write = None;
         self.aaddr = self.ir(32, 10) as u16;
         self.maddr = self.ir(26, 5) as u8;
         self.mdata = if self.p0.m_src_functional() {
@@ -1727,9 +1814,12 @@ impl Engine for Micro {
         if self.popj {
             let mut t = self.pop_spc();
             if (t >> 14) & 1 != 0 {
-                t = self.pop_asks_for_a_fetch(t);
+                t = self.main_loop_return(t, false);
             }
             self.npc = (t & 0o37777) as u16;
+        }
+        if let Some((code, data)) = self.macro_write.take() {
+            self.m.macro_dispatch.write(code, data);
         }
         self.fetch_and_clock();
         self.m.cycles += 1;
