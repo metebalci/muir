@@ -32,10 +32,114 @@
 //!
 //! The words themselves come from [`crate::machine::Machine`], as with the
 //! bus interface; the port says only when.
+//!
+//! **The cache-only prefetch** (contract H8a §3.5, form 2; off
+//! unless [`MemoryPort::set_prefetch`] fits it, and in no revision): when a
+//! macroinstruction fetch's read is answered from main memory at physical
+//! word `p`, the word at `p + 1` is taken into a one-word buffer with its
+//! virtual and physical addresses, if the cache holds it and it is in the
+//! same page. Nothing else happens: no memory cycle, no map lookup, no
+//! arbitration, so it cannot fault. [`Reach::Line`] looks only in the line
+//! the fetch has just read or filled, whose four words the fabric's cache
+//! puts out together; [`Reach::Page`] looks in the next line too, which is
+//! a second lookup of the cache's RAMs. The buffer is dropped by a write
+//! of the location counter, a store to its word, a transfer by block-disk
+//! or the file device, a map write, and -RESET; a checkpoint does not keep
+//! it, so a restore drops it too. What uses it is the fused return
+//! (`crate::machine::macro_dispatch`), in `rtl` alone.
 
 use crate::busint::{Ack, Responder};
 use crate::cache::{Cache, CacheConfig, MemoryTiming};
 use crate::clock::TimingModel;
+
+/// How far the prefetch looks for the next word (contract H8a §3.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// Only in the line the fetch read: the next word when the fetched one
+    /// is not its line's last. The fabric's cache has that line's words out
+    /// of its RAMs already, so this needs no second read of them.
+    Line,
+    /// Anywhere in the fetched word's page that the cache holds: the next
+    /// line's word is a lookup of its own, a second read port.
+    Page,
+}
+
+/// How the fused return that takes the prefetched word loads M 31
+/// (contract H8a §3.5's open design point).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum M31Load {
+    /// (a) M 31 is a register beside M memory, which reads of A and M
+    /// address 31 take: loaded at the edge ending the microcycle after the
+    /// return, as the operand address is, so that microcycle reads the old
+    /// word and the handler the new one.
+    Register,
+    /// (b) M 31 is written through M memory's one write port, in the write
+    /// pulse of the microcycle after the return: the return falls back
+    /// when its own microinstruction has an A or M destination, whose write
+    /// that pulse carries. That microcycle's own reads of A or M 31 pass
+    /// the new word around, as they would a write of the return's.
+    FreePort,
+}
+
+/// The prefetch's form, when it is fitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Prefetch {
+    pub reach: Reach,
+    pub m31: M31Load,
+}
+
+/// The word the prefetch holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Prefetched {
+    /// Its virtual word address, `VMA<23:0>` as the stream's fetch of it
+    /// would give it: `LC<25:2>`.
+    pub vaddr: u32,
+    /// Its physical word address.
+    pub phys: u32,
+    /// The word, as main memory held it when it was taken.
+    pub word: u32,
+}
+
+/// What dropped the buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Drop {
+    /// A write of the location counter.
+    LcWrite,
+    /// A store to its word.
+    Store,
+    /// A transfer by block-disk or the file device.
+    Dma,
+    /// A map write.
+    MapWrite,
+    /// -RESET.
+    Reset,
+}
+
+/// The prefetch's counts, for the profile and the tests; not in a
+/// checkpoint.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrefetchCounts {
+    /// Fetches answered from main memory.
+    pub fetches: u64,
+    /// Words taken: in the fetch's own line, and in the next line.
+    pub same_line: u64,
+    pub next_line: u64,
+    /// Next words not taken: past the page's end, or not in the cache (for
+    /// [`Reach::Line`], every next word in another line).
+    pub page_end: u64,
+    pub not_held: u64,
+    /// Buffers dropped, by [`Drop`]'s kinds in order, a buffer counted
+    /// once: by what dropped it first.
+    pub dropped: [u64; 5],
+    /// Fused returns that took the buffered word.
+    pub used: u64,
+    /// Returns that would have fused on the buffered word but for a
+    /// condition of the fetch path: condition 6 true; under
+    /// [`M31Load::FreePort`], the port taken by the return's own write; and
+    /// a store started in the microcycle before, whose compare with the
+    /// word's address is yet to be made.
+    pub refused: [u64; 3],
+}
 
 /// Where the port's cycle is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +179,14 @@ pub struct MemoryPort {
     /// Whose clock the timeout's oscillator is measured on: the engine's,
     /// [`MemoryPort::keep_timing_model`]. Not in a checkpoint.
     model: TimingModel,
+    /// The prefetch, if fitted, its word, the cycle's virtual word address
+    /// when it is a macroinstruction fetch, and its counts. None of it in a
+    /// checkpoint: the form is the engine's setting, as the timing model
+    /// is, and a restore drops the word.
+    prefetch: Option<Prefetch>,
+    prefetched: Option<Prefetched>,
+    fetch_vaddr: Option<u32>,
+    pub prefetch_counts: PrefetchCounts,
 }
 
 impl Default for MemoryPort {
@@ -97,7 +209,76 @@ impl MemoryPort {
             memory_free_at: 0,
             buffer_free_at: 0,
             model: TimingModel::Sync { cycle_ticks: 4, ilong_ticks: 0 },
+            prefetch: None,
+            prefetched: None,
+            fetch_vaddr: None,
+            prefetch_counts: PrefetchCounts::default(),
         }
+    }
+
+    /// The cache-only prefetch fitted, or taken out: `None`, the default.
+    pub fn set_prefetch(&mut self, prefetch: Option<Prefetch>) {
+        self.prefetch = prefetch;
+        self.prefetched = None;
+    }
+
+    pub fn prefetch(&self) -> Option<Prefetch> {
+        self.prefetch
+    }
+
+    /// The word the prefetch holds, if it holds one.
+    pub fn prefetched(&self) -> Option<Prefetched> {
+        self.prefetched
+    }
+
+    /// The cycle just requested is the stream's macroinstruction fetch of
+    /// virtual word `vaddr`.
+    pub fn mark_fetch(&mut self, vaddr: u32) {
+        self.fetch_vaddr = Some(vaddr & 0x00ff_ffff);
+    }
+
+    /// The buffer dropped, if it holds a word, and counted by `why`.
+    pub fn drop_prefetched(&mut self, why: Drop) {
+        if self.prefetched.take().is_some() {
+            self.prefetch_counts.dropped[why as usize] += 1;
+        }
+    }
+
+    /// The prefetch's part of a read answered: when the cycle was a
+    /// macroinstruction fetch from main memory, of `main`'s words, the next
+    /// word is taken if the cache holds it in the same page, and the
+    /// buffer is emptied otherwise. Called once the port has acknowledged
+    /// the read, whose line the cache then holds.
+    pub fn read_answered(&mut self, main: &[u32]) {
+        let Some(vaddr) = self.fetch_vaddr.take() else { return };
+        let Some(prefetch) = self.prefetch else { return };
+        if !self.memory || self.write {
+            return;
+        }
+        self.prefetched = None;
+        let c = &mut self.prefetch_counts;
+        c.fetches += 1;
+        let next = self.addr + 1;
+        let line = self.cache.config.line_words;
+        if next & 0xff == 0 || next as usize >= main.len() {
+            c.page_end += 1;
+            return;
+        }
+        let same_line = !next.is_multiple_of(line);
+        if !same_line && (prefetch.reach == Reach::Line || !self.cache.holds(next)) {
+            c.not_held += 1;
+            return;
+        }
+        if same_line {
+            c.same_line += 1;
+        } else {
+            c.next_line += 1;
+        }
+        self.prefetched = Some(Prefetched {
+            vaddr: (vaddr + 1) & 0x00ff_ffff,
+            phys: next,
+            word: main[next as usize],
+        });
     }
 
     pub fn cache(&self) -> &Cache {
@@ -123,6 +304,7 @@ impl MemoryPort {
     /// something else, the disk.
     pub fn invalidate_cache(&mut self) {
         self.cache.invalidate();
+        self.drop_prefetched(Drop::Dma);
     }
 
     /// When the write buffer is empty: main memory has done the last write
@@ -146,6 +328,10 @@ impl MemoryPort {
         self.write = write;
         self.addr = phys;
         self.memory = false;
+        self.fetch_vaddr = None;
+        if write && self.prefetched.is_some_and(|p| p.phys == phys) {
+            self.drop_prefetched(Drop::Store);
+        }
     }
 
     /// An edge of the processor's clock: a cycle requested is taken here.
@@ -248,6 +434,12 @@ impl MemoryPort {
             memory_free_at,
             buffer_free_at,
             model: _,
+            // The prefetch's form is the engine's setting, and a restore
+            // drops its word (see the module's account).
+            prefetch: _,
+            prefetched: _,
+            fetch_vaddr: _,
+            prefetch_counts: _,
         } = self;
         match *state {
             State::Idle => w.u8(0),

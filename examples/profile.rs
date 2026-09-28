@@ -26,9 +26,18 @@
 //! would; the macroinstructions counted then include those a fused return
 //! dispatched. `MUIR_H8A=operand` gives the operand bit to the entries of
 //! the opcodes whose `<8:0>` is a register and delta
-//! (`tests/support/macro_dispatch.rs`, `fill_generic`). Either way the run
-//! is watched by that file's checkers, and each workload says what they
-//! counted. `MUIR_RTC=<s>`
+//! (`tests/support/macro_dispatch.rs`, `fill_generic`).
+//! `MUIR_H8A=microcode` fills nothing: the microcode fills the memory and
+//! writes the register itself, and the checkers watch from its first
+//! main-loop return with the register enabled. Either way the run is
+//! watched by that file's checkers, each workload says what they counted,
+//! and the whole run's counts close the output. On `rtl`,
+//! `MUIR_PREFETCH=a` or `b` fits QUUX's cache-only prefetch
+//! (`muir::memory_port`, contract H8a §3.5), M 31 loaded as a register (a)
+//! or through M memory's write port (b), looking for the next word in the
+//! page; `a-line` and `b-line` look only in the fetched word's line; each
+//! workload then says what it took, and how often a fused return used it.
+//! `MUIR_RTC=<s>`
 //! counts QUUX's real-time clock from second `s` of the Unix epoch in the
 //! machine's own time, as `--rtc` does, in place of the host's clock, so
 //! that the band's clock is the same in two runs.
@@ -147,6 +156,10 @@ trait Profiled: Engine {
     fn fetch_started(&self) -> Option<bool> {
         None
     }
+    /// QUUX's prefetch's counts, where it is fitted.
+    fn prefetch_counts(&self) -> Option<muir::memory_port::PrefetchCounts> {
+        None
+    }
 }
 
 impl Profiled for Micro {
@@ -171,7 +184,10 @@ impl<E: Profiled + support::macro_dispatch::Executes> Profiled
         self.engine.bus()
     }
     fn fetch_started(&self) -> Option<bool> {
-        self.engine.fetch_started()
+        Profiled::fetch_started(&self.engine)
+    }
+    fn prefetch_counts(&self) -> Option<muir::memory_port::PrefetchCounts> {
+        self.engine.prefetch_counts()
     }
 }
 
@@ -185,6 +201,9 @@ impl Profiled for Rtl {
     }
     fn fetch_started(&self) -> Option<bool> {
         Rtl::fetch_started(self)
+    }
+    fn prefetch_counts(&self) -> Option<muir::memory_port::PrefetchCounts> {
+        self.prefetch().and(Rtl::prefetch_counts(self))
     }
 }
 
@@ -242,6 +261,8 @@ fn category(label: &str, file: &str) -> String {
 
 struct Phase {
     cycles: u64,
+    /// QUUX's prefetch's counts over the workload, where it is fitted.
+    prefetch: Option<muir::memory_port::PrefetchCounts>,
     /// What the fused return's checkers counted, where they ran.
     checked: Option<support::macro_dispatch::Counts>,
     /// Fused returns: macroinstructions dispatched without `QMLP+2`.
@@ -383,6 +404,7 @@ fn run<E: Profiled>(
     let mut hist = vec![0u64; 1 << 14];
     let mut stall_hist = vec![0u64; 1 << 14];
     let cycles0 = e.machine().cycles;
+    let prefetch0 = e.prefetch_counts();
     let fused0 = e.machine().macro_dispatch.fused;
     let checked0 = e.checker().map(|c| c.counts.clone());
     let mut fetches = [[0u64; 2]; 2];
@@ -510,6 +532,7 @@ fn run<E: Profiled>(
     };
     Phase {
         cycles: e.machine().cycles - cycles0,
+        prefetch: e.prefetch_counts().zip(prefetch0).map(|(a, b)| prefetch_since(a, b)),
         checked: e.checker().zip(checked0.as_ref()).map(|(c, c0)| c.counts.since(c0)),
         fused: e.machine().macro_dispatch.fused - fused0,
         hist,
@@ -523,7 +546,87 @@ fn run<E: Profiled>(
     }
 }
 
-fn report(name: &str, p: &Phase, syms: &Symbols, files: &BTreeMap<String, String>, qmlp: u32) {
+/// The prefetch's counts after `b` was taken.
+fn prefetch_since(
+    a: muir::memory_port::PrefetchCounts,
+    b: muir::memory_port::PrefetchCounts,
+) -> muir::memory_port::PrefetchCounts {
+    muir::memory_port::PrefetchCounts {
+        fetches: a.fetches - b.fetches,
+        same_line: a.same_line - b.same_line,
+        next_line: a.next_line - b.next_line,
+        page_end: a.page_end - b.page_end,
+        not_held: a.not_held - b.not_held,
+        dropped: std::array::from_fn(|k| a.dropped[k] - b.dropped[k]),
+        used: a.used - b.used,
+        refused: std::array::from_fn(|k| a.refused[k] - b.refused[k]),
+    }
+}
+
+/// The prefetch's counts in a line.
+fn prefetch_line(c: &muir::memory_port::PrefetchCounts) -> String {
+    let taken = c.same_line + c.next_line;
+    format!(
+        "prefetch: {} fetches answered, {taken} next words taken ({:.1}%: {} in the line, {} in the next), {} past the page, {} not held; dropped by LC {}, store {}, transfer {}, map {}, reset {}; used by {} fused returns; refused for condition 6 {}, the write port {}, a store starting {}",
+        c.fetches,
+        100.0 * taken as f64 / c.fetches.max(1) as f64,
+        c.same_line,
+        c.next_line,
+        c.page_end,
+        c.not_held,
+        c.dropped[0],
+        c.dropped[1],
+        c.dropped[2],
+        c.dropped[3],
+        c.dropped[4],
+        c.used,
+        c.refused[0],
+        c.refused[1],
+        c.refused[2],
+    )
+}
+
+/// The returns the checkers counted as made by a handler a fused return
+/// ran, all of them and those of a specialised handler, one `OPDTB` names
+/// for no opcode, the most frequent of those by label; and of those, the
+/// ones whose returning microinstruction is the specialised handler's own,
+/// under its label.
+fn handler_returns_line(
+    c: &support::macro_dispatch::Counts,
+    generic: &std::collections::BTreeSet<u16>,
+    label: impl Fn(u16) -> String,
+) -> String {
+    let returns = &c.handler_returns;
+    let base = |l: String| l.rsplit_once('+').map_or(l.clone(), |(b, _)| b.to_string());
+    let special_labels: std::collections::BTreeSet<String> =
+        returns.keys().filter(|h| !generic.contains(h)).map(|&h| base(label(h))).collect();
+    let own: u64 = c
+        .handler_return_sites
+        .iter()
+        .filter(|(at, _)| special_labels.contains(&base(label(**at))))
+        .map(|(_, n)| n)
+        .sum();
+    let all: u64 = returns.values().sum();
+    let mut special: Vec<(u64, u16)> =
+        returns.iter().filter(|(h, _)| !generic.contains(h)).map(|(&h, &n)| (n, h)).collect();
+    special.sort_by_key(|&(n, _)| std::cmp::Reverse(n));
+    let total: u64 = special.iter().map(|(n, _)| n).sum();
+    let top: Vec<String> =
+        special.iter().take(8).map(|&(n, h)| format!("{} {n}", label(h))).collect();
+    format!(
+        "fused returns made by a handler a fused return ran: {all}, by a specialised one {total} ({}), by the specialised handler's own microinstruction {own}",
+        top.join(", ")
+    )
+}
+
+fn report(
+    name: &str,
+    p: &Phase,
+    syms: &Symbols,
+    files: &BTreeMap<String, String>,
+    qmlp: u32,
+    generic: &std::collections::BTreeSet<u16>,
+) {
     let executed: u64 = p.hist.iter().sum();
     let macros = p.hist[(qmlp + 2) as usize] + p.fused;
     println!("== {name}");
@@ -548,6 +651,10 @@ fn report(name: &str, p: &Phase, syms: &Symbols, files: &BTreeMap<String, String
                 .unwrap_or_else(|| "?".into())
         };
         println!("   checkers: {}, problems {}", c.report(label), c.problems());
+        println!("   {}", handler_returns_line(c, generic, label));
+    }
+    if let Some(c) = &p.prefetch {
+        println!("   {}", prefetch_line(c));
     }
     if let Some([stalled, bus, ns, hits, misses]) = p.bus {
         println!("   stalled {stalled} ns, {bus} memory cycles, {ns} ns in all");
@@ -663,8 +770,27 @@ fn main() {
                     write_ns: w.parse().ok()?,
                 })
             });
+            // `MUIR_PREFETCH`: QUUX's cache-only prefetch, as the module
+            // doc says.
+            let prefetch = std::env::var("MUIR_PREFETCH").ok().map(|v| {
+                use muir::memory_port::{M31Load, Prefetch, Reach};
+                let (m31, reach) = v.split_once('-').unwrap_or((v.as_str(), "page"));
+                Prefetch {
+                    m31: match m31 {
+                        "a" => M31Load::Register,
+                        "b" => M31Load::FreePort,
+                        _ => panic!("MUIR_PREFETCH={v}: a or b, then -line or -page"),
+                    },
+                    reach: match reach {
+                        "line" => Reach::Line,
+                        "page" => Reach::Page,
+                        _ => panic!("MUIR_PREFETCH={v}: a or b, then -line or -page"),
+                    },
+                }
+            });
             profile(
                 move |m| {
+                    let on_quux = m.geometry.machine_id.is_some();
                     let mut e = Rtl::new(m);
                     if let Some(cycle_ticks) = ticks {
                         e.set_timing_model(muir::clock::TimingModel::Sync {
@@ -674,6 +800,9 @@ fn main() {
                     }
                     e.set_cache(cache);
                     e.set_memory_timing(memory);
+                    if on_quux {
+                        e.set_prefetch(prefetch);
+                    }
                     e
                 },
                 geometry,
@@ -827,6 +956,30 @@ fn profile<E: Profiled + support::macro_dispatch::Executes>(
     // own opcode table and enabled with its main loop and bases, once it is
     // loaded, and the run watched by the checkers.
     match std::env::var("MUIR_H8A") {
+        // The microcode fills the memory itself: the checkers watch from
+        // its first main-loop return with the register enabled, after
+        // `RESET-MACHINE` has written the bases.
+        Ok(how) if on_quux && how == "microcode" => {
+            while e.machine().macro_dispatch.register & muir::machine::macro_dispatch::ENABLE == 0
+                || e.machine().opc != qmlp as u16
+                || e.pc() >= muir::machine::QUUX_PROM_BASE
+            {
+                e.step().expect("halted before the main loop");
+            }
+            eprintln!(
+                "microcode's fill enabled, register {:o}",
+                e.machine().macro_dispatch.register
+            );
+            measure(
+                support::macro_dispatch::Checked::new(e),
+                &syms,
+                &files,
+                qmlp,
+                root,
+                home,
+                wanted,
+            )
+        }
         Ok(how) if on_quux => {
             let at = |space, name| {
                 syms.address(space, name).unwrap_or_else(|| panic!("{name} in the symbol table"))
@@ -897,6 +1050,11 @@ fn measure<E: Profiled>(
     let ready = home.join("ready.done");
     let p = run(&mut e, &mut k, "(w-done \"ready\")", &ready, syms);
     eprintln!("defined and logged in, {} microcycles", p.cycles);
+    // The generic handlers: `OPDTB`'s thirty-two entries' addresses.
+    let generic: std::collections::BTreeSet<u16> = syms
+        .address(Space::DMem, "OPDTB")
+        .map(|o| (0..32).map(|k| (e.machine().dmem[(o + k) as usize] & 0o37777) as u16).collect())
+        .unwrap_or_default();
 
     // A marker of its own for every run, so that a workload named twice is
     // run twice.
@@ -904,7 +1062,7 @@ fn measure<E: Profiled>(
         let marker = home.join(format!("{name}-{n}.done"));
         let p =
             run(&mut e, &mut k, &format!("(progn {form} (w-done \"{name}-{n}\"))"), &marker, syms);
-        report(name, &p, syms, files, qmlp);
+        report(name, &p, syms, files, qmlp, &generic);
         // `MUIR_PC_DUMP=<dir>`: every executed address's count and the
         // nanoseconds stalled at it, one file a workload.
         // `MUIR_OPS=<dir>`: the macroinstructions, one file a workload.
@@ -927,5 +1085,22 @@ fn measure<E: Profiled>(
             }
             std::fs::write(PathBuf::from(dir).join(format!("{name}.txt")), out).unwrap();
         }
+    }
+    // The whole run's counts, from the fill on: the boot, the login and
+    // the definitions too.
+    if e.checker().is_some() || e.prefetch_counts().is_some() {
+        println!("== the whole run");
+    }
+    if let Some(c) = e.checker() {
+        let label = |pc: u16| {
+            syms.nearest(Space::IMem, pc as u32)
+                .map(|(l, off)| format!("{l}+{off:o}"))
+                .unwrap_or_else(|| "?".into())
+        };
+        println!("   checkers: {}, problems {}", c.counts.report(label), c.counts.problems());
+        println!("   {}", handler_returns_line(&c.counts, &generic, label));
+    }
+    if let Some(c) = e.prefetch_counts() {
+        println!("   {}", prefetch_line(&c));
     }
 }

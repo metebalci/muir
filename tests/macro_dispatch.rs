@@ -224,6 +224,11 @@ struct Setup {
     /// What [`RECORD`]'s handler runs first, in place of its push of
     /// PDL-INDEX.
     first: Option<u64>,
+    /// Where the program's first word is, a word address in the mapped
+    /// pages 1 and 2.
+    code: u32,
+    /// Handlers and words more, put in after the rest.
+    patch: Option<fn(&mut Machine)>,
 }
 
 impl Setup {
@@ -238,6 +243,8 @@ impl Setup {
             operand: false,
             slot: None,
             first: None,
+            code: CODE,
+            patch: None,
         }
     }
 
@@ -377,7 +384,7 @@ fn machine(s: Setup) -> Machine {
 
     m.amem[0o50] = MAIN;
     m.amem[0o51] = s.register;
-    m.amem[0o52] = CODE * 4;
+    m.amem[0o52] = s.code * 4;
     m.amem[0o53] = if s.sequence_break { 1 << 26 } else { 0 };
     m.amem[SENTINEL_AT as usize] = SENTINEL;
     m.amem[LOCALP_AT as usize] = LOCALP;
@@ -387,8 +394,12 @@ fn machine(s: Setup) -> Machine {
     m.pdl_index = SENTINEL as u16;
     let rw = (1 << 23) | (1 << 22);
     m.l2_map[1] = rw | 1;
+    m.l2_map[2] = rw | 2;
     for (k, pair) in s.program.chunks(2).enumerate() {
-        m.main[CODE as usize + k] = pair[0] | pair[1] << 16;
+        m.main[s.code as usize + k] = pair[0] | pair[1] << 16;
+    }
+    if let Some(patch) = s.patch {
+        patch(&mut m);
     }
     m
 }
@@ -724,6 +735,8 @@ fn a_checkpoint_keeps_the_register_and_the_memory() {
         // do not hold, as they stand after destination 5 and before the
         // microcode writes `A-LOCALP` and `M-AP`: the file carries both.
         m.macro_dispatch.operand = Some(Operand { arg: true, delta: 0o52 });
+        // And a prefetched word armed for M 31 (the prefetch's (a)).
+        m.macro_dispatch.m31 = Some(0o12345670123);
         m.macro_dispatch.localp = 1;
         m.macro_dispatch.ap = 2;
         let mut w = Writer::new();
@@ -738,6 +751,7 @@ fn a_checkpoint_keeps_the_register_and_the_memory() {
         assert_eq!(back.macro_dispatch.fused, 0, "{geometry:?}");
         assert_eq!(Machine::checkpointed_geometry(&body).unwrap(), geometry);
         assert_eq!(back.macro_dispatch.operand, m.macro_dispatch.operand, "{geometry:?}");
+        assert_eq!(back.macro_dispatch.m31, Some(0o12345670123), "{geometry:?}");
         assert_eq!(
             (back.macro_dispatch.localp, back.macro_dispatch.ap),
             (1, 2),
@@ -1103,5 +1117,447 @@ fn the_generic_fill_arms_only_a_register_and_a_delta() {
                 assert_eq!(armed(half), want, "opcode {op:o}, register {reg}, dest {dest}");
             }
         }
+    }
+}
+
+// --- The cache-only prefetch (contract H8a §3.5, `rtl` alone) ---
+
+use muir::memory_port::{Drop, M31Load, Prefetch, PrefetchCounts, Reach};
+
+/// The prefetch's four forms.
+const FORMS: [Prefetch; 4] = [
+    Prefetch { reach: Reach::Page, m31: M31Load::Register },
+    Prefetch { reach: Reach::Page, m31: M31Load::FreePort },
+    Prefetch { reach: Reach::Line, m31: M31Load::Register },
+    Prefetch { reach: Reach::Line, m31: M31Load::FreePort },
+];
+
+/// A change made to the machine once, after the first microcycle that
+/// executes an address.
+type Touch = Option<(u16, fn(&mut Machine))>;
+
+/// What a run on `rtl` leaves: its microcycles, the machine, the
+/// prefetch's counts, the memory cycles it started, and the checkers'
+/// counts.
+struct Ran {
+    n: u64,
+    m: Machine,
+    counts: PrefetchCounts,
+    bus_cycles: u64,
+    checked: Counts,
+}
+
+/// Runs `s` on `rtl` under the checkers, the prefetch fitted as `prefetch`
+/// says, until opcode 7's handler has run, and then eight microcycles more
+/// in its loop, which let a fetch the fused return started land in MD (a
+/// handler that writes MD or starts a cycle waits for it, `-WAIT`'s
+/// `DESTMEM AND MBUSY.SYNC`). The microcycles counted are those to the
+/// handler. `touch`, when given, runs once after the first microcycle that
+/// executes its address, with the machine.
+fn run_prefetched(s: Setup, prefetch: Option<Prefetch>, touch: Touch) -> Ran {
+    let mut r = Rtl::new(machine(s));
+    r.set_prefetch(prefetch);
+    let mut e = Checked::new(r);
+    e.boot();
+    let mut touch = touch;
+    for n in 0..20_000 {
+        if e.machine().opc == STOP {
+            e.run(8);
+            let r = &e.engine;
+            return Ran {
+                n,
+                m: r.machine().clone(),
+                counts: r.prefetch_counts().unwrap(),
+                bus_cycles: r.bus_cycles(),
+                checked: e.checker.counts.clone(),
+            };
+        }
+        e.step().unwrap();
+        if let Some((at, f)) = touch
+            && e.engine.executed() == Some(at)
+        {
+            f(e.machine_mut());
+            touch = None;
+        }
+    }
+    panic!("the program never reached its end");
+}
+
+/// **The returns into [`PROGRAM`] that fuse on the prefetched word**: into
+/// a word's first halfword, which needs a fetch, where the word is not
+/// the first of its line of four (the line the fetch before it filled
+/// holds it; the next line is in the cache on no first pass), from a
+/// handler whose return fuses into an entry with R and P clear; under
+/// (b), only a return whose microinstruction writes neither A nor M, the
+/// jump (opcode 2) and the dispatch (opcode 3) here.
+fn fusing_prefetched(m31: M31Load) -> Vec<usize> {
+    let op = |h: u32| h >> 9 & 0o37;
+    (2..PROGRAM.len())
+        .step_by(2)
+        .filter(|&k| !(CODE as usize + k / 2).is_multiple_of(4))
+        .filter(|&k| op(PROGRAM[k - 1]) != 7 && fuses(op(PROGRAM[k - 1])))
+        .filter(|&k| !matches!(op(PROGRAM[k]), 5 | 6))
+        .filter(|&k| m31 == M31Load::Register || matches!(op(PROGRAM[k - 1]), 2 | 3))
+        .collect()
+}
+
+/// **With the prefetch, a return that needs the next word in sequence
+/// fuses** when the buffer holds it: the program leaves the state it
+/// leaves without the prefetch, four microcycles fewer for each such
+/// return (`QMLP` to `QMLP+3`), with no memory cycle of the prefetch's
+/// own, and the checkers find M 31 main memory's word after each. Under
+/// (b) the returns whose microinstruction writes A or M fall back, the
+/// write port being theirs. A fused return that follows a handler a fused
+/// return ran is counted as that handler's own return; without the
+/// prefetch there is none, the second halfword's successor always needing
+/// a fetch.
+#[test]
+fn the_prefetch_fuses_a_return_that_needs_a_fetch() {
+    let off = run_prefetched(Setup::on(), None, None);
+    assert_eq!(counts(&off.m)[..6], COUNTS);
+    assert_eq!(off.checked.handler_returns.values().sum::<u64>(), 0, "none without it");
+    for form in FORMS {
+        let on = run_prefetched(Setup::on(), Some(form), None);
+        let expected = fusing_prefetched(form.m31);
+        let k = expected.len() as u64;
+        assert!(k >= 4, "{form:?}: the program fuses {k} on the fetch path");
+        assert_eq!(state(&on.m), state(&off.m), "{form:?}: the same state");
+        assert_eq!(on.m.macro_dispatch.fused, fusing(fuses) + k, "{form:?}");
+        assert_eq!(off.n - on.n, 4 * k, "{form:?}: four microcycles each");
+        assert_eq!(on.counts.used, k, "{form:?}");
+        assert_eq!(on.bus_cycles, off.bus_cycles, "{form:?}: no memory cycle of its own");
+        assert_eq!(on.checked.prefetched, k, "{form:?}");
+        assert_eq!(on.checked.problems(), 0, "{form:?}: {:?}", on.checked.first);
+        // A handler's own return: into a halfword a fused return ran,
+        // from a handler a fused return ran.
+        let op = |h: u32| h >> 9 & 0o37;
+        let fused_into: Vec<usize> = (1..PROGRAM.len())
+            .filter(|&j| j % 2 == 1 && op(PROGRAM[j - 1]) != 7)
+            .filter(|&j| fuses(op(PROGRAM[j - 1])) && !matches!(op(PROGRAM[j]), 5 | 6))
+            .chain(expected.iter().copied())
+            .collect();
+        let own = fused_into.iter().filter(|&&j| fused_into.contains(&(j - 1))).count() as u64;
+        assert!(own >= k, "{form:?}");
+        assert_eq!(on.checked.handler_returns.values().sum::<u64>(), own, "{form:?}");
+        let refused_port = fusing_prefetched(M31Load::Register).len() as u64 - k;
+        assert_eq!(on.counts.refused, [0, refused_port, 0], "{form:?}");
+        if form.m31 == M31Load::FreePort {
+            assert!(refused_port >= 2, "{form:?}: the port refuses some");
+        }
+    }
+}
+
+/// **Under (a) the microcycle after the return reads the old M 31, under
+/// (b) the new one**: with that microcycle of opcode 3's dispatch return
+/// adding M 31 into A 57, (a) leaves every word as without the prefetch,
+/// and (b) A 57 alone differs, the prefetched word having been passed
+/// around from the write port; the checkers count those reads.
+#[test]
+fn the_microcycle_after_reads_m31_as_the_form_says() {
+    fn slot_reads_m31(m: &mut Machine) {
+        m.imem[0o216] =
+            Insn::new(ALU | muir::isa::asm::ADD | m_src(0o31) | a_src(0o57) | a_dest(0o57));
+    }
+    let s = Setup { patch: Some(slot_reads_m31), ..Setup::on() };
+    let off = run_prefetched(s, None, None);
+    for form in FORMS {
+        let on = run_prefetched(s, Some(form), None);
+        assert!(on.checked.m31_reads_after >= 1, "{form:?}: opcode 3 returns on the fetch path");
+        let (mut a, mut b) = (off.m.amem, on.m.amem);
+        match form.m31 {
+            M31Load::Register => assert_eq!(a, b, "{form:?}"),
+            M31Load::FreePort => {
+                assert_ne!(a[0o57], b[0o57], "{form:?}: the new word passed around");
+                (a[0o57], b[0o57]) = (0, 0);
+                assert_eq!(a, b, "{form:?}: and nothing else");
+            }
+        }
+    }
+}
+
+/// **Condition 6 true, a return on the fetch path does not fuse**: with
+/// the sequence break up, the main loop's call is taken at every fetch
+/// as without the prefetch, and the returns that would have fused on the
+/// buffered word are counted as refused for it.
+#[test]
+fn condition_6_refuses_the_prefetched_word() {
+    let s = Setup { sequence_break: true, ..Setup::on() };
+    let off = run_prefetched(s, None, None);
+    for form in FORMS {
+        let on = run_prefetched(s, Some(form), None);
+        assert_eq!(state(&on.m), state(&off.m), "{form:?}");
+        assert_eq!(on.m.macro_dispatch.fused, fusing(fuses), "{form:?}");
+        assert_eq!(on.n, off.n, "{form:?}");
+        assert_eq!(on.counts.used, 0, "{form:?}");
+        // Condition 6 is tested before the port.
+        assert_eq!(
+            on.counts.refused[0],
+            fusing_prefetched(M31Load::Register).len() as u64,
+            "{form:?}"
+        );
+    }
+}
+
+/// The opcodes and handlers of the invalidation programs, and their words
+/// in A memory: [`INVALIDATE`]'s second halfword runs one of them, and the
+/// return from it needs the next word, which the buffer holds.
+const STORE: u32 = 0o13;
+const STORE_AT: u64 = 0o260;
+const STORE_LATE: u32 = 0o14;
+const STORE_LATE_AT: u64 = 0o264;
+const MAP: u32 = 0o15;
+const MAP_AT: u64 = 0o270;
+const LCW: u32 = 0o16;
+const LCW_AT: u64 = 0o274;
+const TOUCH: u32 = 0o17;
+const TOUCH_AT: u64 = 0o310;
+/// A 60: the word stored over the program's second word; A 61 its
+/// address; A 62 the program's page's virtual address; A 63 the map word
+/// sending it to physical page 2; A 64 the location counter of the
+/// program's second word; A 65 the word [`TOUCH`] reads.
+const NEW_WORD: u32 = hw(2, 0) | hw(2, 0) << 16;
+
+/// Word 0 runs opcode 1 and then the opcode under test; word 1, opcode 1
+/// twice unless something has put [`NEW_WORD`], opcode 2 twice, in its
+/// place; word 2 stops.
+const INVALIDATE: [[u32; 6]; 5] = [
+    [hw(1, 0), hw(STORE, 0), hw(1, 0), hw(1, 0), hw(7, 0), hw(7, 0)],
+    [hw(1, 0), hw(STORE_LATE, 0), hw(1, 0), hw(1, 0), hw(7, 0), hw(7, 0)],
+    [hw(1, 0), hw(MAP, 0), hw(1, 0), hw(1, 0), hw(7, 0), hw(7, 0)],
+    [hw(1, 0), hw(LCW, 0), hw(1, 0), hw(1, 0), hw(7, 0), hw(7, 0)],
+    // A transfer, [`transfer`], while opcode 3 runs.
+    [hw(1, 0), hw(3, 0), hw(1, 0), hw(1, 0), hw(7, 0), hw(7, 0)],
+];
+
+/// The handlers the invalidation programs run, their words, and physical
+/// page 2 for [`MAP`].
+fn invalidators(m: &mut Machine) {
+    handlers(m);
+    // Physical page 2, where the map write sends the program's page: the
+    // program again, with the new word second.
+    for k in 0..3 {
+        m.main[0o1000 + k] = m.main[CODE as usize + k];
+    }
+    m.main[0o1001] = NEW_WORD;
+}
+
+/// The handlers the invalidation programs run, and their words.
+fn handlers(m: &mut Machine) {
+    let put = |m: &mut Machine, at: u64, w: u64| m.imem[at as usize] = Insn::new(w);
+    // STORE: MD, then `VMA-START-WRITE` of the next word, and the return
+    // in the microcycle after the start, before the cycle goes out.
+    put(m, STORE_AT, ALU | SETA | a_src(0o60) | muir::isa::asm::MD);
+    put(m, STORE_AT + 1, ALU | SETA | a_src(0o61) | muir::isa::asm::START_WRITE);
+    put(m, STORE_AT + 2, filler().raw() | POPJ);
+    // STORE_LATE: the same with a microcycle between, so that the cycle
+    // has gone out when the return runs.
+    put(m, STORE_LATE_AT, ALU | SETA | a_src(0o60) | muir::isa::asm::MD);
+    put(m, STORE_LATE_AT + 1, ALU | SETA | a_src(0o61) | muir::isa::asm::START_WRITE);
+    put(m, STORE_LATE_AT + 2, filler().raw());
+    put(m, STORE_LATE_AT + 3, filler().raw() | POPJ);
+    // MAP: MD the page's address, then `VMA-WRITE-MAP` (functional
+    // destination 23) with level 2's enable, `VMA<25>`.
+    put(m, MAP_AT, ALU | SETA | a_src(0o62) | muir::isa::asm::MD);
+    put(m, MAP_AT + 1, ALU | SETA | a_src(0o63) | fd(0o23));
+    put(m, MAP_AT + 2, filler().raw() | POPJ);
+    // LCW: the location counter written with the second word's, as it
+    // stands after the step: the stream fetches it again, as the wrong
+    // word.
+    put(m, LCW_AT, ALU | SETA | a_src(0o64) | fd(1));
+    put(m, LCW_AT + 1, filler().raw() | POPJ);
+    // TOUCH: a read of A 65's word, into M 35, which fills its line.
+    put(m, TOUCH_AT, ALU | SETA | a_src(0o65) | muir::isa::asm::START_READ);
+    put(m, TOUCH_AT + 1, ALU | SETM | SRC_MD | m_dest(0o35));
+    put(m, TOUCH_AT + 2, filler().raw() | POPJ);
+    for (op, at) in [
+        (STORE, STORE_AT),
+        (STORE_LATE, STORE_LATE_AT),
+        (MAP, MAP_AT),
+        (LCW, LCW_AT),
+        (TOUCH, TOUCH_AT),
+    ] {
+        m.dmem[OPDTB as usize + op as usize] = at as u32;
+    }
+    for (k, e) in m.macro_dispatch.entries.iter_mut().enumerate() {
+        *e = m.dmem[OPDTB as usize + (k >> 3 & 0o37)];
+    }
+    m.amem[0o60] = NEW_WORD;
+    m.amem[0o61] = CODE + 1;
+    m.amem[0o62] = CODE;
+    m.amem[0o63] = 1 << 25 | 1 << 23 | 1 << 22 | 2;
+    m.amem[0o64] = (CODE + 1) * 4 + 2;
+}
+
+/// A transfer's write of [`NEW_WORD`] over the program's second word, as
+/// block-disk's and the file device's are: behind the processor's back,
+/// raising the flag that invalidates the cache (`tests/block_disk.rs`,
+/// `tests/quux_file_device.rs` hold that both raise it).
+fn transfer(m: &mut Machine) {
+    m.main[CODE as usize + 1] = NEW_WORD;
+    m.dma_written = true;
+}
+
+/// The same write without the flag: what a missed invalidation leaves.
+fn unflagged(m: &mut Machine) {
+    m.main[CODE as usize + 1] = NEW_WORD;
+}
+
+/// **A store to the buffered word, a map write, a transfer and a write of
+/// the location counter drop it**, and the return that needs the word
+/// runs the fetch path, which finds the new one: each invalidation program
+/// leaves the state it leaves without the prefetch --- opcode 2 run twice
+/// where the old word ran opcode 1 --- and counts its drop. A store is
+/// caught both before its cycle has gone out (the return refused) and
+/// after (the word dropped as the cycle goes out).
+#[test]
+fn a_store_a_map_write_a_transfer_and_an_lc_write_drop_the_word() {
+    let cases: [(usize, Touch, Drop); 5] = [
+        (0, None, Drop::Store),
+        (1, None, Drop::Store),
+        (2, None, Drop::MapWrite),
+        (3, None, Drop::LcWrite),
+        (4, Some((0o214, transfer)), Drop::Dma),
+    ];
+    for (k, touch, why) in cases {
+        let program: &'static [u32] = &INVALIDATE[k];
+        let s = Setup { program, patch: Some(invalidators), ..Setup::on() };
+        let off = run_prefetched(s, None, touch);
+        let c = counts(&off.m);
+        if why != Drop::LcWrite {
+            assert_eq!((c[0], c[1]), (1, 2), "program {k}: the new word ran without the prefetch");
+        }
+        for form in FORMS {
+            let on = run_prefetched(s, Some(form), touch);
+            assert_eq!(state(&on.m), state(&off.m), "program {k}, {form:?}");
+            assert_eq!(on.checked.problems(), 0, "program {k}, {form:?}: {:?}", on.checked.first);
+            let dropped = on.counts.dropped[why as usize] + (k == 0) as u64 * on.counts.refused[2];
+            assert!(dropped >= 1, "program {k}, {form:?}: {:?}", on.counts);
+        }
+    }
+}
+
+/// **The checkers find a word the prefetch should have dropped**: main
+/// memory's second word changed behind the engine's back with no flag
+/// raised, the buffer keeps the old one, the fused return takes it, and
+/// the checkers count M 31 against main memory as a problem.
+#[test]
+fn the_checkers_find_a_stale_prefetched_word() {
+    let program: &'static [u32] = &INVALIDATE[4];
+    let s = Setup { program, patch: Some(invalidators), ..Setup::on() };
+    let on = run_prefetched(s, Some(FORMS[0]), Some((0o214, unflagged)));
+    assert!(on.checked.stale_words >= 1, "{:?}", on.checked);
+    assert!(on.checked.problems() >= 1);
+}
+
+/// **The page's reach takes the next line's word when the cache holds it,
+/// the line's does not, and neither looks past the page**: a program whose
+/// fourth word ends a line reads the fifth's line first ([`TOUCH`]), and
+/// the return into the fifth fuses under [`Reach::Page`] alone. Put at the
+/// end of a page, the same program's return into the next page's first
+/// word fuses under neither, the cache holding it: the prefetch never
+/// looks past the page, which is what keeps it from ever needing the map.
+#[test]
+fn the_page_reach_takes_the_next_line_and_never_the_next_page() {
+    const LINES: [u32; 12] = [
+        hw(1, 0),
+        hw(TOUCH, 0),
+        hw(1, 0),
+        hw(1, 0),
+        hw(1, 0),
+        hw(1, 0),
+        hw(1, 0),
+        hw(1, 0),
+        hw(1, 0),
+        hw(1, 0),
+        hw(7, 0),
+        hw(7, 0),
+    ];
+    fn touch_next_line(m: &mut Machine) {
+        handlers(m);
+        m.amem[0o65] = CODE + 4;
+    }
+    fn touch_next_page(m: &mut Machine) {
+        handlers(m);
+        m.amem[0o65] = 0o1000;
+    }
+    for (code, patch, page_end) in
+        [(CODE, touch_next_line as fn(&mut Machine), false), (0o774, touch_next_page, true)]
+    {
+        let s = Setup { program: &LINES, code, patch: Some(patch), ..Setup::on() };
+        let off = run_prefetched(s, None, None);
+        let page = run_prefetched(s, Some(FORMS[0]), None);
+        let line = run_prefetched(s, Some(FORMS[2]), None);
+        for (form, on) in [("page", &page), ("line", &line)] {
+            assert_eq!(state(&on.m), state(&off.m), "{code:o}, {form}");
+            assert_eq!(on.checked.problems(), 0, "{code:o}, {form}: {:?}", on.checked.first);
+        }
+        assert_eq!(line.counts.next_line, 0, "{code:o}");
+        if page_end {
+            assert_eq!(page.counts.next_line, 0, "{code:o}: not past the page");
+            assert!(page.counts.page_end >= 1, "{code:o}");
+            assert_eq!(page.m.macro_dispatch.fused, line.m.macro_dispatch.fused, "{code:o}");
+        } else {
+            assert_eq!(page.counts.next_line, 1, "{code:o}: the fifth word, TOUCH's line");
+            assert_eq!(page.m.macro_dispatch.fused, line.m.macro_dispatch.fused + 1, "{code:o}");
+        }
+    }
+}
+
+/// **-RESET drops the buffered word**, as a restore does.
+#[test]
+fn reset_drops_the_prefetched_word() {
+    let mut r = Rtl::new(machine(Setup::on()));
+    r.set_prefetch(Some(FORMS[0]));
+    r.boot();
+    let mut n = 0;
+    while r.prefetched().is_none() {
+        r.step().unwrap();
+        n += 1;
+        assert!(n < 200, "the first fetch fills the buffer");
+    }
+    assert_eq!(r.prefetched().unwrap().phys, CODE + 1);
+    r.machine_mut().prog_reset = true;
+    r.run(2);
+    assert_eq!(r.prefetched(), None);
+    assert_eq!(r.prefetch_counts().unwrap().dropped[Drop::Reset as usize], 1);
+}
+
+/// **A call in the microcycle after a fused return returns to the
+/// handler**: microcode 2000's `XTFIXP` returns by `(POPJ-AFTER-NEXT
+/// ...)` with `(CALL-NOT-EQUAL M-TEM A-4 XFALSE)` after it, a call with N
+/// whose return is the POPJ's target, the main loop or, fused, the
+/// handler. With opcode 1's POPJ followed by such a call, counting in
+/// M 27, the program leaves the state it leaves without the fused return
+/// but for the dead words above the micro stack's pointer, two microcycles
+/// fewer for each; the checkers count the stack moved and
+/// the handler not next, which is what they found at `XTFIXP+10` in
+/// bignum with the prefetch's (a).
+#[test]
+fn a_call_after_a_fused_return_returns_to_the_handler() {
+    fn call_after_opcode_1(m: &mut Machine) {
+        m.imem[0o206] = Insn::new(JUMP | target(0o330) | P | N | ALWAYS);
+        m.imem[0o330] = Insn::new(ALU | M_PLUS_C | CARRY_IN | m_src(0o27) | m_dest(0o27) | POPJ);
+    }
+    let off = both(Setup { patch: Some(call_after_opcode_1), ..Setup::off() });
+    let on = both(Setup { patch: Some(call_after_opcode_1), ..Setup::on() });
+    // The words above the micro stack's pointer are dead: the call's push
+    // leaves the handler's address there where the main loop's leaves its
+    // own.
+    let live = |m: &Machine| {
+        let mut m = m.clone();
+        for w in &mut m.spc[m.spcptr as usize + 1..] {
+            *w = 0;
+        }
+        m
+    };
+    for ((name, n_off, m_off), (_, n_on, m_on)) in off.iter().zip(on.iter()) {
+        assert_eq!(counts(m_off)[..6], COUNTS, "{name}");
+        assert_eq!(m_off.mmem[0o27], COUNTS[0], "{name}: the call after every opcode 1");
+        let (a, b) = (live(m_on), live(m_off));
+        assert_eq!(state(&a), state(&b), "{name}: the same live state");
+        assert_eq!(n_off - n_on, 2 * m_on.macro_dispatch.fused, "{name}");
+    }
+    for (name, c) in checked(Setup { patch: Some(call_after_opcode_1), ..Setup::on() }) {
+        assert!(c.stack_moved >= 1 && c.wrong_handler == c.stack_moved, "{name}: {c:?}");
     }
 }

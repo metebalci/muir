@@ -33,6 +33,16 @@
 //!   own write pulse, after its read, where today's path runs the main
 //!   loop's dispatch and push in between.
 //!
+//! - **The prefetched word** (contract H8a §3.5, `rtl` with the prefetch
+//!   fitted): a fused return that needs a fetch took its word from the
+//!   prefetch's buffer, and the microcycle after it starts the stream's
+//!   fetch of that word. After it, M 31 holds main memory's word at the
+//!   fetch's address, translated through the map as it then stands: a
+//!   buffer that missed a store, a transfer or a map write fails this.
+//! - **Returns by a handler a fused return ran**, with no main loop
+//!   between, are counted by that handler: the returns that let the rule's
+//!   check reach a specialised handler's own XCT-NEXT slot.
+//!
 //! [`Checked`] wraps an engine and runs the checker after every step.
 
 use std::collections::BTreeMap;
@@ -45,9 +55,13 @@ use muir::micro::Micro;
 use muir::rtl::Rtl;
 
 /// An engine that says which control-store address it executed in its last
-/// step, `None` when that microcycle was nopped.
+/// step, `None` when that microcycle was nopped, and whether that step
+/// started a macroinstruction fetch, where the engine says.
 pub trait Executes: Engine {
     fn executed(&self) -> Option<u16>;
+    fn fetch_started(&self) -> Option<bool> {
+        None
+    }
 }
 
 impl Executes for Micro {
@@ -59,6 +73,9 @@ impl Executes for Micro {
 impl Executes for Rtl {
     fn executed(&self) -> Option<u16> {
         Rtl::executed(self)
+    }
+    fn fetch_started(&self) -> Option<bool> {
+        Rtl::fetch_started(self)
     }
 }
 
@@ -194,6 +211,20 @@ pub struct Counts {
     /// the address the microcycle after the return wrote, by site: the word
     /// lands after the read, which finds the old one.
     pub pdl_reads_of_writes: BTreeMap<ReadSite, u64>,
+    /// Fused returns on the fetch path, which took the prefetched word, and
+    /// of them those after which M 31 was not main memory's word at the
+    /// fetch's address.
+    pub prefetched: u64,
+    pub stale_words: u64,
+    /// Microcycles after a fused return on the fetch path that read A or
+    /// M 31: under the prefetch's (b) they find the new word, where today's
+    /// path has the old one there.
+    pub m31_reads_after: u64,
+    /// Fused returns made by a handler a fused return ran, with no main
+    /// loop between, by the handler's address, and by the returning
+    /// microinstruction's.
+    pub handler_returns: BTreeMap<u16, u64>,
+    pub handler_return_sites: BTreeMap<u16, u64>,
     /// The first problem found, said in words.
     pub first: Option<String>,
 }
@@ -207,6 +238,7 @@ impl Counts {
             + self.wrong_operand
             + self.copies_differ
             + self.pdl_reads_of_writes.values().sum::<u64>()
+            + self.stale_words
     }
 
     /// What was counted after `earlier`, a clone of these counts.
@@ -233,6 +265,11 @@ impl Counts {
             copies_differ: self.copies_differ - earlier.copies_differ,
             pdl_writes_after: self.pdl_writes_after - earlier.pdl_writes_after,
             pdl_reads_of_writes: diff(&self.pdl_reads_of_writes, &earlier.pdl_reads_of_writes),
+            prefetched: self.prefetched - earlier.prefetched,
+            stale_words: self.stale_words - earlier.stale_words,
+            m31_reads_after: self.m31_reads_after - earlier.m31_reads_after,
+            handler_returns: diff(&self.handler_returns, &earlier.handler_returns),
+            handler_return_sites: diff(&self.handler_return_sites, &earlier.handler_return_sites),
             first: if earlier.first.is_none() { self.first.clone() } else { None },
         }
     }
@@ -254,6 +291,14 @@ impl Counts {
             self.pdl_writes_after,
             self.pdl_reads_of_writes.values().sum::<u64>()
         );
+        if self.prefetched > 0 || self.stale_words > 0 {
+            let _ = write!(
+                s,
+                ", prefetched {}, stale words {}, M 31 read after {}",
+                self.prefetched, self.stale_words, self.m31_reads_after
+            );
+        }
+        let _ = write!(s, ", handlers' own returns {}", self.handler_returns.values().sum::<u64>());
         for (what, map) in [("violation", &self.violations), ("unarmed", &self.unarmed)] {
             for ((w, ret, after), n) in map {
                 let _ = write!(
@@ -333,6 +378,13 @@ struct After {
     spcptr: u8,
 }
 
+/// **Whether instruction `i` reads A or M memory 31**, `M-INST-BUFFER`: its
+/// M source `IR<30:26>` when `IR<31>` is clear, or its A source
+/// `IR<41:32>` in every class but DISPATCH, which has none.
+pub fn reads_m31(i: Insn) -> bool {
+    (!i.m_src_functional() && i.m_src() == 0o31) || (i.op() != Op::Dispatch && i.a_src() == 0o31)
+}
+
 /// The checker's state between two microcycles.
 #[derive(Clone, Default)]
 pub struct Checker {
@@ -343,6 +395,9 @@ pub struct Checker {
     handler: Option<u16>,
     /// The PDL buffer write the microcycle after a fused return made.
     pending: Option<Pending>,
+    /// The handler a fused return ran, while it runs: from its first
+    /// microinstruction to the main loop's.
+    in_handler: Option<u16>,
     /// The addresses the register named when the copies were last seen;
     /// whether each copy is held to its memory; and, where it is not yet,
     /// the microcycle from which it is, the one after the first write of
@@ -352,6 +407,8 @@ pub struct Checker {
     ap_held: bool,
     localp_due: Option<u64>,
     ap_due: Option<u64>,
+    /// How many problems have been said on standard error.
+    said: u32,
     pub counts: Counts,
 }
 
@@ -367,9 +424,15 @@ impl Checker {
         }
     }
 
+    /// The first problem is kept, and the first few said on standard
+    /// error as they are found, so that a run that goes on to fail says
+    /// what the checkers saw first.
     fn problem(&mut self, what: impl FnOnce() -> String) {
-        if self.counts.first.is_none() {
-            self.counts.first = Some(what());
+        if self.counts.first.is_none() || self.said < 5 {
+            let w = what();
+            eprintln!("checkers: microcycle {}: {w}", self.cycles);
+            self.said += 1;
+            self.counts.first.get_or_insert(w);
         }
     }
 
@@ -432,12 +495,19 @@ impl Checker {
                 )
             });
         }
-        if let Some(h) = self.handler.take()
-            && e.executed() != Some(h)
-        {
-            self.counts.wrong_handler += 1;
-            let ran = e.executed().map_or("nothing".into(), |pc| format!("{pc:o}"));
-            self.problem(|| format!("handler {h:o} expected, {ran} ran"));
+        let main = macro_dispatch::main(d.register) as u16;
+        if e.executed().is_some_and(|pc| pc == main || pc == main + 2) {
+            self.in_handler = None;
+        }
+        if let Some(h) = self.handler.take() {
+            if e.executed() == Some(h) {
+                self.in_handler = Some(h);
+            } else {
+                self.counts.wrong_handler += 1;
+                let ran = e.executed().map_or("nothing".into(), |pc| format!("{pc:o}"));
+                let cycles = m.cycles;
+                self.problem(|| format!("handler {h:o} expected, {ran} ran, microcycle {cycles}"));
+            }
         }
         if let Some(a) = self.after.take() {
             // The halfword the main loop's dispatch would take: M 31, by
@@ -456,6 +526,27 @@ impl Checker {
                 && has_an_operand(index)
             {
                 self.counts.operand_candidates += 1;
+            }
+            // On the fetch path the word came from the prefetch, and the
+            // stream's fetch of it has just started: M 31 is to be main
+            // memory's word there, through the map as it stands.
+            if e.fetch_started() == Some(false) {
+                self.counts.prefetched += 1;
+                let phys = m.translate(m.vma).physical as usize;
+                let held = m.main.get(phys).copied();
+                if held != Some(word) {
+                    self.counts.stale_words += 1;
+                    let vma = m.vma;
+                    self.problem(|| {
+                        format!(
+                            "M 31 {word:o} after the return at {:o}, main memory {held:?} at VMA {vma:o}",
+                            a.at
+                        )
+                    });
+                }
+                if e.executed().is_some_and(|pc| reads_m31(m.imem[pc as usize])) {
+                    self.counts.m31_reads_after += 1;
+                }
             }
             match e.executed() {
                 None => self.counts.nopped_after += 1,
@@ -486,8 +577,12 @@ impl Checker {
             if m.spcptr != a.spcptr {
                 self.counts.stack_moved += 1;
                 let now = m.spcptr;
+                let after = e.executed().map_or("nothing".into(), |pc| format!("{pc:o}"));
                 self.problem(|| {
-                    format!("stack pointer {:o} after the return, {now:o} after", a.spcptr)
+                    format!(
+                        "stack pointer {:o} after the return at {:o}, {now:o} after {after}",
+                        a.spcptr, a.at
+                    )
                 });
             }
             if armed {
@@ -508,6 +603,11 @@ impl Checker {
             assert_eq!(d.fused, self.fused + 1, "one fused return a microcycle");
             self.fused = d.fused;
             self.counts.fused += 1;
+            if let Some(h) = self.in_handler.take() {
+                *self.counts.handler_returns.entry(h).or_default() += 1;
+                let at = e.executed().unwrap_or(u16::MAX);
+                *self.counts.handler_return_sites.entry(at).or_default() += 1;
+            }
             self.after = Some(After { at: e.executed().unwrap_or(u16::MAX), spcptr: m.spcptr });
         }
     }

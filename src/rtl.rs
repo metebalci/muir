@@ -571,6 +571,10 @@ pub struct Rtl {
     /// next in sequence. For the profile harness; not in a checkpoint,
     /// being cleared every microcycle.
     fetch_started: Option<bool>,
+    /// `MEMSTART`'s cycle is the stream's macroinstruction fetch, for QUUX's
+    /// prefetch (`crate::memory_port`): registered with `MEMSTART`. Not in
+    /// a checkpoint, which drops the prefetch's word.
+    memstart_fetch: bool,
 }
 
 /// The combinational network during the read phase.
@@ -586,6 +590,13 @@ struct Read {
     /// The operand address the fused return arms, which the edge ending
     /// the next microcycle loads into PDL-INDEX.
     operand: Option<crate::machine::Operand>,
+    /// The prefetched word a fused return on the fetch path takes into
+    /// M 31 (`crate::memory_port`, contract H8a §3.5).
+    prefetch_m31: Option<u32>,
+    /// A return that would have fused on the prefetched word but for
+    /// condition 6 (0), under (b) the write port (1), or a store starting
+    /// (2): for the counts.
+    prefetch_refused: Option<usize>,
     /// QUUX's destination 5, 6 or 7, the MACRO-DISPATCH register and the
     /// MACRO DISPATCH MEMORY's index and entry, written at the edge.
     macro_write: Option<u32>,
@@ -773,6 +784,7 @@ impl Rtl {
             loadmd_at: u64::MAX,
             executed: None,
             fetch_started: None,
+            memstart_fetch: false,
         };
         // QUUX drops the delay lines: `sync`, four ticks, unless `muir`
         // sets `--sync-cycle-ticks`'.
@@ -799,8 +811,9 @@ impl Rtl {
         // state (contract Q11).
         self.m.timers = crate::machine::Timers::new();
         // And QUUX's MACRO-DISPATCH enable, and an armed operand address
-        // (contract H8a).
+        // (contract H8a), and the prefetch's word.
         self.m.macro_dispatch.reset();
+        self.drop_prefetched(crate::memory_port::Drop::Reset);
         // CONTRL 3D26
         self.inop = false;
         self.spushd = false;
@@ -982,6 +995,44 @@ impl Rtl {
     /// The memory cache, if the machine has one: always on QUUX.
     pub fn cache(&self) -> Option<&crate::cache::Cache> {
         self.bus.cache()
+    }
+
+    /// QUUX's cache-only prefetch fitted, in one of its forms, or taken
+    /// out (`crate::memory_port`, contract H8a §3.5): `None` unless set,
+    /// and kept across a restore, which drops its word.
+    pub fn set_prefetch(&mut self, prefetch: Option<crate::memory_port::Prefetch>) {
+        match &mut self.bus {
+            Bus::Quux(p) => p.set_prefetch(prefetch),
+            Bus::Cadr(_) => assert!(prefetch.is_none(), "the prefetch is QUUX's"),
+        }
+    }
+
+    /// The prefetch's form, its word and its counts, on QUUX.
+    pub fn prefetch(&self) -> Option<crate::memory_port::Prefetch> {
+        match &self.bus {
+            Bus::Quux(p) => p.prefetch(),
+            Bus::Cadr(_) => None,
+        }
+    }
+
+    pub fn prefetched(&self) -> Option<crate::memory_port::Prefetched> {
+        match &self.bus {
+            Bus::Quux(p) => p.prefetched(),
+            Bus::Cadr(_) => None,
+        }
+    }
+
+    pub fn prefetch_counts(&self) -> Option<crate::memory_port::PrefetchCounts> {
+        match &self.bus {
+            Bus::Quux(p) => Some(p.prefetch_counts),
+            Bus::Cadr(_) => None,
+        }
+    }
+
+    fn drop_prefetched(&mut self, why: crate::memory_port::Drop) {
+        if let Bus::Quux(p) = &mut self.bus {
+            p.drop_prefetched(why);
+        }
     }
 
     /// Main memory's own timing, if it has one: always on QUUX.
@@ -1435,7 +1486,37 @@ impl Rtl {
         // the pass-around from `L`. A jump's return fuses only while
         // `JUMP_RETURNS_FUSE` says so.
         let jump_pop = (jret && !bit(ir, 6) && jcond) || (jretf && !jcond);
-        let fused = if self.m.geometry.macro_dispatch
+        // With the cache-only prefetch fitted (`crate::memory_port`), a
+        // return that needs the next word in sequence fuses on the word in
+        // the buffer when it is that word (`LC<25:2>`, the address the
+        // stream's fetch will take), condition 6 is false (the main loop's
+        // test on the fetch path, taken here instead of at `QMLP`), and,
+        // when M 31 is loaded through M memory's write port, this
+        // microinstruction writes neither A nor M, whose write that port
+        // carries in the next microcycle. A transfer that has written main
+        // memory since the last cycle started counts as having dropped it.
+        let buffered = match &self.bus {
+            Bus::Quux(p) if needfetch && !have_wrong_word && !self.m.dma_written => p
+                .prefetched()
+                .zip(p.prefetch())
+                .filter(|(w, _)| w.vaddr == (self.lc >> 2) & 0x00ff_ffff),
+            _ => None,
+        };
+        let refused = buffered.and_then(|(_, form)| {
+            if pgf_or_int_or_sb {
+                Some(0)
+            } else if form.m31 == crate::memory_port::M31Load::FreePort && dest {
+                Some(1)
+            } else if self.memstart && self.wrcyc {
+                // A store started in the microcycle before, whose cycle,
+                // and its compare with the buffered word's physical
+                // address, goes out at this microcycle's edge.
+                Some(2)
+            } else {
+                None
+            }
+        });
+        let fusable = if self.m.geometry.macro_dispatch
             && spop
             && (crate::machine::macro_dispatch::JUMP_RETURNS_FUSE || !jump_pop)
             && !srcspcpopreal
@@ -1443,7 +1524,7 @@ impl Rtl {
             && !trap
             && !self.iwrited
             && !lcinc
-            && !needfetch
+            && (!needfetch || buffered.is_some())
             && bit(spc as u64, 14)
             && !(destm && wadr_in & 0o37 == 0o31)
             && !destintctl
@@ -1456,12 +1537,22 @@ impl Rtl {
             let sh4 = !(left ^ !bit(rotate, 4));
             let sh3 = !(!bit(rotate, 3) ^ (!bit(lcs as u64, 0) && self.lc_byte_mode));
             let shift = (sh4 as u32) << 4 | (sh3 as u32) << 3 | (rotate as u32 & 7);
-            let m31 =
-                if self.destmd && self.wadr & 0o37 == 0o31 { self.l } else { self.m.mmem[0o31] };
+            let m31 = if let Some((w, _)) = buffered {
+                w.word
+            } else if self.destmd && self.wadr & 0o37 == 0o31 {
+                self.l
+            } else {
+                self.m.mmem[0o31]
+            };
             self.m.macro_dispatch.fused_return(spc, m31.rotate_left(shift))
         } else {
             None
         };
+        // A refusal is counted where the return would have fused on the
+        // buffered word.
+        let prefetch_refused = refused.filter(|_| fusable.is_some());
+        let fused = fusable.filter(|_| refused.is_none());
+        let prefetch_m31 = buffered.filter(|_| fused.is_some()).map(|(w, _)| w.word);
         let next_instr = spop && (!srcspcpopreal && bit(spc as u64, 14));
         // The popped word stays, as the main loop's push would put it back,
         // unless the entry's N would have nopped that push.
@@ -1559,6 +1650,8 @@ impl Rtl {
             nop,
             fused: fused.is_some(),
             operand: fused.and_then(|f| f.operand),
+            prefetch_m31,
+            prefetch_refused,
             macro_write,
             irdisp,
             halt: funct & 2 != 0,
@@ -1723,6 +1816,11 @@ impl Rtl {
                 };
             }
             self.loadmd_at = ack.loadmd_at;
+            // QUUX's prefetch looks at the next word once a fetch is
+            // answered (`crate::memory_port`).
+            if let Bus::Quux(p) = &mut self.bus {
+                p.read_answered(&self.m.main);
+            }
         }
         // A debug cycle the other machine never answered: this interface's
         // own `NXM TIMEOUT` sets `UB NXM ERROR` in the 74276 at REQERR 0B02
@@ -2269,6 +2367,11 @@ impl Rtl {
                     self.bus.invalidate_cache();
                 }
                 self.bus.request_at(wrcyc, self.bus_addr);
+                if self.memstart_fetch
+                    && let Bus::Quux(p) = &mut self.bus
+                {
+                    p.mark_fetch(self.m.vma);
+                }
                 self.bus_cycles += 1;
                 self.bus_written = false;
                 self.bus_spy = busint::unibus_address(self.bus_addr).and_then(spy::register);
@@ -2353,6 +2456,37 @@ impl Rtl {
         self.destmd = r.destm;
         // page L
         self.l = r.ob;
+        // The cache-only prefetch's word for a fused return on the fetch
+        // path (`crate::memory_port`, contract H8a §3.5): (b) through M
+        // memory's write port in the next microcycle's write pulse, as
+        // `((M-INST-BUFFER) READ-MEMORY-DATA)` writes it, M 31 and the A
+        // word it shadows --- the return wrote neither, or it would not have
+        // fused; (a) into the register beside M memory at the edge ending
+        // the next microcycle, [`crate::machine::MacroDispatch::m31`].
+        // Taken at the start of this edge so that it is the word armed by
+        // the microcycle before.
+        let m31_armed = self.m.macro_dispatch.m31.take();
+        if let (Some(word), Bus::Quux(p)) = (r.prefetch_m31, &mut self.bus) {
+            p.prefetch_counts.used += 1;
+            match p.prefetch().map(|f| f.m31) {
+                Some(crate::memory_port::M31Load::FreePort) => {
+                    self.wadr = 0o31;
+                    self.destd = true;
+                    self.destmd = true;
+                    self.l = word;
+                }
+                _ => self.m.macro_dispatch.m31 = Some(word),
+            }
+        }
+        if let (Some(k), Bus::Quux(p)) = (r.prefetch_refused, &mut self.bus) {
+            p.prefetch_counts.refused[k] += 1;
+        }
+        if let Some(word) = m31_armed {
+            self.m.mmem[0o31] = word;
+            self.m.amem[0o31] = word;
+            self.m.macro_dispatch.a_written(0o31, word);
+            self.m.macro_dispatch.m_written(0o31, word);
+        }
         // page PDLCTL
         self.pwidx = r.destpdl_x;
         self.pdlwrited = r.pdlwrite;
@@ -2411,6 +2545,7 @@ impl Rtl {
         // page LC
         if r.destlc {
             self.lc = r.ob & 0o377777777;
+            self.drop_prefetched(crate::memory_port::Drop::LcWrite);
         } else {
             let inc = (r.lcinc && !self.lc_byte_mode) as u32 + r.lcinc as u32;
             self.lc = (self.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
@@ -2497,6 +2632,16 @@ impl Rtl {
         if r.vmaenb {
             self.m.vma = r.vmas;
         }
+        // The prefetch's word is dropped by a map write, which lands in the
+        // next microcycle's write pulse, and by a transfer that has written
+        // main memory. A store to it drops it when its cycle goes out
+        // ([`MemoryPort::request_at`]), and the read phase takes no word
+        // while a store's start stands before that.
+        if r.wmap {
+            self.drop_prefetched(crate::memory_port::Drop::MapWrite);
+        } else if self.m.dma_written {
+            self.drop_prefetched(crate::memory_port::Drop::Dma);
+        }
 
         // page VCTL1: the memory cycle.  MEMPREPARE is the write phase's
         // level, MEMSTART its registered copy, so a cycle prepared here runs
@@ -2526,6 +2671,7 @@ impl Rtl {
         // `MBUSY.SYNC` is it registered here.
         self.mbusy_sync = (self.memstart && r.vmaok) || self.mbusy;
         self.memstart = r.memop;
+        self.memstart_fetch = r.needfetch && r.lcinc;
         // The master clock edge the bus interface runs on. `MEMRQ` is a level
         // during the cycle and "the bus interface only looks at it towards
         // the end of the cycle", which is here.
@@ -3169,6 +3315,8 @@ impl Engine for Rtl {
             executed,
             // Cleared every microcycle, and only the profile reads it.
             fetch_started: _,
+            // The prefetch's, whose word a checkpoint drops.
+            memstart_fetch: _,
         } = self;
         m.save(w);
         w.u64s(trace);
@@ -3327,6 +3475,9 @@ impl Engine for Rtl {
             1 => {
                 let mut p = MemoryPort::new();
                 p.load(r)?;
+                // The prefetch's form is this engine's setting, and its
+                // word is dropped.
+                p.set_prefetch(self.prefetch());
                 Bus::Quux(Box::new(p))
             }
             k => return Err(crate::checkpoint::bad(format!("bus kind {k}"))),

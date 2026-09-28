@@ -341,7 +341,12 @@ impl Geometry {
 /// mode chooses the halfword), or steps the location counter itself
 /// (`LCINC`: a `NEXT INSTR` the microcycle before, or a dispatch's
 /// `IR<24>`), and when the entry has R or P. A return that needs a fetch
-/// is never fused here: there is no prefetch (contract H8a §3.5).
+/// is not fused, unless `rtl` has the cache-only prefetch fitted
+/// (`crate::memory_port`, contract H8a §3.5, off by default):
+/// then it fuses on the prefetched word when that is the next word in
+/// sequence and condition 6, which the main loop tests on the fetch path,
+/// is false, and M 31 takes the word as the prefetch's form says. `micro`
+/// has no cache, and no prefetch.
 ///
 /// **The operand address** (contract H8a §3.4). When a fused return's entry
 /// has the operand bit and the halfword's register, `<8:6>`, is LOCAL (5)
@@ -481,6 +486,10 @@ pub struct MacroDispatch {
     /// The operand address armed by a fused return, loaded into PDL-INDEX
     /// at the end of the next microcycle.
     pub operand: Option<Operand>,
+    /// The prefetched word a fused return on the fetch path arms when M 31
+    /// is a register beside M memory (`crate::memory_port::M31Load`, `rtl`
+    /// alone), loaded into it at the end of the next microcycle.
+    pub m31: Option<u32>,
     /// How many returns have been fused: a count for the profile and the
     /// tests, not kept in a checkpoint.
     pub fused: u64,
@@ -495,6 +504,7 @@ impl Default for MacroDispatch {
             localp: 0,
             ap: 0,
             operand: None,
+            m31: None,
             fused: 0,
         }
     }
@@ -507,11 +517,12 @@ impl MacroDispatch {
         self.register &= !macro_dispatch::ENABLE;
     }
 
-    /// -RESET: the enable cleared, and an armed operand address dropped;
-    /// the base copies kept.
+    /// -RESET: the enable cleared, and an armed operand address and M 31
+    /// word dropped; the base copies kept.
     pub fn reset(&mut self) {
         self.disable();
         self.operand = None;
+        self.m31 = None;
     }
 
     /// A write of functional destination 5, 6 or 7 (`code`). The
@@ -584,6 +595,7 @@ impl MacroDispatch {
             w.bool(o.arg);
             w.u8(o.delta);
         });
+        w.opt(self.m31, |w, v| w.u32(v));
     }
 
     fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
@@ -593,6 +605,7 @@ impl MacroDispatch {
         self.localp = r.u32()? & macro_dispatch::BASE_BITS;
         self.ap = r.u32()? & macro_dispatch::BASE_BITS;
         self.operand = r.opt(|r| Ok(Operand { arg: r.bool()?, delta: r.u8()? & 0o77 }))?;
+        self.m31 = r.opt(|r| r.u32())?;
         if self.index as usize >= macro_dispatch::ENTRIES {
             return Err(crate::checkpoint::bad(format!(
                 "MACRO DISPATCH MEMORY index {:o}, wider than its ten bits",
