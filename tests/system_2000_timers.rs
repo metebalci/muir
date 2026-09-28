@@ -287,9 +287,11 @@ fn run_ns(e: &mut Micro, ns: u64) {
 
 /// What the band says it is: logged in at the listener, it writes to the
 /// file device, as `HOST://home//lispm//versions`, 3, its microcode's
-/// version, its machine type and the herald's line, then the 60ths
-/// `(time)` moved over a `process-sleep` of 60, which only the tick moves;
-/// what it wrote, within 60 s of simulated time.
+/// version, its machine type and the herald's line, then the count
+/// `(time)` moved over a `process-sleep` of 60; what it wrote, within 60 s
+/// of simulated time. `(time)` is bits 31:14 of the microsecond clock
+/// (muir-sys `sys/sys/qrand.lisp:1291-1318`, `%microsecond-clock-ldb`
+/// `#o1622`), 1e6/16384 = 61.04 counts a second; the tick does not move it.
 fn says_what_it_is(e: &mut Micro, k: &mut Keyboard, root: &Path) -> Option<String> {
     type_slow(e, k, "(login \"LISPM\" \"HOST\" t)\n");
     run_ns(e, 2_000_000_000);
