@@ -433,10 +433,21 @@ impl Micro {
     /// `SPCWPASS` is `SPUSHD`'s, the push of the microcycle *before*,
     /// registered by the 74S175 at CONTRL 3D26, and the pushed word is
     /// written only in the next microcycle.
+    ///
+    /// After the functional source's pop in this microinstruction the
+    /// pointer has counted down once and does not count again, and this
+    /// pop takes the word the source read, the old top: page CONTRL's
+    /// `-SPOP` is one output, the 74S64 at 3E28, pulled by `POPJ OR
+    /// SRCSPCPOPREAL` (the 74S00 at 3E23) as by the returns, and `-SPCNT`
+    /// at 4D09 one count (`cadrwd/cadr4.wlr`, nets `-SPOP` and `-SPCNT`);
+    /// both read the one SPC bus.
     fn pop_spc(&mut self) -> u32 {
         if self.spc_pushed {
             self.spc_popped = true;
             return self.m.spc[(self.m.spcptr.wrapping_sub(1) & 0o37) as usize];
+        }
+        if self.spc_popped {
+            return self.m.spc[((self.m.spcptr + 1) & 0o37) as usize];
         }
         let ptr = self.m.spcptr;
         let v = match self.spc_write {
@@ -1341,8 +1352,10 @@ impl Micro {
                 let ret = if n { self.npc.wrapping_sub(1) } else { self.npc } & 0o37777;
                 self.push_spc(ret as u32);
                 // The pop is the next microcycle's, under `IWRITED`, and
-                // takes the pushed word through `SPCWPASS`.
+                // takes the pushed word through `SPCWPASS`: nothing of
+                // this microcycle's counting is its.
                 self.spc_pushed = false;
+                self.spc_popped = false;
                 self.pop_spc();
             }
             // The two microcycles the board spends on it, both nopped and
@@ -1459,6 +1472,7 @@ impl Micro {
             let new = self.adata & 0o377777;
             self.m.dmem[(addr & 0o3777) as usize] = new;
             let entry = if self.m.geometry.old_word_while_written { entry } else { new };
+            self.ignpopj(entry);
             if self.popj && (entry >> 16) & 1 == 0 {
                 self.npc = (entry & 0o37777) as u16;
                 self.popj = false;
@@ -1471,6 +1485,7 @@ impl Micro {
         let n = (entry >> 14) & 1 != 0;
         let p = (entry >> 15) & 1 != 0;
         let r = (entry >> 16) & 1 != 0;
+        self.ignpopj(entry);
 
         // The address a push would save --- page CONTRL's `RETA`: `PC + 1`,
         // under `N` the inhibited slot's own address, and with `IR<25>` the
@@ -1505,6 +1520,20 @@ impl Micro {
         self.npc = target as u16;
         self.popj = false;
         Ok(())
+    }
+
+    /// `IGNPOPJ`: a dispatch whose entry has no R pops nothing for the
+    /// functional source, which has read the SPC word all the same. Page
+    /// CONTRL: `-IGNPOPJ` is `DR OR -IRDISP`, the 74S32 at 3E18, and the
+    /// 74S64 at 3E28 ANDs it into `POPJ OR SRCSPCPOPREAL` in making `-SPOP`
+    /// (`cadrwd/cadr4.wlr`, nets `-IGNPOPJ` and `-SPOP`). So the pop
+    /// [`Micro::read_functional`] took for source 14 is given back; the
+    /// POPJ bit the dispatch clears itself.
+    fn ignpopj(&mut self, entry: u32) {
+        if (entry >> 16) & 1 == 0 && self.spc_popped {
+            self.m.spcptr = (self.m.spcptr + 1) & 0o37;
+            self.spc_popped = false;
+        }
     }
 
     fn byte(&mut self) -> Result<(), Halt> {

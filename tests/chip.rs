@@ -2636,6 +2636,101 @@ fn a_push_and_a_pop_at_once_count_up_and_pop_the_old_top() {
     }
 }
 
+/// **Two pops in one microinstruction count the stack pointer down once,
+/// and a dispatch whose entry has no R pops nothing.** Page CONTRL: the
+/// 74S64 at 3E28 makes `-SPOP` from `-IGNPOPJ` ANDed with `POPJ OR
+/// SRCSPCPOPREAL` (the 74S00 at 3E23), the dispatch's own return
+/// `DISPENB AND DR AND -DP` and the jump's returns, and `-SPCNT`, the
+/// open-collector 74S08 at 4D09, is one count however many groups pull
+/// it (`cadrwd/cadr4.wlr`, nets `-SPOP` and `-SPCNT`). Both pops take the
+/// SPC bus, the word at the pointer as it stands. `IGNPOPJ` is
+/// `IRDISP AND -DR`: a dispatch whose entry has no R holds off both the
+/// POPJ bit and the functional source's pop, while the source still reads
+/// the SPC word.
+///
+/// Each case pushes `Y` and then `X`, then runs one microinstruction that
+/// reads the pop source: with the POPJ bit, as a jump with R, as a
+/// dispatch whose entry has R, as one whose entry has R and P, which falls
+/// through (`DFALL`) but pops for the source, and as a dispatch whose
+/// entry has neither R nor P, without and with the POPJ bit. Two more read it in a write: a
+/// dispatch-memory write of an entry without R, which is `IGNPOPJ`'s too,
+/// and a control-store write, whose push counts up once for itself and the
+/// source's pop and whose pop, the next microcycle's under `IWRITED`,
+/// counts down (CONTRL 3D26 and 3D21). Where control lands records the
+/// SPC pointer and word.
+#[test]
+fn two_pops_at_once_count_down_once_and_a_dispatch_without_r_pops_nothing() {
+    use microcode::*;
+    use muir::isa::Insn;
+    let fd = |d: u64| (d << 19) | (0o37 << 14);
+    // PROM addresses: the program starts at 20.
+    let (x, y) = (20 + 60, 20 + 80);
+    let here = |k: u64| JUMP | ALWAYS | target(20 + k);
+    let cases: [(&str, u64); 8] = [
+        ("a POPJ off the pop source", ALU | SETM | src(0o14) | POPJ),
+        ("a return off the pop source", JUMP | ALWAYS | R | src(0o14)),
+        ("a dispatch returning, off the pop source", DISPATCH | src(0o14) | d_addr(0o10)),
+        ("a dispatch falling through, off the pop source", DISPATCH | src(0o14) | d_addr(0o12)),
+        ("a dispatch without R, off the pop source", DISPATCH | src(0o14) | d_addr(0o11)),
+        (
+            "a dispatch without R, off the pop source, with the POPJ bit",
+            DISPATCH | src(0o14) | d_addr(0o11) | POPJ,
+        ),
+        (
+            "a dispatch-memory write off the pop source",
+            DISPATCH | DMEM_WRITE | src(0o14) | a_src(0o61) | d_addr(0o11),
+        ),
+        (
+            "a control-store write off the pop source",
+            JUMP | ALWAYS | P | R | src(0o14) | target(0o250),
+        ),
+    ];
+    let mut got = Vec::new();
+    for (what, insn) in cases {
+        let mut p = vec![filler(); 120];
+        // The dispatch entries: at 10 R, at 11 neither R nor P, to Y, and
+        // at 12 both.
+        p[0] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o60) | d_addr(0o10));
+        p[1] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o61) | d_addr(0o11));
+        p[2] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o62) | d_addr(0o12));
+        p[3] = Insn::new(ALU | SETM | m_src(2) | fd(0o15));
+        p[4] = Insn::new(ALU | SETM | m_src(1) | fd(0o15));
+        p[5] = Insn::new(insn);
+        p[7] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o203));
+        p[8] = Insn::new(here(8));
+        p[60] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o201));
+        p[61] = Insn::new(here(61));
+        p[80] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o202));
+        p[81] = Insn::new(here(81));
+        let mut m = on_main_memory(&p, &[x as u32, y as u32]);
+        m.amem[0o60] = 1 << 16;
+        m.amem[0o61] = y as u32;
+        m.amem[0o62] = (1 << 16) | (1 << 15);
+        let [chip, rtl, micro] = left_after(&m, 150, &[0o201, 0o202, 0o203]);
+        got.push((what, chip, rtl, micro));
+    }
+    // A pop lands at X, or goes straight on for a dispatch falling
+    // through, with pointer 1 over Y; no pop lands at Y, or goes straight
+    // on for a write, with pointer 2 over X.
+    let popped = (1 << 24) | y as u32;
+    let kept = (2 << 24) | x as u32;
+    let want = [
+        [popped, 0, 0],
+        [popped, 0, 0],
+        [popped, 0, 0],
+        [0, 0, popped],
+        [0, kept, 0],
+        [0, kept, 0],
+        [0, 0, kept],
+        [0, 0, kept],
+    ];
+    for ((what, chip, rtl, micro), want) in got.iter().zip(want) {
+        assert_eq!(chip.words, want, "{what}: the board");
+        assert_eq!(rtl.words, chip.words, "{what}: rtl");
+        assert_eq!(micro.words, chip.words, "{what}: micro");
+    }
+}
+
 /// **`PROG.BOOT`, bit 7 of a mode-register write, reboots the machine.**  The
 /// program writes `200` into `766012` every time round, so both engines trap
 /// to 0 again and again, in the same microcycle and with the same period.

@@ -618,6 +618,90 @@ fn a_push_and_a_pop_at_once_count_up_and_pop_the_old_top() {
     }
 }
 
+/// **Two pops in one microinstruction count the stack pointer down once,
+/// and a dispatch whose entry has no R pops nothing**, on both. Page
+/// CONTRL: `-SPOP` is one output, the 74S64 at 3E28, whatever pulls it,
+/// and `-SPCNT` at 4D09 one count; both pops take the word at the pointer
+/// as it stands. `IGNPOPJ`, `IRDISP AND -DR`, holds off the POPJ bit and
+/// the functional source's pop together at that 74S64.
+/// `two_pops_at_once_count_down_once_and_a_dispatch_without_r_pops_nothing`
+/// in `tests/chip.rs` runs the same programs on the netlist, which gives
+/// the same words.
+///
+/// Each case pushes `Y` and `X`, then runs its microinstruction; where
+/// control lands --- `X`, `Y` or straight on --- records the SPC pointer
+/// and word.
+#[test]
+fn two_pops_at_once_count_down_once_and_a_dispatch_without_r_pops_nothing() {
+    use muir::isa::asm::DMEM_WRITE;
+    let (x, y) = (60, 80);
+    let here = |k: u64| Insn::new(JUMP | ALWAYS | target(k));
+    // A pop lands at X, or goes straight on for a dispatch falling
+    // through, with pointer 1 over Y; no pop lands at Y, or goes straight
+    // on for a write, with pointer 2 over X.
+    let popped = [(1 << 24) | y, 0, 0];
+    let kept = [0, (2 << 24) | x, 0];
+    let straight = [0, 0, (2 << 24) | x];
+    let cases: [(&str, u64, [u32; 3]); 8] = [
+        ("a POPJ off the pop source", ALU | SETM | src(0o14) | POPJ, popped),
+        ("a return off the pop source", JUMP | ALWAYS | R | src(0o14), popped),
+        ("a dispatch returning, off the pop source", DISPATCH | src(0o14) | d_addr(0o10), popped),
+        (
+            "a dispatch falling through, off the pop source",
+            DISPATCH | src(0o14) | d_addr(0o12),
+            [0, 0, (1 << 24) | y],
+        ),
+        ("a dispatch without R, off the pop source", DISPATCH | src(0o14) | d_addr(0o11), kept),
+        (
+            "a dispatch without R, off the pop source, with the POPJ bit",
+            DISPATCH | src(0o14) | d_addr(0o11) | POPJ,
+            kept,
+        ),
+        (
+            "a dispatch-memory write off the pop source",
+            DISPATCH | DMEM_WRITE | src(0o14) | a_src(0o61) | d_addr(0o11),
+            straight,
+        ),
+        (
+            "a control-store write off the pop source",
+            JUMP | ALWAYS | P | R | src(0o14) | target(0o250),
+            straight,
+        ),
+    ];
+    for (what, insn, want) in cases {
+        let mut prom = vec![filler(); 90];
+        // The dispatch entries: at 10 R, at 11 neither R nor P, to Y, and
+        // at 12 both.
+        prom[0] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o60) | d_addr(0o10));
+        prom[1] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o61) | d_addr(0o11));
+        prom[2] = Insn::new(DISPATCH | DMEM_WRITE | a_src(0o62) | d_addr(0o12));
+        prom[3] = Insn::new(ALU | SETM | m_src(2) | fdest(0o15));
+        prom[4] = Insn::new(ALU | SETM | m_src(1) | fdest(0o15));
+        prom[5] = Insn::new(insn);
+        prom[7] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o203));
+        prom[8] = here(8);
+        prom[x as usize] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o201));
+        prom[x as usize + 1] = here(x as u64 + 1);
+        prom[y as usize] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o202));
+        prom[y as usize + 1] = here(y as u64 + 1);
+        let set = |m: &mut Machine| {
+            m.mmem[1] = x;
+            m.mmem[2] = y;
+            m.amem[0o60] = 1 << 16;
+            m.amem[0o61] = y;
+            m.amem[0o62] = (1 << 16) | (1 << 15);
+        };
+        let (e, r) = both(&prom, &set, 40);
+        let got = |m: &Machine| [m.amem[0o201], m.amem[0o202], m.amem[0o203]];
+        assert_eq!(got(r.machine()), want, "{what}: rtl");
+        assert_eq!(got(e.machine()), want, "{what}: micro");
+        assert_eq!(e.machine().spcptr, r.machine().spcptr, "{what}: the pointer");
+        // The 19 bits the 82S21s at page SPC hold.
+        let stack = |m: &Machine| m.spc.map(|w| w & 0o1777777);
+        assert_eq!(stack(e.machine()), stack(r.machine()), "{what}: the stack");
+    }
+}
+
 /// **A read the map refuses leaves MD alone.** On the board a cycle starts
 /// only under `VMAOK`: `MBUSY` is set from `MEMSTART AND VMAOK` on page
 /// VCTL1, so nothing is requested and `MD` keeps its word, and `-VMAOK` in
