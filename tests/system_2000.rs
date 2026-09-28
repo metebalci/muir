@@ -23,7 +23,7 @@ use muir::machine::{Geometry, Machine};
 use muir::micro::Micro;
 use muir::rtl::Rtl;
 use muir::tv::Board;
-use support::macro_dispatch::{Checked, Executes, fill_generic};
+use support::macro_dispatch::{Checked, Executes, fill_generic, set_register};
 
 mod support;
 
@@ -497,9 +497,10 @@ fn boots_with_the_fused_return<E: Executes>(engine: &str, make: impl Fn(Machine)
 /// on `rtl`: its MACRO DISPATCH MEMORY filled from its own `OPDTB` and the
 /// register enabled with its `QMLP`, `A-LOCALP` and `M-AP`, it reaches the
 /// listener with returns fused and the register still enabled; the
-/// microcycle after every fused return keeps the rule of §3.3, the handler
-/// the main loop would have reached runs next, and the base copies equal
-/// `A-LOCALP` and `M-AP` after every microcycle.
+/// microcycle after every fused return keeps the rule of §3.3, the
+/// handler's first microinstruction reads no PDL word that microcycle
+/// writes, the handler the main loop would have reached runs next, and the
+/// base copies equal `A-LOCALP` and `M-AP` after every microcycle.
 #[test]
 fn system_2000_boots_with_the_fused_return_on_rtl() {
     boots_with_the_fused_return("rtl", Rtl::new);
@@ -526,9 +527,8 @@ fn a_stale_macro_dispatch_memory_never_runs() {
     let mut e = Micro::new(quux(&pack, &root));
     e.boot();
     // After -BOOT's reset, which clears the enable too.
-    let d = &mut e.machine_mut().macro_dispatch;
-    d.entries.fill(illop as u32);
-    d.register = muir::machine::macro_dispatch::word(qmlp, 0, 0);
+    e.machine_mut().macro_dispatch.entries.fill(illop as u32);
+    set_register(e.machine_mut(), muir::machine::macro_dispatch::word(qmlp, 0, 0));
     let n = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
     eprintln!("listener after {n} steps");
     let d = &e.machine().macro_dispatch;

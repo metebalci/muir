@@ -188,7 +188,8 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// refused rather than resumed on a page it does not know, and version 48
 /// QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY, and whether the
 /// machine has them (contract H8a, revision 12), and version 49 the
-/// operand address a fused return has armed, which
+/// operand address's two base copies and the operand address a fused
+/// return has armed, which
 /// `a_checkpoint_keeps_the_register_and_the_memory` in
 /// `tests/macro_dispatch.rs` holds, with a `micro` PDL buffer write by
 /// PDL-INDEX taking the index where it lands.

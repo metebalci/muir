@@ -680,7 +680,7 @@ unchanged.
 | `IR` | at the edge ending *n*, from the I bus: the control store at `PC`, the boot PROM, the debug IR, or `IWR` in the cycle after `WRITE-I-MEM` | the instruction executed in *n*+1. The instruction at a jump's target runs in *n*+2; the one after the jump runs in *n*+1 unless `N` inhibits it |
 | `PC`, `LC`, `Q`, `VMA`, `MD` (from the processor), `INTERRUPT-CONTROL`, the PDL pointer and index, the SPC pointer, the flags | at the edge ending *n* | *n*+1 |
 | A memory, M memory | in *n*+1's write pulse, from `WADR` and `L` registered at the edge ending *n* | *n*+1, through the pass-around (ACTL 3B21/3B27, MCTL 4B18: a source address equal to the pending `WADR` reads `L`); the memory itself from *n*+2 |
-| PDL buffer | in *n*+1's write pulse, at the pointer or index registered with it (`PWIDX`) | *n*+2: no pass-around, so *n*+1 reads the word as it was (`pdl_read_right_after_a_push_on_the_board`, `tests/cosim.rs`) |
+| PDL buffer | in *n*+1's write pulse, at the pointer or the index as it stands then: only the choice between them is registered (`PWIDX`), not the address | *n*+2: no pass-around, so *n*+1 reads the word as it was (`pdl_read_right_after_a_push_on_the_board`, `tests/cosim.rs`) |
 | SPC stack, a push | in *n*+1's write pulse, at the pointer the edge ending *n* moved to | the next-address path in *n*+1 (`SPCWPASS` puts the word on the `SPC` bus); an M-source read of the stack in *n*+1 reads the RAM's old word at the new pointer; *n*+2 reads the new |
 | Map, a `WRITE-MAP` store | in *n*+1's write pulse, both levels, addressed by `MAPI` then (`VMA` while `MEMSTART`, else `MD`) | `MAP(MD)` and a dispatch on map bits read the old word in *n*+1 (QUUX's definition; below) and the new from *n*+2. A memory cycle an instruction in *n*+1 starts is translated at the edge ending *n*+2, through the new word: `PHYS-MEM-READ` stores the map and starts a read in the next instruction |
 | Dispatch memory, a dispatch write | in *n*'s own write pulse, at its own `DADR` | the dispatch in *n* reads the old word (QUUX's definition); from *n*+1 the new |
@@ -1421,10 +1421,14 @@ delta, as `QADLOC1` and `QADARG1` compute them
 (`uc-macrocode.lisp:237-245`): delta is the halfword's `<5:0>`, and the
 sum is masked to PDL-INDEX's bits. The handler's first microinstruction
 finds its operand at `C-PDL-BUFFER-INDEX`. The bases are copies the
-machine keeps, fourteen bits each: every A or M write whose address the
-register names writes the copy too, and the register's write and a
-checkpoint's restore load them from A and M memory. A checkpoint keeps an
-armed operand address, and -RESET drops it.
+machine keeps, fourteen bits each: an A write at the register's
+`<23:14>` writes the copy of `A-LOCALP`, and an M write at its `<28:24>`
+the copy of `M-AP`, with their write pulse, and nothing else writes them.
+The register's write does not load them from A and M memory, so the
+microcode writes `A-LOCALP` and `M-AP` after destination 5. -RESET leaves
+the copies and drops an armed operand address; a checkpoint keeps both
+copies and an armed operand address, and its restore reads nothing from
+A or M memory.
 
 **The rule for the microcycle after a fused return.** It runs as it would
 have before the main loop's dispatch, which has been decided by then, so
@@ -1434,8 +1438,13 @@ entry has the operand bit, PDL-INDEX, `A-LOCALP`, `M-AP`, or the PDL
 buffer by PDL-INDEX (destination 12). A PDL buffer write lands in the
 next microcycle's write phase at PDL-INDEX as it stands then (`PWIDX`),
 which is after the operand address has been loaded, so it would go to the
-next instruction's operand; both engines do that. The machine does not
-check the rule; `tests/support/macro_dispatch.rs` does, over a run.
+next instruction's operand; both engines do that. Nor may the handler's
+first microinstruction read the PDL buffer at the address the microcycle
+after the return writes, at the pointer (destinations 10 and 11) or by
+PDL-INDEX: the buffer has no pass-around (above), so the read finds the
+word before that write, where today's path has the main loop's dispatch
+and push in between. The machine does not check these rules;
+`tests/support/macro_dispatch.rs` does, over a run.
 
 Microcode 2000 keeps the rule where no entry has the operand bit. It
 stores to a local or an argument by PDL-INDEX in the microcycle after a
@@ -1449,7 +1458,7 @@ clears it too, wherever it lands: the entries name control-store
 addresses, and a new microcode must not run on those another left, whether
 the PROM loaded it or a `%DISK-RESTORE` (which does not pass through the
 PROM). Reset devices, word 104, does not touch it. A checkpoint keeps the
-register, the index and the entries.
+register, the index, the entries and the base copies.
 
 `tests/macro_dispatch.rs` holds, on both engines, a main loop made as
 `QMLP` is: the destinations' decode, on revision 12 and not on 11 or the
@@ -1461,15 +1470,21 @@ above that is not fused running today's path microcycle for microcycle;
 the operand address for LOCAL and ARG at the handler's first
 microinstruction and not before, masked, from bases written by the
 popping microinstruction itself, and nothing loaded without the operand
-bit or for another register; a PDL buffer write by PDL-INDEX in the
-microcycle after landing at the operand address; the rule checker's
-decode and each forbidden write found in a run; the enable cleared by
--RESET and by a control-store write; and the checkpoint.
+bit or for another register; the base copies not loaded by destination 5
+and written by the writes of `A-LOCALP` and `M-AP` alone; a PDL buffer
+write by PDL-INDEX in the microcycle after landing at the operand
+address; the rule checker's decode, each forbidden write found in a run,
+and a handler's first PDL read at the address the microcycle after the
+return writes found; the generic fill's operand bit only on halfwords
+whose `<8:0>` is a register and a delta (of ND4, `PUSH-CDR-IF-CAR-EQUAL`
+and `PUSH-CDR-STORE-CAR-IF-CONS`, and not `PUSH-NUMBER`, whose `<8:0>` is
+an immediate); the enable cleared by -RESET and by a control-store write,
+the base copies kept; and the checkpoint.
 `tests/system_2000.rs` holds System 2000 reaching its listener on revision
 12 in the same microcycles and nanoseconds, with the same memories, as on
 revision 11, on both engines; booting with the memory filled from its
 `OPDTB` and enabled from its `QMLP`, `A-LOCALP` and `M-AP`, with returns
-fused, the rule kept after every one, the main loop's handler run next
+fused, the rules kept after every one, the main loop's handler run next
 and the base copies equal to their memory after every microcycle; and
 booting with
 the register enabled and every entry poisoned to `ILLOP` before the PROM

@@ -352,18 +352,25 @@ impl Geometry {
 /// the sum masked to PDL-INDEX's bits. So the handler's first
 /// microinstruction finds its operand at `C-PDL-BUFFER-INDEX`. The two
 /// bases are the machine's own copies, [`MacroDispatch::localp`] and
-/// [`MacroDispatch::ap`], fourteen bits each, written with every A or M
-/// write whose address the register names, and loaded from A and M memory
-/// when the register is written and when a checkpoint is restored.
+/// [`MacroDispatch::ap`], fourteen bits each, written only with an A write
+/// at the address the register's `<23:14>` names and an M write at its
+/// `<28:24>`, with their write pulse. The register's write does not load
+/// them, so the microcode writes `A-LOCALP` and `M-AP` after destination
+/// 5 (contract H8a §3.4, §4); -RESET leaves them, and a checkpoint keeps
+/// them.
 ///
 /// The microcycle after a fused return must not write the location
 /// counter, M 31, INTERRUPT-CONTROL or destinations 5 to 7, and, when the
 /// entry has the operand bit, PDL-INDEX, `A-LOCALP`, `M-AP` or the PDL
 /// buffer by PDL-INDEX (contract H8a §3.3): the handler and the operand
 /// address are chosen by then, and a PDL buffer write lands at PDL-INDEX
-/// as it stands in the next microcycle, after the load. A
-/// microcode that breaks the rule is changed, never covered by the
-/// hardware; `tests/support/macro_dispatch.rs` checks it.
+/// as it stands in the next microcycle, after the load. Nor may the
+/// handler's first microinstruction read the PDL buffer at the address
+/// that microcycle writes, at the pointer or by PDL-INDEX: the buffer has
+/// no pass-around, and the word lands in the handler's own write pulse,
+/// after the read, where today's path has the main loop's two microcycles
+/// in between. A microcode that breaks these rules is changed, never
+/// covered by the hardware; `tests/support/macro_dispatch.rs` checks them.
 pub mod macro_dispatch {
     /// `<31>` of the register, the enable.
     pub const ENABLE: u32 = 1 << 31;
@@ -465,12 +472,11 @@ pub struct MacroDispatch {
     pub index: u16,
     /// The entries.
     pub entries: Vec<u32>,
-    /// The copy of `A-LOCALP`, fourteen bits: A memory at the register's
-    /// `<23:14>` ([`macro_dispatch`]). Not kept in a checkpoint: loaded from
-    /// A memory at restore.
+    /// The copy of `A-LOCALP`, fourteen bits: the last A write at the
+    /// register's `<23:14>` ([`macro_dispatch`]). Kept in a checkpoint.
     pub localp: u32,
-    /// The copy of `M-AP`, fourteen bits: M memory at the register's
-    /// `<28:24>`. Loaded from M memory at restore.
+    /// The copy of `M-AP`, fourteen bits: the last M write at the
+    /// register's `<28:24>`. Kept in a checkpoint.
     pub ap: u32,
     /// The operand address armed by a fused return, loaded into PDL-INDEX
     /// at the end of the next microcycle.
@@ -501,33 +507,23 @@ impl MacroDispatch {
         self.register &= !macro_dispatch::ENABLE;
     }
 
-    /// -RESET: the enable cleared, and an armed operand address dropped.
+    /// -RESET: the enable cleared, and an armed operand address dropped;
+    /// the base copies kept.
     pub fn reset(&mut self) {
         self.disable();
         self.operand = None;
     }
 
-    /// A write of functional destination 5, 6 or 7 (`code`), with A and M
-    /// memory as they stand: the register's write loads the base copies
-    /// from the addresses it names.
-    pub fn write(&mut self, code: u32, data: u32, amem: &[u32], mmem: &[u32]) {
+    /// A write of functional destination 5, 6 or 7 (`code`). The
+    /// register's write leaves the base copies as they are: they follow the
+    /// writes of the words it names from then on.
+    pub fn write(&mut self, code: u32, data: u32) {
         match code {
-            5 => {
-                self.register = data & macro_dispatch::REGISTER_BITS;
-                self.reload(amem, mmem);
-            }
+            5 => self.register = data & macro_dispatch::REGISTER_BITS,
             6 => self.index = (data & (macro_dispatch::ENTRIES as u32 - 1)) as u16,
             7 => self.entries[self.index as usize] = data & macro_dispatch::ENTRY_BITS,
             _ => unreachable!("destination {code:o} is not the MACRO DISPATCH MEMORY's"),
         }
-    }
-
-    /// The base copies loaded from A and M memory at the addresses the
-    /// register names.
-    pub fn reload(&mut self, amem: &[u32], mmem: &[u32]) {
-        self.localp =
-            amem[macro_dispatch::localp_address(self.register)] & macro_dispatch::BASE_BITS;
-        self.ap = mmem[macro_dispatch::ap_address(self.register)] & macro_dispatch::BASE_BITS;
     }
 
     /// A write of A memory at `adr`: the copy of `A-LOCALP` takes it when
@@ -582,18 +578,20 @@ impl MacroDispatch {
         w.u32(self.register);
         w.u16(self.index);
         w.u32s(&self.entries);
+        w.u32(self.localp);
+        w.u32(self.ap);
         w.opt(self.operand, |w, o| {
             w.bool(o.arg);
             w.u8(o.delta);
         });
     }
 
-    /// The copies are not read here: [`Machine::load`] reloads them once A
-    /// and M memory are in.
     fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
         self.register = r.u32()?;
         self.index = r.u16()?;
         r.u32s_into(&mut self.entries)?;
+        self.localp = r.u32()? & macro_dispatch::BASE_BITS;
+        self.ap = r.u32()? & macro_dispatch::BASE_BITS;
         self.operand = r.opt(|r| Ok(Operand { arg: r.bool()?, delta: r.u8()? & 0o77 }))?;
         if self.index as usize >= macro_dispatch::ENTRIES {
             return Err(crate::checkpoint::bad(format!(
@@ -2277,10 +2275,6 @@ impl Machine {
                 )));
             }
         }
-        // The operand address's base copies are not in the file: loaded from
-        // A and M memory, as the register's write loads them (contract H8a
-        // §3.6).
-        self.macro_dispatch.reload(&self.amem, &self.mmem);
         Ok(())
     }
 

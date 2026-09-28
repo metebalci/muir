@@ -1947,8 +1947,7 @@ impl Engine for Micro {
             self.npc = (t & 0o37777) as u16;
         }
         if let Some((code, data)) = self.macro_write.take() {
-            let m = &mut self.m;
-            m.macro_dispatch.write(code, data, &m.amem, &m.mmem);
+            self.m.macro_dispatch.write(code, data);
         }
         self.fetch_and_clock();
         self.m.cycles += 1;

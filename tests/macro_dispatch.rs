@@ -34,7 +34,7 @@ use muir::rtl::Rtl;
 
 mod support;
 
-use support::macro_dispatch::{Checked, Counts, Executes, Write, writes};
+use support::macro_dispatch::{Checked, Counts, Executes, PdlAt, Write, fill_generic, writes};
 
 /// The main loop, at an address with `<1:0>` clear as the stream hardware
 /// requires (`uc-macrocode.lisp:6`).
@@ -221,6 +221,9 @@ struct Setup {
     /// What runs in the microcycle after [`RECORD`]'s return, in place of
     /// its push of PDL-INDEX.
     slot: Option<u64>,
+    /// What [`RECORD`]'s handler runs first, in place of its push of
+    /// PDL-INDEX.
+    first: Option<u64>,
 }
 
 impl Setup {
@@ -234,6 +237,7 @@ impl Setup {
             program: &PROGRAM,
             operand: false,
             slot: None,
+            first: None,
         }
     }
 
@@ -271,12 +275,16 @@ fn machine(s: Setup) -> Machine {
     let mut prom = vec![filler(); 1024];
     let put = |prom: &mut Vec<Insn>, at: u64, w: u64| prom[at as usize] = Insn::new(w);
     // Start: MACRO-DISPATCH, LC, INTERRUPT-CONTROL (the sequence break),
-    // the main loop's return pushed, and a return into the main loop.
+    // the main loop's return pushed, `A-LOCALP` and `M-AP` written over
+    // themselves after destination 5, as the microcode is to write them
+    // (the register's write does not load the base copies), and a return
+    // into the main loop.
     put(&mut prom, 0, ALU | SETA | a_src(0o51) | fd(5));
     put(&mut prom, 1, ALU | SETA | a_src(0o52) | fd(1));
     put(&mut prom, 2, ALU | SETA | a_src(0o53) | fd(2));
     put(&mut prom, 3, ALU | SETA | a_src(0o50) | fd(0o15));
-    put(&mut prom, 5, filler().raw() | POPJ);
+    put(&mut prom, 4, ALU | SETA | a_src(LOCALP_AT) | a_dest(LOCALP_AT));
+    put(&mut prom, 5, ALU | SETM | m_src(AP_AT) | m_dest(AP_AT) | POPJ);
     // The main loop.
     put(&mut prom, QMLP, JUMP | target(0o110) | P | 1 << 5 | 6);
     put(&mut prom, QMLP + 1, ALU | SETM | SRC_MD | m_dest(0o31));
@@ -324,7 +332,7 @@ fn machine(s: Setup) -> Machine {
     // to the sentinel (destination 13), and return, pushing it again in
     // the microcycle after the POPJ unless the slot says otherwise.
     let push_index = ALU | SETM | src(3) | fd(0o11);
-    put(&mut prom, RECORD_AT, push_index);
+    put(&mut prom, RECORD_AT, s.first.unwrap_or(push_index));
     put(&mut prom, RECORD_AT + 1, ALU | SETA | a_src(SENTINEL_AT) | fd(0o13));
     put(&mut prom, RECORD_AT + 2, filler().raw() | POPJ);
     put(&mut prom, RECORD_SLOT, s.slot.unwrap_or(push_index));
@@ -624,7 +632,8 @@ fn revision_11_and_the_cadr_have_none_of_it() {
 }
 
 /// **-RESET clears the enable and keeps the rest**: the index, the
-/// entries, and the register's other bits, on both engines.
+/// entries, the register's other bits and the base copies, on both
+/// engines.
 #[test]
 fn reset_clears_the_enable_only() {
     let check = |name: &str, m: &Machine, entries: &[u32]| {
@@ -632,6 +641,7 @@ fn reset_clears_the_enable_only() {
         assert_eq!(d.register, enabled() & !macro_dispatch::ENABLE, "{name}: the enable cleared");
         assert_eq!(d.index, 0o17, "{name}: the index kept");
         assert_eq!(d.entries, entries, "{name}: the entries kept");
+        assert_eq!((d.localp, d.ap), (LOCALP, AP), "{name}: the base copies kept");
     };
     let mut m = machine(Setup::on());
     m.macro_dispatch.index = 0o17;
@@ -696,10 +706,11 @@ fn a_control_store_write_clears_the_enable() {
     check("rtl", Rtl::new(program()));
 }
 
-/// **A checkpoint keeps the register, the index and the entries**, an
-/// armed operand address, and whether the machine is revision 12 or 11;
-/// the base copies are loaded from A and M memory at restore (contract
-/// H8a §3.6), and the count of fused returns is not the machine's.
+/// **A checkpoint keeps the register, the index and the entries**, the
+/// base copies as they stand, an armed operand address, and whether the
+/// machine is revision 12 or 11 (contract H8a §3.6): nothing is loaded
+/// from A and M memory at restore. The count of fused returns is not the
+/// machine's.
 #[test]
 fn a_checkpoint_keeps_the_register_and_the_memory() {
     use muir::checkpoint::{Reader, Writer};
@@ -710,7 +721,8 @@ fn a_checkpoint_keeps_the_register_and_the_memory() {
         m.macro_dispatch.entries[0o1777] = 0o777777;
         m.macro_dispatch.fused = 5;
         // An operand address armed, and base copies that A and M memory
-        // do not hold: the file carries the first and not the second.
+        // do not hold, as they stand after destination 5 and before the
+        // microcode writes `A-LOCALP` and `M-AP`: the file carries both.
         m.macro_dispatch.operand = Some(Operand { arg: true, delta: 0o52 });
         m.macro_dispatch.localp = 1;
         m.macro_dispatch.ap = 2;
@@ -728,8 +740,8 @@ fn a_checkpoint_keeps_the_register_and_the_memory() {
         assert_eq!(back.macro_dispatch.operand, m.macro_dispatch.operand, "{geometry:?}");
         assert_eq!(
             (back.macro_dispatch.localp, back.macro_dispatch.ap),
-            (LOCALP, AP),
-            "{geometry:?}: the base copies loaded from A and M memory"
+            (1, 2),
+            "{geometry:?}: the base copies kept, not loaded from A and M memory"
         );
     }
 }
@@ -946,5 +958,150 @@ fn a_pdl_write_by_index_after_a_fused_return_lands_at_the_operand_address() {
             assert_eq!(micro.pdl[at as usize], want, "operand bit {operand}: PDL {at:o}");
         }
         assert_eq!(micro.pdl[SENTINEL as usize], mark, "operand bit {operand}");
+    }
+}
+
+/// **Destination 5 does not load the base copies** (contract H8a §3.4), on
+/// both engines: the copies are written only by an A write at the
+/// register's `<23:14>` and an M write at its `<28:24>`, with their write
+/// pulse. After destination 5 names `A-LOCALP` and `M-AP`, whose memory
+/// holds other words, the copies keep what they held, and an A write at
+/// `M-AP`'s address number, which is not an M write, leaves the copy of
+/// `M-AP`; the writes of `A-LOCALP` and `M-AP` that the microcode makes
+/// after destination 5 then load them.
+#[test]
+fn destination_5_does_not_load_the_base_copies() {
+    let (stale_localp, stale_ap) = (0o1111, 0o2222);
+    let (new_localp, new_ap) = (0o1234, 0o4321);
+    let program = |and_write: bool| {
+        let mut prom = vec![
+            Insn::new(ALU | SETA | a_src(0o51) | fd(5)),
+            Insn::new(filler().raw()),
+            Insn::new(ALU | SETA | a_src(0o52) | a_dest(AP_AT)),
+        ];
+        if and_write {
+            prom.push(Insn::new(ALU | SETA | a_src(0o53) | a_dest(LOCALP_AT)));
+            prom.push(Insn::new(ALU | SETA | a_src(0o54) | m_dest(AP_AT)));
+        }
+        prom.extend([Insn::new(filler().raw()); 4]);
+        let mut m = Machine::new();
+        m.geometry = Geometry::QUUX;
+        m.load_prom(&prom);
+        support::prom_program_in_ram(&mut m);
+        m.amem[0o51] = enabled();
+        m.amem[0o52] = 0o7777;
+        m.amem[0o53] = new_localp;
+        m.amem[0o54] = new_ap;
+        m.amem[LOCALP_AT as usize] = LOCALP;
+        m.mmem[AP_AT as usize] = AP;
+        m.amem[AP_AT as usize] = AP;
+        m.macro_dispatch.localp = stale_localp;
+        m.macro_dispatch.ap = stale_ap;
+        m
+    };
+    for (and_write, want) in [(false, (stale_localp, stale_ap)), (true, (new_localp, new_ap))] {
+        let mut e = Micro::new(program(and_write));
+        e.boot();
+        e.run(12);
+        let mut r = Rtl::new(program(and_write));
+        r.boot();
+        r.run(12);
+        for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
+            let d = &m.macro_dispatch;
+            assert_eq!(d.register, enabled(), "{name}: destination 5 written");
+            // The M write at `M-AP` writes the shadowing A word too.
+            let a = if and_write { new_ap } else { 0o7777 };
+            assert_eq!(m.amem[AP_AT as usize], a, "{name}: the A write made");
+            assert_eq!((d.localp, d.ap), want, "{name}, A-LOCALP and M-AP written {and_write}");
+        }
+    }
+}
+
+/// **The checker finds a PDL read, by a handler's first microinstruction,
+/// at an address the microcycle after the return writes** (contract H8a
+/// §3.3), on both engines. The PDL buffer has no pass-around: that write
+/// lands in the handler's own write pulse, after its read, where today's
+/// path runs the main loop's dispatch and push in between. With
+/// [`RECORD`]'s handler reading the PDL buffer first, by the pointer or
+/// by the index, and the microcycle after its return pushing, writing at
+/// the pointer, or writing by PDL-INDEX, each of the four fused returns
+/// from that handler into it is counted where the addresses meet, with the
+/// operand bit and without; a read at the other address is not.
+#[test]
+fn the_checker_finds_a_pdl_read_of_the_write_after_a_return() {
+    let read_pointer = ALU | SETM | src(0o25) | m_dest(0o36);
+    let read_index = ALU | SETM | src(0o5) | m_dest(0o36);
+    let push = ALU | SETM | src(3) | fd(0o11);
+    let at_pointer = ALU | SETA | a_src(SENTINEL_AT) | fd(0o10);
+    let at_index = ALU | SETA | a_src(SENTINEL_AT) | fd(0o12);
+    let cases = [
+        (push, read_pointer, Some(PdlAt::Pointer)),
+        (at_pointer, read_pointer, Some(PdlAt::Pointer)),
+        (at_index, read_index, Some(PdlAt::Index)),
+        (push, read_index, None),
+        (at_index, read_pointer, None),
+    ];
+    for (slot, first, found) in cases {
+        for operand in [true, false] {
+            let s = Setup { slot: Some(slot), first: Some(first), operand, ..Setup::operands() };
+            for (name, c) in checked(s) {
+                let what = format!("{found:?}, operand bit {operand}, {name}");
+                assert_eq!(c.pdl_writes_after, 4, "{what}: the four writes seen");
+                let sites: Vec<_> = c.pdl_reads_of_writes.iter().collect();
+                match found {
+                    Some(at) => {
+                        let want = (at, RECORD_AT as u16 + 2, RECORD_SLOT as u16, RECORD_AT as u16);
+                        assert_eq!(sites, [(&want, &4)], "{what}");
+                    }
+                    None => assert!(sites.is_empty(), "{what}"),
+                }
+                let violations = c.violations.values().sum::<u64>();
+                let reads = c.pdl_reads_of_writes.values().sum::<u64>();
+                assert_eq!(
+                    c.problems(),
+                    violations + reads,
+                    "{what}: {}",
+                    c.report(|_| String::new())
+                );
+            }
+        }
+    }
+}
+
+/// **The generic fill gives the operand bit only where the halfword's
+/// `<8:0>` is a register and a delta**: CALL to ND3 and their twins, and
+/// of ND4 (16, 36), whose sub-opcode is `<15:13>` (`M-INST-SUB-OPCODE`,
+/// `uc-parameters.lisp`), only `PUSH-CDR-IF-CAR-EQUAL` (5), which fetches
+/// its operand by `QADCM4`, and `PUSH-CDR-STORE-CAR-IF-CONS` (6), which
+/// stores by `STOCYC`'s `QADCM2` (`uc-macrocode.lisp`, `D-ND4`). Not
+/// `PUSH-NUMBER` (3), whose `<8:0>` is an immediate, the stack-closure
+/// sub-opcodes 0, 1, 2 and 4, whose `<8:0>` is a local's offset
+/// (`M-INST-ADR`), or 7, `ILLOP`; nor BRANCH, MISC, AREFI-NEW or the
+/// unused codes.
+#[test]
+fn the_generic_fill_arms_only_a_register_and_a_delta() {
+    let mut m = Machine::new();
+    m.geometry = Geometry::QUUX;
+    fill_generic(&mut m, QMLP as u16, OPDTB as u16, LOCALP_AT as u16, AP_AT as u8, true);
+    let armed = |half: u32| {
+        m.macro_dispatch.entries[(half >> 6) as usize & 0o1777] & macro_dispatch::OPERAND != 0
+    };
+    for reg in 0..8 {
+        for sub in 0..8u32 {
+            // ND4's `<13:9>` is 16 with `<13>`, the sub-opcode's low bit,
+            // clear, and 36 with it set.
+            let half = sub << 13 | 0o16 << 9 | reg << 6;
+            assert_eq!(armed(half), matches!(sub, 5 | 6), "ND4 sub-opcode {sub}, register {reg}");
+        }
+        for op in 0..0o40u32 {
+            if op & 0o17 == 0o16 {
+                continue;
+            }
+            let want = matches!(op, 0..=0o13 | 0o31..=0o33);
+            for dest in 0..4 {
+                let half = dest << 14 | op << 9 | reg << 6;
+                assert_eq!(armed(half), want, "opcode {op:o}, register {reg}, dest {dest}");
+            }
+        }
     }
 }

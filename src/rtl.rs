@@ -2418,8 +2418,7 @@ impl Rtl {
         // QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY
         // (`machine::macro_dispatch`).
         if let Some(code) = r.macro_write {
-            let m = &mut self.m;
-            m.macro_dispatch.write(code, r.ob, &m.amem, &m.mmem);
+            self.m.macro_dispatch.write(code, r.ob);
         }
         if r.fused {
             self.m.macro_dispatch.fused += 1;
