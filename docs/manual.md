@@ -787,8 +787,8 @@ Default: on for `rtl` and `chip`, off for `micro`.
 ### `--prom <file>`
 
 The boot PROM to run, an MCR microcode file as MIT's own
-`sys/ubin/promh.mcr` is: the 512 words the machine fetches before it turns
-the PROM off. A program longer than that, or assembled somewhere other than
+`sys/ubin/promh.mcr` is: the 1024 words the machine fetches before it
+turns the PROM off. A program longer than that, or assembled somewhere other than
 address 0, or setting the statistics bit `IR<46>`, which a burned word has
 nowhere to hold, is refused rather than run.
 

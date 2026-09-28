@@ -819,8 +819,8 @@ interrupt over a second, and the feature page's three words.
 starts the PC at 36000; the microcode lives in 0-35777, which is RAM from
 the start, and there is no PROM-disable bit: the PROM loads the microcode
 and jumps to 6. A reboot is a jump to 36000. The CADR keeps MIT's overlay:
-its PROM covers 0-777 until `PROMDISABLE` in the mode register, written at
-Unibus `766012`, lets the RAM show through.
+its PROM covers 0-1777, the first 1K words, until `PROMDISABLE` in the
+mode register, written at Unibus `766012`, lets the RAM show through.
 
 The PROM is muir-sys's PROM 2000 for block-disk and a GPT
 (`data/quux-promh.mcr`), MIT's `promh.text` changed so that a PDL buffer
