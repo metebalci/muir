@@ -23,6 +23,7 @@ use muir::machine::{Geometry, Machine};
 use muir::micro::Micro;
 use muir::rtl::Rtl;
 use muir::tv::Board;
+use support::macro_dispatch::{Checked, Executes, fill_generic};
 
 mod support;
 
@@ -455,34 +456,35 @@ fn to_the_main_loop(e: &mut impl Engine, qmlp: u16) {
     panic!("QMLP never ran");
 }
 
-/// Fills the MACRO DISPATCH MEMORY with the generic handlers, every index
-/// OPDTB's entry for its `<13:9>` opcode, with the operand bit clear, and
-/// enables the register with the main loop's address: what microcode that
-/// writes them is to do at every start (contract H8a §4).
-fn fill_from_opdtb(m: &mut Machine, qmlp: u16, opdtb: u16) {
-    for (k, e) in m.macro_dispatch.entries.iter_mut().enumerate() {
-        *e = m.dmem[opdtb as usize + (k >> 3 & 0o37)];
-    }
-    m.macro_dispatch.register = muir::machine::macro_dispatch::word(qmlp, 0, 0);
-}
-
 /// Boots the band on `make`'s engine with the MACRO DISPATCH MEMORY filled
-/// and enabled once the microcode is loaded, as its microcode does not yet
-/// do, and says how many returns fused.
-fn boots_with_the_fused_return<E: Engine>(engine: &str, make: impl Fn(Machine) -> E) {
+/// with the generic handlers and enabled once the microcode is loaded, as
+/// its microcode does not yet do, under the checkers of
+/// `support::macro_dispatch`; and says how many returns fused. The entries
+/// have no operand bit: microcode 2000 stores to a local or an argument in
+/// the microcycle after a main-loop return (`QSTLOC`, `QSTARG`,
+/// `uc-macrocode.lisp:327-334`), a write the rule of §3.3 forbids where
+/// the next entry has it; the checkers count those apart.
+fn boots_with_the_fused_return<E: Executes>(engine: &str, make: impl Fn(Machine) -> E) {
     let (qmlp, opdtb) = (band_symbol("QMLP", "I-MEM"), band_symbol("OPDTB", "D-MEM"));
+    let (localp, ap) = (band_symbol("A-LOCALP", "A-MEM"), band_symbol("M-AP", "M-MEM"));
     let Some((_dir, pack, root)) = band_2000(&format!("system-2000-fused-{engine}")) else {
         return;
     };
     let mut e = make(quux(&pack, &root));
     e.boot();
     to_the_main_loop(&mut e, qmlp);
-    fill_from_opdtb(e.machine_mut(), qmlp, opdtb);
+    fill_generic(e.machine_mut(), qmlp, opdtb, localp, ap as u8, false);
+    let mut e = Checked::new(e);
     let n = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
     let m = e.machine();
+    let c = &e.checker.counts;
     eprintln!("{engine}: listener after {n} steps, {} fused returns", m.macro_dispatch.fused);
+    eprintln!("{engine}: {}", c.report(|pc| format!("{pc:o}")));
     assert!(drawn_at_its_words_a_line(&e), "{engine}: the listener, fused");
     assert!(m.macro_dispatch.fused > 0, "{engine}: returns fused");
+    assert_eq!(c.fused, m.macro_dispatch.fused, "{engine}: every one checked");
+    assert!(c.operand_candidates > 0, "{engine}: LOCAL and ARG operands");
+    assert_eq!(c.problems(), 0, "{engine}: the rule of §3.3 kept and every check met");
     assert_eq!(
         m.macro_dispatch.register >> 31,
         1,
@@ -491,10 +493,13 @@ fn boots_with_the_fused_return<E: Engine>(engine: &str, make: impl Fn(Machine) -
     assert_eq!(microcode_version(&e), 2000);
 }
 
-/// **System 2000 boots with the fused return** (contract H8a §6 item 6), on
-/// `rtl`: its MACRO DISPATCH MEMORY filled from its own `OPDTB` and the
-/// register enabled with its `QMLP`, it reaches the listener with returns
-/// fused and the register still enabled.
+/// **System 2000 boots with the fused return** (contract H8a §6 items 4-6),
+/// on `rtl`: its MACRO DISPATCH MEMORY filled from its own `OPDTB` and the
+/// register enabled with its `QMLP`, `A-LOCALP` and `M-AP`, it reaches the
+/// listener with returns fused and the register still enabled; the
+/// microcycle after every fused return keeps the rule of §3.3, the handler
+/// the main loop would have reached runs next, and the base copies equal
+/// `A-LOCALP` and `M-AP` after every microcycle.
 #[test]
 fn system_2000_boots_with_the_fused_return_on_rtl() {
     boots_with_the_fused_return("rtl", Rtl::new);

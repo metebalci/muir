@@ -161,7 +161,8 @@ pub struct Micro {
     /// when it goes out ([`Micro::start_write`]).
     write_out: Option<(u32, WriteOut)>,
     /// The PDL buffer write an instruction hands to the next microcycle's
-    /// write phase, `PDLWRITED`: the index and the word.
+    /// write phase, `PDLWRITED`: the address and the word, the address
+    /// [`PDL_AT_INDEX`] for a write by PDL-INDEX.
     pdl_write: Option<(u16, u32)>,
     /// The SPC write the same way, `SPUSHD`: the pointer and the word.
     spc_write: Option<(u8, u32)>,
@@ -182,6 +183,10 @@ pub struct Micro {
     /// instruction that writes one reads the register and the memory as
     /// they stood. Set and used within one step.
     macro_write: Option<(u32, u32)>,
+    /// The operand address a fused return in this microcycle arms
+    /// (`crate::machine::macro_dispatch`), handed to the machine at its
+    /// edge. Set and used within one step.
+    operand: Option<crate::machine::Operand>,
 }
 
 impl Micro {
@@ -243,6 +248,7 @@ impl Micro {
             trap: false,
             pushed: false,
             macro_write: None,
+            operand: None,
         }
     }
 
@@ -285,8 +291,9 @@ impl Micro {
             // `-RESET` and `-BOOT` put every interval timer in its reset
             // state (contract Q11).
             self.m.timers = crate::machine::Timers::new();
-            // `-RESET` clears QUUX's MACRO-DISPATCH enable (contract H8a).
-            self.m.macro_dispatch.disable();
+            // `-RESET` clears QUUX's MACRO-DISPATCH enable, and drops an
+            // armed operand address (contract H8a).
+            self.m.macro_dispatch.reset();
             // `-RESET` clears `MEMSTART` (`Rtl::reset`).
             self.write_out = None;
         }
@@ -372,8 +379,14 @@ impl Micro {
     /// them with `CLK` high (`Rtl::write_phase`).  There is no pass-around
     /// into `M` for either, so an instruction that reads one right after a
     /// write to it gets the word that was there.
+    ///
+    /// A write by PDL-INDEX goes where PDL-INDEX stands when it lands, as
+    /// `PWIDX` addresses it (`Rtl::write_phase`): on the CADR nothing can
+    /// move the index in between, and on QUUX a fused return's operand
+    /// address can (`crate::machine::macro_dispatch`).
     fn land_writes(&mut self) {
         if let Some((adr, word)) = self.pdl_write.take() {
+            let adr = if adr == PDL_AT_INDEX { self.m.pdl_index } else { adr };
             self.m.pdl[adr as usize] = word;
         }
         if let Some((ptr, word)) = self.spc_write.take() {
@@ -472,14 +485,26 @@ impl Micro {
         let rotate = self.lc_rotation(stepped, crate::machine::macro_dispatch::INDEX_ROTATE);
         let rotated = rol(self.m.mmem[0o31], rotate);
         match self.m.macro_dispatch.fused_return(word, rotated) {
-            Some((handler, keep)) => {
-                if keep {
+            Some(f) => {
+                if f.keep {
                     self.m.spcptr = (self.m.spcptr + 1) & 0o37;
                 }
                 self.m.macro_dispatch.fused += 1;
-                handler as u32
+                self.operand = f.operand;
+                f.handler as u32
             }
             None => target,
+        }
+    }
+
+    /// A pop by a jump with R, fused as [`Micro::main_loop_return`] says
+    /// only while `macro_dispatch::JUMP_RETURNS_FUSE` does
+    /// (`crate::machine::macro_dispatch`).
+    fn jump_return(&mut self, word: u32) -> u32 {
+        if crate::machine::macro_dispatch::JUMP_RETURNS_FUSE {
+            self.main_loop_return(word, false)
+        } else {
+            self.pop_asks_for_a_fetch(word)
         }
     }
 
@@ -528,6 +553,15 @@ impl Micro {
     /// microcycle leaves `MD` alone, and one due goes out last, with `MD`
     /// as this microcycle leaves it ([`Micro::start_write`]).
     fn fetch_and_clock(&mut self) {
+        // QUUX's operand address: armed by a fused return at the edge
+        // ending its microcycle, loaded into PDL-INDEX at the edge ending
+        // the next, after anything that microcycle wrote there
+        // (`crate::machine::macro_dispatch`).
+        if let Some(o) = self.m.macro_dispatch.operand.take() {
+            let adr = self.m.macro_dispatch.operand_address(o);
+            self.m.pdl_index = adr as u16 & self.m.geometry.pdl_mask();
+        }
+        self.m.macro_dispatch.operand = self.operand.take();
         if let Some((physical, WriteOut::Started)) = self.write_out {
             if self.next_microcycle_holds_the_write() {
                 self.write_out = Some((physical, WriteOut::Next));
@@ -830,7 +864,7 @@ impl Micro {
                 self.m.pdl_pointer = (self.m.pdl_pointer + 1) & self.m.geometry.pdl_mask();
                 self.pdl_write = Some((self.m.pdl_pointer, data));
             }
-            0o12 => self.pdl_write = Some((self.m.pdl_index, data)),
+            0o12 => self.pdl_write = Some((PDL_AT_INDEX, data)),
             0o13 => self.m.pdl_index = data as u16 & self.m.geometry.pdl_mask(),
             0o14 => self.m.pdl_pointer = data as u16 & self.m.geometry.pdl_mask(),
             // SPC, push
@@ -1057,13 +1091,22 @@ impl Micro {
     /// instruction register's latch at IREG 3C17 and the parity generator
     /// at IPAR 3F24. Otherwise the write goes to a functional destination
     /// *and* to M memory, which shadows the low 32 words of A.
+    ///
+    /// QUUX's copies of `A-LOCALP` and `M-AP` take the word where the
+    /// MACRO-DISPATCH register names its address
+    /// (`crate::machine::macro_dispatch`).
     fn write_dest(&mut self, dest: u16) -> Result<(), Halt> {
         if dest & 0o4000 != 0 {
-            self.m.amem[(dest & 0o1777) as usize] = self.out;
+            let adr = (dest & 0o1777) as usize;
+            self.m.amem[adr] = self.out;
+            self.m.macro_dispatch.a_written(adr, self.out);
         } else {
             self.write_functional(dest, self.out)?;
-            self.m.mmem[(dest & 0o37) as usize] = self.out;
-            self.m.amem[(dest & 0o37) as usize] = self.out;
+            let adr = (dest & 0o37) as usize;
+            self.m.mmem[adr] = self.out;
+            self.m.amem[adr] = self.out;
+            self.m.macro_dispatch.a_written(adr, self.out);
+            self.m.macro_dispatch.m_written(adr, self.out);
         }
         Ok(())
     }
@@ -1080,6 +1123,10 @@ enum WriteOut {
     /// Out at the end of this microcycle.
     Due = 2,
 }
+
+/// [`Micro`]'s `pdl_write` address for a write by PDL-INDEX, resolved when
+/// the write lands: no PDL address, which is fourteen bits at most.
+const PDL_AT_INDEX: u16 = u16::MAX;
 
 /// Rotate left, the machine's only shifter primitive.
 fn rol(v: u32, n: u32) -> u32 {
@@ -1278,7 +1325,7 @@ impl Micro {
         if r && cond {
             let mut t = self.pop_spc();
             if (t >> 14) & 1 != 0 {
-                t = self.main_loop_return(t, false);
+                t = self.jump_return(t);
             }
             target = (t & 0o37777) as u16;
         }
@@ -1462,7 +1509,7 @@ impl Engine for Micro {
         // bottom of the control store.  `-BOOT` presets `RUN`.
         self.m.reset_console_registers();
         self.m.timers = crate::machine::Timers::new();
-        self.m.macro_dispatch.disable();
+        self.m.macro_dispatch.reset();
         self.m.clock_control.run = true;
         self.srun = true;
         self.npc = self.m.reset_pc();
@@ -1535,6 +1582,7 @@ impl Engine for Micro {
             // Set and used within one step.
             pushed: _,
             macro_write: _,
+            operand: _,
         } = self;
         m.save(w);
         w.u64(p0.raw());
@@ -1819,7 +1867,8 @@ impl Engine for Micro {
             self.npc = (t & 0o37777) as u16;
         }
         if let Some((code, data)) = self.macro_write.take() {
-            self.m.macro_dispatch.write(code, data);
+            let m = &mut self.m;
+            m.macro_dispatch.write(code, data, &m.amem, &m.mmem);
         }
         self.fetch_and_clock();
         self.m.cycles += 1;

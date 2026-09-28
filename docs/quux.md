@@ -1385,15 +1385,16 @@ well:
 
 | Destination | Writes |
 |---|---|
-| 5 | the MACRO-DISPATCH register: `<13:0>` the main loop's address, `<23:14>` the A-memory address of `A-LOCALP` and `<28:24>` the M-memory address of `M-AP` (kept, and read by nothing), `<31>` the enable; `<30:29>` reserved, written 0 and kept 0 |
+| 5 | the MACRO-DISPATCH register: `<13:0>` the main loop's address, `<23:14>` the A-memory address of `A-LOCALP` and `<28:24>` the M-memory address of `M-AP`, the operand address's bases, `<31>` the enable; `<30:29>` reserved, written 0 and kept 0 |
 | 6 | the MACRO DISPATCH MEMORY's index, `<9:0>` |
-| 7 | the entry at the index, `<17:0>`: D-MEM's word, `<13:0>` the handler's address, `<14>` N, `<15>` P, `<16>` R, and `<17>` the operand bit (kept, and read by nothing) |
+| 7 | the entry at the index, `<17:0>`: D-MEM's word, `<13:0>` the handler's address, `<14>` N, `<15>` P, `<16>` R, and `<17>` the operand bit |
 
 The MACRO DISPATCH MEMORY has 1,024 entries, feature word 17, indexed by
 the halfword's `<15:6>`: its destination, opcode and register together.
 
-**A fused return** is a return --- a POPJ, a jump with R, or a dispatch
-whose entry has R --- that pops a word with `<14>` set and `<13:0>` the
+**A fused return** is a return --- a POPJ, a dispatch whose entry has R,
+or a jump with R (one switch in the code, `JUMP_RETURNS_FUSE` in
+`src/machine.rs`, takes jumps out on both engines) --- that pops a word with `<14>` set and `<13:0>` the
 register's, with the register enabled and no fetch needed, so that today
 it would go to `QMLP+2`. When the entry for the next halfword has R and P
 clear, it goes to the entry's address instead, two microcycles sooner; the
@@ -1410,10 +1411,38 @@ entry has R or P, the word is another main loop's (`DMLP`'s), the
 register is disabled, or the popping microinstruction pushes, pops by
 functional source 14, writes M 31 or INTERRUPT-CONTROL, or steps the
 location counter itself (a `NEXT INSTR` the microcycle before, or a
-dispatch's `IR<24>`). The microcycle after a fused return runs as it
-would have before the main loop's dispatch, which has been decided by
-then: it must not write the location counter, M 31 or destinations 5 to
-7. The machine does not check that.
+dispatch's `IR<24>`).
+
+**The operand address.** When the entry has the operand bit and the
+halfword's register, `<8:6>`, is LOCAL (5) or ARG (6) (`QADCM1`,
+`uc-macrocode.lisp:129-137`), PDL-INDEX is loaded at the end of the
+microcycle after the return with `A-LOCALP` + delta or `M-AP` + 1 +
+delta, as `QADLOC1` and `QADARG1` compute them
+(`uc-macrocode.lisp:237-245`): delta is the halfword's `<5:0>`, and the
+sum is masked to PDL-INDEX's bits. The handler's first microinstruction
+finds its operand at `C-PDL-BUFFER-INDEX`. The bases are copies the
+machine keeps, fourteen bits each: every A or M write whose address the
+register names writes the copy too, and the register's write and a
+checkpoint's restore load them from A and M memory. A checkpoint keeps an
+armed operand address, and -RESET drops it.
+
+**The rule for the microcycle after a fused return.** It runs as it would
+have before the main loop's dispatch, which has been decided by then, so
+it must not write the location counter, M 31, INTERRUPT-CONTROL (whose
+byte mode chooses the halfword) or destinations 5 to 7; and, where the
+entry has the operand bit, PDL-INDEX, `A-LOCALP`, `M-AP`, or the PDL
+buffer by PDL-INDEX (destination 12). A PDL buffer write lands in the
+next microcycle's write phase at PDL-INDEX as it stands then (`PWIDX`),
+which is after the operand address has been loaded, so it would go to the
+next instruction's operand; both engines do that. The machine does not
+check the rule; `tests/support/macro_dispatch.rs` does, over a run.
+
+Microcode 2000 keeps the rule where no entry has the operand bit. It
+stores to a local or an argument by PDL-INDEX in the microcycle after a
+main-loop return (`QSTLOC` and `QSTARG`, `uc-macrocode.lisp:327-334`, and,
+more rarely, `QVMALCL`, `XCTO1` and `MAKE-STACK-CLOSURE`), so with the operand bit on any entry that store can
+land at the next instruction's operand; System 2000 then does not reach
+its listener on `rtl` or `micro`.
 
 -RESET clears the enable and nothing else, and every control-store write
 clears it too, wherever it lands: the entries name control-store
@@ -1426,14 +1455,23 @@ register, the index and the entries.
 `QMLP` is: the destinations' decode, on revision 12 and not on 11 or the
 CADR; the same state with the MACRO DISPATCH MEMORY holding the generic
 handlers as without it, two microcycles fewer for each fused return,
-returns by a POPJ, a jump with R and a dispatch with R all fused and N
-honoured; the entry taken by the whole `<15:6>`; each case above that is
-not fused running today's path microcycle for microcycle; the enable
-cleared by -RESET and by a control-store write; and the checkpoint.
+returns by a POPJ, a dispatch with R and, as the switch says, a jump with
+R fused and N honoured; the entry taken by the whole `<15:6>`; each case
+above that is not fused running today's path microcycle for microcycle;
+the operand address for LOCAL and ARG at the handler's first
+microinstruction and not before, masked, from bases written by the
+popping microinstruction itself, and nothing loaded without the operand
+bit or for another register; a PDL buffer write by PDL-INDEX in the
+microcycle after landing at the operand address; the rule checker's
+decode and each forbidden write found in a run; the enable cleared by
+-RESET and by a control-store write; and the checkpoint.
 `tests/system_2000.rs` holds System 2000 reaching its listener on revision
 12 in the same microcycles and nanoseconds, with the same memories, as on
 revision 11, on both engines; booting with the memory filled from its
-`OPDTB` and enabled from its `QMLP`, with returns fused; and booting with
+`OPDTB` and enabled from its `QMLP`, `A-LOCALP` and `M-AP`, with returns
+fused, the rule kept after every one, the main loop's handler run next
+and the base copies equal to their memory after every microcycle; and
+booting with
 the register enabled and every entry poisoned to `ILLOP` before the PROM
 loads the microcode, nothing fused. `tests/unused_codes.rs` holds that it
 writes none of destinations 5 to 7.

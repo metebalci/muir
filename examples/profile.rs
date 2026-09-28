@@ -21,9 +21,14 @@
 //!
 //! On QUUX, `MUIR_H8A` fills the MACRO DISPATCH MEMORY with the generic
 //! handlers, `OPDTB`'s entry for each index's opcode, and enables the
-//! MACRO-DISPATCH register with `QMLP`, once the microcode has reached its
-//! main loop, as a microcode that writes them would; the macroinstructions
-//! counted then include those a fused return dispatched. `MUIR_RTC=<s>`
+//! MACRO-DISPATCH register with `QMLP`, `A-LOCALP` and `M-AP`, once the
+//! microcode has reached its main loop, as a microcode that writes them
+//! would; the macroinstructions counted then include those a fused return
+//! dispatched. `MUIR_H8A=operand` gives the operand bit to the entries of
+//! the opcodes whose `<8:0>` is a register and delta
+//! (`tests/support/macro_dispatch.rs`, `fill_generic`). Either way the run
+//! is watched by that file's checkers, and each workload says what they
+//! counted. `MUIR_RTC=<s>`
 //! counts QUUX's real-time clock from second `s` of the Unix epoch in the
 //! machine's own time, as `--rtc` does, in place of the host's clock, so
 //! that the band's clock is the same in two runs.
@@ -128,6 +133,10 @@ const METERS: &[&str] = &[
 
 /// What the two engines can say that the harness needs beyond [`Engine`].
 trait Profiled: Engine {
+    /// The fused return's checkers, where the engine runs under them.
+    fn checker(&self) -> Option<&support::macro_dispatch::Checker> {
+        None
+    }
     fn executed_pc(&self) -> Option<u16>;
     /// Nanoseconds stalled on the bus, memory cycles, the machine's
     /// nanoseconds, and the memory cache's hits and misses, where the
@@ -146,6 +155,23 @@ impl Profiled for Micro {
     }
     fn bus(&self) -> Option<[u64; 5]> {
         None
+    }
+}
+
+impl<E: Profiled + support::macro_dispatch::Executes> Profiled
+    for support::macro_dispatch::Checked<E>
+{
+    fn checker(&self) -> Option<&support::macro_dispatch::Checker> {
+        Some(&self.checker)
+    }
+    fn executed_pc(&self) -> Option<u16> {
+        self.engine.executed_pc()
+    }
+    fn bus(&self) -> Option<[u64; 5]> {
+        self.engine.bus()
+    }
+    fn fetch_started(&self) -> Option<bool> {
+        self.engine.fetch_started()
     }
 }
 
@@ -216,6 +242,8 @@ fn category(label: &str, file: &str) -> String {
 
 struct Phase {
     cycles: u64,
+    /// What the fused return's checkers counted, where they ran.
+    checked: Option<support::macro_dispatch::Counts>,
     /// Fused returns: macroinstructions dispatched without `QMLP+2`.
     fused: u64,
     hist: Vec<u64>,
@@ -356,6 +384,7 @@ fn run<E: Profiled>(
     let mut stall_hist = vec![0u64; 1 << 14];
     let cycles0 = e.machine().cycles;
     let fused0 = e.machine().macro_dispatch.fused;
+    let checked0 = e.checker().map(|c| c.counts.clone());
     let mut fetches = [[0u64; 2]; 2];
     let qmlp = syms.address(Space::IMem, "QMLP");
     let mut ops: HashMap<(u16, u16, u64), u64> = HashMap::new();
@@ -481,6 +510,7 @@ fn run<E: Profiled>(
     };
     Phase {
         cycles: e.machine().cycles - cycles0,
+        checked: e.checker().zip(checked0.as_ref()).map(|(c, c0)| c.counts.since(c0)),
         fused: e.machine().macro_dispatch.fused - fused0,
         hist,
         stall_hist,
@@ -510,6 +540,14 @@ fn report(name: &str, p: &Phase, syms: &Symbols, files: &BTreeMap<String, String
             p.fused,
             100.0 * p.fused as f64 / macros as f64
         );
+    }
+    if let Some(c) = &p.checked {
+        let label = |pc: u16| {
+            syms.nearest(Space::IMem, pc as u32)
+                .map(|(l, off)| format!("{l}+{off:o}"))
+                .unwrap_or_else(|| "?".into())
+        };
+        println!("   checkers: {}, problems {}", c.report(label), c.problems());
     }
     if let Some([stalled, bus, ns, hits, misses]) = p.bus {
         println!("   stalled {stalled} ns, {bus} memory cycles, {ns} ns in all");
@@ -646,7 +684,7 @@ fn main() {
     }
 }
 
-fn profile<E: Profiled>(
+fn profile<E: Profiled + support::macro_dispatch::Executes>(
     make: impl Fn(muir::machine::Machine) -> E,
     geometry: muir::machine::Geometry,
     wanted: &[&(&str, &str)],
@@ -786,21 +824,54 @@ fn profile<E: Profiled>(
     let mut e = make(m);
     e.boot();
     // `MUIR_H8A`: the MACRO DISPATCH MEMORY filled from the microcode's
-    // own opcode table and enabled with its main loop, once it is loaded.
-    if on_quux && std::env::var_os("MUIR_H8A").is_some() {
-        let opdtb = syms.address(Space::DMem, "OPDTB").expect("OPDTB in the symbol table");
-        // Not while the PROM loads the microcode: on `rtl` a control-store
-        // write's second microcycle stands at the address written, and the
-        // PC goes back into the PROM after it.
-        while e.machine().opc != qmlp as u16 || e.pc() >= muir::machine::QUUX_PROM_BASE {
-            e.step().expect("halted before the main loop");
+    // own opcode table and enabled with its main loop and bases, once it is
+    // loaded, and the run watched by the checkers.
+    match std::env::var("MUIR_H8A") {
+        Ok(how) if on_quux => {
+            let at = |space, name| {
+                syms.address(space, name).unwrap_or_else(|| panic!("{name} in the symbol table"))
+            };
+            let opdtb = at(Space::DMem, "OPDTB");
+            let (localp, ap) = (at(Space::AMem, "A-LOCALP"), at(Space::MMem, "M-AP"));
+            // Not while the PROM loads the microcode: on `rtl` a
+            // control-store write's second microcycle stands at the address
+            // written, and the PC goes back into the PROM after it.
+            while e.machine().opc != qmlp as u16 || e.pc() >= muir::machine::QUUX_PROM_BASE {
+                e.step().expect("halted before the main loop");
+            }
+            support::macro_dispatch::fill_generic(
+                e.machine_mut(),
+                qmlp as u16,
+                opdtb as u16,
+                localp as u16,
+                ap as u8,
+                how == "operand",
+            );
+            measure(
+                support::macro_dispatch::Checked::new(e),
+                &syms,
+                &files,
+                qmlp,
+                root,
+                home,
+                wanted,
+            )
         }
-        let m = e.machine_mut();
-        for (k, w) in m.macro_dispatch.entries.iter_mut().enumerate() {
-            *w = m.dmem[opdtb as usize + (k >> 3 & 0o37)];
-        }
-        m.macro_dispatch.register = muir::machine::macro_dispatch::word(qmlp as u16, 0, 0);
+        _ => measure(e, &syms, &files, qmlp, root, home, wanted),
     }
+}
+
+/// The run from the boot on: the listener, the definitions, and the
+/// workloads, each reported.
+fn measure<E: Profiled>(
+    mut e: E,
+    syms: &Symbols,
+    files: &BTreeMap<String, String>,
+    qmlp: u32,
+    root: PathBuf,
+    home: PathBuf,
+    wanted: &[&(&str, &str)],
+) {
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS_1001, root.clone(), 400_000_000);
     eprintln!("listener after {ran} microcycles");
     let mut k = Keyboard::new();
@@ -824,7 +895,7 @@ fn profile<E: Profiled>(
         &mut plain,
     );
     let ready = home.join("ready.done");
-    let p = run(&mut e, &mut k, "(w-done \"ready\")", &ready, &syms);
+    let p = run(&mut e, &mut k, "(w-done \"ready\")", &ready, syms);
     eprintln!("defined and logged in, {} microcycles", p.cycles);
 
     // A marker of its own for every run, so that a workload named twice is
@@ -832,8 +903,8 @@ fn profile<E: Profiled>(
     for (n, (name, form)) in wanted.iter().enumerate() {
         let marker = home.join(format!("{name}-{n}.done"));
         let p =
-            run(&mut e, &mut k, &format!("(progn {form} (w-done \"{name}-{n}\"))"), &marker, &syms);
-        report(name, &p, &syms, &files, qmlp);
+            run(&mut e, &mut k, &format!("(progn {form} (w-done \"{name}-{n}\"))"), &marker, syms);
+        report(name, &p, syms, files, qmlp);
         // `MUIR_PC_DUMP=<dir>`: every executed address's count and the
         // nanoseconds stalled at it, one file a workload.
         // `MUIR_OPS=<dir>`: the macroinstructions, one file a workload.

@@ -583,6 +583,9 @@ struct Read {
     /// A fused return (`machine::macro_dispatch`): `npc` is the MACRO
     /// DISPATCH MEMORY's handler.
     fused: bool,
+    /// The operand address the fused return arms, which the edge ending
+    /// the next microcycle loads into PDL-INDEX.
+    operand: Option<crate::machine::Operand>,
     /// QUUX's destination 5, 6 or 7, the MACRO-DISPATCH register and the
     /// MACRO DISPATCH MEMORY's index and entry, written at the edge.
     macro_write: Option<u32>,
@@ -795,8 +798,9 @@ impl Rtl {
         // QUUX's interval timers: `-RESET` puts every one in its reset
         // state (contract Q11).
         self.m.timers = crate::machine::Timers::new();
-        // And QUUX's MACRO-DISPATCH enable (contract H8a).
-        self.m.macro_dispatch.disable();
+        // And QUUX's MACRO-DISPATCH enable, and an armed operand address
+        // (contract H8a).
+        self.m.macro_dispatch.reset();
         // CONTRL 3D26
         self.inop = false;
         self.spushd = false;
@@ -1428,9 +1432,12 @@ impl Rtl {
         // to the MACRO DISPATCH MEMORY's handler for the halfword M 31 gives
         // under the counter as `LCINC` steps it at the next edge, page
         // SMCTL's gates on the stepped counter. M 31 is read as M is, with
-        // the pass-around from `L`.
+        // the pass-around from `L`. A jump's return fuses only while
+        // `JUMP_RETURNS_FUSE` says so.
+        let jump_pop = (jret && !bit(ir, 6) && jcond) || (jretf && !jcond);
         let fused = if self.m.geometry.macro_dispatch
             && spop
+            && (crate::machine::macro_dispatch::JUMP_RETURNS_FUSE || !jump_pop)
             && !srcspcpopreal
             && !spush
             && !trap
@@ -1458,7 +1465,7 @@ impl Rtl {
         let next_instr = spop && (!srcspcpopreal && bit(spc as u64, 14));
         // The popped word stays, as the main loop's push would put it back,
         // unless the entry's N would have nopped that push.
-        let spop = spop && !matches!(fused, Some((_, true)));
+        let spop = spop && !fused.is_some_and(|f| f.keep);
         let spcnt = spush | spop;
 
         let n = trap
@@ -1483,8 +1490,8 @@ impl Rtl {
         let spc_target = ((spc as u16) & 0o37774) | (spc1a as u16) << 1 | (spc as u16 & 1);
         let npc = if trap {
             self.m.reset_pc()
-        } else if let Some((handler, _)) = fused {
-            handler
+        } else if let Some(f) = fused {
+            f.handler
         } else {
             match (pcs1 as u8) * 2 + pcs0 as u8 {
                 0 => spc_target,
@@ -1551,6 +1558,7 @@ impl Rtl {
         Read {
             nop,
             fused: fused.is_some(),
+            operand: fused.and_then(|f| f.operand),
             macro_write,
             irdisp,
             halt: funct & 2 != 0,
@@ -1620,11 +1628,16 @@ impl Rtl {
     /// Everything written here belongs to the *previous* instruction, and
     /// every enable is a registered one.
     fn write_phase(&mut self, r: &Read) {
+        // QUUX's copies of `A-LOCALP` and `M-AP` take the word where the
+        // MACRO-DISPATCH register names its address, with the write pulse
+        // (`machine::macro_dispatch`).
         if self.destd {
             self.m.amem[self.wadr as usize] = self.l;
+            self.m.macro_dispatch.a_written(self.wadr as usize, self.l);
         }
         if self.destmd {
             self.m.mmem[(self.wadr & 0o37) as usize] = self.l;
+            self.m.macro_dispatch.m_written((self.wadr & 0o37) as usize, self.l);
         }
         if self.pdlwrited {
             // Addressed by `PWIDX` rather than by `IR<30>`: with CLK low the
@@ -2405,7 +2418,8 @@ impl Rtl {
         // QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY
         // (`machine::macro_dispatch`).
         if let Some(code) = r.macro_write {
-            self.m.macro_dispatch.write(code, r.ob);
+            let m = &mut self.m;
+            m.macro_dispatch.write(code, r.ob, &m.amem, &m.mmem);
         }
         if r.fused {
             self.m.macro_dispatch.fused += 1;
@@ -2456,6 +2470,15 @@ impl Rtl {
         if r.destpdlx {
             self.m.pdl_index = r.ob as u16 & self.m.geometry.pdl_mask();
         }
+        // QUUX's operand address (`machine::macro_dispatch`): armed at the
+        // edge ending a fused return, loaded at the edge ending the
+        // microcycle after it, over anything that microcycle wrote there,
+        // from the base copies as its write pulse has left them.
+        if let Some(o) = self.m.macro_dispatch.operand.take() {
+            let adr = self.m.macro_dispatch.operand_address(o);
+            self.m.pdl_index = adr as u16 & self.m.geometry.pdl_mask();
+        }
+        self.m.macro_dispatch.operand = r.operand;
         if r.destpdlp {
             self.m.pdl_pointer = r.ob as u16 & self.m.geometry.pdl_mask();
         } else if r.pdlcnt {

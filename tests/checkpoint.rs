@@ -187,12 +187,14 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// revision 11), so that a version-46 checkpoint of a revision-10 machine is
 /// refused rather than resumed on a page it does not know, and version 48
 /// QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY, and whether the
-/// machine has them (contract H8a, revision 12), which
+/// machine has them (contract H8a, revision 12), and version 49 the
+/// operand address a fused return has armed, which
 /// `a_checkpoint_keeps_the_register_and_the_memory` in
-/// `tests/macro_dispatch.rs` holds.
+/// `tests/macro_dispatch.rs` holds, with a `micro` PDL buffer write by
+/// PDL-INDEX taking the index where it lands.
 #[test]
-fn the_format_is_version_48_and_another_version_is_refused() {
-    assert_eq!(checkpoint::VERSION, 48, "a new version needs its own tests");
+fn the_format_is_version_49_and_another_version_is_refused() {
+    assert_eq!(checkpoint::VERSION, 49, "a new version needs its own tests");
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
@@ -200,14 +202,14 @@ fn the_format_is_version_48_and_another_version_is_refused() {
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();
-    assert_eq!(&good[at..at + 4], 48u32.to_le_bytes());
+    assert_eq!(&good[at..at + 4], 49u32.to_le_bytes());
     for other in (1u32..checkpoint::VERSION).chain([u32::MAX]) {
         let mut file = good.clone();
         file[at..at + 4].copy_from_slice(&other.to_le_bytes());
         std::fs::write(&path, &file).unwrap();
         let err = checkpoint::read(&path).unwrap_err().to_string();
         assert!(err.contains(&format!("format version {other}")), "{err}");
-        assert!(err.contains("reads 48"), "{err}");
+        assert!(err.contains("reads 49"), "{err}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

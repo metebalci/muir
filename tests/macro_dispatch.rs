@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! QUUX's MACRO-DISPATCH register, its MACRO DISPATCH MEMORY and the fused
-//! return (contract H8a, revision 12), on hand-written microcode.
+//! QUUX's MACRO-DISPATCH register, its MACRO DISPATCH MEMORY, the fused
+//! return and the operand address (contract H8a, revision 12), on
+//! hand-written microcode.
 //!
 //! Functional destination 5 writes the register (`<13:0>` the main loop's
 //! address, `<31>` the enable), 6 the memory's index and 7 the entry at it.
@@ -12,7 +13,9 @@
 //! clear: the main loop's dispatch and the push of its return are not run,
 //! two microcycles, and the popped word stays on the stack unless the
 //! entry's N is set. Every other return runs the main loop as it always
-//! has.
+//! has. When the entry has the operand bit and the halfword's register is
+//! LOCAL or ARG, PDL-INDEX is loaded with the operand's address at the end
+//! of the microcycle after the return.
 //!
 //! The main loop here is made as microcode 2000's `QMLP` is
 //! (`uc-macrocode.lisp:9-13`): the condition-6 call, `M-INST-BUFFER <- MD`,
@@ -22,14 +25,16 @@
 use muir::engine::Engine;
 use muir::isa::Insn;
 use muir::isa::asm::{
-    ALU, ALWAYS, CARRY_IN, DISPATCH, JUMP, M_PLUS_C, N, P, POPJ, R, SETA, SETM, SRC_MD, a_src,
-    d_addr, d_len, filler, m_dest, m_src, rot, src, target,
+    ALU, ALWAYS, CARRY_IN, DISPATCH, JUMP, M_PLUS_C, N, P, POPJ, R, SETA, SETM, SRC_MD, a_dest,
+    a_src, d_addr, d_len, filler, m_dest, m_src, rot, src, target,
 };
-use muir::machine::{Geometry, Machine, macro_dispatch};
+use muir::machine::{Geometry, Machine, Operand, macro_dispatch};
 use muir::micro::Micro;
 use muir::rtl::Rtl;
 
 mod support;
+
+use support::macro_dispatch::{Checked, Counts, Executes, Write, writes};
 
 /// The main loop, at an address with `<1:0>` clear as the stream hardware
 /// requires (`uc-macrocode.lisp:6`).
@@ -55,6 +60,101 @@ const OP_ROTATE: u64 = 32 - 9;
 /// A halfword: `<13:9>` the opcode and `<8:6>` the register.
 const fn hw(op: u32, reg: u32) -> u32 {
     op << 9 | reg << 6
+}
+
+/// A halfword with `<5:0>` the delta too.
+const fn hwd(op: u32, reg: u32, delta: u32) -> u32 {
+    hw(op, reg) | delta
+}
+
+/// Where the register names `A-LOCALP`, A memory 432 as in microcode 2000
+/// (`uc-parameters.lisp:1071`), and `M-AP`, M memory 21
+/// (`uc-parameters.lisp:384`).
+const LOCALP_AT: u64 = 0o432;
+const AP_AT: u64 = 0o21;
+/// What they hold at the start: `A-LOCALP` near the top of the PDL
+/// buffer's fourteen bits, so that a large delta wraps.
+const LOCALP: u32 = 0o37760;
+const AP: u32 = 0o200;
+/// PDL-INDEX where no operand address has been loaded: the start's, and
+/// what [`RECORD`]'s handler leaves. In A memory 54.
+const SENTINEL: u32 = 0o3777;
+const SENTINEL_AT: u64 = 0o54;
+/// Opcode 10 pushes PDL-INDEX as its first microinstruction finds it,
+/// sets it to [`SENTINEL`], and returns by a POPJ whose microcycle after,
+/// its [`Setup::slot`], pushes PDL-INDEX again.
+const RECORD: u32 = 0o10;
+/// Its handler, and the microcycle after its return.
+const RECORD_AT: u64 = 0o230;
+const RECORD_SLOT: u64 = RECORD_AT + 3;
+/// Opcode 11 steps `M-AP` in the POPJ that returns.
+const SETAP: u32 = 0o11;
+const SETAP_AT: u64 = 0o240;
+/// Opcode 12 sets `A-LOCALP` to [`LOCALP_2`], from A memory 56, in the POPJ
+/// that returns.
+const SETLOCALP: u32 = 0o12;
+const SETLOCALP_AT: u64 = 0o250;
+const LOCALP_2: u32 = 0o1000;
+
+/// The operand program: [`RECORD`] with LOCAL, ARG and another register,
+/// each once in a word's first halfword, which needs a fetch and is not
+/// fused, and once in its second, which is; one after [`SETAP`]'s return
+/// and one after [`SETLOCALP`]'s; and deltas of 0 to 77.
+const OPERANDS: [u32; 14] = [
+    hwd(RECORD, 5, 3),
+    hwd(RECORD, 5, 7),
+    hwd(RECORD, 6, 0),
+    hwd(RECORD, 6, 5),
+    hw(SETAP, 0),
+    hwd(RECORD, 6, 2),
+    hwd(RECORD, 4, 1),
+    hwd(RECORD, 4, 1),
+    hwd(RECORD, 5, 0o77),
+    hwd(RECORD, 5, 0o77),
+    hw(SETLOCALP, 0),
+    hwd(RECORD, 5, 1),
+    hw(7, 0),
+    hw(7, 0),
+];
+
+/// What [`RECORD`] pushes over [`OPERANDS`] with the operand bit in its
+/// entries: in pairs, PDL-INDEX at the handler's first microcycle and in
+/// the microcycle after its return. The second halfwords with LOCAL or ARG
+/// find the operand's address, masked to fourteen bits; every other push
+/// finds [`SENTINEL`], the microcycle after a return included.
+fn operand_records() -> Vec<u32> {
+    let s = SENTINEL;
+    vec![
+        s,
+        s,
+        (LOCALP + 7) & 0o37777,
+        s,
+        s,
+        s,
+        AP + 1 + 5,
+        s,
+        // After SETAP: `M-AP` stepped by the return itself.
+        AP + 1 + 1 + 2,
+        s,
+        s,
+        s,
+        s,
+        s,
+        s,
+        s,
+        (LOCALP + 0o77) & 0o37777,
+        s,
+        // After SETLOCALP: `A-LOCALP` written by the return itself.
+        LOCALP_2 + 1,
+        s,
+    ]
+}
+
+/// Whether the return by opcode `op`'s handler can fuse: every one but a
+/// jump with R's (opcode 2) while [`macro_dispatch::JUMP_RETURNS_FUSE`] takes
+/// jumps out.
+fn fuses(op: u32) -> bool {
+    op != 2 || macro_dispatch::JUMP_RETURNS_FUSE
 }
 
 /// The program's halfwords in the order they run: a word's `<15:0>`, then
@@ -114,6 +214,13 @@ struct Setup {
     /// The MACRO DISPATCH MEMORY holds [`specialised`]'s entry for opcode
     /// 2 with register 5.
     specialised: bool,
+    /// The halfwords run.
+    program: &'static [u32],
+    /// [`RECORD`]'s entries have the operand bit, whatever the register.
+    operand: bool,
+    /// What runs in the microcycle after [`RECORD`]'s return, in place of
+    /// its push of PDL-INDEX.
+    slot: Option<u64>,
 }
 
 impl Setup {
@@ -124,7 +231,15 @@ impl Setup {
             sequence_break: false,
             pop: Pop::Plain,
             specialised: false,
+            program: &PROGRAM,
+            operand: false,
+            slot: None,
         }
+    }
+
+    /// The operand program, enabled, with the operand bit.
+    fn operands() -> Setup {
+        Setup { program: &OPERANDS, operand: true, ..Setup::on() }
     }
 
     fn on() -> Setup {
@@ -137,9 +252,9 @@ fn fd(code: u64) -> u64 {
     code << 19 | 0o37 << 14
 }
 
-/// The register's word for this program's main loop, enabled.
+/// The register's word for this program's main loop and bases, enabled.
 fn enabled() -> u32 {
-    macro_dispatch::word(QMLP as u16, 0, 0)
+    macro_dispatch::word(QMLP as u16, LOCALP_AT as u16, AP_AT as u8)
 }
 
 /// The entry `specialised` sets: opcode 2 with register 5.
@@ -205,6 +320,18 @@ fn machine(s: Setup) -> Machine {
     put(&mut prom, 0o124, filler().raw() | POPJ);
     // The specialised handler: count in M 7 and return.
     put(&mut prom, SPECIAL, ALU | M_PLUS_C | CARRY_IN | m_src(7) | m_dest(7) | POPJ);
+    // RECORD: push PDL-INDEX (functional source 3, destination 11), set it
+    // to the sentinel (destination 13), and return, pushing it again in
+    // the microcycle after the POPJ unless the slot says otherwise.
+    let push_index = ALU | SETM | src(3) | fd(0o11);
+    put(&mut prom, RECORD_AT, push_index);
+    put(&mut prom, RECORD_AT + 1, ALU | SETA | a_src(SENTINEL_AT) | fd(0o13));
+    put(&mut prom, RECORD_AT + 2, filler().raw() | POPJ);
+    put(&mut prom, RECORD_SLOT, s.slot.unwrap_or(push_index));
+    // SETAP: `M-AP` + 1, in the POPJ itself.
+    put(&mut prom, SETAP_AT, ALU | M_PLUS_C | CARRY_IN | m_src(AP_AT) | m_dest(AP_AT) | POPJ);
+    // SETLOCALP: `A-LOCALP` from A memory 56, in the POPJ itself.
+    put(&mut prom, SETLOCALP_AT, ALU | SETA | a_src(0o56) | a_dest(LOCALP_AT) | POPJ);
     // Opcode 7 stops: a jump to itself.
     put(&mut prom, STOP as u64, JUMP | target(STOP as u64) | ALWAYS | N);
     m.load_prom(&prom);
@@ -219,6 +346,9 @@ fn machine(s: Setup) -> Machine {
     m.dmem[OPDTB as usize + 5] = 1 << 16 | 1 << 15;
     m.dmem[OPDTB as usize + 6] = 1 << 15 | 1 << 14 | 0o120;
     m.dmem[OPDTB as usize + 7] = STOP as u32;
+    m.dmem[OPDTB as usize + RECORD as usize] = RECORD_AT as u32;
+    m.dmem[OPDTB as usize + SETAP as usize] = SETAP_AT as u32;
+    m.dmem[OPDTB as usize + SETLOCALP as usize] = SETLOCALP_AT as u32;
     m.dmem[RETURNS as usize] = 1 << 16;
     m.dmem[RETURNS as usize + 1] = 1 << 16;
     // The MACRO DISPATCH MEMORY: every index OPDTB's entry for its opcode,
@@ -229,14 +359,27 @@ fn machine(s: Setup) -> Machine {
     if s.specialised {
         m.macro_dispatch.entries[specialised_index()] = SPECIAL as u32;
     }
+    if s.operand {
+        for (k, e) in m.macro_dispatch.entries.iter_mut().enumerate() {
+            if k >> 3 & 0o37 == RECORD as usize {
+                *e |= macro_dispatch::OPERAND;
+            }
+        }
+    }
 
     m.amem[0o50] = MAIN;
     m.amem[0o51] = s.register;
     m.amem[0o52] = CODE * 4;
     m.amem[0o53] = if s.sequence_break { 1 << 26 } else { 0 };
+    m.amem[SENTINEL_AT as usize] = SENTINEL;
+    m.amem[LOCALP_AT as usize] = LOCALP;
+    m.amem[0o56] = LOCALP_2;
+    m.mmem[AP_AT as usize] = AP;
+    m.amem[AP_AT as usize] = AP;
+    m.pdl_index = SENTINEL as u16;
     let rw = (1 << 23) | (1 << 22);
     m.l2_map[1] = rw | 1;
-    for (k, pair) in PROGRAM.chunks(2).enumerate() {
+    for (k, pair) in s.program.chunks(2).enumerate() {
         m.main[CODE as usize + k] = pair[0] | pair[1] << 16;
     }
     m
@@ -351,14 +494,15 @@ fn destinations_5_to_7_write_the_register_the_index_and_the_entry() {
 /// **A fused return skips the main loop's dispatch and push**, on both
 /// engines: the program leaves the same state with the MACRO DISPATCH
 /// MEMORY holding the generic handlers as without it, two microcycles
-/// fewer for each fused return. A POPJ, a jump with R and a dispatch whose
+/// fewer for each fused return. A POPJ, a jump with R (while
+/// [`macro_dispatch::JUMP_RETURNS_FUSE`] says so) and a dispatch whose
 /// entry has R all fuse; an entry with N fuses and pops the word, as the
 /// main loop's nopped push would have left it popped.
 #[test]
 fn a_fused_return_skips_the_dispatch_and_the_push() {
     let off = both(Setup::off());
     let on = both(Setup::on());
-    let fused = fusing(|_| true);
+    let fused = fusing(fuses);
     assert!(fused >= 6, "the program fuses {fused}");
     for ((name, n_off, m_off), (_, n_on, m_on)) in off.iter().zip(on.iter()) {
         assert_eq!(counts(m_off)[..6], COUNTS, "{name}: every macroinstruction ran once");
@@ -374,11 +518,11 @@ fn a_fused_return_skips_the_dispatch_and_the_push() {
 /// among those fused, which a POPJ-only fused return fails.
 #[test]
 fn a_dispatch_return_fuses() {
-    let without_3 = fusing(|op| op != 3);
-    assert!(fusing(|_| true) > without_3, "the program has dispatch returns to fuse");
+    let without_3 = fusing(|op| op != 3 && fuses(op));
+    assert!(fusing(fuses) > without_3, "the program has dispatch returns to fuse");
     for (name, _, m) in both(Setup::on()) {
         assert_eq!(counts(&m)[2], COUNTS[2], "{name}");
-        assert_eq!(m.macro_dispatch.fused, fusing(|_| true), "{name}");
+        assert_eq!(m.macro_dispatch.fused, fusing(fuses), "{name}");
     }
 }
 
@@ -417,7 +561,7 @@ fn a_return_that_writes_m31_pushes_or_writes_interrupt_control_is_not_fused() {
     for pop in [Pop::WritesM31, Pop::Pushes, Pop::WritesInterruptControl] {
         let off = both(Setup { pop, ..Setup::off() });
         let on = both(Setup { pop, ..Setup::on() });
-        let fused = fusing(|op| op != 1);
+        let fused = fusing(|op| op != 1 && fuses(op));
         for ((name, n_off, m_off), (_, n_on, m_on)) in off.iter().zip(on.iter()) {
             assert_eq!(counts(m_off)[..6], COUNTS, "{pop:?}, {name}");
             assert_eq!(state(m_on), state(m_off), "{pop:?}, {name}: the same state");
@@ -441,8 +585,8 @@ fn condition_6_is_tested_on_the_fetch_path() {
         assert_eq!(counts(m_off)[..6], COUNTS, "{name}");
         assert_eq!(m_off.mmem[0o10], fetches, "{name}: the call at every fetch");
         assert_eq!(state(m_on), state(m_off), "{name}");
-        assert_eq!(m_on.macro_dispatch.fused, fusing(|_| true), "{name}");
-        assert_eq!(n_off - n_on, 2 * fusing(|_| true), "{name}");
+        assert_eq!(m_on.macro_dispatch.fused, fusing(fuses), "{name}");
+        assert_eq!(n_off - n_on, 2 * fusing(fuses), "{name}");
     }
 }
 
@@ -552,9 +696,10 @@ fn a_control_store_write_clears_the_enable() {
     check("rtl", Rtl::new(program()));
 }
 
-/// **A checkpoint keeps the register, the index and the entries**, and
-/// whether the machine is revision 12 or 11; the count of fused returns
-/// is not the machine's.
+/// **A checkpoint keeps the register, the index and the entries**, an
+/// armed operand address, and whether the machine is revision 12 or 11;
+/// the base copies are loaded from A and M memory at restore (contract
+/// H8a §3.6), and the count of fused returns is not the machine's.
 #[test]
 fn a_checkpoint_keeps_the_register_and_the_memory() {
     use muir::checkpoint::{Reader, Writer};
@@ -564,6 +709,11 @@ fn a_checkpoint_keeps_the_register_and_the_memory() {
         m.macro_dispatch.index = 0o1001;
         m.macro_dispatch.entries[0o1777] = 0o777777;
         m.macro_dispatch.fused = 5;
+        // An operand address armed, and base copies that A and M memory
+        // do not hold: the file carries the first and not the second.
+        m.macro_dispatch.operand = Some(Operand { arg: true, delta: 0o52 });
+        m.macro_dispatch.localp = 1;
+        m.macro_dispatch.ap = 2;
         let mut w = Writer::new();
         m.save(&mut w);
         let body = w.finish();
@@ -575,6 +725,12 @@ fn a_checkpoint_keeps_the_register_and_the_memory() {
         assert_eq!(back.macro_dispatch.entries, m.macro_dispatch.entries, "{geometry:?}");
         assert_eq!(back.macro_dispatch.fused, 0, "{geometry:?}");
         assert_eq!(Machine::checkpointed_geometry(&body).unwrap(), geometry);
+        assert_eq!(back.macro_dispatch.operand, m.macro_dispatch.operand, "{geometry:?}");
+        assert_eq!(
+            (back.macro_dispatch.localp, back.macro_dispatch.ap),
+            (LOCALP, AP),
+            "{geometry:?}: the base copies loaded from A and M memory"
+        );
     }
 }
 
@@ -589,4 +745,206 @@ fn revision_12_says_so() {
     assert_eq!(Geometry::QUUX_11.machine_id.unwrap() >> 4 & 0o7777, 11);
     assert_eq!(Geometry::QUUX_11.feature_word(word_17), Some(0));
     assert_eq!(Geometry::CADR.feature_word(word_17), None);
+}
+
+/// **A jump with R fuses exactly as [`macro_dispatch::JUMP_RETURNS_FUSE`]
+/// says**, on both engines: the returns from opcode 2, whose handler
+/// returns by a jump with R, are counted among the fused only while it is
+/// set. The one switch reaches both engines.
+#[test]
+fn a_jump_return_fuses_as_the_switch_says() {
+    let jumps = fusing(|_| true) - fusing(|op| op != 2);
+    assert!(jumps > 0, "the program has jump returns to fuse");
+    let want = fusing(|_| true) - if macro_dispatch::JUMP_RETURNS_FUSE { 0 } else { jumps };
+    for (name, _, m) in both(Setup::on()) {
+        assert_eq!(m.macro_dispatch.fused, want, "{name}");
+    }
+}
+
+/// [`RECORD`]'s pushes over a run: the PDL buffer from word 1 up, as its
+/// pointer has counted them.
+fn records(m: &Machine) -> Vec<u32> {
+    m.pdl[1..=m.pdl_pointer as usize].to_vec()
+}
+
+/// **The operand address** (contract H8a §3.4, §6 item 4), on both engines:
+/// a fused return whose entry has the operand bit loads PDL-INDEX with
+/// `A-LOCALP` + delta for LOCAL and `M-AP` + 1 + delta for ARG, masked to
+/// its fourteen bits, at the end of the microcycle after the return --- the
+/// handler's first microinstruction finds it there, and the microcycle
+/// after does not. The bases are the copies the register's write loaded
+/// from A and M memory, and `M-AP` or `A-LOCALP` written by the popping
+/// microinstruction itself is the new one. A register other than LOCAL and ARG, and a
+/// return that is not fused, load nothing; and the run takes the same
+/// microcycles as without the operand bit.
+#[test]
+fn a_fused_return_loads_the_operand_address() {
+    let plain = both(Setup { operand: false, ..Setup::operands() });
+    for ((name, n, m), (_, n_plain, _)) in both(Setup::operands()).iter().zip(plain.iter()) {
+        assert_eq!(records(m), operand_records(), "{name}");
+        assert_eq!(m.macro_dispatch.fused, 6, "{name}: the six second halfwords");
+        assert_eq!(n, n_plain, "{name}: no microcycle more or less");
+    }
+}
+
+/// **Without the operand bit PDL-INDEX is left alone**, on both engines:
+/// with the same fused returns, every push finds the sentinel, as it does
+/// with the MACRO DISPATCH MEMORY disabled.
+#[test]
+fn without_the_operand_bit_pdl_index_is_unchanged() {
+    let sentinels = vec![SENTINEL; operand_records().len()];
+    for setup in
+        [Setup { operand: false, ..Setup::operands() }, Setup { register: 0, ..Setup::operands() }]
+    {
+        for (name, _, m) in both(setup) {
+            assert_eq!(records(&m), sentinels, "{name}");
+        }
+    }
+}
+
+/// Runs `s` on both engines under the checker, to opcode 7.
+fn checked(s: Setup) -> [(&'static str, Counts); 2] {
+    fn go<E: Executes>(e: E) -> Counts {
+        let (_, counts) = run_checked(Checked::new(e));
+        counts
+    }
+    [("micro", go(Micro::new(machine(s)))), ("rtl", go(Rtl::new(machine(s))))]
+}
+
+fn run_checked<E: Executes>(mut e: Checked<E>) -> (u64, Counts) {
+    e.boot();
+    for n in 0..20_000 {
+        if e.machine().opc == STOP {
+            return (n, e.checker.counts.clone());
+        }
+        e.step().unwrap();
+    }
+    panic!("the program never reached its end");
+}
+
+/// **The checkers find these programs clean** (contract H8a §6 items 4 and
+/// 5), on both engines: after every fused return the handler the main loop
+/// would have dispatched to runs next, the micro stack is where the return
+/// left it, PDL-INDEX is the operand address where one is armed, and the
+/// base copies equal `A-LOCALP` and `M-AP` after every microcycle, `M-AP`
+/// stepping under them.
+#[test]
+fn the_checkers_find_the_programs_clean() {
+    for (s, fused, loads) in
+        [(Setup::on(), fusing(fuses), 0), (Setup::operands(), 6, 5), (Setup::off(), 0, 0)]
+    {
+        for (name, c) in checked(s) {
+            assert_eq!(c.problems(), 0, "{name}: {}", c.report(|_| String::new()));
+            assert_eq!(c.fused, fused, "{name}");
+            assert_eq!(c.operand_loads, loads, "{name}");
+            assert!(c.unarmed.is_empty(), "{name}");
+        }
+    }
+}
+
+/// **The rule checker's decode** (contract H8a §3.3): each write the
+/// microcycle after a fused return may not make, and none where there is
+/// none. M 31 and the location counter are written by an M destination
+/// or functional destination 1, `A-LOCALP` by an A destination at the
+/// register's `<23:14>` (or an M one, where that is below 40), `M-AP` by
+/// an M destination at its `<28:24>` and not by an A destination there.
+#[test]
+fn the_rule_checker_decodes_each_forbidden_write() {
+    let reg = enabled();
+    let i = |w: u64| Insn::new(w);
+    let cases: [(u64, &[Write]); 14] = [
+        (filler().raw(), &[]),
+        (ALU | SETA | a_src(3) | fd(1), &[Write::Lc]),
+        (ALU | SETA | a_src(3) | m_dest(0o31), &[Write::M31]),
+        (ALU | SETA | a_src(3) | a_dest(0o31), &[]),
+        (ALU | SETA | a_src(3) | fd(2), &[Write::InterruptControl]),
+        (ALU | SETA | a_src(3) | fd(5), &[Write::MacroDispatch]),
+        (ALU | SETA | a_src(3) | fd(6), &[Write::MacroDispatch]),
+        (ALU | SETA | a_src(3) | fd(7), &[Write::MacroDispatch]),
+        (ALU | SETA | a_src(3) | fd(0o13), &[Write::PdlIndex]),
+        (ALU | SETA | a_src(3) | fd(0o12), &[Write::PdlAtIndex]),
+        (ALU | SETA | a_src(3) | a_dest(LOCALP_AT), &[Write::Localp]),
+        (ALU | SETA | a_src(3) | m_dest(AP_AT), &[Write::Ap]),
+        (ALU | SETA | a_src(3) | a_dest(AP_AT), &[]),
+        (JUMP | target(0o100) | ALWAYS | m_dest(0o31) | fd(1), &[]),
+    ];
+    for (w, want) in cases {
+        assert_eq!(writes(i(w), reg), want, "{w:o}");
+    }
+    // A-LOCALP below 40 is written by an M destination too.
+    let low = macro_dispatch::word(QMLP as u16, 0o25, AP_AT as u8);
+    assert_eq!(writes(i(ALU | SETA | a_src(3) | m_dest(0o25)), low), [Write::Localp]);
+    // A BYTE instruction writes as an ALU one does.
+    assert_eq!(
+        writes(i(muir::isa::asm::BYTE | a_src(3) | 1 << 19 | m_dest(0o31)), reg),
+        [Write::Lc, Write::M31]
+    );
+}
+
+/// **The rule checker finds each forbidden write in a run** (contract H8a
+/// §3.3, §6 item 5), on both engines: with the microcycle after
+/// [`RECORD`]'s return writing INTERRUPT-CONTROL, the MACRO-DISPATCH
+/// register, PDL-INDEX, the PDL buffer at PDL-INDEX, `A-LOCALP` or `M-AP`
+/// --- each with what it held, or the sentinel, so
+/// that the program runs on --- every one of the four fused returns from
+/// that handler is a violation of that kind; the last three are allowed,
+/// and counted apart, where the entry has no operand bit.
+#[test]
+fn the_rule_checker_finds_each_forbidden_write() {
+    let cases = [
+        (ALU | SETA | a_src(0o53) | fd(2), Write::InterruptControl),
+        (ALU | SETA | a_src(0o51) | fd(5), Write::MacroDispatch),
+        (ALU | SETA | a_src(SENTINEL_AT) | fd(0o13), Write::PdlIndex),
+        (ALU | SETA | a_src(SENTINEL_AT) | fd(0o12), Write::PdlAtIndex),
+        (ALU | SETA | a_src(LOCALP_AT) | a_dest(LOCALP_AT), Write::Localp),
+        (ALU | SETM | m_src(AP_AT) | m_dest(AP_AT), Write::Ap),
+    ];
+    for (slot, kind) in cases {
+        for operand in [true, false] {
+            let s = Setup { slot: Some(slot), operand, ..Setup::operands() };
+            for (name, c) in checked(s) {
+                let (forbidden, allowed) = if operand || !kind.operand_only() {
+                    (&c.violations, &c.unarmed)
+                } else {
+                    (&c.unarmed, &c.violations)
+                };
+                assert!(allowed.is_empty(), "{kind:?}, operand bit {operand}, {name}");
+                let sites: Vec<_> = forbidden.iter().collect();
+                let want = (kind, RECORD_AT as u16 + 2, RECORD_SLOT as u16);
+                assert_eq!(sites, [(&want, &4)], "{kind:?}, operand bit {operand}, {name}");
+                assert_eq!(c.problems() - c.violations.values().sum::<u64>(), 0, "{name}");
+            }
+        }
+    }
+}
+
+/// **A PDL buffer write by PDL-INDEX in the microcycle after a fused return
+/// lands at the operand address**, on both engines alike: the word is
+/// written in the next microcycle's write phase at PDL-INDEX as it then
+/// stands (`PWIDX`), and the operand address was loaded at the edge before.
+/// This is why the rule of §3.3 forbids it when the entry has the operand
+/// bit, as `QSTLOC` and `QSTARG` (`uc-macrocode.lisp:327-334`) do it: the
+/// store to a local would go to the next instruction's operand instead.
+/// Without the operand bit it lands where it was aimed.
+#[test]
+fn a_pdl_write_by_index_after_a_fused_return_lands_at_the_operand_address() {
+    let mark = 0o525252;
+    let slot = ALU | SETA | a_src(0o55) | fd(0o12);
+    let loaded = [(LOCALP + 7) & 0o37777, AP + 1 + 5, (LOCALP + 0o77) & 0o37777];
+    for operand in [true, false] {
+        let s = Setup { slot: Some(slot), operand, ..Setup::operands() };
+        // The mark in A memory 55, which `machine` leaves zero.
+        let with_mark = |mut m: Machine| {
+            m.amem[0o55] = mark;
+            m
+        };
+        let (_, micro) = run(Micro::new(with_mark(machine(s))));
+        let (_, rtl) = run(Rtl::new(with_mark(machine(s))));
+        assert!(micro.pdl == rtl.pdl, "operand bit {operand}: the engines agree");
+        for at in loaded {
+            let want = if operand { mark } else { 0 };
+            assert_eq!(micro.pdl[at as usize], want, "operand bit {operand}: PDL {at:o}");
+        }
+        assert_eq!(micro.pdl[SENTINEL as usize], mark, "operand bit {operand}");
+    }
 }

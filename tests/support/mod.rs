@@ -16,6 +16,7 @@
 #![allow(dead_code)]
 
 pub mod file;
+pub mod macro_dispatch;
 pub mod server;
 pub mod status;
 pub mod time;

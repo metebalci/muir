@@ -295,16 +295,17 @@ impl Geometry {
     }
 }
 
-/// **QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY, and the
-/// fused return** (contract H8a, revision 12). Functional destinations 5 to
-/// 7, which the CADR leaves to its low group with no decoder output, so
-/// that there they write only M, as on QUUX below revision 12.
+/// **QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY, the fused
+/// return and the operand address** (contract H8a, revision 12). Functional
+/// destinations 5 to 7, which the CADR leaves to its low group with no
+/// decoder output, so that there they write only M, as on QUUX below
+/// revision 12.
 ///
 /// **The register**, destination 5: `<13:0>` the main loop's address,
 /// microcode 2000's `QMLP`; `<23:14>` the A-memory address of `A-LOCALP`
 /// (`uc-parameters.lisp:1071`) and `<28:24>` the M-memory address of `M-AP`
-/// (`uc-parameters.lisp:384`), kept for contract H8a's operand address
-/// (§3.4) and read by nothing here; `<31>` the enable. `<30:29>` are reserved, written 0 and kept 0 here. -RESET clears
+/// (`uc-parameters.lisp:384`), the operand address's two bases; `<31>` the
+/// enable. `<30:29>` are reserved, written 0 and kept 0 here. -RESET clears
 /// the enable and nothing else, and so does every control-store write, so
 /// that no microcode runs on the entries another one left.
 ///
@@ -312,16 +313,16 @@ impl Geometry {
 /// destination, opcode and register together. Destination 6 writes the
 /// index, `<9:0>`, and destination 7 the entry at the index, `<17:0>`:
 /// D-MEM's word, `<13:0>` the handler's address, `<14>` N, `<15>` P and
-/// `<16>` R, and `<17>` the operand bit, kept for the operand address and
-/// read by nothing here. A reset leaves the index and the entries, as it
-/// leaves D-MEM.
+/// `<16>` R, and `<17>` the operand bit. A reset leaves the index and the
+/// entries, as it leaves D-MEM.
 ///
 /// **The fused return.** A microinstruction that pops the micro stack as a
-/// return --- a POPJ, a jump with R, or a dispatch whose entry has R --- and
-/// pops a word with `<14>` set and `<13:0>` the register's, with the
-/// register enabled and no instruction fetch needed, would go to the main
-/// loop's dispatch today: `QMLP+2`, where the stream hardware's `SPCMUNG`
-/// sends it (`uc-macrocode.lisp:6-7`). That dispatch is `(DISPATCH-XCT-NEXT
+/// return --- a POPJ, a dispatch whose entry has R, or, while
+/// [`JUMP_RETURNS_FUSE`] says so, a jump with R --- and pops a word with
+/// `<14>` set and `<13:0>` the register's, with the register enabled and no
+/// instruction fetch needed, would go to the main loop's dispatch today:
+/// `QMLP+2`, where the stream hardware's `SPCMUNG` sends it
+/// (`uc-macrocode.lisp:6-7`). That dispatch is `(DISPATCH-XCT-NEXT
 /// M-INST-OP OPDTB)` and its XCT-NEXT the push of `A-MAIN-DISPATCH` back
 /// (`uc-macrocode.lisp:9-13`). When the entry for the next halfword has R
 /// and P clear, the return goes to the entry's address instead, two
@@ -342,10 +343,27 @@ impl Geometry {
 /// `IR<24>`), and when the entry has R or P. A return that needs a fetch
 /// is never fused here: there is no prefetch (contract H8a §3.5).
 ///
+/// **The operand address** (contract H8a §3.4). When a fused return's entry
+/// has the operand bit and the halfword's register, `<8:6>`, is LOCAL (5)
+/// or ARG (6) (`QADCM1`, `uc-macrocode.lisp:129-137`), PDL-INDEX is loaded
+/// at the end of the microcycle after the return with `A-LOCALP` + delta or
+/// `M-AP` + 1 + delta, as `QADLOC1` and `QADARG1` compute them
+/// (`uc-macrocode.lisp:237-245`), delta being the halfword's `<5:0>` and
+/// the sum masked to PDL-INDEX's bits. So the handler's first
+/// microinstruction finds its operand at `C-PDL-BUFFER-INDEX`. The two
+/// bases are the machine's own copies, [`MacroDispatch::localp`] and
+/// [`MacroDispatch::ap`], fourteen bits each, written with every A or M
+/// write whose address the register names, and loaded from A and M memory
+/// when the register is written and when a checkpoint is restored.
+///
 /// The microcycle after a fused return must not write the location
-/// counter, M 31 or destinations 5 to 7 (contract H8a §3.3): the handler is
-/// chosen by then. A microcode that breaks the rule is changed, never
-/// covered by the hardware.
+/// counter, M 31, INTERRUPT-CONTROL or destinations 5 to 7, and, when the
+/// entry has the operand bit, PDL-INDEX, `A-LOCALP`, `M-AP` or the PDL
+/// buffer by PDL-INDEX (contract H8a §3.3): the handler and the operand
+/// address are chosen by then, and a PDL buffer write lands at PDL-INDEX
+/// as it stands in the next microcycle, after the load. A
+/// microcode that breaks the rule is changed, never covered by the
+/// hardware; `tests/support/macro_dispatch.rs` checks it.
 pub mod macro_dispatch {
     /// `<31>` of the register, the enable.
     pub const ENABLE: u32 = 1 << 31;
@@ -368,6 +386,20 @@ pub mod macro_dispatch {
     /// location counter chooses the halfword as it does for the main loop's
     /// dispatch, whose `IR<4:0>` is 23 for `M-INST-OP`'s `<13:9>`.
     pub const INDEX_ROTATE: u32 = 32 - 6;
+    /// The halfword's register, `<8:6>`, that names the local block:
+    /// `QADLOC` in `QADCM1` (`uc-macrocode.lisp:129-137`).
+    pub const LOCAL: u32 = 5;
+    /// The halfword's register that names the argument block, `QADARG`.
+    pub const ARG: u32 = 6;
+    /// The base copies' width, fourteen bits (contract H8a §7).
+    pub const BASE_BITS: u32 = 0o37777;
+
+    /// **Whether a return by a jump with R fuses**, as one by a POPJ or a
+    /// dispatch whose entry has R does. Microcode 2000 returns that way
+    /// with `POPJ-LESS-THAN` and its fellows. Contract H8a §3.3 names POPJs
+    /// and dispatches only; this is the one switch that takes jumps out, on
+    /// both engines.
+    pub const JUMP_RETURNS_FUSE: bool = true;
 
     /// The register's word for a main loop at `main`, `A-LOCALP` at A
     /// memory's `localp` and `M-AP` at M memory's `ap`, enabled.
@@ -379,6 +411,48 @@ pub mod macro_dispatch {
     pub fn main(register: u32) -> u32 {
         register & 0o37777
     }
+
+    /// `A-LOCALP`'s A-memory address, `<23:14>`.
+    pub fn localp_address(register: u32) -> usize {
+        (register >> 14 & 0o1777) as usize
+    }
+
+    /// `M-AP`'s M-memory address, `<28:24>`.
+    pub fn ap_address(register: u32) -> usize {
+        (register >> 24 & 0o37) as usize
+    }
+
+    /// The operand address a fused return arms for `rotated`, the halfword
+    /// rotated by [`INDEX_ROTATE`], whose entry is `entry`: the register
+    /// from `<2:0>` of the index and delta from `<31:26>`, the halfword's
+    /// `<8:6>` and `<5:0>`.
+    pub fn operand(entry: u32, rotated: u32) -> Option<super::Operand> {
+        let register = rotated & 7;
+        (entry & OPERAND != 0 && (register == LOCAL || register == ARG))
+            .then_some(super::Operand { arg: register == ARG, delta: (rotated >> 26) as u8 })
+    }
+}
+
+/// A fused return's operand address (contract H8a §3.4), armed by the
+/// return and loaded into PDL-INDEX at the end of the microcycle after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Operand {
+    /// ARG, `M-AP` + 1 + delta, rather than LOCAL, `A-LOCALP` + delta.
+    pub arg: bool,
+    /// The halfword's `<5:0>`.
+    pub delta: u8,
+}
+
+/// A fused return, as [`MacroDispatch::fused_return`] gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fused {
+    /// The handler's address, the entry's `<13:0>`.
+    pub handler: u16,
+    /// Whether the popped word stays on the stack: the entry's N is clear.
+    pub keep: bool,
+    /// The operand address it arms, if the entry has the operand bit and
+    /// the register is LOCAL or ARG.
+    pub operand: Option<Operand>,
 }
 
 /// QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY
@@ -391,6 +465,16 @@ pub struct MacroDispatch {
     pub index: u16,
     /// The entries.
     pub entries: Vec<u32>,
+    /// The copy of `A-LOCALP`, fourteen bits: A memory at the register's
+    /// `<23:14>` ([`macro_dispatch`]). Not kept in a checkpoint: loaded from
+    /// A memory at restore.
+    pub localp: u32,
+    /// The copy of `M-AP`, fourteen bits: M memory at the register's
+    /// `<28:24>`. Loaded from M memory at restore.
+    pub ap: u32,
+    /// The operand address armed by a fused return, loaded into PDL-INDEX
+    /// at the end of the next microcycle.
+    pub operand: Option<Operand>,
     /// How many returns have been fused: a count for the profile and the
     /// tests, not kept in a checkpoint.
     pub fused: u64,
@@ -398,7 +482,15 @@ pub struct MacroDispatch {
 
 impl Default for MacroDispatch {
     fn default() -> Self {
-        MacroDispatch { register: 0, index: 0, entries: vec![0; macro_dispatch::ENTRIES], fused: 0 }
+        MacroDispatch {
+            register: 0,
+            index: 0,
+            entries: vec![0; macro_dispatch::ENTRIES],
+            localp: 0,
+            ap: 0,
+            operand: None,
+            fused: 0,
+        }
     }
 }
 
@@ -409,23 +501,65 @@ impl MacroDispatch {
         self.register &= !macro_dispatch::ENABLE;
     }
 
-    /// A write of functional destination 5, 6 or 7 (`code`).
-    pub fn write(&mut self, code: u32, data: u32) {
+    /// -RESET: the enable cleared, and an armed operand address dropped.
+    pub fn reset(&mut self) {
+        self.disable();
+        self.operand = None;
+    }
+
+    /// A write of functional destination 5, 6 or 7 (`code`), with A and M
+    /// memory as they stand: the register's write loads the base copies
+    /// from the addresses it names.
+    pub fn write(&mut self, code: u32, data: u32, amem: &[u32], mmem: &[u32]) {
         match code {
-            5 => self.register = data & macro_dispatch::REGISTER_BITS,
+            5 => {
+                self.register = data & macro_dispatch::REGISTER_BITS;
+                self.reload(amem, mmem);
+            }
             6 => self.index = (data & (macro_dispatch::ENTRIES as u32 - 1)) as u16,
             7 => self.entries[self.index as usize] = data & macro_dispatch::ENTRY_BITS,
             _ => unreachable!("destination {code:o} is not the MACRO DISPATCH MEMORY's"),
         }
     }
 
+    /// The base copies loaded from A and M memory at the addresses the
+    /// register names.
+    pub fn reload(&mut self, amem: &[u32], mmem: &[u32]) {
+        self.localp =
+            amem[macro_dispatch::localp_address(self.register)] & macro_dispatch::BASE_BITS;
+        self.ap = mmem[macro_dispatch::ap_address(self.register)] & macro_dispatch::BASE_BITS;
+    }
+
+    /// A write of A memory at `adr`: the copy of `A-LOCALP` takes it when
+    /// the register names that address. An M destination writes A as well,
+    /// and calls this too.
+    pub fn a_written(&mut self, adr: usize, v: u32) {
+        if adr == macro_dispatch::localp_address(self.register) {
+            self.localp = v & macro_dispatch::BASE_BITS;
+        }
+    }
+
+    /// A write of M memory at `adr`: the copy of `M-AP` takes it when the
+    /// register names that address.
+    pub fn m_written(&mut self, adr: usize, v: u32) {
+        if adr == macro_dispatch::ap_address(self.register) {
+            self.ap = v & macro_dispatch::BASE_BITS;
+        }
+    }
+
+    /// The operand address `o` makes from the base copies, before PDL-INDEX's
+    /// mask: `A-LOCALP` + delta, or `M-AP` + 1 + delta.
+    pub fn operand_address(&self, o: Operand) -> u32 {
+        (if o.arg { self.ap + 1 } else { self.localp }) + o.delta as u32
+    }
+
     /// The fused return ([`macro_dispatch`]) for a pop of `popped`, with
     /// `rotated` the word M 31 gives rotated by [`macro_dispatch::INDEX_ROTATE`]
     /// under the location counter as the main loop's dispatch would see it:
-    /// the handler's address, and whether the popped word stays on the
-    /// stack. The engine has checked everything the microinstruction does;
-    /// `None` is today's return.
-    pub fn fused_return(&self, popped: u32, rotated: u32) -> Option<(u16, bool)> {
+    /// the handler's address, whether the popped word stays on the stack,
+    /// and the operand address it arms. The engine has checked everything
+    /// the microinstruction does; `None` is today's return.
+    pub fn fused_return(&self, popped: u32, rotated: u32) -> Option<Fused> {
         use macro_dispatch::{ENABLE, N, P, R, main};
         if self.register & ENABLE == 0
             || popped & (1 << 14) == 0
@@ -437,19 +571,30 @@ impl MacroDispatch {
         if entry & (R | P) != 0 {
             return None;
         }
-        Some(((entry & 0o37777) as u16, entry & N == 0))
+        Some(Fused {
+            handler: (entry & 0o37777) as u16,
+            keep: entry & N == 0,
+            operand: macro_dispatch::operand(entry, rotated),
+        })
     }
 
     fn save(&self, w: &mut crate::checkpoint::Writer) {
         w.u32(self.register);
         w.u16(self.index);
         w.u32s(&self.entries);
+        w.opt(self.operand, |w, o| {
+            w.bool(o.arg);
+            w.u8(o.delta);
+        });
     }
 
+    /// The copies are not read here: [`Machine::load`] reloads them once A
+    /// and M memory are in.
     fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
         self.register = r.u32()?;
         self.index = r.u16()?;
         r.u32s_into(&mut self.entries)?;
+        self.operand = r.opt(|r| Ok(Operand { arg: r.bool()?, delta: r.u8()? & 0o77 }))?;
         if self.index as usize >= macro_dispatch::ENTRIES {
             return Err(crate::checkpoint::bad(format!(
                 "MACRO DISPATCH MEMORY index {:o}, wider than its ten bits",
@@ -2132,6 +2277,10 @@ impl Machine {
                 )));
             }
         }
+        // The operand address's base copies are not in the file: loaded from
+        // A and M memory, as the register's write loads them (contract H8a
+        // §3.6).
+        self.macro_dispatch.reload(&self.amem, &self.mmem);
         Ok(())
     }
 
