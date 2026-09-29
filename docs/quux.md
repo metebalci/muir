@@ -43,13 +43,16 @@ differences, what it needed:
 
 Microcycles counted by the profile harness (`examples/profile.rs`) over its
 workloads on System 1001's band, each change against the machine without
-it:
+it. These are microcycles, not time: on `rtl` a microcycle count leaves out
+the time stalled on memory, and on `micro` the fixed charge a memory cycle.
+A share of a workload is of its microinstructions executed, as the harness
+prints it:
 
 | Change | Measured |
 |---|---|
 | Six-bit level-1 map (QUUX on its microcode 1000 against the CADR on 323 rebuilt, 324) | 11.3% fewer microcycles on `micro` and 11.1% on `rtl` over thirteen workloads; `intern` 31% fewer, `print-scroll` 27%, `compile` 21%, the idle listener 20 to 30% |
-| 16K-word PDL buffer (against QUUX's 1K) | 3.8% fewer on `micro` and 4.3% on `rtl` over thirteen workloads; deep recursion 29% fewer, its PDL buffer's share falling from 26% of its microcycles to 0.9% |
-| `MUL` and `DIV` (microcode using them against the same without) | 20% fewer microcycles a macroinstruction on the multiply-and-divide workload (25.0 to 20.0), 7% on float, 1.5% on bignum; multiply and divide's share of the first 25.6% to 5.4% |
+| 16K-word PDL buffer (against QUUX's 1K) | 3.8% fewer microcycles on `micro` and 4.3% on `rtl` over thirteen workloads; deep recursion 29% fewer, its PDL buffer's share falling from 26% of its microinstructions executed to 0.9% |
+| `MUL` and `DIV` (microcode using them against the same without) | 20% fewer microcycles a macroinstruction on the multiply-and-divide workload (25.0 to 20.0), 7% on float, 1.5% on bignum; multiply and divide's share of the first workload's microinstructions executed falling from 25.6% to 5.4% |
 
 The time these save on a machine with the synchronous microcycle and the
 cache is in [the memory cache](#the-memory-cache).
@@ -1565,7 +1568,7 @@ alone saves 3.90% and 4.75%, and the handlers with the prefetch 5.94% and
 5.55%. The 24 no-ops the rule costs run 2,639,638 microcycles on revision
 11, 0.58% of its microcycles, and 1,427,815 on revision 12, 0.36%;
 `QSTLOC`'s is 64%
-of it on revision 11, and it falls on revision 12 because the
+of those microcycles on revision 11, and it falls on revision 12 because the
 specialised handlers make their stores in their own return. Two runs of
 the same configuration give the same counts, microcycle for microcycle.
 

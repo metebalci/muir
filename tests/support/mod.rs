@@ -17,6 +17,7 @@
 
 pub mod file;
 pub mod macro_dispatch;
+pub mod profile;
 pub mod server;
 pub mod status;
 pub mod time;

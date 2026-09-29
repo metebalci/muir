@@ -45,10 +45,21 @@
 //! With no workloads named, all of them run, in the order below. For each,
 //! it prints the microcycles, the macroinstructions --- executions of
 //! `QMLP+2`, the dispatch on `M-INST-OP` (`uc-macrocode.lisp`) --- and their
-//! ratio, where the microinstructions went by the category and source file
-//! of the nearest `I-MEM` label in the symbol table, the hottest labels,
-//! and the microcode's own meters out of A memory. On `rtl` it adds the
-//! time stalled on the bus and the memory cycles.
+//! ratio; the time, where the microinstructions went by the category and
+//! source file of the nearest `I-MEM` label in the symbol table, the
+//! hottest labels, and the microcode's own meters out of A memory. On `rtl`
+//! it adds the memory cycles. The workloads' time together closes the
+//! output.
+//!
+//! **A microcycle count is not the time.** On `rtl` a wait or a hang for
+//! the memory advances the clock and runs no microcycle, so the time line
+//! gives the microcycles and their own time, the time stalled on memory,
+//! and the time in all, which is the two added, side by side
+//! (`tests/support/profile.rs`, held by `tests/profile_time.rs`). On `micro`
+//! the memory's time is a fixed charge a memory cycle, not a stall, and the
+//! line says so. The category and label shares are of the microinstructions
+//! executed, which leave out the inhibited microcycles and the memory's
+//! time both; every percentage says what it is of.
 //!
 //! Every count includes the typing: the listener reads the form a
 //! character at a time. `nil`, the empty form, measures that overhead on
@@ -80,6 +91,8 @@ use muir::terminal::keyboard::{Keyboard, keysym};
 // file server in it, and this program is a test run by hand.
 #[path = "../tests/support/mod.rs"]
 mod support;
+
+use support::profile::Span;
 
 /// LISPM-1 and OZ, as the release's `site/hosts.text` gives them.
 const CHAOS_1001: (u16, u16) = (0o177201, 0o177200);
@@ -148,6 +161,8 @@ trait Profiled: Engine {
         None
     }
     fn executed_pc(&self) -> Option<u16>;
+    /// The microcycles and the time so far.
+    fn span(&self) -> Span;
     /// Nanoseconds stalled on the bus, memory cycles, the machine's
     /// nanoseconds, and the memory cache's hits and misses, where the
     /// engine keeps them.
@@ -167,6 +182,9 @@ impl Profiled for Micro {
     fn executed_pc(&self) -> Option<u16> {
         self.executed()
     }
+    fn span(&self) -> Span {
+        Span::of_micro(self)
+    }
     fn bus(&self) -> Option<[u64; 5]> {
         None
     }
@@ -180,6 +198,9 @@ impl<E: Profiled + support::macro_dispatch::Executes> Profiled
     }
     fn executed_pc(&self) -> Option<u16> {
         self.engine.executed_pc()
+    }
+    fn span(&self) -> Span {
+        self.engine.span()
     }
     fn bus(&self) -> Option<[u64; 5]> {
         self.engine.bus()
@@ -195,6 +216,9 @@ impl<E: Profiled + support::macro_dispatch::Executes> Profiled
 impl Profiled for Rtl {
     fn executed_pc(&self) -> Option<u16> {
         self.executed()
+    }
+    fn span(&self) -> Span {
+        Span::of_rtl(self)
     }
     fn bus(&self) -> Option<[u64; 5]> {
         let (h, m) = self.cache().map_or((0, 0), |c| (c.hits, c.misses));
@@ -261,7 +285,8 @@ fn category(label: &str, file: &str) -> String {
 }
 
 struct Phase {
-    cycles: u64,
+    /// The microcycles and the time, the memory's and in all.
+    span: Span,
     /// QUUX's prefetch's counts over the workload, where it is fitted.
     prefetch: Option<muir::memory_port::PrefetchCounts>,
     /// What the fused return's checkers counted, where they ran.
@@ -404,7 +429,7 @@ fn run<E: Profiled>(
     let bus0 = e.bus();
     let mut hist = vec![0u64; 1 << 14];
     let mut stall_hist = vec![0u64; 1 << 14];
-    let cycles0 = e.machine().cycles;
+    let span0 = e.span();
     let prefetch0 = e.prefetch_counts();
     let fused0 = e.machine().macro_dispatch.fused;
     let checked0 = e.checker().map(|c| c.counts.clone());
@@ -532,7 +557,7 @@ fn run<E: Profiled>(
         _ => None,
     };
     Phase {
-        cycles: e.machine().cycles - cycles0,
+        span: e.span().since(span0),
         prefetch: e.prefetch_counts().zip(prefetch0).map(|(a, b)| prefetch_since(a, b)),
         checked: e.checker().zip(checked0.as_ref()).map(|(c, c0)| c.counts.since(c0)),
         fused: e.machine().macro_dispatch.fused - fused0,
@@ -568,7 +593,7 @@ fn prefetch_since(
 fn prefetch_line(c: &muir::memory_port::PrefetchCounts) -> String {
     let taken = c.same_line + c.next_line;
     format!(
-        "prefetch: {} fetches answered, {taken} next words taken ({:.1}%: {} in the line, {} in the next), {} past the page, {} not held; dropped by LC {}, store {}, transfer {}, map {}, reset {}; used by {} fused returns; refused for condition 6 {}, a store starting {}",
+        "prefetch: {} fetches answered, {taken} next words taken ({:.1}% of the fetches answered: {} in the line, {} in the next), {} past the page, {} not held; dropped by LC {}, store {}, transfer {}, map {}, reset {}; used by {} fused returns; refused for condition 6 {}, a store starting {}",
         c.fetches,
         100.0 * taken as f64 / c.fetches.max(1) as f64,
         c.same_line,
@@ -631,12 +656,13 @@ fn report(
     let macros = p.hist[(qmlp + 2) as usize] + p.fused;
     println!("== {name}");
     println!(
-        "   {} microcycles, {} executed, {} macroinstructions, {:.1} microcycles each",
-        p.cycles,
+        "   {} microcycles, {} microinstructions executed, {} macroinstructions, {:.1} microcycles each",
+        p.span.microcycles,
         executed,
         macros,
-        p.cycles as f64 / macros.max(1) as f64
+        p.span.microcycles as f64 / macros.max(1) as f64
     );
+    println!("   {}", p.span.line());
     if p.fused > 0 {
         println!(
             "   fused returns {} ({:.1}% of macroinstructions)",
@@ -656,8 +682,8 @@ fn report(
     if let Some(c) = &p.prefetch {
         println!("   {}", prefetch_line(c));
     }
-    if let Some([stalled, bus, ns, hits, misses]) = p.bus {
-        println!("   stalled {stalled} ns, {bus} memory cycles, {ns} ns in all");
+    if let Some([_, bus, _, hits, misses]) = p.bus {
+        println!("   {bus} memory cycles");
         if hits + misses > 0 {
             println!("   cache {hits} hits, {misses} misses");
         }
@@ -671,7 +697,7 @@ fn report(
             .map(|(k, [slot, nop])| format!("{k} {:.2}%+{:.2}%", pct(slot), pct(nop)))
             .collect();
         println!(
-            "   hazards: {} executed, {:.2}% inhibited; transfers (slot+inhibited) {}; conditional jumps {:.2}%; reads of the last write {:.2}%, of the one before {:.2}%",
+            "   hazards, each a % of the {} microinstructions executed: {:.2}% inhibited; transfers (slot+inhibited) {}; conditional jumps {:.2}%; reads of the last write {:.2}%, of the one before {:.2}%",
             h.executed,
             pct(h.nopped),
             t.join(", "),
@@ -704,12 +730,12 @@ fn report(
     let mut cats: Vec<_> = by_cat.into_iter().collect();
     cats.sort_by_key(|c| std::cmp::Reverse(c.1));
     let line: Vec<String> = cats.iter().map(|(c, n)| format!("{c} {:.1}", pct(*n))).collect();
-    println!("   {}", line.join(", "));
+    println!("   by category, % of the microinstructions executed: {}", line.join(", "));
     let mut labels: Vec<_> = by_label.into_iter().collect();
     labels.sort_by_key(|l| std::cmp::Reverse(l.1));
     let top: Vec<String> =
         labels.iter().take(6).map(|(l, n)| format!("{l} {:.1}", pct(*n))).collect();
-    println!("   hottest: {}", top.join(", "));
+    println!("   hottest, % of the microinstructions executed: {}", top.join(", "));
     let m: Vec<String> = METERS.iter().zip(&p.meters).map(|(n, v)| format!("{n} {v}")).collect();
     println!("   {}", m.join(", "));
 }
@@ -1042,7 +1068,7 @@ fn measure<E: Profiled>(
     );
     let ready = home.join("ready.done");
     let p = run(&mut e, &mut k, "(w-done \"ready\")", &ready, syms);
-    eprintln!("defined and logged in, {} microcycles", p.cycles);
+    eprintln!("defined and logged in, {} microcycles", p.span.microcycles);
     // The generic handlers: `OPDTB`'s thirty-two entries' addresses.
     let generic: std::collections::BTreeSet<u16> = syms
         .address(Space::DMem, "OPDTB")
@@ -1051,11 +1077,13 @@ fn measure<E: Profiled>(
 
     // A marker of its own for every run, so that a workload named twice is
     // run twice.
+    let mut total: Option<Span> = None;
     for (n, (name, form)) in wanted.iter().enumerate() {
         let marker = home.join(format!("{name}-{n}.done"));
         let p =
             run(&mut e, &mut k, &format!("(progn {form} (w-done \"{name}-{n}\"))"), &marker, syms);
         report(name, &p, syms, files, qmlp, &generic);
+        total = Some(total.map_or(p.span, |t| t.plus(p.span)));
         // `MUIR_PC_DUMP=<dir>`: every executed address's count and the
         // nanoseconds stalled at it, one file a workload.
         // `MUIR_OPS=<dir>`: the macroinstructions, one file a workload.
@@ -1078,6 +1106,11 @@ fn measure<E: Profiled>(
             }
             std::fs::write(PathBuf::from(dir).join(format!("{name}.txt")), out).unwrap();
         }
+    }
+    // The workloads' time together, each with its typing.
+    if let Some(t) = total {
+        println!("== the {} workloads together", wanted.len());
+        println!("   {}", t.line());
     }
     // The whole run's counts, from the fill on: the boot, the login and
     // the definitions too.

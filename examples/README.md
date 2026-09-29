@@ -62,10 +62,20 @@ the listener --- the empty form, compiling, two kinds of recursion, consing,
 fixnum multiply and remainder, flonum arithmetic, `aset` and `aref`, sorting,
 bignums, `intern`, printing, and compiling again --- each ending by writing a
 marker file through the FILE service. For each it prints the microcycles and
-macroinstructions, where the microinstructions went by the category and
-source file of the nearest microcode label, the hottest labels, and the
-microcode's own meters; on `rtl`, the time stalled on the bus. `MUIR_UCODE`
-runs it on another microcode. About a minute on `micro`.
+macroinstructions; the time; where the microinstructions went by the
+category and source file of the nearest microcode label, the hottest labels,
+and the microcode's own meters; and on `rtl` the memory cycles. The
+workloads' time together closes the output. `MUIR_UCODE` runs it on another
+microcode. About a minute on `micro`.
+
+A microcycle count is not the time. On `rtl` a wait or a hang for the memory
+advances the clock and runs no microcycle, so the time line gives three
+figures side by side: the microcycles and their own time, the time stalled on
+memory, and the time in all, which is the two added. On `micro` the memory's
+time is a fixed charge a memory cycle, not a stall, and the line says so. The
+category and label shares are of the microinstructions executed, which leave
+out inhibited microcycles and the memory's time; each percentage the harness
+prints says what it is of.
 
 ## What needs fetching
 
