@@ -393,7 +393,7 @@ on it, and `micro`'s clock counts the same ticks.
 
 The ticks are a board's: the number its fit proves its longest path settles
 in. **Four ticks, 40 ns, is met on the Arty Z7-20**: muir-fpga's QUUX at
-four ticks, with contracts Q1-Q5 and block-disk, its commit `bddc44d`
+four ticks, with contracts Q1-Q5 and block-disk, its commit `2535395`
 (against muir at `8598fbd`), has a worst setup slack of +0.461 ns and no
 failing path, in 11,974 LUTs; an earlier fit of
 the same design measured the longest chains as MD through both
@@ -402,7 +402,7 @@ the multiplier, 24.1 ns of the 30 a path after the scratchpads gets. Both
 boards run four ticks: three, 30 ns, is out of the DE25-Nano's reach by
 the divider alone, a `DIV` of `MD` needing its word 17 ticks before its
 hold ends. The DE25-Nano at four ticks meets them at every corner, a worst
-setup slack of +0.180 ns at `bddc44d`, its thinnest path the microsecond
+setup slack of +0.180 ns at `2535395`, its thinnest path the microsecond
 clock's count under a constraint a tick tighter than the microcycle's (an
 earlier fit's longest chain was MD through the maps to the next address at
 16.1 ns); the level-1 map's MLAB write-to-read, which Quartus does not time,
@@ -641,8 +641,8 @@ microcode and System 2000's band read the GPT; MIT's label in block 0 is
 the CADR's.
 
 **System 2000's band is on a GPT disk in a dynamic VHD**: muir-sys's
-development band for revision 12, its microcode from muir-sys `11a1a85`
-and its PROM from `02c0bb3`, a T-300's 263,245
+development band for revision 12, its microcode from muir-sys `6aa92cc`
+and its PROM from `62c4503`, a T-300's 263,245
 blocks with the current `MCR1` at block 17, "MCR1 UCADR 2000", holding
 microcode 2000 and the current `LOD4`, "LOD4 System 2000", the band, no
 FILE and no TEMP (`band_2000_is_system_2000_on_microcode_2000`). QUUX
@@ -834,7 +834,7 @@ by block number, nothing is saved, the microcode is found through the
 GPT, the devices are reset through the register page and timer 0 given
 its period (revision 10), and for revision 11 the register page is mapped
 at physical page 37777 with block-disk's registers at its words 200-203
-(muir-sys's `sys/ucadr/promh.text` as committed in muir-sys `02c0bb3`),
+(muir-sys's `sys/ucadr/promh.text` as committed in muir-sys `62c4503`),
 assembled at 36000. It sets error stop through the register page, not `766012`, and
 halts at `ERROR-MICROCODE-TOO-BIG` if a microcode reaches 36000. The
 control store stays 16K words: jump targets are `IR<25:12>`, dispatch

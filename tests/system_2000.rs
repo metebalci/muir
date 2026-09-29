@@ -5,7 +5,7 @@
 //! microcode 2000, which sizes its main screen from the feature page.
 //!
 //! It is in the gitignored `ref/band-2000` (muir-sys's hand-over of its
-//! main `11a1a85` for contract H8a, on revision 12; contracts Q8, Q11, Q13
+//! main `6aa92cc` for contract H8a, on revision 12; contracts Q8, Q11, Q13
 //! and H8a): a GPT disk as a dynamic VHD, which QUUX boots as it is,
 //! with microcode 2000 in its current `MCR1`, "MCR1 UCADR 2000", and the
 //! band, "LOD4 System 2000", in its current `LOD4`; PROM 2000, the PROM it
@@ -18,7 +18,7 @@
 //! register at `RESET-MACHINE`, at every start, with specialised handlers
 //! for some entries. The band before, microcode 2000 with nothing of H8a
 //! (muir-sys's Q13 hand-over for revision 11, whose microcode and PROM
-//! sources are muir-sys `02c0bb3`'s), is `ref/band-2000-q13`: the tests of
+//! sources are muir-sys `62c4503`'s), is `ref/band-2000-q13`: the tests of
 //! a microcode that never writes the register boot it. Without a band the
 //! tests skip and say so.
 

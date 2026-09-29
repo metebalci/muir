@@ -116,7 +116,7 @@ fn the_cadr_keeps_the_overlay() {
 }
 
 /// Where 36000's `JUMP GO` goes: `GO`, at 36043 since muir-sys's commit
-/// `7c4bcb2` put the halts `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040 and
+/// `7749360` put the halts `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040 and
 /// `ERROR-BUFFER-NOT-LOADED` at 36042 before it, and still there in the GPT
 /// PROM of revision 11: the hand-over's symbol table `promh.sym` says `GO
 /// I-MEM 36043`
@@ -233,7 +233,7 @@ fn quux_s_prom_is_mit_s_promh_changed() {
 
 /// **The built-in QUUX PROM is muir-sys's hand-over, byte for byte**, where
 /// the hand-over (`ref/band-2000`, whose `promh.*` are PROM 2000, the GPT
-/// PROM for revision 11, from muir-sys `02c0bb3`'s `promh.text`) is present; its
+/// PROM for revision 11, from muir-sys `62c4503`'s `promh.text`) is present; its
 /// symbols and error table say version 2000, 3720 octal; and they put what
 /// [`GO`], [`LAST`], [`DISK_AWAIT_PACK`] and [`GPT_HALTS`] say where they
 /// say.
