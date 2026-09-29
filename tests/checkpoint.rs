@@ -752,7 +752,7 @@ fn micro_carries_its_late_writes_across_a_checkpoint() {
     };
     assert_eq!(got(&resumed), got(&straight));
     assert_eq!(got(&straight).0, 0, "the stale PDL word");
-    assert_eq!(got(&straight).2, !0, "the PDL word once landed");
+    assert_eq!(got(&straight).2, 0xffff_ffff, "the PDL word once landed");
 }
 
 /// **A `micro` checkpoint taken between a write's start and the edge it

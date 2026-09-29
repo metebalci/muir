@@ -178,7 +178,7 @@ fn reading(page: u32, word: u32) -> Machine {
     let mut m = Machine::new();
     m.l1_map[0] = 0;
     m.l2_map[0] = (1 << 23) | page;
-    m.mmem[1] = word;
+    m.mmem[1] = u64::from(word);
     let mut prom = vec![filler(); 512];
     for k in 0..12 {
         prom[k * 42] = Insn::new(ALU | SETM | m_src(1) | a_src(3) | START_READ);
@@ -296,7 +296,7 @@ fn a_seek_ends_on_the_tick_its_countdown_reaches_under_fpga() {
         d.set_timing_model(model);
         d.attach(0, Unit::blank(Geometry::T300));
         d.timed = true;
-        let mut main = vec![0; 1 << 16];
+        let mut main = vec![0u32; 1 << 16];
         let now = 1_000;
         d.advance(now);
         d.write(COMMAND, 0o4, &mut main);

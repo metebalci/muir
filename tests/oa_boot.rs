@@ -54,7 +54,7 @@ fn machine(geometry: Geometry) -> (Machine, u16) {
         prom[at as usize + 1] = jump_to_self;
     }
     m.load_prom(&prom);
-    m.amem[5] = OA;
+    m.amem[5] = u64::from(OA);
     (m, at)
 }
 

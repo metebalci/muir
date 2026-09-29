@@ -81,7 +81,7 @@ fn rebuilt_microcode(dir: &str) -> Option<PathBuf> {
 /// `%MICROCODE-VERSION-NUMBER`, A memory's word 40 (`mcr::Mcr::version`
 /// has where that is from), as the running machine holds it.
 fn microcode_version(e: &impl Engine) -> u32 {
-    e.machine().amem[0o40] & 0o77777777
+    support::low(e.machine().amem[0o40]) & 0o77777777
 }
 
 /// **System 1001 reaches its listener on `micro`, on microcode 323.** The

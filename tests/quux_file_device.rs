@@ -194,7 +194,7 @@ fn put_bytes(m: &mut Machine, at: u32, bytes: &[u8]) {
     for (k, chunk) in bytes.chunks(4).enumerate() {
         let mut w = [0u8; 4];
         w[..chunk.len()].copy_from_slice(chunk);
-        m.main[at as usize + k] = u32::from_le_bytes(w);
+        m.main[at as usize + k] = u64::from(u32::from_le_bytes(w));
     }
 }
 
@@ -216,10 +216,10 @@ impl Dev {
 
     fn with_rings(mounts: Mounts, cmd_log2: u32, resp_log2: u32) -> Dev {
         let mut m = quux(mounts);
-        m.bus_write(CMD_BASE, CMD_RING);
-        m.bus_write(CMD_SIZE, cmd_log2);
-        m.bus_write(RESP_BASE, RESP_RING);
-        m.bus_write(RESP_SIZE, resp_log2);
+        m.bus_write(CMD_BASE, CMD_RING.into());
+        m.bus_write(CMD_SIZE, cmd_log2.into());
+        m.bus_write(RESP_BASE, RESP_RING.into());
+        m.bus_write(RESP_SIZE, resp_log2.into());
         m.bus_write(CONTROL, 1);
         assert_eq!(m.bus_read(STATUS) & 0b111, 1, "enabled, not quiet, not refused");
         Dev { m, prod: 0, cons: 0, cmd_log2, resp_log2, tag: 0o100 }
@@ -240,9 +240,11 @@ impl Dev {
             c.w6,
             c.w7,
         ];
-        self.m.main[slot as usize..slot as usize + 8].copy_from_slice(&words);
+        for (m, w) in self.m.main[slot as usize..slot as usize + 8].iter_mut().zip(words) {
+            *m = w.into();
+        }
         self.prod = self.prod.wrapping_add(1);
-        self.m.bus_write(CMD_PROD, self.prod as u32);
+        self.m.bus_write(CMD_PROD, (self.prod as u32).into());
         self.tag as u32
     }
 
@@ -256,13 +258,13 @@ impl Dev {
         }
         let r = self.response(self.cons);
         self.cons = self.cons.wrapping_add(1);
-        self.m.bus_write(RESP_CONS, self.cons as u32);
+        self.m.bus_write(RESP_CONS, (self.cons as u32).into());
         r
     }
 
     fn response(&self, index: u16) -> Resp {
         let slot = RESP_RING + 8 * (index as u32 % (1 << self.resp_log2));
-        Resp(self.m.main[slot as usize..slot as usize + 8].try_into().unwrap())
+        Resp(std::array::from_fn(|k| support::low(self.m.main[slot as usize + k])))
     }
 
     fn run(&mut self, c: Cmd) -> Resp {
@@ -317,7 +319,11 @@ impl Dev {
             ..Default::default()
         });
         let n = if r.status() == 0 { r.count() as usize / 4 } else { 0 };
-        (r, records(&self.m.main[BUF_B as usize..BUF_B as usize + n]))
+        let words: Vec<u32> = self.m.main[BUF_B as usize..BUF_B as usize + n]
+            .iter()
+            .map(|&w| support::low(w))
+            .collect();
+        (r, records(&words))
     }
     fn complete(&mut self, text: &str) -> (Resp, String) {
         let a = self.a(text.as_bytes());
@@ -457,9 +463,9 @@ fn an_enable_refuses_a_bad_ring_and_the_configuration_holds_while_enabled() {
         ("a ring past main memory", words - 8 * 3, 2),
     ] {
         let mut m = quux(Mounts::default());
-        m.bus_write(CMD_BASE, base);
+        m.bus_write(CMD_BASE, base.into());
         m.bus_write(CMD_SIZE, size);
-        m.bus_write(RESP_BASE, RESP_RING);
+        m.bus_write(RESP_BASE, RESP_RING.into());
         m.bus_write(RESP_SIZE, 0);
         m.bus_write(CONTROL, 0x101);
         let s = m.bus_read(STATUS);
@@ -538,10 +544,10 @@ fn commands_run_one_at_a_time_in_order() {
         d.tag = d.tag.wrapping_add(1);
         let slot = CMD_RING as usize + 8 * d.prod as usize;
         d.m.main[slot..slot + 8].copy_from_slice(&[
-            d.tag as u32 | op::LOG << 16,
+            (d.tag as u32 | op::LOG << 16).into(),
             0,
-            BUF_A,
-            n,
+            BUF_A.into(),
+            u64::from(n),
             0,
             0,
             0,
@@ -554,9 +560,9 @@ fn commands_run_one_at_a_time_in_order() {
     for (k, n) in [1u32, 100, 1024].into_iter().enumerate() {
         due += cost(n, 0);
         d.m.ns = due - 1;
-        assert_eq!(d.m.bus_read(RESP_PROD), k as u32, "command {k} not yet");
+        assert_eq!(d.m.bus_read(RESP_PROD), (k as u32).into(), "command {k} not yet");
         d.m.ns = due;
-        assert_eq!(d.m.bus_read(RESP_PROD), k as u32 + 1, "command {k} at {due}");
+        assert_eq!(d.m.bus_read(RESP_PROD), (k as u32 + 1).into(), "command {k} at {due}");
     }
     for (k, tag) in tags.into_iter().enumerate() {
         let r = d.response(k as u16);
@@ -575,9 +581,9 @@ fn the_rings_wrap_at_their_size_and_across_2_to_the_16() {
             let r = d.run(Cmd { op: op::OPEN, flags: PROBE, a: (BUF_A, 1), ..Default::default() });
             assert_eq!((r.status(), r.flags() & 1), (0, 1), "size {log2}, command {k}");
         }
-        assert_eq!(d.m.bus_read(CMD_CONS), n & 0xffff);
-        assert_eq!(d.m.bus_read(RESP_PROD), n & 0xffff);
-        assert_eq!(d.m.bus_read(RESP_CONS), n & 0xffff);
+        assert_eq!(d.m.bus_read(CMD_CONS), (n & 0xffff).into());
+        assert_eq!(d.m.bus_read(RESP_PROD), (n & 0xffff).into());
+        assert_eq!(d.m.bus_read(RESP_CONS), (n & 0xffff).into());
     }
 }
 
@@ -732,17 +738,17 @@ fn a_prog_unibus_reset_leaves_the_device_as_it_was() {
         let m = e.machine_mut();
         let slot = CMD_RING as usize + 8 * d.prod as usize;
         m.main[slot..slot + 8].copy_from_slice(&[
-            0o77 | op::READ << 16,
-            o.handle(),
+            (0o77 | op::READ << 16).into(),
+            o.handle().into(),
             0,
             0,
-            BUF_B,
+            u64::from(BUF_B),
             65_536,
             0,
             0,
         ]);
         let prod = d.prod as u32 + 1;
-        m.bus_write(CMD_PROD, prod);
+        m.bus_write(CMD_PROD, prod.into());
         let look = |m: &mut Machine| {
             [m.bus_read(CONTROL), m.bus_read(STATUS), m.bus_read(CMD_PROD), m.bus_read(CMD_CONS)]
         };
@@ -1389,7 +1395,16 @@ mod engines {
         assert_eq!(o.status(), 0);
         d.m.bus_write(CONTROL, 0x101);
         let slot = CMD_RING as usize + 8 * d.prod as usize;
-        d.m.main[slot..slot + 8].copy_from_slice(&[0, o.handle(), 0, 0, BUF_B, 8, 0, 0]);
+        d.m.main[slot..slot + 8].copy_from_slice(&[
+            0,
+            o.handle().into(),
+            0,
+            0,
+            BUF_B.into(),
+            8,
+            0,
+            0,
+        ]);
         d.m.main[BUF_B as usize] = 0o7070;
         let mut m = d.m;
         let mut words = vec![filler(); 512];
@@ -1402,9 +1417,9 @@ mod engines {
         m.l2_map[2] = (1 << 23) | (1 << 22) | (CMD_RING >> 8);
         m.l2_map[3] = (1 << 23) | (1 << 22) | (BUF_B >> 8);
         m.mmem[1] = (1 << 8) | 0o164;
-        m.mmem[2] = d.prod as u32 + 1;
-        m.mmem[3] = (2 << 8) | (8 * d.prod as u32);
-        m.mmem[4] = TAG | op::READ << 16;
+        m.mmem[2] = u64::from(d.prod as u32 + 1);
+        m.mmem[3] = u64::from((2 << 8) | (8 * d.prod as u32));
+        m.mmem[4] = u64::from(TAG | op::READ << 16);
         m.mmem[5] = (1 << 8) | 0o170;
         m.mmem[6] = (1 << 8) | 0o100;
         m.mmem[7] = 3 << 8;
@@ -1446,7 +1461,7 @@ mod engines {
         let r = &m.main[resp as usize..resp as usize + 8];
         assert_eq!(
             r[0],
-            TAG | op::READ << 24,
+            (TAG | op::READ << 24).into(),
             "{name}: status 0, and the program's word 0 was read"
         );
         assert_eq!(r[1], 8, "{name}");
@@ -1454,9 +1469,9 @@ mod engines {
             e.step().unwrap();
         }
         let m = e.machine();
-        assert_eq!(m.amem[0o200], answered, "{name}: the program saw word 170 move");
+        assert_eq!(m.amem[0o200], answered.into(), "{name}: the program saw word 170 move");
         assert_eq!(m.amem[0o201], 1 << 7, "{name}: and word 100 <7>");
-        assert_eq!(m.amem[0o202], u32::from_le_bytes(*b"0123"), "{name}: and the data in B");
+        assert_eq!(m.amem[0o202], u32::from_le_bytes(*b"0123").into(), "{name}: and the data in B");
     }
 
     /// **Both engines drive the device**: the command a program writes
@@ -1495,7 +1510,7 @@ mod engines {
             r.step().unwrap();
         }
         assert_eq!(r.cache().unwrap().misses, 2, "and missed once after it");
-        assert_eq!(r.machine().amem[0o202], u32::from_le_bytes(*b"0123"));
+        assert_eq!(r.machine().amem[0o202], u32::from_le_bytes(*b"0123").into());
     }
 
     /// **The producer index is taken once the write buffer is empty**: with
@@ -1517,7 +1532,7 @@ mod engines {
             r.boot();
             let (due, _, _) = run_to_response(&mut r, answered, Rtl::ns);
             assert!((least..most).contains(&due), "{write_ns} ns a write: due {due}");
-            assert_eq!(r.machine().main[resp as usize] & 0xffff, TAG);
+            assert_eq!(r.machine().main[resp as usize] & 0xffff, TAG.into());
         }
     }
 }

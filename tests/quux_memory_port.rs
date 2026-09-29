@@ -48,10 +48,10 @@ fn machine(geometry: Geometry, prom: &[Insn], addresses: &[u32]) -> Machine {
     let rw = (1 << 23) | (1 << 22);
     for (k, &p) in addresses.iter().enumerate() {
         m.l2_map[1 + k] = rw | (p >> 8);
-        m.mmem[1 + k] = ((1 + k as u32) << 8) | (p & 0xff);
+        m.mmem[1 + k] = u64::from(((1 + k as u32) << 8) | (p & 0xff));
     }
     for (k, w) in m.main[..0o4000].iter_mut().enumerate() {
-        *w = 0o1000000 + k as u32;
+        *w = u64::from(0o1000000 + k as u32);
     }
     m
 }
@@ -269,7 +269,10 @@ fn rtl_shows_the_memory_port_s_acknowledgement_and_grant() {
     let cs = cycles(&mut e);
     assert_eq!(cs.len(), 4, "{cs:?}");
     let m = e.machine();
-    assert_eq!(m.amem[0o200..0o204], [0o1001000, 0o1001001, Geometry::QUUX.machine_id.unwrap(), 0]);
+    assert_eq!(
+        m.amem[0o200..0o204],
+        [0o1001000, 0o1001001, Geometry::QUUX.machine_id.unwrap().into(), 0]
+    );
     let (miss, hit, register, empty) = (&cs[0], &cs[1], &cs[2], &cs[3]);
     for c in &cs {
         assert!(c.held, "granted until acknowledged: {c:?}");

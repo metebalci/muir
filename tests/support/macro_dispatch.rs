@@ -450,7 +450,7 @@ impl Checker {
         let base = macro_dispatch::BASE_BITS;
         let localp_at = macro_dispatch::localp_address(d.register);
         let ap_at = macro_dispatch::ap_address(d.register);
-        let (localp, ap) = (m.amem[localp_at] & base, m.mmem[ap_at] & base);
+        let (localp, ap) = (m.amem[localp_at] & u64::from(base), m.mmem[ap_at] & u64::from(base));
         if self.bases.is_some_and(|b| b != (localp_at, ap_at)) {
             // The register names other words: its write loaded nothing.
             (self.localp_held, self.ap_held) = (false, false);
@@ -472,7 +472,9 @@ impl Checker {
                 }
             }
         }
-        if (self.localp_held && d.localp != localp) || (self.ap_held && d.ap != ap) {
+        if (self.localp_held && u64::from(d.localp) != localp)
+            || (self.ap_held && u64::from(d.ap) != ap)
+        {
             self.counts.copies_differ += 1;
             let (cl, ca) = (d.localp, d.ap);
             self.problem(|| {
@@ -520,9 +522,10 @@ impl Checker {
             let entry = d.entries[index];
             let register = half >> 6 & 7;
             let armed = entry & macro_dispatch::OPERAND != 0
-                && (register == macro_dispatch::LOCAL || register == macro_dispatch::ARG);
+                && (register == macro_dispatch::LOCAL.into()
+                    || register == macro_dispatch::ARG.into());
             self.handler = Some((entry & 0o37777) as u16);
-            if (register == macro_dispatch::LOCAL || register == macro_dispatch::ARG)
+            if (register == macro_dispatch::LOCAL.into() || register == macro_dispatch::ARG.into())
                 && has_an_operand(index)
             {
                 self.counts.operand_candidates += 1;
@@ -532,7 +535,7 @@ impl Checker {
             // memory's word there, through the map as it stands.
             if e.fetch_started() == Some(false) {
                 self.counts.prefetched += 1;
-                let phys = m.translate(m.vma).physical as usize;
+                let phys = m.translate(m.vma as u32).physical as usize;
                 let held = m.main.get(phys).copied();
                 if held != Some(word) {
                     self.counts.stale_words += 1;
@@ -588,7 +591,8 @@ impl Checker {
             if armed {
                 self.counts.operand_loads += 1;
                 let delta = half & 0o77;
-                let want = if register == macro_dispatch::ARG { ap + 1 } else { localp } + delta;
+                let want =
+                    if register == macro_dispatch::ARG.into() { ap + 1 } else { localp } + delta;
                 let want = want as u16 & m.geometry.pdl_mask();
                 if m.pdl_index != want {
                     self.counts.wrong_operand += 1;
@@ -653,8 +657,8 @@ pub fn set_register(m: &mut Machine, word: u32) {
     let base = macro_dispatch::BASE_BITS;
     let d = &mut m.macro_dispatch;
     d.register = word;
-    d.localp = m.amem[macro_dispatch::localp_address(word)] & base;
-    d.ap = m.mmem[macro_dispatch::ap_address(word)] & base;
+    d.localp = m.amem[macro_dispatch::localp_address(word)] as u32 & base;
+    d.ap = m.mmem[macro_dispatch::ap_address(word)] as u32 & base;
 }
 
 /// **The MACRO DISPATCH MEMORY filled with the generic handlers**, every

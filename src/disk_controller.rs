@@ -36,6 +36,7 @@
 
 use crate::clock::TimingModel;
 use crate::disk_unit::{self, BLOCK_WORDS, Unit, format};
+use crate::machine::MemoryWord;
 
 /// The divider between the timeout clock and `TIMEOUT`, the 74393 at
 /// DCTMOT 0C03.
@@ -558,7 +559,7 @@ impl Controller {
 
     /// `main` is physical memory, which a transfer reads and writes directly:
     /// the controller is a bus master and does not go through the map.
-    pub fn write(&mut self, register: u32, v: u32, main: &mut [u32]) {
+    pub fn write<W: MemoryWord>(&mut self, register: u32, v: u32, main: &mut [W]) {
         match register & 3 {
             // "Writing the command register does NOT initiate a transfer,
             // unlike most disk controllers.  Use register 3 (START) to
@@ -592,7 +593,7 @@ impl Controller {
     /// 00 read, 10 read compare, 11 write, 02 read all, 13 write all, 04
     /// seek, 05 at ease, 1005 recalibrate, 405 fault clear, 06 offset clear,
     /// 16 stop/reset.
-    fn start(&mut self, main: &mut [u32]) {
+    fn start<W: MemoryWord>(&mut self, main: &mut [W]) {
         if self.units[self.selected()].is_none() && self.cmd & 0o4 == 0 {
             // A command that uses the memory channel, with no drive on the
             // unit: the disk lossage presets `BUSY` off before the sequencer
@@ -864,7 +865,7 @@ impl Controller {
 
     /// One read, read-compare or write, from the disk address register
     /// through the command list.
-    fn transfer(&mut self, read: bool, compare: bool, main: &mut [u32]) -> u32 {
+    fn transfer<W: MemoryWord>(&mut self, read: bool, compare: bool, main: &mut [W]) -> u32 {
         self.read_compare_difference = false;
         self.dma_written.clear();
         self.ccw_cycle = false;
@@ -901,7 +902,7 @@ impl Controller {
     /// format the disk" --- so what crosses the channel is the bytes as
     /// they lie under the head, low-order byte first, as everything on
     /// this disk goes.
-    fn transfer_all(&mut self, read: bool, main: &mut [u32]) {
+    fn transfer_all<W: MemoryWord>(&mut self, read: bool, main: &mut [W]) {
         self.read_compare_difference = false;
         self.dma_written.clear();
         self.ccw_cycle = false;
@@ -933,7 +934,7 @@ impl Controller {
     /// four bytes to a word, low-order byte first.  The track is read
     /// round and round --- the command does not advance the head --- so a
     /// list longer than a track comes back to where it started.
-    fn read_all(&mut self, bytes: &[u8], main: &mut [u32]) {
+    fn read_all<W: MemoryWord>(&mut self, bytes: &[u8], main: &mut [W]) {
         let mut at = 0usize;
         self.each_ccw(main, |d, page, main| {
             if page + BLOCK_WORDS > main.len() {
@@ -946,7 +947,7 @@ impl Controller {
                     *byte = bytes[at % bytes.len()];
                     at += 1;
                 }
-                *w = u32::from_le_bytes(b);
+                *w = W::of(u32::from_le_bytes(b));
             }
             d.dma_written.push(page);
             true
@@ -954,14 +955,15 @@ impl Controller {
     }
 
     /// Write All: the pages the command list names, back into bytes.
-    fn write_all_bytes(&mut self, main: &mut [u32]) -> Vec<u8> {
+    fn write_all_bytes<W: MemoryWord>(&mut self, main: &mut [W]) -> Vec<u8> {
         let mut bytes = Vec::new();
         self.each_ccw(main, |d, page, main| {
             if page + BLOCK_WORDS > main.len() {
                 d.nxm = true;
                 return false;
             }
-            bytes.extend(main[page..page + BLOCK_WORDS].iter().flat_map(|w| w.to_le_bytes()));
+            bytes
+                .extend(main[page..page + BLOCK_WORDS].iter().flat_map(|&w| w.low().to_le_bytes()));
             true
         });
         bytes
@@ -971,17 +973,17 @@ impl Controller {
     /// the More flag clear or `each` says to stop.  [`Controller::command_list`]
     /// walks the same list a block at a time; this one has no block to
     /// advance to, the track being one stream.
-    fn each_ccw(
+    fn each_ccw<W: MemoryWord>(
         &mut self,
-        main: &mut [u32],
-        mut each: impl FnMut(&mut Controller, usize, &mut [u32]) -> bool,
+        main: &mut [W],
+        mut each: impl FnMut(&mut Controller, usize, &mut [W]) -> bool,
     ) {
         let mut n = 0u32;
         loop {
             let clp = self.clp & !0xffff | (self.clp.wrapping_add(n)) & 0xffff;
             self.last_memory_address = clp;
             self.ccw_cycle = true;
-            let Some(&ccw) = main.get(clp as usize) else {
+            let Some(ccw) = main.get(clp as usize).map(|&w| w.low()) else {
                 self.nxm = true;
                 return;
             };
@@ -1001,12 +1003,12 @@ impl Controller {
 
     /// The command list: one CCW per page, each naming where in physical
     /// memory the block goes, until one arrives with the More flag clear.
-    fn command_list(
+    fn command_list<W: MemoryWord>(
         &mut self,
         unit: &mut Unit,
         read: bool,
         compare: bool,
-        main: &mut [u32],
+        main: &mut [W],
     ) -> u32 {
         // "Only bits <15:0> of the CLP can count; if you attempt to carry
         // into the high 8 bits you will wrap around."  `DCCLP` is where that
@@ -1023,7 +1025,7 @@ impl Controller {
             let clp = self.clp & !0xffff | (self.clp.wrapping_add(n)) & 0xffff;
             self.last_memory_address = clp;
             self.ccw_cycle = true;
-            let Some(&ccw) = main.get(clp as usize) else {
+            let Some(ccw) = main.get(clp as usize).map(|&w| w.low()) else {
                 self.nxm = true;
                 return moved;
             };
@@ -1129,17 +1131,19 @@ impl Controller {
                 // bit 22 of the status register if they don't agree."  "This
                 // error does not stop the transfer."
                 (true, true) => {
-                    if in_memory != from_disk {
+                    if in_memory.iter().zip(&from_disk).any(|(&m, &d)| m != W::of(d)) {
                         self.read_compare_difference = true;
                     }
                 }
                 (true, false) => {
-                    in_memory.copy_from_slice(&from_disk);
+                    for (m, &d) in in_memory.iter_mut().zip(&from_disk) {
+                        *m = W::of(d);
+                    }
                     self.dma_written.push(page);
                 }
                 (false, _) => {
-                    let words: &[u32; BLOCK_WORDS] = (&*in_memory).try_into().unwrap();
-                    if !unit.write_block(words) {
+                    let words: [u32; BLOCK_WORDS] = std::array::from_fn(|k| in_memory[k].low());
+                    if !unit.write_block(&words) {
                         unit.fault = true;
                         return moved;
                     }

@@ -320,8 +320,8 @@ fn the_bus_reaches_the_frame_buffer() {
 
     // The mode register is on the same bus and is not the buffer; its sync
     // bits are the program's, wherever it stands.
-    m.bus_write(tv::CONTROL, mode::BOW);
-    assert_eq!(m.bus_read(tv::CONTROL) & !(mode::HSYNC | mode::VSYNC), mode::BOW);
+    m.bus_write(tv::CONTROL, mode::BOW.into());
+    assert_eq!(m.bus_read(tv::CONTROL) & u64::from(!(mode::HSYNC | mode::VSYNC)), mode::BOW.into());
     assert!(m.tv.black_on_white());
     assert_eq!(m.bus_error, 0);
 }
@@ -835,7 +835,7 @@ fn both_boards_are_on_the_one_interrupt_line() {
     assert!(!m.xbus_interrupt(), "neither enable is up");
 
     // The color board alone, through its own registers.
-    m.bus_write(0o17377750, mode::INTERRUPT_ENABLE);
+    m.bus_write(0o17377750, mode::INTERRUPT_ENABLE.into());
     assert!(!m.xbus_interrupt(), "the write cleared the flag");
     m.ns += FRAME_NS;
     assert!(m.xbus_interrupt(), "the color board's SEND INTR is on the line");
@@ -845,14 +845,14 @@ fn both_boards_are_on_the_one_interrupt_line() {
     // The main board alone.
     m.bus_write(0o17377750, 0);
     assert!(!m.xbus_interrupt());
-    m.bus_write(0o17377760, mode::INTERRUPT_ENABLE);
+    m.bus_write(0o17377760, mode::INTERRUPT_ENABLE.into());
     m.ns += FRAME_NS;
     assert!(m.xbus_interrupt(), "the main board's");
     assert!(!m.color_tv.as_ref().unwrap().interrupt(m.ns), "with the color board's enable down");
 
     // `-XBUS INIT` clears the vertical flag on both: `Machine::bus_reset`
     // is the wire.
-    m.bus_write(0o17377750, mode::INTERRUPT_ENABLE);
+    m.bus_write(0o17377750, mode::INTERRUPT_ENABLE.into());
     m.ns += FRAME_NS;
     assert!(m.tv.vert_flag(m.ns) && m.color_tv.as_ref().unwrap().vert_flag(m.ns));
     m.bus_reset();

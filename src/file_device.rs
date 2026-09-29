@@ -41,6 +41,7 @@
 //! read-only. With no default folder `/` holds the mounts alone and is
 //! read-only.
 
+use crate::machine::MemoryWord;
 use std::collections::BTreeMap;
 use std::fs::{self, File, Metadata};
 use std::io;
@@ -508,7 +509,7 @@ struct Buf {
     len: u32,
 }
 
-fn buffer(main: &[u32], addr: u32, len: u32) -> Result<Buf, u32> {
+fn buffer<W: MemoryWord>(main: &[W], addr: u32, len: u32) -> Result<Buf, u32> {
     let at = (addr & 0xff_ffff) as usize;
     if at & 3 != 0 || len > MAX_BUFFER || at + (len as usize).div_ceil(4) > main.len() {
         return Err(status::BAD_BUFFER);
@@ -517,17 +518,17 @@ fn buffer(main: &[u32], addr: u32, len: u32) -> Result<Buf, u32> {
 }
 
 /// Byte k of a buffer is `<8(k mod 4)+7 : 8(k mod 4)>` of word k/4.
-fn bytes_of(main: &[u32], b: Buf) -> Vec<u8> {
-    (0..b.len as usize).map(|k| (main[b.at + k / 4] >> (8 * (k % 4))) as u8).collect()
+fn bytes_of<W: MemoryWord>(main: &[W], b: Buf) -> Vec<u8> {
+    (0..b.len as usize).map(|k| (main[b.at + k / 4].low() >> (8 * (k % 4))) as u8).collect()
 }
 
 /// `data` into the buffer at `at`: `ceil(n/4)` words, the bytes past n in
 /// the last one 0, and no other word.
-fn put_bytes(main: &mut [u32], at: usize, data: &[u8]) {
+fn put_bytes<W: MemoryWord>(main: &mut [W], at: usize, data: &[u8]) {
     for (k, chunk) in data.chunks(4).enumerate() {
         let mut w = [0u8; 4];
         w[..chunk.len()].copy_from_slice(chunk);
-        main[at + k] = u32::from_le_bytes(w);
+        main[at + k] = W::of(u32::from_le_bytes(w));
     }
 }
 
@@ -697,7 +698,14 @@ impl FileDevice {
     /// A register written at `now`. A producer write is taken from when the
     /// processor's write buffer is empty, `drained_at`, if that is later;
     /// `main` is read for the command's lengths as it is taken.
-    pub fn write(&mut self, word: u32, v: u32, now: u64, drained_at: u64, main: &[u32]) {
+    pub fn write<W: MemoryWord>(
+        &mut self,
+        word: u32,
+        v: u32,
+        now: u64,
+        drained_at: u64,
+        main: &[W],
+    ) {
         let on = self.enabled;
         match word {
             CONTROL => {
@@ -777,7 +785,7 @@ impl FileDevice {
     /// Takes the command at the head of the ring, if there is one and the
     /// response ring has room, from `start`: its due time from the lengths
     /// its entry names.
-    fn take(&mut self, start: u64, main: &[u32]) {
+    fn take<W: MemoryWord>(&mut self, start: u64, main: &[W]) {
         if self.head_due.is_some() || !self.enabled || self.queued() == 0 {
             return;
         }
@@ -785,12 +793,12 @@ impl FileDevice {
             return;
         }
         let e = self.cmd_base as usize + 8 * (self.cmd_cons % self.cmd_entries()) as usize;
-        self.head_due = Some(due(start, main[e + 3], main[e + 5]));
+        self.head_due = Some(due(start, main[e + 3].low(), main[e + 5].low()));
     }
 
     /// Runs every command due by `now`, each at its own due time, and takes
     /// the next. Whether main memory was written.
-    pub fn advance(&mut self, now: u64, main: &mut [u32]) -> bool {
+    pub fn advance<W: MemoryWord>(&mut self, now: u64, main: &mut [W]) -> bool {
         let mut wrote = false;
         while let Some(at) = self.head_due.filter(|&d| d <= now) {
             self.head_due = None;
@@ -812,9 +820,9 @@ impl FileDevice {
     /// opcode; 1 a count; 2 a handle; 3 a length; 4 an mtime; 5 flags; 6
     /// DIRECTORY's next cookie or COMPLETE's matches; 7 0. A failed
     /// command's response is word 0 alone.
-    fn execute(&mut self, main: &mut [u32]) {
+    fn execute<W: MemoryWord>(&mut self, main: &mut [W]) {
         let e = self.cmd_base as usize + 8 * (self.cmd_cons % self.cmd_entries()) as usize;
-        let c: [u32; 8] = main[e..e + 8].try_into().unwrap();
+        let c: [u32; 8] = std::array::from_fn(|k| main[e + k].low());
         let (tag, opcode, flags) = (c[0] & 0xffff, (c[0] >> 16) & 0xff, c[0] >> 24);
         let mut reply = Reply::default();
         let st = match self.command(opcode, flags, &c, main, &mut reply) {
@@ -825,17 +833,19 @@ impl FileDevice {
             }
         };
         let r = self.resp_base as usize + 8 * (self.cmd_cons % self.resp_entries()) as usize;
-        main[r] = tag | st << 16 | opcode << 24;
-        main[r + 1..r + 8].copy_from_slice(&reply.0);
+        main[r] = W::of(tag | st << 16 | opcode << 24);
+        for (m, &v) in main[r + 1..r + 8].iter_mut().zip(&reply.0) {
+            *m = W::of(v);
+        }
         self.cmd_cons = self.cmd_cons.wrapping_add(1);
     }
 
-    fn command(
+    fn command<W: MemoryWord>(
         &mut self,
         opcode: u32,
         flags: u32,
         c: &[u32; 8],
-        main: &mut [u32],
+        main: &mut [W],
         r: &mut Reply,
     ) -> Result<(), u32> {
         let allowed = match opcode {
@@ -904,7 +914,9 @@ impl FileDevice {
                     words.extend(rec);
                     next += 1;
                 }
-                main[b.at..b.at + words.len()].copy_from_slice(&words);
+                for (m, &v) in main[b.at..b.at + words.len()].iter_mut().zip(&words) {
+                    *m = W::of(v);
+                }
                 r.count(4 * words.len() as u32);
                 r.w6(if next < entries.len() { next as u32 } else { 0 });
                 Ok(())

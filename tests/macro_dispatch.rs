@@ -393,21 +393,21 @@ fn machine(s: Setup) -> Machine {
         }
     }
 
-    m.amem[0o50] = MAIN;
-    m.amem[0o51] = s.register;
-    m.amem[0o52] = s.code * 4;
+    m.amem[0o50] = u64::from(MAIN);
+    m.amem[0o51] = u64::from(s.register);
+    m.amem[0o52] = u64::from(s.code * 4);
     m.amem[0o53] = if s.sequence_break { 1 << 26 } else { 0 };
-    m.amem[SENTINEL_AT as usize] = SENTINEL;
-    m.amem[LOCALP_AT as usize] = LOCALP;
-    m.amem[0o56] = LOCALP_2;
-    m.mmem[AP_AT as usize] = AP;
-    m.amem[AP_AT as usize] = AP;
+    m.amem[SENTINEL_AT as usize] = u64::from(SENTINEL);
+    m.amem[LOCALP_AT as usize] = u64::from(LOCALP);
+    m.amem[0o56] = u64::from(LOCALP_2);
+    m.mmem[AP_AT as usize] = u64::from(AP);
+    m.amem[AP_AT as usize] = u64::from(AP);
     m.pdl_index = SENTINEL as u16;
     let rw = (1 << 23) | (1 << 22);
     m.l2_map[1] = rw | 1;
     m.l2_map[2] = rw | 2;
     for (k, pair) in s.program.chunks(2).enumerate() {
-        m.main[s.code as usize + k] = pair[0] | pair[1] << 16;
+        m.main[s.code as usize + k] = u64::from(pair[0] | pair[1] << 16);
     }
     if let Some(patch) = s.patch {
         patch(&mut m);
@@ -441,9 +441,7 @@ fn both(s: Setup) -> [(&'static str, u64, Machine); 2] {
 
 /// The counts of opcodes 1 to 6, and M 7, the specialised handler's.
 fn counts(m: &Machine) -> [u32; 7] {
-    let mut c = [0; 7];
-    c.copy_from_slice(&m.mmem[1..=7]);
-    c
+    std::array::from_fn(|k| support::low(m.mmem[1 + k]))
 }
 
 /// The architectural state a program leaves: M and A memory, the SPC
@@ -529,7 +527,7 @@ fn destinations_5_to_7_write_the_register_the_index_and_the_entry() {
         m.geometry = geometry;
         m.load_prom(&prom);
         support::prom_program_in_ram(&mut m);
-        m.amem[0o51] = !0;
+        m.amem[0o51] = 0xffff_ffff;
         m.amem[0o52] = 0o7771234;
         m.amem[0o53] = 0o7654321;
         m.amem[0o54] = 0o17;
@@ -662,7 +660,7 @@ fn condition_6_is_tested_on_the_fetch_path() {
     let fetches = PROGRAM.len() as u32 / 2;
     for ((name, n_off, m_off), (_, n_on, m_on)) in off.iter().zip(on.iter()) {
         assert_eq!(counts(m_off)[..6], COUNTS, "{name}");
-        assert_eq!(m_off.mmem[0o10], fetches, "{name}: the call at every fetch");
+        assert_eq!(m_off.mmem[0o10], fetches.into(), "{name}: the call at every fetch");
         assert_eq!(state(m_on), state(m_off), "{name}");
         assert_eq!(m_on.macro_dispatch.fused, fusing(fuses), "{name}");
         assert_eq!(n_off - n_on, 2 * fusing(fuses), "{name}");
@@ -755,7 +753,7 @@ fn a_control_store_write_clears_the_enable() {
         m.geometry = Geometry::QUUX;
         m.load_prom(&prom);
         support::prom_program_in_ram(&mut m);
-        m.amem[0o51] = enabled();
+        m.amem[0o51] = u64::from(enabled());
         m.mmem[1] = 0o1234;
         m.amem[0o52] = 0o5670;
         m.macro_dispatch.entries[5] = 0o4321;
@@ -855,7 +853,7 @@ fn a_jump_return_fuses_as_the_switch_says() {
 /// [`RECORD`]'s pushes over a run: the PDL buffer from word 1 up, as its
 /// pointer has counted them.
 fn records(m: &Machine) -> Vec<u32> {
-    m.pdl[1..=m.pdl_pointer as usize].to_vec()
+    m.pdl[1..=m.pdl_pointer as usize].iter().map(|&w| support::low(w)).collect()
 }
 
 /// [`RECORD`]'s returns over [`OPERANDS`] that fuse on `engine`, and of
@@ -1079,7 +1077,11 @@ fn a_pdl_write_by_index_after_a_fused_return_lands_at_the_operand_address() {
         assert_eq!(rtl.pdl[prefetched as usize], want, "operand bit {operand}");
         // The third push, the second word's first halfword's.
         let pushed = if operand { AP + 1 } else { SENTINEL };
-        assert_eq!((micro.pdl[3], rtl.pdl[3]), (SENTINEL, pushed), "operand bit {operand}");
+        assert_eq!(
+            (support::low(micro.pdl[3]), support::low(rtl.pdl[3])),
+            (SENTINEL, pushed),
+            "operand bit {operand}"
+        );
         let (mut a, mut b) = (micro.pdl, rtl.pdl);
         for at in [prefetched as usize, 3] {
             (a[at], b[at]) = (0, 0);
@@ -1099,7 +1101,7 @@ fn a_pdl_write_by_index_after_a_fused_return_lands_at_the_operand_address() {
 #[test]
 fn destination_5_does_not_load_the_base_copies() {
     let (stale_localp, stale_ap) = (0o1111, 0o2222);
-    let (new_localp, new_ap) = (0o1234, 0o4321);
+    let (new_localp, new_ap): (u32, u32) = (0o1234, 0o4321);
     let program = |and_write: bool| {
         let mut prom = vec![
             Insn::new(ALU | SETA | a_src(0o51) | fd(5)),
@@ -1115,13 +1117,13 @@ fn destination_5_does_not_load_the_base_copies() {
         m.geometry = Geometry::QUUX;
         m.load_prom(&prom);
         support::prom_program_in_ram(&mut m);
-        m.amem[0o51] = enabled();
+        m.amem[0o51] = u64::from(enabled());
         m.amem[0o52] = 0o7777;
-        m.amem[0o53] = new_localp;
-        m.amem[0o54] = new_ap;
-        m.amem[LOCALP_AT as usize] = LOCALP;
-        m.mmem[AP_AT as usize] = AP;
-        m.amem[AP_AT as usize] = AP;
+        m.amem[0o53] = new_localp.into();
+        m.amem[0o54] = new_ap.into();
+        m.amem[LOCALP_AT as usize] = u64::from(LOCALP);
+        m.mmem[AP_AT as usize] = u64::from(AP);
+        m.amem[AP_AT as usize] = u64::from(AP);
         m.macro_dispatch.localp = stale_localp;
         m.macro_dispatch.ap = stale_ap;
         m
@@ -1138,7 +1140,7 @@ fn destination_5_does_not_load_the_base_copies() {
             assert_eq!(d.register, enabled(), "{name}: destination 5 written");
             // The M write at `M-AP` writes the shadowing A word too.
             let a = if and_write { new_ap } else { 0o7777 };
-            assert_eq!(m.amem[AP_AT as usize], a, "{name}: the A write made");
+            assert_eq!(support::low(m.amem[AP_AT as usize]), a, "{name}: the A write made");
             assert_eq!((d.localp, d.ap), want, "{name}, A-LOCALP and M-AP written {and_write}");
         }
     }
@@ -1413,7 +1415,7 @@ fn invalidators(m: &mut Machine) {
     for k in 0..3 {
         m.main[0o1000 + k] = m.main[CODE as usize + k];
     }
-    m.main[0o1001] = NEW_WORD;
+    m.main[0o1001] = u64::from(NEW_WORD);
 }
 
 /// The handlers the invalidation programs run, and their words.
@@ -1456,11 +1458,11 @@ fn handlers(m: &mut Machine) {
     for (k, e) in m.macro_dispatch.entries.iter_mut().enumerate() {
         *e = m.dmem[OPDTB as usize + (k >> 3 & 0o37)];
     }
-    m.amem[0o60] = NEW_WORD;
-    m.amem[0o61] = CODE + 1;
-    m.amem[0o62] = CODE;
+    m.amem[0o60] = u64::from(NEW_WORD);
+    m.amem[0o61] = u64::from(CODE + 1);
+    m.amem[0o62] = u64::from(CODE);
     m.amem[0o63] = 1 << 25 | 1 << 23 | 1 << 22 | 2;
-    m.amem[0o64] = (CODE + 1) * 4 + 2;
+    m.amem[0o64] = u64::from((CODE + 1) * 4 + 2);
 }
 
 /// A transfer's write of [`NEW_WORD`] over the program's second word, as
@@ -1468,13 +1470,13 @@ fn handlers(m: &mut Machine) {
 /// raising the flag that invalidates the cache (`tests/block_disk.rs`,
 /// `tests/quux_file_device.rs` hold that both raise it).
 fn transfer(m: &mut Machine) {
-    m.main[CODE as usize + 1] = NEW_WORD;
+    m.main[CODE as usize + 1] = u64::from(NEW_WORD);
     m.dma_written = true;
 }
 
 /// The same write without the flag: what a missed invalidation leaves.
 fn unflagged(m: &mut Machine) {
-    m.main[CODE as usize + 1] = NEW_WORD;
+    m.main[CODE as usize + 1] = u64::from(NEW_WORD);
 }
 
 /// **A store to the buffered word, a map write, a transfer and a write of
@@ -1549,7 +1551,7 @@ fn the_page_reach_takes_the_next_line_and_never_the_next_page() {
     ];
     fn touch_next_line(m: &mut Machine) {
         handlers(m);
-        m.amem[0o65] = CODE + 4;
+        m.amem[0o65] = u64::from(CODE + 4);
     }
     fn touch_next_page(m: &mut Machine) {
         handlers(m);
@@ -1709,7 +1711,7 @@ fn a_call_after_a_fused_return_returns_to_the_handler() {
     };
     for ((name, n_off, m_off), (_, n_on, m_on)) in off.iter().zip(on.iter()) {
         assert_eq!(counts(m_off)[..6], COUNTS, "{name}");
-        assert_eq!(m_off.mmem[0o27], COUNTS[0], "{name}: the call after every opcode 1");
+        assert_eq!(m_off.mmem[0o27], COUNTS[0].into(), "{name}: the call after every opcode 1");
         let (a, b) = (live(m_on), live(m_off));
         assert_eq!(state(&a), state(&b), "{name}: the same live state");
         assert_eq!(m_on.macro_dispatch.fused, fused_on(name, fuses), "{name}");

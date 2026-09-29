@@ -399,7 +399,7 @@ pub fn engine_vma<E: Engine>(e: &mut E) -> u32 {
     for _ in 0..2 {
         e.step().unwrap();
     }
-    e.machine().vma
+    e.machine().vma as u32
 }
 
 /// The boards these programs need as netlists: the processor, the

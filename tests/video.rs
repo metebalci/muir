@@ -68,8 +68,8 @@ fn the_buffer_is_40960_words() {
         m.l2_map[2] = rw | (last >> 8);
         m.l2_map[3] = rw | ((last + 1) >> 8);
         for (k, &(va, v)) in cases.iter().enumerate() {
-            m.mmem[1 + k] = va;
-            m.mmem[10 + k] = v;
+            m.mmem[1 + k] = u64::from(va);
+            m.mmem[10 + k] = u64::from(v);
         }
         m
     };
@@ -107,7 +107,7 @@ fn a_pixel_is_where_the_cadr_would_put_it_at_40_words_a_line() {
     assert_eq!((f.width, f.height, f.words_per_line), (1280, 1024, 40));
     assert_eq!(f.visible(), tv::VIDEO_WORDS as usize);
     assert!(f.shows_white(x, y), "a one shows white while black-on-white is off");
-    m.bus_write(MODE, tv::mode::BOW);
+    m.bus_write(MODE, tv::mode::BOW.into());
     assert!(!Frame::of(&m.tv).shows_white(x, y), "and black with it on");
 }
 
@@ -120,13 +120,13 @@ fn a_pixel_is_where_the_cadr_would_put_it_at_40_words_a_line() {
 fn it_keeps_black_on_white_and_never_interrupts() {
     let mut m = quux_with_video();
     m.bus_write(MODE, 0o377);
-    assert_eq!(m.bus_read(MODE), tv::mode::BOW);
+    assert_eq!(m.bus_read(MODE), tv::mode::BOW.into());
     for w in 1..8 {
         m.bus_write(MODE + w, 0o177777);
         assert_eq!(m.bus_read(MODE + w), 0, "word {:o}", 0o210 + w);
     }
     assert_eq!(m.bus_error, 0, "210-217 answer");
-    assert_eq!(m.bus_read(MODE), tv::mode::BOW, "the reserved words' writes went nowhere");
+    assert_eq!(m.bus_read(MODE), tv::mode::BOW.into(), "the reserved words' writes went nowhere");
     for r in 0..8 {
         m.bus_error = 0;
         assert_eq!(m.bus_read(tv::CONTROL + r), 0, "register {r} read");
@@ -135,8 +135,8 @@ fn it_keeps_black_on_white_and_never_interrupts() {
         m.bus_write(tv::CONTROL + r, 0);
         assert_eq!(m.bus_error, bus_error::XBUS_NXM, "register {r} written");
     }
-    assert_eq!(m.bus_read(MODE), tv::mode::BOW, "the old address wrote nothing");
-    m.bus_write(MODE, tv::mode::INTERRUPT_ENABLE | tv::mode::BOW);
+    assert_eq!(m.bus_read(MODE), tv::mode::BOW.into(), "the old address wrote nothing");
+    m.bus_write(MODE, (tv::mode::INTERRUPT_ENABLE | tv::mode::BOW).into());
     for ms in 0..1000u64 {
         m.ns = ms * 1_000_000;
         assert!(!m.xbus_interrupt(), "an interrupt at {ms} ms");
@@ -152,7 +152,8 @@ fn it_keeps_black_on_white_and_never_interrupts() {
 /// (`tests/quux_rtc.rs`), and 16 the number of interval timers, 3.
 #[test]
 fn the_feature_page_describes_the_main_screen() {
-    let words = |m: &mut Machine| [0o11, 0o12, 0o13, 0o16].map(|w| m.bus_read(PAGE + w));
+    let words =
+        |m: &mut Machine| [0o11, 0o12, 0o13, 0o16].map(|w| support::low(m.bus_read(PAGE + w)));
     let packed = |hi: u32, lo: u32| hi << 16 | lo;
     assert_eq!(words(&mut quux_with_video()), [packed(1280, 1024), packed(1, 40), 0o17000000, 3]);
     let mut m = Machine::new();
@@ -209,7 +210,7 @@ fn the_buffer_reaches_up_to_the_page() {
     m.bus_write(0o17777377, 0o707070);
     assert_eq!(m.bus_read(0o17777377), 0o707070, "the buffer's last word");
     assert_eq!(m.tv.read_buffer(261_887), 0o707070);
-    assert_eq!(m.bus_read(PAGE), Geometry::QUUX.machine_id.unwrap(), "the page's first");
+    assert_eq!(m.bus_read(PAGE), Geometry::QUUX.machine_id.unwrap().into(), "the page's first");
     assert_eq!(m.bus_error, 0);
 }
 

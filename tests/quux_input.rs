@@ -36,7 +36,7 @@ fn keys_come_out_in_order() {
     }
     assert_eq!(m.bus_read(KBD_STATUS) & 1, 1);
     assert!(m.quux_input.key_waiting(), "as the host sees it too");
-    let got: Vec<u32> = (0..4).map(|_| m.bus_read(KBD_DATA)).collect();
+    let got: Vec<u32> = (0..4).map(|_| support::low(m.bus_read(KBD_DATA))).collect();
     assert!(!m.quux_input.key_waiting());
     assert_eq!(got, [0o101, 0o1234567, 0o15, 0x12_3456]);
     assert_eq!(m.bus_read(KBD_STATUS) & 1, 0, "taken");
@@ -52,7 +52,7 @@ fn it_holds_64_and_says_when_it_overflowed() {
         m.quux_input.press(k);
     }
     assert_eq!(m.bus_read(KBD_STATUS) & 3, 3, "waiting, overflowed");
-    let got: Vec<u32> = (0..64).map(|_| m.bus_read(KBD_DATA)).collect();
+    let got: Vec<u32> = (0..64).map(|_| support::low(m.bus_read(KBD_DATA))).collect();
     assert_eq!(got, (0..64).collect::<Vec<u32>>(), "the first 64");
     assert_eq!(m.bus_read(KBD_STATUS) & 3, 2, "empty, still overflowed");
     m.bus_write(KBD_STATUS, 0);
@@ -89,16 +89,16 @@ fn each_interrupts_under_its_enable() {
     m.quux_input.mouse_move(1, 0);
     assert_eq!(m.bus_read(INTERRUPTS) & 0o60, 0, "neither enabled");
     assert!(!m.interrupt());
-    m.bus_write(KBD_STATUS, ENABLE);
+    m.bus_write(KBD_STATUS, ENABLE.into());
     assert_eq!(m.bus_read(INTERRUPTS) & 0o60, 0o20, "the keyboard");
     assert!(m.interrupt());
-    m.bus_write(MOUSE_STATUS, ENABLE);
+    m.bus_write(MOUSE_STATUS, ENABLE.into());
     assert_eq!(m.bus_read(INTERRUPTS) & 0o60, 0o60, "and the mouse");
     m.bus_read(KBD_DATA);
     m.bus_read(MOUSE);
     assert_eq!(m.bus_read(INTERRUPTS) & 0o60, 0, "both taken");
     assert!(!m.interrupt());
-    assert_eq!(m.bus_read(KBD_STATUS) & ENABLE, ENABLE, "the enable reads back");
+    assert_eq!(m.bus_read(KBD_STATUS) & u64::from(ENABLE), ENABLE.into(), "the enable reads back");
 }
 
 /// **The terminal's keyboard and mouse deliver into it** on QUUX, as they
@@ -153,7 +153,7 @@ fn a_checkpoint_keeps_it() {
     m.quux_input.press(0o101);
     m.quux_input.press(0o102);
     m.quux_input.mouse_move(7, 9);
-    m.bus_write(KBD_STATUS, ENABLE);
+    m.bus_write(KBD_STATUS, ENABLE.into());
     let mut w = Writer::new();
     m.quux_input.save(&mut w);
     let body = w.finish();

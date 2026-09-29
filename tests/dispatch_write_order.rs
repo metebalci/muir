@@ -146,13 +146,13 @@ fn board(m: &Machine, main: &[(u32, u32)]) -> Board {
     let (a, mm, pdl, spc, dm, l1, l2) =
         (ram(0, &c), ram(1, &c), ram(2, &c), ram(3, &c), ram(4, &c), ram(5, &c), ram(6, &c));
     for (k, &v) in m.amem.iter().enumerate() {
-        a.store(&mut c, k, v);
+        a.store(&mut c, k, support::low(v));
     }
     for (k, &v) in m.mmem.iter().enumerate() {
-        mm.store(&mut c, k, v);
+        mm.store(&mut c, k, support::low(v));
     }
     for (k, &v) in m.pdl[..pdl.len()].iter().enumerate() {
-        pdl.store(&mut c, k, v);
+        pdl.store(&mut c, k, support::low(v));
     }
     for (k, &v) in m.spc.iter().enumerate() {
         spc.store(&mut c, k, v & 0o1777777);
@@ -211,7 +211,7 @@ fn on_engine<E: Engine>(
 ) -> (End, Trace) {
     let mut m = m.clone();
     for &(p, w) in main {
-        m.main[p as usize] = w;
+        m.main[p as usize] = u64::from(w);
     }
     let mut e = new(m);
     boot(&mut e);
@@ -222,10 +222,10 @@ fn on_engine<E: Engine>(
     }
     let mm = e.machine();
     let end = End {
-        mmem: mm.mmem.to_vec(),
+        mmem: mm.mmem.iter().map(|&w| support::low(w)).collect(),
         dmem: mm.dmem.iter().map(|&w| w & 0o377777).collect(),
         l2: mm.l2_map[..1024].iter().map(|&w| w & 0o77777777).collect(),
-        pdl: mm.pdl[..1024].to_vec(),
+        pdl: mm.pdl[..1024].iter().map(|&w| support::low(w)).collect(),
         spc: mm.spc.iter().map(|&w| w & 0o1777777).collect(),
         spcptr: mm.spcptr,
     };
@@ -1105,7 +1105,7 @@ fn rtl_timed(
 ) -> (End, Vec<Row>) {
     let mut m = m.clone();
     for &(p, w) in main {
-        m.main[p as usize] = w;
+        m.main[p as usize] = u64::from(w);
     }
     let mut e = muir::rtl::Rtl::new(m);
     e.set_timing_model(timing);
@@ -1121,10 +1121,10 @@ fn rtl_timed(
     }
     let mm = e.machine();
     let end = End {
-        mmem: mm.mmem.to_vec(),
+        mmem: mm.mmem.iter().map(|&w| support::low(w)).collect(),
         dmem: mm.dmem.iter().map(|&w| w & 0o377777).collect(),
         l2: mm.l2_map[..1024].iter().map(|&w| w & 0o77777777).collect(),
-        pdl: mm.pdl[..1024].to_vec(),
+        pdl: mm.pdl[..1024].iter().map(|&w| support::low(w)).collect(),
         spc: mm.spc.iter().map(|&w| w & 0o1777777).collect(),
         spcptr: mm.spcptr,
     };
@@ -1376,7 +1376,7 @@ fn on_quux_a_checkpoint_inside_the_wait_keeps_the_old_word() {
     let (over, mut m, main, r) = longest.unwrap();
     assert!(over > 0, "a dispatch that waits for MD");
     for (p, w) in main {
-        m.main[p as usize] = w;
+        m.main[p as usize] = u64::from(w);
     }
     let mut e = Rtl::new(m);
     e.boot();
@@ -1394,7 +1394,7 @@ fn on_quux_a_checkpoint_inside_the_wait_keeps_the_old_word() {
     }
     assert!(inside > 0, "saved inside the wait ({}..{})", r.from, r.to);
     let mm = e.machine();
-    assert_eq!((mm.mmem[5], mm.spcptr), (AT_OLD_DPC, 1));
+    assert_eq!((support::low(mm.mmem[5]), mm.spcptr), (AT_OLD_DPC, 1));
 }
 
 /// **muir-fpga's three programs of this shape, on `rtl` under its grid,

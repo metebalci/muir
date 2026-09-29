@@ -54,15 +54,15 @@ fn unibus_reader(extra: u32) -> Rtl {
     m.amem[3] = 0o123456;
     m.l1_map[0] = 0;
     m.l2_map[0] = (1 << 23) | 0o37766;
-    m.mmem[1] = spy::A_LOW as u32;
-    m.mmem[2] = spy::STAT_LOW as u32;
+    m.mmem[1] = u64::from(spy::A_LOW as u32);
+    m.mmem[2] = u64::from(spy::STAT_LOW as u32);
     m.mmem[3] = 3;
-    m.mmem[4] = spy::FLAG_1 as u32;
+    m.mmem[4] = u64::from(spy::FLAG_1 as u32);
     // Virtual page 1 on the physical page the Unibus location `extra` is
     // reached through; the offset within it.
     let phys = busint::unibus_physical(extra);
     m.l2_map[1] = (1 << 23) | (phys >> 8);
-    m.mmem[5] = 0o400 | (phys & 0xff);
+    m.mmem[5] = u64::from(0o400 | (phys & 0xff));
     let mut prom = vec![filler(); 512];
     let mut at = 0;
     for (k, park) in [0o101, 0o102, 0o103, 0o104, 0o105].iter().enumerate() {
@@ -244,7 +244,7 @@ fn a_debug_cycle_takes_the_unibus_from_the_processor_and_gives_it_back() {
     assert_eq!(m.bus_error, 0, "every read of the processor's was answered");
     assert_eq!(m.amem[0o101], 0o123456, "A-LOW");
     assert_eq!(m.amem[0o102], 0, "STAT-LOW");
-    assert_eq!(m.amem[0o103], spy::OPEN_READ as u32, "register 3");
+    assert_eq!(m.amem[0o103], (spy::OPEN_READ as u32).into(), "register 3");
     assert_eq!(m.amem[0o104], 0xe900, "FLAG-1, running");
     assert_eq!(r.bus_cycles(), 5);
     assert!(r.busint().unwrap().holds_the_unibus(), "and the processor has the Unibus again");
@@ -422,7 +422,7 @@ fn a_debugger_halts_and_reads_the_debuggee_over_the_cable() {
     );
     assert!(pc > 0 && pc < 0o400, "a PC in the debuggee's PROM, past the boot: {pc:o}");
     assert_eq!(a.amem[0o102], pc + 1, "one step through the cable moved it by one");
-    assert_eq!(b.pc() as u32, pc + 1, "and that is where the debuggee stands");
+    assert_eq!(u64::from(b.pc() as u32), pc + 1, "and that is where the debuggee stands");
     assert_eq!(lashup.debugger.bus_cycles(), 15, "five DBG operations, three cycles each");
     assert!(!b.debug_busy(), "the cable is quiet");
 }
@@ -517,13 +517,13 @@ fn the_debugger_reads_a_running_debuggee_and_neither_loses_a_cycle() {
     assert_eq!(b.bus_error, 0, "every read of the debuggee's was answered");
     assert_eq!(b.amem[0o101], 0o123456, "A-LOW");
     assert_eq!(b.amem[0o102], 0, "STAT-LOW");
-    assert_eq!(b.amem[0o103], spy::OPEN_READ as u32, "register 3");
+    assert_eq!(b.amem[0o103], (spy::OPEN_READ as u32).into(), "register 3");
     assert_eq!(b.amem[0o104], 0xe900, "FLAG-1, running");
     assert_eq!(lashup.debuggee.bus_cycles(), 5);
 
     let a = lashup.debugger.machine();
     assert_eq!(a.bus_error, 0, "every read of the debugger's was answered");
-    let pcs: Vec<u32> = (0o101..=0o105).map(|k| a.amem[k]).collect();
+    let pcs: Vec<u32> = (0o101..=0o105).map(|k| a.amem[k] as u32).collect();
     eprintln!("the running debuggee's PC, five reads: {pcs:?}; steps {:?}", lashup.steps);
     assert!(pcs.windows(2).all(|w| w[1] > w[0]), "a climbing PC: {pcs:?}");
     assert!(pcs.iter().all(|&p| p < 512), "in the PROM: {pcs:?}");
@@ -599,7 +599,7 @@ fn the_cable_over_tcp_is_the_cable_in_process() {
     assert_eq!(am.amem[0o102], rm.amem[0o102], "and after the step");
     assert_eq!(am.amem[0o102], am.amem[0o101] + 1);
     assert_eq!(b.pc(), reference.debuggee.pc(), "the debuggee stands where the reference does");
-    assert_eq!(b.pc() as u32, am.amem[0o102]);
+    assert_eq!(u64::from(b.pc() as u32), am.amem[0o102]);
     assert!(!b.debug_busy(), "the cable is quiet");
 }
 

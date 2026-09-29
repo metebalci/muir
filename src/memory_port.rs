@@ -82,7 +82,7 @@ pub struct Prefetched {
     /// Its physical word address.
     pub phys: u32,
     /// The word, as main memory held it when it was taken.
-    pub word: u32,
+    pub word: crate::machine::Word,
 }
 
 /// What dropped the buffer.
@@ -234,7 +234,7 @@ impl MemoryPort {
     /// word is taken if the cache holds it in the same page, and the
     /// buffer is emptied otherwise. Called once the port has acknowledged
     /// the read, whose line the cache then holds.
-    pub fn read_answered(&mut self, main: &[u32]) {
+    pub fn read_answered(&mut self, main: &[crate::machine::Word]) {
         let Some(vaddr) = self.fetch_vaddr.take() else { return };
         let Some(reach) = self.prefetch else { return };
         if !self.memory || self.write {
@@ -453,7 +453,7 @@ impl MemoryPort {
         w.opt(*prefetched, |w, p| {
             w.u32(p.vaddr);
             w.u32(p.phys);
-            w.u32(p.word);
+            w.word(p.word);
         });
         w.opt(*fetch_vaddr, |w, v| w.u32(v));
     }
@@ -482,7 +482,7 @@ impl MemoryPort {
         // The word the prefetch held, and a fetch it is to look past; kept
         // only where the engine has the prefetch fitted.
         let prefetched = r.opt(|r| {
-            Ok(Prefetched { vaddr: r.u32()? & 0x00ff_ffff, phys: r.u32()?, word: r.u32()? })
+            Ok(Prefetched { vaddr: r.u32()? & 0x00ff_ffff, phys: r.u32()?, word: r.word()? })
         })?;
         let fetch_vaddr = r.opt(|r| Ok(r.u32()? & 0x00ff_ffff))?;
         if self.prefetch.is_some() {

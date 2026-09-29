@@ -251,7 +251,7 @@ fn the_boot_loads_microcode_323_off_the_pack() {
     // end of the boot is the PROM's leftovers and not the band's word.
     let at = want.amem_start as usize;
     for (i, w) in want.amem.iter().enumerate().skip(1) {
-        assert_eq!(m.amem[at + i], *w, "A memory word {i:o}");
+        assert_eq!(m.amem[at + i], (*w).into(), "A memory word {i:o}");
     }
     // The leftover is the last instruction the PROM runs: `((VMA-START-WRITE)
     // VMA)`, whose A destination field is zero, so `A-GARBAGE` catches the

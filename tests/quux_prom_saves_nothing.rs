@@ -106,7 +106,7 @@ fn to_six<E: Engine>(mut e: E, name: &str) -> Run {
                 microcycles: n,
                 stores: m.store_log.take().unwrap(),
                 transfers: m.block_disk.as_mut().unwrap().log.take().unwrap(),
-                pages: m.main[lo..=hi].to_vec(),
+                pages: m.main[lo..=hi].iter().map(|&w| support::low(w)).collect(),
             };
             run.stores.truncate(stores);
             run.transfers.truncate(transfers);

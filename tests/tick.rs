@@ -54,9 +54,9 @@ fn machine(geometry: Geometry, prom: &[Insn], period_us: u32, control: [u32; 2])
     m.load_prom(&words);
     m.geometry = geometry;
     support::prom_program_in_ram(&mut m);
-    m.mmem[1] = period_us;
-    m.mmem[2] = control[0];
-    m.mmem[4] = control[1];
+    m.mmem[1] = u64::from(period_us);
+    m.mmem[2] = u64::from(control[0]);
+    m.mmem[4] = u64::from(control[1]);
     m.mmem[6] = 1 << 27;
     m.l2_map[0] = (1 << 23) | (1 << 22);
     m
@@ -91,7 +91,8 @@ fn both(m: impl Fn() -> Machine, pc: u16, limit: u64) -> [(Option<u64>, Vec<u32>
     let mut r = Rtl::new(m());
     r.boot();
     let tr = until(&mut r, pc, limit, Rtl::ns);
-    [(te, e.machine().mmem.to_vec()), (tr, r.machine().mmem.to_vec())]
+    let low = |m: &Machine| m.mmem.iter().map(|&w| support::low(w)).collect::<Vec<u32>>();
+    [(te, low(e.machine())), (tr, low(r.machine()))]
 }
 
 /// Timer 0's control and period words on the register page, through
@@ -144,8 +145,8 @@ fn the_tick_is_timer_0_on_the_page_and_not_destination_3() {
     let m = || {
         let mut m = machine(Geometry::QUUX, &prom, 16_667, [TICK_ON, TICK_CLEAR]);
         m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
-        m.mmem[7] = TIMER_0_PERIOD;
-        m.mmem[8] = TIMER_0_CONTROL;
+        m.mmem[7] = u64::from(TIMER_0_PERIOD);
+        m.mmem[8] = u64::from(TIMER_0_CONTROL);
         m.mmem[10] = 0o401;
         m.mmem[11] = 0o403;
         m
@@ -194,7 +195,7 @@ fn source_15_counts_microseconds() {
         }
         let want = (e.machine().ns / 1000) as u32;
         assert!(
-            want.wrapping_sub(e.machine().mmem[1]) <= 1,
+            want.wrapping_sub(support::low(e.machine().mmem[1])) <= 1,
             "micro from {start}: {} against {want}",
             e.machine().mmem[1]
         );
@@ -209,7 +210,7 @@ fn source_15_counts_microseconds() {
                 r.step().unwrap();
             }
             let want = (r.ns() / 1000) as u32;
-            let got = r.machine().mmem[1];
+            let got = support::low(r.machine().mmem[1]);
             assert!(
                 want.wrapping_sub(got) <= 1,
                 "rtl {model:?} from {start}: {got} against {want}"

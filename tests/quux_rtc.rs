@@ -34,16 +34,16 @@ fn a_fixed_start_counts_machine_time() {
     let s = 1_700_000_000;
     let mut m = quux();
     m.rtc = Rtc::Counted { start: s, base_ns: m.ns };
-    assert_eq!(m.bus_read(RTC), s, "at power-on");
+    assert_eq!(m.bus_read(RTC), s.into(), "at power-on");
     m.ns = SECOND - 1;
-    assert_eq!(m.bus_read(RTC), s, "a nanosecond short of a second");
+    assert_eq!(m.bus_read(RTC), s.into(), "a nanosecond short of a second");
     m.ns = SECOND;
-    assert_eq!(m.bus_read(RTC), s + 1, "a second on");
+    assert_eq!(m.bus_read(RTC), (s + 1).into(), "a second on");
     m.ns = 3600 * SECOND + 5;
-    assert_eq!(m.bus_read(RTC), s + 3600, "an hour on");
+    assert_eq!(m.bus_read(RTC), (s + 3600).into(), "an hour on");
     // The base is the machine's clock when the RTC was set.
     m.rtc = Rtc::Counted { start: s, base_ns: 3600 * SECOND };
-    assert_eq!(m.bus_read(RTC), s, "from its own base");
+    assert_eq!(m.bus_read(RTC), s.into(), "from its own base");
     assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0, "nothing timed out");
 }
 
@@ -53,14 +53,14 @@ fn a_fixed_start_counts_machine_time() {
 fn it_holds_at_the_last_second() {
     let mut m = quux();
     m.rtc = Rtc::Counted { start: u32::MAX - 1, base_ns: 0 };
-    assert_eq!(m.bus_read(RTC), u32::MAX - 1);
+    assert_eq!(m.bus_read(RTC), (u32::MAX - 1).into());
     m.ns = SECOND;
-    assert_eq!(m.bus_read(RTC), u32::MAX, "the last second");
+    assert_eq!(m.bus_read(RTC), u32::MAX.into(), "the last second");
     m.ns = 1000 * SECOND;
-    assert_eq!(m.bus_read(RTC), u32::MAX, "held, not wrapped");
+    assert_eq!(m.bus_read(RTC), u32::MAX.into(), "held, not wrapped");
     m.rtc = Rtc::Counted { start: u32::MAX, base_ns: 0 };
     m.ns = u64::MAX;
-    assert_eq!(m.bus_read(RTC), u32::MAX, "at the machine clock's own end");
+    assert_eq!(m.bus_read(RTC), u32::MAX.into(), "at the machine clock's own end");
 }
 
 /// **Live, the default, is the host's clock at each read**: within a second
@@ -70,11 +70,11 @@ fn live_is_the_host_s_clock() {
     let mut m = quux();
     assert_eq!(m.rtc, Rtc::Host, "the default");
     let before = host_now();
-    let got = m.bus_read(RTC) as u64;
+    let got = m.bus_read(RTC);
     let after = host_now();
     assert!(before <= got && got <= after, "{before} <= {got} <= {after}");
     m.ns = 100_000 * SECOND;
-    let got = m.bus_read(RTC) as u64;
+    let got = m.bus_read(RTC);
     assert!(got.abs_diff(host_now()) <= 2, "{got}: the machine's time does not move it");
 }
 
@@ -87,13 +87,13 @@ fn a_write_changes_nothing() {
         m.rtc = rtc;
         m.ns = 7 * SECOND;
         let before = m.bus_read(RTC);
-        for v in [0, 1, !0, 0o1234567] {
-            m.bus_write(RTC, v);
+        for v in [0u32, 1, !0, 0o1234567] {
+            m.bus_write(RTC, v.into());
             let after = m.bus_read(RTC);
             if let Rtc::Counted { .. } = rtc {
                 assert_eq!(after, before, "{rtc:?}: written {v:o}");
             } else {
-                assert!((after as u64).abs_diff(host_now()) <= 2, "{rtc:?}: written {v:o}");
+                assert!(after.abs_diff(host_now()) <= 2, "{rtc:?}: written {v:o}");
             }
         }
         assert_eq!(m.rtc, rtc, "the setting is not the machine's to change");
@@ -198,9 +198,9 @@ fn both_engines_count_machine_seconds() {
     }
     for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
         assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0, "{name}: no timeout");
-        assert_eq!(m.amem[0o200], s, "{name}: the start, before the second");
+        assert_eq!(m.amem[0o200], s.into(), "{name}: the start, before the second");
         assert!(m.ns >= SECOND, "{name}: the machine's clock crossed its second: {} ns", m.ns);
         assert!(m.ns < 2 * SECOND, "{name}: and no more: {} ns", m.ns);
-        assert_eq!(m.amem[0o201], s + 1, "{name}: a second on, at {} ns", m.ns);
+        assert_eq!(m.amem[0o201], (s + 1).into(), "{name}: a second on, at {} ns", m.ns);
     }
 }

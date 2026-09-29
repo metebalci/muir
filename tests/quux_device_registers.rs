@@ -51,7 +51,7 @@ fn machine(prom: &[Insn], addresses: &[u32]) -> Machine {
     let rw = (1 << 23) | (1 << 22);
     for (k, &p) in addresses.iter().enumerate() {
         m.l2_map[1 + k] = rw | (p >> 8);
-        m.mmem[1 + k] = ((1 + k as u32) << 8) | (p & 0xff);
+        m.mmem[1 + k] = u64::from(((1 + k as u32) << 8) | (p & 0xff));
     }
     for k in 0..6 {
         m.amem[0o200 + k] = 0o525252;
@@ -98,7 +98,7 @@ const EMPTY: [u32; 9] = [
 #[test]
 fn a_register_takes_a_microcycle_more_than_nothing() {
     let (m, answered) = rtl(reading(&[REGISTER]));
-    assert_eq!(m.amem[0o200], Geometry::QUUX.machine_id.unwrap(), "the register's word");
+    assert_eq!(m.amem[0o200], Geometry::QUUX.machine_id.unwrap().into(), "the register's word");
     assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0);
     for empty in EMPTY {
         let (m, failed) = rtl(reading(&[empty]));
@@ -274,7 +274,11 @@ fn a_register_write_right_after_a_register_read_holds_md_no_longer() {
     assert_eq!(page, 80, "word 105 behind the read: MD read in two microcycles");
     let (e, _) = run(Micro::new(machine(&prom, &[REGISTER, WORD_105])), |_| 0);
     for (name, m) in [("rtl", r), ("micro", e)] {
-        assert_eq!(m.amem[0o200], Geometry::QUUX.machine_id.unwrap(), "{name}: the word read");
+        assert_eq!(
+            m.amem[0o200],
+            Geometry::QUUX.machine_id.unwrap().into(),
+            "{name}: the word read"
+        );
         assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0, "{name}: every cycle answered");
     }
 }

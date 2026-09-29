@@ -325,7 +325,7 @@ fn m10_the_band_ticks_and_says_it_is_system_2000() {
     }
     eprintln!("word 110 {c0:o}, word 111 {p0}; INTR-TICK ran {ticks} times in 10 s");
     assert_eq!(c0 & !2, 0o401, "word 110: timer 0 on, periodic, interrupt enable");
-    assert_eq!(p0, Timers::TICK_PERIOD_US, "word 111");
+    assert_eq!(p0, Timers::TICK_PERIOD_US.into(), "word 111");
     assert!(ticks.abs_diff(600) <= 1, "INTR-TICK ran {ticks} times in 10 s");
     // The mouse, a record.
     use muir::quux_input::KeyboardMouse;
@@ -396,8 +396,10 @@ fn reboot(
     eprintln!("listener after {ran} microcycles");
     let post = |m: &mut Machine, k: u32, words: [u32; 8]| {
         let slot = (CMD_RING + 8 * (k % 4)) as usize;
-        m.main[slot..slot + 8].copy_from_slice(&words);
-        m.bus_write(PAGE + 0o164, k + 1);
+        for (m, w) in m.main[slot..slot + 8].iter_mut().zip(words) {
+            *m = w.into();
+        }
+        m.bus_write(PAGE + 0o164, (k + 1).into());
     };
     use muir::file_device::op;
     let mut queue: Option<Queue> = None;
@@ -421,12 +423,12 @@ fn reboot(
         assert_eq!(m.bus_read(control(2)) & 3, 3, "timer 2 on and up");
         // The rings, the device enabled, and a file opened.
         m.main[CMD_RING as usize..NAME as usize + 8].fill(0);
-        m.bus_write(PAGE + 0o162, CMD_RING);
+        m.bus_write(PAGE + 0o162, CMD_RING.into());
         m.bus_write(PAGE + 0o163, 2);
-        m.bus_write(PAGE + 0o166, RESP_RING);
+        m.bus_write(PAGE + 0o166, RESP_RING.into());
         m.bus_write(PAGE + 0o167, 2);
         m.bus_write(FDEV_CONTROL, 1);
-        m.main[NAME as usize] = u32::from_le_bytes(*b"/big");
+        m.main[NAME as usize] = u64::from(u32::from_le_bytes(*b"/big"));
         post(m, 0, [1 | op::OPEN << 16, 0, NAME, 4, 0, 0, 0, 0]);
         let t = m.ns;
         while e.machine().file_device.response_producer() == 0 {
@@ -434,7 +436,7 @@ fn reboot(
             assert!(e.machine().ns < t + 1_000_000, "the OPEN answered, the machine halted");
         }
         let m = e.machine_mut();
-        let handle = m.main[RESP_RING as usize + 2];
+        let handle = support::low(m.main[RESP_RING as usize + 2]);
         assert_eq!(m.main[RESP_RING as usize] >> 16 & 0xff, 0, "the OPEN answered");
         m.bus_write(PAGE + 0o171, 1);
         // Queued at the PROM's step 4, below.
@@ -442,8 +444,10 @@ fn reboot(
             for k in 1..4 {
                 post(m, k, [(1 + k) | (op::READ << 16), handle, 0, 0, BUF, 65_536, 0, 0]);
             }
-            m.main[NAME as usize..NAME as usize + 2]
-                .copy_from_slice(&[u32::from_le_bytes(*b"/new"), u32::from_le_bytes(*b"dir\0")]);
+            m.main[NAME as usize..NAME as usize + 2].copy_from_slice(&[
+                u32::from_le_bytes(*b"/new").into(),
+                u32::from_le_bytes(*b"dir\0").into(),
+            ]);
             post(m, 4, [5 | op::CREATE_DIRECTORY << 16, 0, NAME, 7, 0, 0, 0, 0]);
         }));
     }
@@ -475,7 +479,8 @@ fn reboot(
         n
     };
     let m = e.machine_mut();
-    let at_6 = [m.bus_read(control(1)), m.bus_read(control(2)), m.bus_read(FDEV_STATUS)];
+    let at_6 =
+        [m.bus_read(control(1)), m.bus_read(control(2)), m.bus_read(FDEV_STATUS)].map(support::low);
     let answered = m.main[RESP_RING as usize..RESP_RING as usize + 32].iter().any(|&w| w != 0);
     let to_listener = to_a_new_listener(&mut e, limit, |e| {
         intrs += (e.executed() == Some(intr)) as u64;

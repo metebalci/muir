@@ -83,6 +83,23 @@ pub fn alu(m: u32, a: u32, aluf: u8, alumode: bool, cin: bool) -> Alu {
     Alu { f, aeqm: (f & 0xffff_ffff) == 0xffff_ffff }
 }
 
+/// `<39:32>` of a 40-bit word's ALU output, in place above bit 31
+/// (contract G2 §2.2): a logical function acts on them as on every other
+/// bit, the 74S181's table in logic mode, and an arithmetic one leaves M's,
+/// the array's arithmetic being the CADR's 33 bits over `<31:0>`. `m` and
+/// `a` are the whole words; a 32-bit word has nothing there and gives 0.
+pub fn alu_tag(m: u64, a: u64, aluf: u8, alumode: bool) -> u64 {
+    const TAG: u64 = 0xff << 32;
+    if alumode {
+        // The same table, slice by slice: the tag's bits are the low eight
+        // of the logic function of the tags.
+        let f = alu((m >> 32) as u32 & 0xff, (a >> 32) as u32 & 0xff, aluf, true, false).f;
+        (f & 0xff) << 32
+    } else {
+        m & TAG
+    }
+}
+
 /// What page ALUC4 puts on the ALU's control pins.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Control {

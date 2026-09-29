@@ -267,7 +267,7 @@ fn the_driver_reads_the_boards_pc_through_the_window() {
     );
     assert_eq!(
         read,
-        board.cpu.bus(&n, "PC", 14) as u32,
+        (board.cpu.bus(&n, "PC", 14) as u32).into(),
         "the PC read through the window is where the halted board stands"
     );
     assert!(run.debuggee.fault().is_none(), "and nothing at the window went unaccounted for");

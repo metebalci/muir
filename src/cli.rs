@@ -3261,7 +3261,9 @@ impl Hold {
                 // cells and the same address picks the board.
                 Ok(Some(Command::Mem { from, words })) => {
                     let m = e.machine();
-                    let read = |a: usize| m.main.get(a).copied();
+                    // `<31:0>` of each word: a 40-bit word is no machine's
+                    // the executables run (contract G2 §8.1).
+                    let read = |a: usize| m.main.get(a).map(|&w| w as u32);
                     match crate::prompt::main_dump(from, words, m.main.len(), read) {
                         Ok(dump) => print!("{dump}"),
                         Err(what) => println!("prompt: {what}"),
@@ -3758,9 +3760,10 @@ fn say_registers<E: Engine>(e: &E) -> String {
     crate::prompt::registers(&[
         ("PC", e.pc() as u32),
         ("OPC", m.opc as u32),
-        ("Q", m.q),
-        ("VMA", m.vma),
-        ("MD", m.md),
+        // `<31:0>`: a 40-bit word is no machine's the executables run.
+        ("Q", m.q as u32),
+        ("VMA", m.vma as u32),
+        ("MD", m.md as u32),
         ("LC", m.lc),
         ("SPCPTR", m.spcptr as u32),
         ("PDLPTR", m.pdl_pointer as u32),
@@ -3805,12 +3808,15 @@ fn say_memory(
     from: usize,
     words: Option<usize>,
 ) -> Result<String, String> {
-    let all: &[u32] = match memory {
-        Memory::Amem => &m.amem,
-        Memory::Mmem => &m.mmem,
-        Memory::Dmem => &m.dmem,
-        Memory::Pdl => &m.pdl,
-        Memory::Spc => &m.spc,
+    // A, M and the PDL buffer by `<31:0>`: a 40-bit word is no machine's
+    // the executables run (contract G2 §8.1).
+    let low = |w: &[crate::machine::Word]| w.iter().map(|&w| w as u32).collect::<Vec<u32>>();
+    let all: Vec<u32> = match memory {
+        Memory::Amem => low(&m.amem),
+        Memory::Mmem => low(&m.mmem),
+        Memory::Dmem => m.dmem.to_vec(),
+        Memory::Pdl => low(&m.pdl),
+        Memory::Spc => m.spc.to_vec(),
     };
     if from >= all.len() {
         return Err(format!(

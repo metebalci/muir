@@ -243,7 +243,7 @@ impl DebugProgram {
     fn constant(&mut self, v: u32) -> u64 {
         let k = self.next_m;
         assert!(k < 32, "out of M memory for constants");
-        self.m.mmem[k] = v;
+        self.m.mmem[k] = v.into();
         self.next_m += 1;
         k as u64
     }

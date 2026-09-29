@@ -88,38 +88,38 @@ fn the_interface_answers_its_own_registers() {
     m.bus_error = muir::machine::bus_error::XBUS_NXM;
     assert_eq!(
         m.bus_read(error),
-        (0xff00 | muir::machine::bus_error::XBUS_NXM | error_status::NOT_FREE) as u32
+        ((0xff00 | muir::machine::bus_error::XBUS_NXM | error_status::NOT_FREE) as u32).into()
     );
     m.bus_write(error, 0);
     assert_eq!(m.bus_error, 0, "the write clears the status bits");
     assert_eq!(
         m.bus_read(error),
-        (0xff00 | error_status::NOT_FREE) as u32,
+        ((0xff00 | error_status::NOT_FREE) as u32).into(),
         "the interface is busy with the read"
     );
     m.bus_write(error, 0o200);
     assert!(m.write_through, "bit 7 of the data turns write-through mode on");
     assert_eq!(
         m.bus_read(error),
-        (0xff00 | error_status::NOT_FREE | error_status::WRITE_THROUGH) as u32
+        ((0xff00 | error_status::NOT_FREE | error_status::WRITE_THROUGH) as u32).into()
     );
 
     // The interrupt status: each half of the register is written from its
     // own address, and only its own bits move.
     assert_eq!(
         m.bus_read(control),
-        interrupt_status::LOCAL_ENABLE as u32,
+        (interrupt_status::LOCAL_ENABLE as u32).into(),
         "local mode, nothing pending"
     );
     m.bus_write(control, 0o177777);
     assert_eq!(
         m.bus_read(control),
-        (interrupt_status::CONTROL_MASK | interrupt_status::LOCAL_ENABLE) as u32
+        ((interrupt_status::CONTROL_MASK | interrupt_status::LOCAL_ENABLE) as u32).into()
     );
     m.bus_write(control2, 0o177777);
     assert_eq!(
         m.bus_read(control),
-        !interrupt_status::XBUS_INTR as u32,
+        (!interrupt_status::XBUS_INTR as u32).into(),
         "both halves written: every bit but the live one, which the disk is not raising"
     );
     assert!(m.interrupt(), "bit 15 written is a simulated Unibus interrupt");
@@ -881,8 +881,8 @@ fn a_bus_reset_through_the_interface_reaches_the_model_boards() {
     let (n, mut c) = interface();
     let mut m = Machine::new();
     m.ns = 1_000;
-    m.bus_write(CONTROL, mode::INTERRUPT_ENABLE | mode::VERT);
-    m.bus_write(muir::busint::unibus_physical(ioboard::CSR), csr::WRITABLE as u32);
+    m.bus_write(CONTROL, (mode::INTERRUPT_ENABLE | mode::VERT).into());
+    m.bus_write(muir::busint::unibus_physical(ioboard::CSR), (csr::WRITABLE as u32).into());
     m.bus_write(REGS, 1 << 11);
     assert!(m.tv.interrupt(1_000) && m.disk.interrupt());
     assert_eq!(m.ioboard.csr() & csr::WRITABLE, csr::WRITABLE);
@@ -905,7 +905,7 @@ fn a_bus_reset_through_the_interface_reaches_the_model_boards() {
     c.drive(ubreset, Level::High);
     c.settle();
     buses.tick(&mut c, 4_000);
-    buses.machine.bus_write(CONTROL, mode::INTERRUPT_ENABLE | mode::VERT);
+    buses.machine.bus_write(CONTROL, (mode::INTERRUPT_ENABLE | mode::VERT).into());
     buses.tick(&mut c, 5_000);
     assert!(buses.machine.tv.interrupt(5_000));
 }
@@ -938,8 +938,8 @@ fn the_processors_own_bus_reset_reaches_the_model_boards() {
         prom[5] = Insn::new(ALU | SETA | a_src(3) | INTERRUPT_CONTROL);
         m.load_prom(&prom);
         m.ns = 1_000;
-        m.bus_write(CONTROL, mode::INTERRUPT_ENABLE | mode::VERT);
-        m.bus_write(muir::busint::unibus_physical(ioboard::CSR), csr::WRITABLE as u32);
+        m.bus_write(CONTROL, (mode::INTERRUPT_ENABLE | mode::VERT).into());
+        m.bus_write(muir::busint::unibus_physical(ioboard::CSR), (csr::WRITABLE as u32).into());
         m.bus_write(REGS, 1 << 11);
         assert!(m.tv.interrupt(1_000) && m.disk.interrupt());
         assert_eq!(m.ioboard.csr() & csr::WRITABLE, csr::WRITABLE);

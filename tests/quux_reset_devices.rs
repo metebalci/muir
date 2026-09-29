@@ -100,13 +100,13 @@ fn make_busy(m: &mut Machine) {
     m.ns += 100_000;
     // The file device: rings, enabled under its interrupt enable, an OPEN
     // queued, due some 20 us on.
-    m.bus_write(PAGE + 0o162, CMD_RING);
+    m.bus_write(PAGE + 0o162, CMD_RING.into());
     m.bus_write(PAGE + 0o163, 2);
-    m.bus_write(PAGE + 0o166, RESP_RING);
+    m.bus_write(PAGE + 0o166, RESP_RING.into());
     m.bus_write(PAGE + 0o167, 2);
     m.bus_write(FDEV_CONTROL, 0x101);
     m.main[CMD_RING as usize..CMD_RING as usize + 8].copy_from_slice(&[
-        0o101 | muir::file_device::op::OPEN << 16,
+        (0o101 | muir::file_device::op::OPEN << 16).into(),
         0,
         0o120000,
         1,
@@ -115,7 +115,7 @@ fn make_busy(m: &mut Machine) {
         0,
         0,
     ]);
-    m.main[0o120000] = b'/' as u32;
+    m.main[0o120000] = u64::from(b'/' as u32);
     m.bus_write(FDEV_CMD_PROD, 1);
     // What is up: timer 1, the keyboard and the mouse; block-disk is not
     // yet done.
@@ -143,10 +143,10 @@ fn m5_word_104_reads_0() {
 /// whole machine's state is what it was.
 #[test]
 fn m5_a_write_with_bit_0_clear_changes_nothing() {
-    for v in [0, !1] {
+    for v in [0u32, !1] {
         let mut m = busy();
         let before = state(&m);
-        m.bus_write(RESET_DEVICES, v);
+        m.bus_write(RESET_DEVICES, v.into());
         assert!(state(&m) == before, "a write of {v:o} changed the machine");
     }
 }
@@ -251,7 +251,7 @@ fn engine_machine(prom: &[Insn], m_words: &[(usize, u32)]) -> Machine {
     m.l2_map[0] = (1 << 23) | (1 << 22);
     m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
     for &(k, v) in m_words {
-        m.mmem[k] = v;
+        m.mmem[k] = u64::from(v);
     }
     m
 }
@@ -327,7 +327,7 @@ fn m5_sintr_at_the_reset_s_edge_still_has_what_it_resets() {
             r.step().unwrap();
         }
         assert_eq!(
-            r.machine().mmem[5] == !0,
+            r.machine().mmem[5] == 0xffff_ffff,
             taken,
             "reset {reset}, the jump {jump_after} microcycles after the write's edge"
         );

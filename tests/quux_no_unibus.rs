@@ -61,7 +61,7 @@ fn every_unibus_address_is_nothing_on_quux() {
 #[test]
 fn the_window_s_last_page_is_the_register_page() {
     let mut m = quux();
-    assert_eq!(m.bus_read(0o17777400), Geometry::QUUX.machine_id.unwrap());
+    assert_eq!(m.bus_read(0o17777400), Geometry::QUUX.machine_id.unwrap().into());
     assert_eq!(m.bus_error, 0, "the page answers");
     assert_eq!(m.bus_read(0o17777377), 0);
     assert_eq!(m.bus_error, bus_error::XBUS_NXM, "the word below it is nothing there");
@@ -121,7 +121,7 @@ fn both_engines_time_out_on_the_unibus_window() {
         for (k, u) in [0o764120u32, 0o764140].into_iter().enumerate() {
             let p = unibus_physical(u);
             m.l2_map[1 + k] = rw | (p >> 8);
-            m.mmem[1 + k] = ((1 + k as u32) << 8) | (p & 0xff);
+            m.mmem[1 + k] = u64::from(((1 + k as u32) << 8) | (p & 0xff));
         }
         m.amem[0o200] = 0o525252;
         m.amem[0o201] = 0o525252;

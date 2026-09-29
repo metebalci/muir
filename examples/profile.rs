@@ -355,7 +355,9 @@ fn reads(i: Insn, w: (u16, bool)) -> bool {
 fn meters(e: &impl Engine, syms: &Symbols) -> Vec<u32> {
     METERS
         .iter()
-        .map(|m| syms.address(Space::AMem, m).map(|a| e.machine().amem[a as usize]).unwrap_or(0))
+        .map(|m| {
+            syms.address(Space::AMem, m).map(|a| e.machine().amem[a as usize] as u32).unwrap_or(0)
+        })
         .collect()
 }
 
@@ -508,7 +510,7 @@ fn run<E: Profiled>(
                     let half = if lc & 2 != 0 { word & 0xffff } else { word >> 16 } as u16;
                     *ops.entry((half, handler, now - then)).or_default() += 1;
                 }
-                last = Some((now, e.machine().mmem[0o31], e.lc(), None));
+                last = Some((now, e.machine().mmem[0o31] as u32, e.lc(), None));
                 since_dispatch = 0;
             } else if since_dispatch == 2
                 && let Some((_, word, lc, h @ None)) = last.as_mut()

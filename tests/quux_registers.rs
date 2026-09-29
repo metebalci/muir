@@ -91,7 +91,10 @@ fn raise(source: usize) -> (Machine, &'static str) {
         }
         // The Chaosnet interface's transmit done, under its enable.
         6 => {
-            m.bus_write(PAGE + 0o140, (csr::CLEAR_TRANSMITTER | csr::TRANSMIT_INT_ENABLE) as u32);
+            m.bus_write(
+                PAGE + 0o140,
+                ((csr::CLEAR_TRANSMITTER | csr::TRANSMIT_INT_ENABLE) as u32).into(),
+            );
             "network"
         }
         // A response waiting, under 160 <8>: a command of no opcode, which
@@ -168,8 +171,8 @@ fn word_101_is_the_error_status() {
     assert_eq!(m.bus_read(ERRORS), 0);
     m.bus_read(0o17376000); // an empty Xbus I/O address
     assert_ne!(m.bus_error & bus_error::XBUS_NXM, 0, "the read timed out");
-    assert_eq!(m.bus_read(ERRORS), m.bus_error as u32);
-    assert_ne!(m.bus_read(ERRORS) & bus_error::XBUS_NXM as u32, 0);
+    assert_eq!(m.bus_read(ERRORS), (m.bus_error as u32).into());
+    assert_ne!(m.bus_read(ERRORS) & u64::from(bus_error::XBUS_NXM as u32), 0);
     m.bus_write(ERRORS, 0);
     assert_eq!((m.bus_error, m.bus_read(ERRORS)), (0, 0), "cleared");
 }
@@ -371,9 +374,12 @@ fn every_word_of_the_page() {
     for (w, &(class, want)) in t.iter().enumerate() {
         let got = m.bus_read(PAGE + w as u32);
         if want == POWER_ON_103 {
-            assert!(got >= before && got <= before + 5, "word 103 is the host's time: {got}");
+            assert!(
+                got >= before.into() && got <= (before + 5).into(),
+                "word 103 is the host's time: {got}"
+            );
         } else {
-            assert_eq!(got, want, "word {w:o} ({class:?}) at power-on");
+            assert_eq!(got, want.into(), "word {w:o} ({class:?}) at power-on");
         }
         assert_eq!(m.bus_error, 0, "word {w:o} answered");
     }
@@ -441,10 +447,10 @@ fn program(m: &mut Machine, words: &[u32]) {
     let rw = (1 << 23) | (1 << 22);
     for (k, &p) in words.iter().enumerate() {
         m.l2_map[1 + k] = rw | (p >> 8);
-        m.mmem[1 + k] = ((1 + k as u32) << 8) | (p & 0xff);
+        m.mmem[1 + k] = u64::from(((1 + k as u32) << 8) | (p & 0xff));
     }
     m.l2_map[30] = rw | (ERRORS >> 8);
-    m.mmem[30] = (30 << 8) | (ERRORS & 0xff);
+    m.mmem[30] = u64::from((30 << 8) | (ERRORS & 0xff));
     for k in 0..words.len() {
         m.amem[0o200 + k] = 0o525252;
         m.amem[0o240 + k] = 0o525252;
@@ -484,7 +490,7 @@ fn both_engines_read_every_word_through_the_map() {
                 let (got, errors) = (m.amem[0o200 + k], m.amem[0o240 + k]);
                 let want = t[w as usize].1;
                 if want != POWER_ON_103 {
-                    assert_eq!(got, want, "{name}: word {w:o}");
+                    assert_eq!(got, want.into(), "{name}: word {w:o}");
                 }
                 assert_eq!(errors, 0, "{name}: word {w:o} set word 101");
             }
@@ -513,7 +519,7 @@ fn the_old_addresses_answer_nothing() {
         assert_eq!(m.bus_error, bus_error::XBUS_NXM, "{a:o}: a read sets <0>");
         m.bus_error = 0;
         let s = state(&m);
-        m.bus_write(a, !0);
+        m.bus_write(a, 0xffff_ffff);
         assert_eq!(m.bus_error, bus_error::XBUS_NXM, "{a:o}: a write sets <0>");
         m.bus_error = 0;
         assert!(state(&m) == s, "{a:o}: a write changed the machine");
@@ -533,7 +539,11 @@ fn both_engines_find_nothing_at_the_old_addresses() {
         for (name, m, ns) in on_both(m) {
             for (k, &a) in batch.iter().enumerate() {
                 assert_eq!(m.amem[0o200 + k], 0, "{name}: {a:o} reads 0");
-                assert_eq!(m.amem[0o240 + k], bus_error::XBUS_NXM as u32, "{name}: {a:o}: 101");
+                assert_eq!(
+                    m.amem[0o240 + k],
+                    (bus_error::XBUS_NXM as u32).into(),
+                    "{name}: {a:o}: 101"
+                );
             }
             assert!(ns < 4_250 * batch.len() as u64, "{name}: {ns} ns, a timeout");
         }

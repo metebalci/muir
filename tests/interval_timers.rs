@@ -81,8 +81,8 @@ fn quux() -> Machine {
 /// Timer `k`'s control word and word 100's bit for it, at `ns`.
 fn look(m: &mut Machine, k: usize, ns: u64) -> (u32, bool) {
     m.ns = ns;
-    let w = m.bus_read(control(k));
-    (w, m.bus_read(INTERRUPTS) & BIT[k] != 0)
+    let w = support::low(m.bus_read(control(k)));
+    (w, m.bus_read(INTERRUPTS) & u64::from(BIT[k]) != 0)
 }
 
 /// Whether timer `k`'s flag reads up at `ns`, in its word and, under its
@@ -98,7 +98,7 @@ fn up(m: &mut Machine, k: usize, ns: u64) -> bool {
 
 fn write(m: &mut Machine, at: u64, word: u32, v: u32) {
     m.ns = at;
-    m.bus_write(word, v);
+    m.bus_write(word, v.into());
 }
 
 /// **M1, periodic, each timer**: turned on by a write of its control word
@@ -117,7 +117,7 @@ fn m1_a_periodic_timer_rises_every_period_on_its_start_s_grid() {
         assert_eq!(m.bus_read(period(k)), 50, "timer {k}: the period reads back");
         let (t0, p) = (7_003, 50 * US);
         write(&mut m, t0, control(k), ON | IE);
-        assert_eq!(m.bus_read(control(k)), ON | IE, "timer {k}: on, periodic, enabled");
+        assert_eq!(m.bus_read(control(k)), (ON | IE).into(), "timer {k}: on, periodic, enabled");
         for n in 1..=3 {
             assert!(!up(&mut m, k, t0 + n * p - 1), "timer {k}: rise {n} early");
             assert!(up(&mut m, k, t0 + n * p), "timer {k}: rise {n} at t0 + {n} periods");
@@ -134,7 +134,11 @@ fn m1_a_periodic_timer_rises_every_period_on_its_start_s_grid() {
         // rise is a period after the write.
         let t1 = t0 + 6 * p + 333;
         write(&mut m, t1, period(k), 30);
-        assert_eq!(m.bus_read(control(k)) & FLAG, 0, "timer {k}: the period write took it down");
+        assert_eq!(
+            m.bus_read(control(k)) & u64::from(FLAG),
+            0,
+            "timer {k}: the period write took it down"
+        );
         assert!(!up(&mut m, k, t1 + 30 * US - 1));
         assert!(up(&mut m, k, t1 + 30 * US), "timer {k}: a period after the period write");
         // Off takes the flag down.
@@ -170,13 +174,17 @@ fn m2_a_one_shot_timer_rises_once() {
         write(&mut m, 0, period(k), 40);
         let t0 = 2_001;
         write(&mut m, t0, control(k), ON | ONE_SHOT | IE);
-        assert_eq!(m.bus_read(control(k)), ON | ONE_SHOT | IE, "timer {k}: one-shot, armed");
+        assert_eq!(
+            m.bus_read(control(k)),
+            (ON | ONE_SHOT | IE).into(),
+            "timer {k}: one-shot, armed"
+        );
         assert!(!up(&mut m, k, t0 + p - 1));
         assert!(up(&mut m, k, t0 + p), "timer {k}: the one rise");
         write(&mut m, t0 + p + 1, control(k), ON | ONE_SHOT | IE | CLEAR);
         assert_eq!(
             m.bus_read(control(k)),
-            ON | ONE_SHOT | IE,
+            (ON | ONE_SHOT | IE).into(),
             "timer {k}: risen and cleared reads as armed"
         );
         for n in [2, 3, 10] {
@@ -191,7 +199,11 @@ fn m2_a_one_shot_timer_rises_once() {
             assert!(up(&mut m, k, t0 + n * p), "timer {k}: up at {n} periods");
         }
         write(&mut m, t0 + 3 * p + 1, control(k), ON | IE | CLEAR);
-        assert_eq!(m.bus_read(control(k)), ON | ONE_SHOT | IE, "timer {k}: a write keeps the mode");
+        assert_eq!(
+            m.bus_read(control(k)),
+            (ON | ONE_SHOT | IE).into(),
+            "timer {k}: a write keeps the mode"
+        );
         for n in [4, 5, 10] {
             assert!(!up(&mut m, k, t0 + n * p), "timer {k}: left up, a rise at {n} periods");
         }
@@ -203,7 +215,7 @@ fn m2_a_one_shot_timer_rises_once() {
         assert!(up(&mut m, k, t0 + p));
         let t1 = t0 + p + 77;
         write(&mut m, t1, period(k), 20);
-        assert_eq!(m.bus_read(control(k)) & FLAG, 0, "timer {k}: taken down");
+        assert_eq!(m.bus_read(control(k)) & u64::from(FLAG), 0, "timer {k}: taken down");
         assert!(!up(&mut m, k, t1 + 20 * US - 1));
         assert!(up(&mut m, k, t1 + 20 * US), "timer {k}: a period after the period write");
         write(&mut m, t1 + 20 * US, control(k), ON | IE | CLEAR);
@@ -215,23 +227,23 @@ fn m2_a_one_shot_timer_rises_once() {
         write(&mut m, 0, period(k), 40);
         write(&mut m, t0, control(k), ON | IE);
         write(&mut m, t0 + p / 2, control(k), ON | ONE_SHOT | IE);
-        assert_eq!(m.bus_read(control(k)) & ONE_SHOT, 0, "timer {k}: still periodic");
+        assert_eq!(m.bus_read(control(k)) & u64::from(ONE_SHOT), 0, "timer {k}: still periodic");
         assert!(up(&mut m, k, t0 + p));
         write(&mut m, t0 + p, control(k), ON | ONE_SHOT | IE | CLEAR);
         assert!(!up(&mut m, k, t0 + 2 * p - 1));
         assert!(up(&mut m, k, t0 + 2 * p), "timer {k}: periodic still, at 2 periods");
         // Off, then on with <2>: one-shot from the new start.
         write(&mut m, t0 + 2 * p, control(k), IE);
-        assert_eq!(m.bus_read(control(k)), IE, "timer {k}: off keeps periodic");
+        assert_eq!(m.bus_read(control(k)), IE.into(), "timer {k}: off keeps periodic");
         let t2 = t0 + 2 * p + 9;
         write(&mut m, t2, control(k), ON | ONE_SHOT | IE);
-        assert_eq!(m.bus_read(control(k)), ON | ONE_SHOT | IE, "timer {k}: one-shot now");
+        assert_eq!(m.bus_read(control(k)), (ON | ONE_SHOT | IE).into(), "timer {k}: one-shot now");
         assert!(up(&mut m, k, t2 + p));
         write(&mut m, t2 + p, control(k), ON | IE | CLEAR);
         assert!(!up(&mut m, k, t2 + 2 * p), "timer {k}: one-shot, once");
         // Off keeps the mode until the next turn-on.
         write(&mut m, t2 + 3 * p, control(k), 0);
-        assert_eq!(m.bus_read(control(k)), ONE_SHOT, "timer {k}: off, the mode as it was");
+        assert_eq!(m.bus_read(control(k)), ONE_SHOT.into(), "timer {k}: off, the mode as it was");
     }
 }
 
@@ -264,16 +276,18 @@ fn m3_a_write_touches_its_timer_alone() {
         write(&mut m, 0, period(2), 33);
         write(&mut m, 0, control(2), ON);
         m.ns = 15 * US;
-        assert_eq!(m.bus_read(INTERRUPTS), BIT[0], "timer 0 up");
+        assert_eq!(m.bus_read(INTERRUPTS), BIT[0].into(), "timer 0 up");
         m
     };
     for k in 0..3 {
         for (is_period, v) in WRITES {
             let mut m = setup();
             let before = m.timers.timer;
-            let words: Vec<u32> =
-                (0..3).flat_map(|j| [control(j), period(j)]).map(|w| m.bus_read(w)).collect();
-            m.bus_write(if is_period { period(k) } else { control(k) }, v);
+            let words: Vec<u32> = (0..3)
+                .flat_map(|j| [control(j), period(j)])
+                .map(|w| support::low(m.bus_read(w)))
+                .collect();
+            m.bus_write(if is_period { period(k) } else { control(k) }, v.into());
             for j in (0..3).filter(|&j| j != k) {
                 assert_eq!(
                     m.timers.timer[j],
@@ -281,8 +295,8 @@ fn m3_a_write_touches_its_timer_alone() {
                     "a write of {v:o} to timer {k}'s {} touched timer {j}",
                     if is_period { "period" } else { "control" }
                 );
-                assert_eq!(m.bus_read(control(j)), words[2 * j], "timer {j}'s control");
-                assert_eq!(m.bus_read(period(j)), words[2 * j + 1], "timer {j}'s period");
+                assert_eq!(m.bus_read(control(j)), words[2 * j].into(), "timer {j}'s control");
+                assert_eq!(m.bus_read(period(j)), words[2 * j + 1].into(), "timer {j}'s period");
             }
         }
     }
@@ -307,7 +321,7 @@ fn every_timer_on(m: &mut Machine) {
     // Up, all three.
     m.ns = at + 5 * US;
     for k in 0..3 {
-        assert_ne!(m.bus_read(control(k)) & FLAG, 0);
+        assert_ne!(m.bus_read(control(k)) & u64::from(FLAG), 0);
     }
 }
 
@@ -365,7 +379,7 @@ fn engine_machine(prom: &[Insn], m_words: &[(usize, u32)]) -> Machine {
     m.l2_map[0] = (1 << 23) | (1 << 22);
     m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
     for &(k, v) in m_words {
-        m.mmem[k] = v;
+        m.mmem[k] = u64::from(v);
     }
     m
 }
@@ -413,20 +427,24 @@ fn m6_a_timer_interrupts_under_its_interrupt_enable() {
                 }
                 assert!(e.now() > at + 20 * US, "{engine_name}: ran past the rise");
                 let m = e.machine_mut();
-                assert_eq!(m.mmem[5] == !0, want, "timer {k}, {v:o}, {engine_name}: condition 5");
+                assert_eq!(
+                    m.mmem[5] == 0xffff_ffff,
+                    want,
+                    "timer {k}, {v:o}, {engine_name}: condition 5"
+                );
                 let now = at + 100 * US;
                 m.ns = now;
                 assert_eq!(
-                    m.bus_read(control(k)) & FLAG != 0,
+                    m.bus_read(control(k)) & u64::from(FLAG) != 0,
                     v & ON != 0,
                     "timer {k}, {v:o}, {engine_name}: the flag, ungated, at {now}"
                 );
                 assert_eq!(
-                    m.bus_read(INTERRUPTS) & bit != 0,
+                    m.bus_read(INTERRUPTS) & u64::from(bit) != 0,
                     want,
                     "timer {k}, {v:o}, {engine_name}: word 100"
                 );
-                assert_eq!(m.bus_read(INTERRUPTS) & !bit, 0, "timer {k}: no other bit");
+                assert_eq!(m.bus_read(INTERRUPTS) & u64::from(!bit), 0, "timer {k}: no other bit");
             }
         }
     }
@@ -484,7 +502,7 @@ fn m6_a_rise_during_a_wait_for_md_is_seen_by_the_jump_after() {
                         }
                     }
                     let ends = ends.unwrap();
-                    let taken = r.machine().mmem[5] == !0;
+                    let taken = r.machine().mmem[5] == 0xffff_ffff;
                     cases[taken as usize] += 1;
                     assert_eq!(
                         taken,
@@ -509,8 +527,16 @@ fn m7_the_page_s_layout_and_q1_s_codes_at_revision_10() {
     assert_eq!(m.bus_read(RESET_DEVICES), 0);
     for k in 0..3 {
         m.bus_write(control(k), !0);
-        assert_eq!(m.bus_read(control(k)) & !(ON | FLAG | ONE_SHOT | IE), 0, "timer {k}");
-        assert_eq!(m.bus_read(control(k)), ON | ONE_SHOT | IE, "timer {k}: on, one-shot, <8>");
+        assert_eq!(
+            m.bus_read(control(k)) & u64::from(!(ON | FLAG | ONE_SHOT | IE)),
+            0,
+            "timer {k}"
+        );
+        assert_eq!(
+            m.bus_read(control(k)),
+            (ON | ONE_SHOT | IE).into(),
+            "timer {k}: on, one-shot, <8>"
+        );
         m.bus_write(period(k), !0);
         assert_eq!(m.bus_read(period(k)), 0o77777777, "timer {k}'s period");
     }
@@ -536,7 +562,7 @@ fn m7_the_page_s_layout_and_q1_s_codes_at_revision_10() {
         }
         let m = e.machine();
         assert_eq!(m.mmem[3], 100, "{engine_name}: destination 4 wrote M");
-        assert_eq!(m.amem[0o200], !0, "{engine_name}: source 17");
+        assert_eq!(m.amem[0o200], 0xffff_ffff, "{engine_name}: source 17");
         assert_eq!(m.timers.timer, [RESET_STATE; 3], "{engine_name}: destination 4 set no timer");
     }
 }
@@ -697,7 +723,7 @@ fn m13_sintr_at_the_shared_edge_keeps_what_destination_3_does_not_clear() {
             deadline_ns: 0,
         };
         run_marking(&mut r, dest_3, 40);
-        assert_eq!(r.machine().mmem[5], !0, "destination 3 written with {dest3}: taken");
+        assert_eq!(r.machine().mmem[5], 0xffff_ffff, "destination 3 written with {dest3}: taken");
     }
 }
 
@@ -730,7 +756,7 @@ fn m13_a_read_gives_the_flags_as_they_stood_at_its_edge() {
             r.boot();
             r.machine_mut().timers.timer[0] = timer(deadline);
             let edge = run_marking(&mut r, dest_3, 60);
-            (edge, flag_of(word, r.machine().amem[0o200]))
+            (edge, flag_of(word, support::low(r.machine().amem[0o200])))
         };
         assert_eq!(run(3, 0).1, 1, "word {word:o}: destination 3 with 3, the flag up");
         assert_eq!(run(1, 0).1, 1, "word {word:o}: destination 3 with 1, the flag up");
@@ -775,7 +801,7 @@ fn destination_3_writes_only_m_at_revision_10() {
             }
             let m = e.machine();
             assert_eq!(m.timers, timers, "{engine_name}: {before:?} written with {v:o}");
-            assert_eq!(m.mmem[0o37], v, "{engine_name}: destination 3 wrote M 37");
+            assert_eq!(m.mmem[0o37], v.into(), "{engine_name}: destination 3 wrote M 37");
         }
     }
 }

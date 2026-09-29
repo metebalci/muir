@@ -112,7 +112,7 @@ enum Stall {
 }
 use crate::clock::{Speed, TimingModel};
 use crate::engine::Engine;
-use crate::machine::{Halt, IMEM_WORDS, Machine};
+use crate::machine::{Halt, IMEM_WORDS, Machine, Word};
 use crate::muldiv;
 use crate::spy;
 use crate::ttl;
@@ -324,7 +324,7 @@ pub struct Rtl {
     destmd: bool,
 
     // --- L 3C26-3C29 74S374 on CLK3F ---
-    l: u32,
+    l: Word,
 
     // --- NPC 4E04/4E05 74S374 and LPC 4F06-4F08 25S07, both on CLK4B ---
     pc: u16,
@@ -415,7 +415,7 @@ pub struct Rtl {
     /// synchronized."
     mbusy_sync: bool,
     bus_addr: u32,
-    bus_data: u32,
+    bus_data: Word,
     /// The word of the cycle in flight has reached its slave, at
     /// [`Busint::answered_at`].
     bus_written: bool,
@@ -563,7 +563,7 @@ pub struct Rtl {
 
     // --- the far end of the cables ---
     /// `MEM<31:0>`: the word the bus interface holds after a read.
-    busint_bus: u32,
+    busint_bus: Word,
     /// When `-LOADMD` strobes that word into `MD`, or `u64::MAX` when no
     /// read is waiting to land. "Equals MEMACK and RDCYC ... Loads MD from
     /// MEM, asynchronous with clock": with the acknowledgement for an Xbus
@@ -597,7 +597,7 @@ struct Read {
     operand: Option<crate::machine::Operand>,
     /// The prefetched word a fused return on the fetch path takes into
     /// M 31 (`crate::memory_port`, contract H8a §3.5).
-    prefetch_m31: Option<u32>,
+    prefetch_m31: Option<Word>,
     /// A return that would have fused on the prefetched word but for
     /// condition 6 (0) or a store starting (1): for the counts.
     prefetch_refused: Option<usize>,
@@ -611,11 +611,14 @@ struct Read {
     /// The next instruction, off the control store at `PC`.
     i: u64,
 
-    a: u32,
-    m: u32,
+    a: Word,
+    m: Word,
     alu: u64,
+    /// `<39:32>` of the ALU's output on a 40-bit word, in place: M's, or a
+    /// logical function's ([`ttl::alu_tag`]); 0 on a 32-bit one.
+    alu_tag: Word,
     r: u32,
-    ob: u32,
+    ob: Word,
 
     n: bool,
     npc: u16,
@@ -658,7 +661,7 @@ struct Read {
     dispwr: bool,
     dadr: u16,
 
-    vmas: u32,
+    vmas: Word,
     vmaenb: bool,
     vmo: u32,
 
@@ -695,6 +698,10 @@ struct Read {
     /// not go through `-WAIT`.
     stepping: bool,
 }
+
+/// A word's `<31:0>`: the CADR's whole word, and what the arithmetic,
+/// the shifts and the rotator act on in a 40-bit one (contract G2 §2.2).
+const LOW: Word = 0xffff_ffff;
 
 fn bit(v: u64, n: u32) -> bool {
     (v >> n) & 1 != 0
@@ -1126,7 +1133,8 @@ impl Rtl {
         let mapi =
             if self.memstart { (self.m.vma >> 8) & 0xffff } else { (self.m.md >> 8) & 0xffff };
         let adr0 = ((mapi >> 5) & 0o3777) as u16;
-        let adr1 = self.m.geometry.l2_index(self.m.l1_map[adr0 as usize], mapi << 8) as u16;
+        let adr1 =
+            self.m.geometry.l2_index(self.m.l1_map[adr0 as usize], (mapi << 8) as u32) as u16;
         (adr0, adr1)
     }
 
@@ -1250,11 +1258,11 @@ impl Rtl {
         // which the read phase has read already (QUUX has no hung
         // microcycle to read it again after the pulse).
         if self.wmapd && !self.m.geometry.old_word_while_written {
-            if bit(self.m.vma as u64, 26) {
-                vmap = self.m.geometry.l1_from_vma(self.m.vma);
+            if bit(self.m.vma, 26) {
+                vmap = self.m.geometry.l1_from_vma(self.m.vma as u32);
             }
-            if bit(self.m.vma as u64, 25) {
-                vmo = self.m.vma & 0o77777777;
+            if bit(self.m.vma, 25) {
+                vmo = self.m.vma as u32 & 0o77777777;
             }
         }
 
@@ -1275,24 +1283,25 @@ impl Rtl {
         let vmaok = pfr && pfw;
 
         // mux MF
-        let mf = if srclc {
-            (needfetch as u32) << 31
+        let mf: Word = if srclc {
+            ((needfetch as u32) << 31
                 | (self.lc_byte_mode as u32) << 29
                 | (self.prog_unibus_reset as u32) << 28
                 | (self.int_enable as u32) << 27
                 | (self.sequence_break as u32) << 26
                 | (self.lc & 0x03ff_fffe)
-                | lc0b as u32
+                | lc0b as u32)
+                .into()
         } else if srcopc {
             // Page OPCD drives `MF<13:0>` from `OPC<13:0>`, which is eight
             // microcycles back, not one.
-            self.opc[7] as u32
+            self.opc[7].into()
         } else if srcdc {
-            self.m.dispatch_constant as u32
+            self.m.dispatch_constant.into()
         } else if srcpdlptr {
-            self.m.pdl_pointer as u32
+            self.m.pdl_pointer.into()
         } else if srcpdlidx {
-            self.m.pdl_index as u32
+            self.m.pdl_index.into()
         } else if srcq {
             self.m.q
         } else if srcmd {
@@ -1305,24 +1314,26 @@ impl Rtl {
             // which *inverts*, and a pull-up on the input of an inverting
             // buffer is a hard zero on its output.  A one there would be
             // right for a '241, which is what this is easy to mistake it for.
-            (!pfw as u32) << 31
+            ((!pfw as u32) << 31
                 | (!pfr as u32) << 30
                 | (vmap & self.m.geometry.l1_mask()) << 24
-                | (vmo & 0o77777777)
+                | (vmo & 0o77777777))
+                .into()
         } else if let (true, 6, Some(id)) = (group_b, src, self.m.geometry.machine_id) {
             // QUUX's MACHINE-ID in source 16 (`Geometry::QUUX`).
-            id
+            id.into()
         } else if group_b && src == 5 && self.m.geometry.tick {
             // QUUX's microsecond clock in source 15 (`machine::Timers`).
-            crate::machine::Timers::microseconds(self.ns)
+            crate::machine::Timers::microseconds(self.ns).into()
         } else {
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 that decodes
             // `IR<28:26>` under `IR<31>` and `IR<29>` has those three outputs
             // unconnected, so nothing on page MF drives the bus, and an
             // undriven TTL bus reads high. No instruction means to read
             // them; a control-store word being written back does, for the
-            // nopped microcycle its `IR` holds it, and `chip` shows the ones.
-            !0
+            // nopped microcycle its `IR` holds it, and `chip` shows the ones:
+            // the word's bits, 32 on every machine the executables run.
+            self.m.geometry.word_mask()
         };
 
         // page PDLCTL: `PDLP` is `(CLK AND IR30) OR (-CLK AND -PWIDX)` off
@@ -1345,7 +1356,7 @@ impl Rtl {
         // *registered* `DESTSPC`, over `L` and the *registered* `RETA`. So
         // the word is known before the ALU is, and the pass-around closes no
         // loop.
-        let spcw = if self.destspcd { self.l & 0o7777777 } else { self.reta as u32 };
+        let spcw = if self.destspcd { self.l as u32 & 0o7777777 } else { self.reta as u32 };
         let spco = self.m.spc[self.m.spcptr as usize];
         let spc = if self.spushd { spcw } else { spco };
 
@@ -1354,7 +1365,7 @@ impl Rtl {
         } else if pdlenb {
             pdl
         } else if spcenb {
-            (self.m.spcptr as u32) << 24 | (spco & 0o1777777)
+            ((self.m.spcptr as u32) << 24 | (spco & 0o1777777)).into()
         } else if mfenb {
             mf
         } else {
@@ -1377,31 +1388,38 @@ impl Rtl {
         let shift = if sr { bits(sh4, sh3) } else { 0 };
         let mskl = mskr.wrapping_add(field(ir, 9, 5)) & 0o37;
 
-        // page SHIFT0-1: a 32-bit rotate left by `shift`
-        let r = m.rotate_left(shift);
+        // page SHIFT0-1: a 32-bit rotate left by `shift`, of `M<31:0>`
+        let r = (m as u32).rotate_left(shift);
         // page MSKG4
         let msk = (!0u32 >> (31 - mskl)) & (!0u32 << mskr);
 
         // page ALU0-1 / ALUC4
-        let ctl = ttl::alu_control(ir, bit(self.m.q as u64, 0), bit(a as u64, 31), iralu, irjump);
-        let alu_out = ttl::alu(m, a, ctl.aluf, ctl.alumode, ctl.cin);
+        let ctl = ttl::alu_control(ir, bit(self.m.q, 0), bit(a, 31), iralu, irjump);
+        let alu_out = ttl::alu(m as u32, a as u32, ctl.aluf, ctl.alumode, ctl.cin);
         let alu = alu_out.f;
         let aeqm = alu_out.aeqm;
+        // A 40-bit word's `<39:32>`: M's, or a logical function's of both
+        // (contract G2 §2.2). The shifts, the steps and the rotator act on
+        // `<31:0>`.
+        let mtag = m & !LOW;
+        let tag =
+            if self.m.geometry.wide() { ttl::alu_tag(m, a, ctl.aluf, ctl.alumode) } else { 0 };
 
         // QUUX's multiply and divide, [`muldiv`]: they drive the output bus
-        // and load `Q` whatever `IR<13:12>` and `IR<1:0>` say.
+        // and load `Q` whatever `IR<13:12>` and `IR<1:0>` say, on `<31:0>`.
         let op = if iralu && self.m.geometry.muldiv { muldiv::decode(ir) } else { None };
-        let (muldiv_ob, muldiv_q) = op.map_or((0, 0), |op| muldiv::run(op, m, a, self.m.q));
+        let (muldiv_ob, muldiv_q) =
+            op.map_or((0, 0), |op| muldiv::run(op, m as u32, a as u32, self.m.q as u32));
 
         // page MO
-        let mo = (msk & r) | (!msk & a);
+        let mo = Word::from(msk & r) | (a & !Word::from(msk));
         let osel = (bit(ir, 13) && iralu) as u32 * 2 + (bit(ir, 12) && iralu) as u32;
         let ob = match osel {
-            _ if op.is_some() => muldiv_ob,
+            _ if op.is_some() => mtag | Word::from(muldiv_ob),
             0 => mo,
-            1 => alu as u32,
-            2 => (alu >> 1) as u32,
-            _ => ((alu << 1) as u32 & !1) | (self.m.q >> 31),
+            1 => (alu & LOW) | tag,
+            2 => mtag | ((alu >> 1) & LOW),
+            _ => mtag | Word::from(((alu << 1) as u32 & !1) | (self.m.q as u32 >> 31)),
         };
 
         // page FLAG
@@ -1448,7 +1466,7 @@ impl Rtl {
         // the CADR the one written, as `chip` has it, and on QUUX the one
         // from before, which the RAM still holds in the read phase.
         let dram_q = if dispwr && !self.m.geometry.old_word_while_written {
-            a & 0o377777
+            a as u32 & 0o377777
         } else {
             self.m.dmem[dadr as usize]
         };
@@ -1544,7 +1562,7 @@ impl Rtl {
             } else {
                 self.m.mmem[0o31]
             };
-            self.m.macro_dispatch.fused_return(spc, m31.rotate_left(shift))
+            self.m.macro_dispatch.fused_return(spc, (m31 as u32).rotate_left(shift))
         } else {
             None
         };
@@ -1599,7 +1617,7 @@ impl Rtl {
         // page VCTRL1 / VCTRL2
         let memop = memrd | memwr | ifetch;
         let vmaenb = destvma | ifetch;
-        let vmas = if !ifetch { ob } else { (self.lc >> 2) & 0x00ff_ffff };
+        let vmas = if !ifetch { ob } else { Word::from((self.lc >> 2) & 0x00ff_ffff) };
 
         // page ICTL: the boot PROM overlays the bottom of the control store,
         // and `-PROMENABLE` is off while `IWRITEDA` is up.  In that cycle
@@ -1659,6 +1677,7 @@ impl Rtl {
             a,
             m,
             alu,
+            alu_tag: tag,
             r,
             ob,
             n,
@@ -1744,7 +1763,7 @@ impl Rtl {
         // by a registered one, so the address and the data are this
         // instruction's.  Which is why there is no dispatch pass-around.
         if r.dispwr {
-            self.m.dmem[r.dadr as usize] = r.a & 0o377777;
+            self.m.dmem[r.dadr as usize] = r.a as u32 & 0o377777;
         }
         if self.wmapd {
             // `MAPWR0D` is `WMAPD AND VMA26` and `MAPWR1D` is `WMAPD AND
@@ -1758,13 +1777,13 @@ impl Rtl {
             // has the whole account); its low five, `MAPI<12:8>`, come
             // through the same 74S258s either way.
             let (adr0, adr1) = self.map_address();
-            let both = bit(self.m.vma as u64, 26) && bit(self.m.vma as u64, 25);
+            let both = bit(self.m.vma, 26) && bit(self.m.vma, 25);
             let adr1 = if both { adr1 & 0o37 } else { adr1 };
-            if bit(self.m.vma as u64, 26) {
-                self.m.l1_map[adr0 as usize] = self.m.geometry.l1_from_vma(self.m.vma);
+            if bit(self.m.vma, 26) {
+                self.m.l1_map[adr0 as usize] = self.m.geometry.l1_from_vma(self.m.vma as u32);
             }
-            if bit(self.m.vma as u64, 25) {
-                self.m.l2_map[adr1 as usize] = self.m.vma & 0o77777777;
+            if bit(self.m.vma, 25) {
+                self.m.l2_map[adr1 as usize] = self.m.vma as u32 & 0o77777777;
             }
         }
         // `-IWEA` is `NAND(WP5A, IWRITEDA)` at ICTL 1B13, so the control
@@ -1811,7 +1830,7 @@ impl Rtl {
                 self.busint_bus = match self.bus_responder {
                     // Given up on, the cable is whatever nothing drives.
                     Responder::Debug(_) if ack.timed_out => 0xffff,
-                    Responder::Debug(_) => self.debug_out_word as u32,
+                    Responder::Debug(_) => self.debug_out_word.into(),
                     _ => self.m.bus_read(self.bus_addr),
                 };
             }
@@ -1881,15 +1900,15 @@ impl Rtl {
         let pulses = (spy::MODE_RESET | spy::MODE_BOOT) as u32;
         if mode && !self.bus_pulsed && now + busint::REGISTER_PULSE_NS >= at {
             self.bus_pulsed = true;
-            self.m.prog_reset |= self.bus_data & spy::MODE_RESET as u32 != 0;
-            self.m.prog_boot |= self.bus_data & spy::MODE_BOOT as u32 != 0;
+            self.m.prog_reset |= self.bus_data & spy::MODE_RESET as Word != 0;
+            self.m.prog_boot |= self.bus_data & spy::MODE_BOOT as Word != 0;
         }
         if now >= at {
             self.m.ns = at;
             // When the write buffer is empty, for the file device's producer
             // index (contract Q9).
             self.m.write_buffer_empty_at = self.bus.write_buffer_empty_at();
-            let data = if mode { self.bus_data & !pulses } else { self.bus_data };
+            let data = if mode { self.bus_data & !Word::from(pulses) } else { self.bus_data };
             self.m.bus_write(self.bus_addr, data);
             self.bus_written = true;
         }
@@ -1910,7 +1929,7 @@ impl Rtl {
             && let Some(at) = self.bus.answered_at()
             && now >= at
         {
-            self.busint_bus = self.spy_read(eadr) as u32;
+            self.busint_bus = self.spy_read(eadr).into();
             self.bus_sampled = true;
         }
     }
@@ -1989,7 +2008,7 @@ impl Rtl {
                     if !self.debug_written && now >= at {
                         self.m.ns = at;
                         let data = if mode { req.dbd & !pulses } else { req.dbd };
-                        self.m.bus_write(phys, data as u32);
+                        self.m.bus_write(phys, data.into());
                         self.debug_written = true;
                     }
                 } else if !req.write && !self.debug_sampled && now >= at {
@@ -2325,7 +2344,7 @@ impl Rtl {
         if self.memstart {
             self.lvmo = r.vmo;
             if r.vmaok && self.mbusy {
-                self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
+                self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma as u32 & 0xff);
                 self.bus_data = self.m.md;
                 if self.rdcyc {
                     self.rd_in_progress = true;
@@ -2346,7 +2365,7 @@ impl Rtl {
                 // board's too, `MD` passing through the bus interface with
                 // no latch (`the_engines_write_the_md_of_the_microcycle_after_the_start`,
                 // `tests/chip.rs`).
-                self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma & 0xff);
+                self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma as u32 & 0xff);
                 self.bus_data = self.m.md;
                 self.bus_responder = if self.m.geometry.has_register_page() {
                     // QUUX: its frame buffer on the memory bus with main
@@ -2370,7 +2389,7 @@ impl Rtl {
                 if self.memstart_fetch
                     && let Bus::Quux(p) = &mut self.bus
                 {
-                    p.mark_fetch(self.m.vma);
+                    p.mark_fetch(self.m.vma as u32);
                 }
                 self.bus_cycles += 1;
                 self.bus_written = false;
@@ -2440,7 +2459,7 @@ impl Rtl {
         // being replaced is still needed after `IR` has moved on.
         let was_ir = self.ir;
         // page IREG: the OA registers substitute fields as the word loads
-        let iob = r.i | ((r.ob as u64 & 0x003f_ffff) << 26) | (r.ob as u64 & 0x03ff_ffff);
+        let iob = r.i | ((r.ob & 0x003f_ffff) << 26) | (r.ob & 0x03ff_ffff);
         let mut ir = r.i;
         if r.destimod1 {
             ir = (ir & !(0x1ffu64 << 40) & !0x1fff_fc00_0000) | (iob & 0x1_ffff_fc00_0000);
@@ -2509,7 +2528,8 @@ impl Rtl {
         }
 
         // page IWR
-        self.iwr = ((r.a as u64 & 0xffff) << 32) | r.m as u64;
+        // `IWR<47:32>` from `A<15:0>` and `IWR<31:0>` from `M<31:0>`.
+        self.iwr = ((r.a & 0xffff) << 32) | (r.m & LOW);
 
         // page NPC / LPC / OPCS.  `Machine::opc` is the PC of the
         // instruction that just executed, which is what LPC holds; the OPC
@@ -2536,7 +2556,7 @@ impl Rtl {
 
         // page LC
         if r.destlc {
-            self.lc = r.ob & 0o377777777;
+            self.lc = r.ob as u32 & 0o377777777;
             self.drop_prefetched(crate::memory_port::Drop::LcWrite);
         } else {
             let inc = (r.lcinc && !self.lc_byte_mode) as u32 + r.lcinc as u32;
@@ -2545,15 +2565,15 @@ impl Rtl {
         // QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY
         // (`machine::macro_dispatch`).
         if let Some(code) = r.macro_write {
-            self.m.macro_dispatch.write(code, r.ob);
+            self.m.macro_dispatch.write(code, r.ob as u32);
         }
         if r.fused {
             self.m.macro_dispatch.fused += 1;
         }
         // page FLAG
         if r.destintctl {
-            self.lc_byte_mode = bit(r.ob as u64, 29);
-            let reset = bit(r.ob as u64, 28);
+            self.lc_byte_mode = bit(r.ob, 29);
+            let reset = bit(r.ob, 28);
             if reset != self.prog_unibus_reset {
                 // The interface puts it on the backplane as `-XBUS INIT`
                 // and `-UB INIT`: the memory boards are held by it, and the
@@ -2568,18 +2588,23 @@ impl Rtl {
                 }
             }
             self.prog_unibus_reset = reset;
-            self.int_enable = bit(r.ob as u64, 27);
-            self.sequence_break = bit(r.ob as u64, 26);
+            self.int_enable = bit(r.ob, 27);
+            self.sequence_break = bit(r.ob, 26);
         }
 
         // page Q
+        // The steps and the shifts on `Q<31:0>`, whatever is above; a load
+        // takes the whole word, as the output bus has it for an ALU
+        // function.
+        let q_high = self.m.q & !LOW;
+        let q_low = self.m.q as u32;
         if r.muldiv.is_some() {
-            self.m.q = r.muldiv_q;
+            self.m.q = q_high | Word::from(r.muldiv_q);
         } else if r.qs1 || r.qs0 {
             self.m.q = match (r.qs1 as u8) * 2 + r.qs0 as u8 {
-                1 => (self.m.q << 1) | (!bit(r.alu, 31)) as u32,
-                2 => ((r.alu as u32 & 1) << 31) | (self.m.q >> 1),
-                _ => r.alu as u32,
+                1 => q_high | Word::from((q_low << 1) | (!bit(r.alu, 31)) as u32),
+                2 => q_high | Word::from(((r.alu as u32 & 1) << 31) | (q_low >> 1)),
+                _ => (r.alu & LOW) | r.alu_tag,
             };
         }
 
@@ -3043,12 +3068,12 @@ impl Rtl {
             self.trace = [
                 self.pc as u64,
                 self.ir,
-                self.m.q as u64,
-                r.a as u64,
-                r.m as u64,
+                self.m.q,
+                r.a,
+                r.m,
                 r.alu & 0xffff_ffff,
                 r.r as u64,
-                r.ob as u64,
+                r.ob,
                 self.m.dispatch_constant as u64,
                 self.opc[7] as u64,
                 self.stat as u64,
@@ -3317,7 +3342,7 @@ impl Engine for Rtl {
         w.u16(*wadr);
         w.bool(*destd);
         w.bool(*destmd);
-        w.u32(*l);
+        w.word(*l);
         w.u16(*pc);
         w.u16(*lpc);
         w.u32(*lc);
@@ -3363,7 +3388,7 @@ impl Engine for Rtl {
         }
         w.bool(*mbusy_sync);
         w.u32(*bus_addr);
-        w.u32(*bus_data);
+        w.word(*bus_data);
         w.bool(*bus_written);
         w.opt(*bus_spy, crate::checkpoint::Writer::u8);
         w.bool(*bus_sampled);
@@ -3408,7 +3433,7 @@ impl Engine for Rtl {
             }
         }
         w.u64(*ns);
-        w.u32(*busint_bus);
+        w.word(*busint_bus);
         w.u64(*loadmd_at);
         w.opt(*executed, crate::checkpoint::Writer::u16);
         w.bool(*memstart_fetch);
@@ -3424,7 +3449,7 @@ impl Engine for Rtl {
         self.wadr = r.u16()?;
         self.destd = r.bool()?;
         self.destmd = r.bool()?;
-        self.l = r.u32()?;
+        self.l = r.word()?;
         self.pc = r.u16()?;
         self.lpc = r.u16()?;
         self.lc = r.u32()?;
@@ -3476,7 +3501,7 @@ impl Engine for Rtl {
         };
         self.mbusy_sync = r.bool()?;
         self.bus_addr = r.u32()?;
-        self.bus_data = r.u32()?;
+        self.bus_data = r.word()?;
         self.bus_written = r.bool()?;
         self.bus_spy = r.opt(Reader::u8)?;
         self.bus_sampled = r.bool()?;
@@ -3520,7 +3545,7 @@ impl Engine for Rtl {
             }
         };
         self.ns = r.u64()?;
-        self.busint_bus = r.u32()?;
+        self.busint_bus = r.word()?;
         self.loadmd_at = r.u64()?;
         self.executed = r.opt(Reader::u16)?;
         self.memstart_fetch = r.bool()?;

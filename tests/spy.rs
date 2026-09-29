@@ -1071,10 +1071,10 @@ fn unibus_read_machine() -> Machine {
     let mut m = straight_line_machine();
     m.l1_map[0] = 0;
     m.l2_map[0] = (1 << 23) | 0o37766;
-    m.mmem[1] = spy::A_LOW as u32;
-    m.mmem[2] = spy::STAT_LOW as u32;
+    m.mmem[1] = u64::from(spy::A_LOW as u32);
+    m.mmem[2] = u64::from(spy::STAT_LOW as u32);
     m.mmem[3] = 3;
-    m.mmem[4] = spy::FLAG_1 as u32;
+    m.mmem[4] = u64::from(spy::FLAG_1 as u32);
     let mut prom = vec![filler(); 512];
     let mut at = 0;
     for (k, park) in [0o101, 0o102, 0o103, 0o104].iter().enumerate() {
@@ -1095,8 +1095,12 @@ fn runs_the_four_reads(e: &mut dyn Engine, name: &str) {
     assert_eq!(m.bus_error, 0, "{name}: every read was answered");
     assert_eq!(m.amem[0o101], 0o123456, "{name}: A-LOW, the A bus under the filler");
     assert_eq!(m.amem[0o102], 0, "{name}: STAT-LOW");
-    assert_eq!(m.amem[0o103], spy::OPEN_READ as u32, "{name}: register 3, the open bus");
-    assert_eq!(m.amem[0o104], RUNNING as u32, "{name}: FLAG-1, running and waiting for nothing");
+    assert_eq!(m.amem[0o103], (spy::OPEN_READ as u32).into(), "{name}: register 3, the open bus");
+    assert_eq!(
+        m.amem[0o104],
+        (RUNNING as u32).into(),
+        "{name}: FLAG-1, running and waiting for nothing"
+    );
 }
 
 #[test]

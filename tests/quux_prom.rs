@@ -56,7 +56,8 @@ fn run(m: Machine, steps: usize) -> [([u32; 3], Vec<u16>); 2] {
         pr.push(r.pc());
         r.step().unwrap();
     }
-    let mm = |x: &Machine| [x.mmem[1], x.mmem[2], x.mmem[3]];
+    // `<31:0>`, of a 32-bit machine's words: nothing is above.
+    let mm = |x: &Machine| [x.mmem[1], x.mmem[2], x.mmem[3]].map(|w| u32::try_from(w).unwrap());
     [(mm(e.machine()), pe), (mm(r.machine()), pr)]
 }
 

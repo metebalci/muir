@@ -214,7 +214,7 @@ fn the_clock_line_spans_the_pair() {
 /// at `15-8`, the channel at `7-6`, the color at `3-0`, as
 /// `WRITE-COLOR-MAP` lays them out.
 fn write_map(m: &mut Machine, color: u32, channel: u32, value: u32) {
-    m.bus_write(0o17377754, value << 8 | channel << 6 | color);
+    m.bus_write(0o17377754, (value << 8 | channel << 6 | color).into());
 }
 
 /// The whole map in one go: color `c`'s three guns from `f`.

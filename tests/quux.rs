@@ -67,12 +67,16 @@ fn a_six_bit_level_1_entry_is_written_and_read_back() {
             m.geometry = geometry;
             // Level-1 index 100.
             m.mmem[1] = 0o100 << 13;
-            m.mmem[2] = level_1_store(0o41);
+            m.mmem[2] = u64::from(level_1_store(0o41));
         };
         let (e, r) = both(&prom, &set, 30);
         for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
             assert_eq!(m.l1_map[0o100], want, "{geometry:?}, {name}: the entry stored");
-            assert_eq!((m.amem[0o200] >> 24) & 0o77, want, "{geometry:?}, {name}: MAP(MD)<29:24>");
+            assert_eq!(
+                (m.amem[0o200] >> 24) & 0o77,
+                want.into(),
+                "{geometry:?}, {name}: MAP(MD)<29:24>"
+            );
         }
     }
 }
@@ -125,11 +129,11 @@ fn quux_answers_its_id_in_source_16() {
         Insn::new(ALU | SETM | src(0o36) | a_dest(0o202)),
         Insn::new(ALU | SETM | src(0o17) | a_dest(0o203)),
     ];
-    let id = (0x5155 << 16) | (12 << 4) | 4;
+    let id: u32 = (0x5155 << 16) | (12 << 4) | 4;
     for (geometry, want) in [(Geometry::QUUX, [id, id, !0]), (Geometry::CADR, [!0, !0, !0])] {
         let (e, r) = both(&prom, &|m: &mut Machine| m.geometry = geometry, 30);
         for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
-            let got = [m.amem[0o201], m.amem[0o202], m.amem[0o203]];
+            let got = [m.amem[0o201], m.amem[0o202], m.amem[0o203]].map(support::low);
             assert_eq!(got, want, "{geometry:?}, {name}");
         }
     }
@@ -169,7 +173,7 @@ fn quux_lists_its_sizes_in_its_feature_page() {
             m.geometry = geometry;
             m.l2_map[1] = (1 << 23) | (1 << 22) | 0o37777;
             for (k, &w) in words.iter().enumerate() {
-                m.mmem[1 + k] = (1 << 8) | w;
+                m.mmem[1 + k] = u64::from((1 << 8) | w);
             }
         }
     };
@@ -177,7 +181,7 @@ fn quux_lists_its_sizes_in_its_feature_page() {
     let want = [id, 6, 2048, 16384, 16384, 1024, 2048, 3, 1, 1, 3, 3, 1024, 0];
     let (e, r) = both(&prom, &set(Geometry::QUUX), 400);
     for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
-        let got: Vec<u32> = (0..words.len()).map(|k| m.amem[0o200 + k]).collect();
+        let got: Vec<u32> = (0..words.len()).map(|k| support::low(m.amem[0o200 + k])).collect();
         assert_eq!(got, want, "QUUX, {name}");
         assert_eq!(m.bus_error & bus_error::XBUS_NXM, 0, "QUUX, {name}: no NXM");
     }
@@ -217,14 +221,21 @@ fn quux_s_pdl_buffer_is_4k_or_16k() {
             if bits == 10 { Geometry::CADR } else { Geometry { pdl_bits: bits, ..Geometry::QUUX } };
         let set = |m: &mut Machine| {
             m.geometry = geometry;
-            m.mmem[1] = start;
+            m.mmem[1] = u64::from(start);
         };
         let (e, r) = both(&prom, &set, 30);
         for (name, m) in [("micro", e.machine()), ("rtl", r.machine())] {
-            assert_eq!(m.amem[0o201], after, "{bits} bits from {start:o}, {name}: the pointer");
-            assert_eq!(m.amem[0o202], !0, "{bits} bits from {start:o}, {name}: the word pushed");
             assert_eq!(
-                m.pdl[after as usize], !0,
+                m.amem[0o201],
+                after.into(),
+                "{bits} bits from {start:o}, {name}: the pointer"
+            );
+            assert_eq!(
+                m.amem[0o202], 0xffff_ffff,
+                "{bits} bits from {start:o}, {name}: the word pushed"
+            );
+            assert_eq!(
+                m.pdl[after as usize], 0xffff_ffff,
                 "{bits} bits from {start:o}, {name}: where it went"
             );
         }

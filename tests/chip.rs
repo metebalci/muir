@@ -1949,10 +1949,10 @@ fn chip_and_rtl_hold_the_same_memories() {
     // would have to be against what it held a step ago.
     let snapshot = |r: &Rtl| -> Vec<Vec<u32>> {
         vec![
-            r.m.amem.to_vec(),
-            r.m.mmem.to_vec(),
+            r.m.amem.iter().map(|&w| support::low(w)).collect(),
+            r.m.mmem.iter().map(|&w| support::low(w)).collect(),
             // The CADR's 1,024: the rest is room for a QUUX's.
-            r.m.pdl[..1024].to_vec(),
+            r.m.pdl[..1024].iter().map(|&w| support::low(w)).collect(),
             r.m.spc.iter().map(|&v| v & 0o1777777).collect(),
             r.m.dmem.iter().map(|&v| v & 0o377777).collect(),
             r.m.l1_map.iter().map(|&v| v & 0o37).collect(),
@@ -2055,14 +2055,14 @@ fn same_program_on(
     let l1 = Ram::new(&c, n, &MEMS[5]);
     let l2 = Ram::new(&c, n, &MEMS[6]);
     for (k, &v) in m.amem.iter().enumerate() {
-        a.store(&mut c, k, v);
+        a.store(&mut c, k, support::low(v));
     }
     for (k, &v) in m.mmem.iter().enumerate() {
-        mm.store(&mut c, k, v);
+        mm.store(&mut c, k, support::low(v));
     }
     // The CADR's 1,024, the board's RAM: the rest is room for a QUUX's.
     for (k, &v) in m.pdl[..pdl.len()].iter().enumerate() {
-        pdl.store(&mut c, k, v);
+        pdl.store(&mut c, k, support::low(v));
     }
     for (k, &v) in m.spc.iter().enumerate() {
         spc.store(&mut c, k, v & 0o1777777);
@@ -2154,8 +2154,8 @@ fn writes_a_diagnostic_register(register: u8, value: u32) -> muir::machine::Mach
     use microcode::*;
     use muir::isa::Insn;
     let mut m = page_zero_on_the_diagnostic_block();
-    m.mmem[1] = value;
-    m.mmem[2] = register as u32;
+    m.mmem[1] = u64::from(value);
+    m.mmem[2] = u64::from(register as u32);
     let mut prom = vec![filler(); 512];
     prom[20] = Insn::new(ALU | SETM | m_src(1) | a_src(3) | MD);
     prom[21] = Insn::new(ALU | SETM | m_src(2) | a_src(3) | START_WRITE);
@@ -2204,7 +2204,7 @@ fn chip_and_rtl_agree_on_the_diagnostic_block() {
         spy::CLK as u32,         // its address
     ];
     for (k, &v) in constants.iter().enumerate() {
-        m.mmem[k + 1] = v;
+        m.mmem[k + 1] = u64::from(v);
     }
     let mut prom = vec![filler(); 512];
     let mut at = 0;
@@ -2267,7 +2267,7 @@ fn chip_and_rtl_agree_on_the_diagnostic_block() {
         let rtl = r.machine().amem[*p];
         let mask = if k == 4 { !0x4 } else { !0 };
         assert_eq!(chip & mask, w, "read {k} on the board");
-        assert_eq!(rtl & mask, w, "read {k} on rtl");
+        assert_eq!(rtl & u64::from(mask), w.into(), "read {k} on rtl");
     }
     let (o1, o2) = (a.word(&c, 0o106), a.word(&c, 0o107));
     eprintln!(
@@ -2278,7 +2278,7 @@ fn chip_and_rtl_agree_on_the_diagnostic_block() {
     assert_eq!(o1, o2, "the board's OPC history is frozen");
     assert_eq!(
         (o1, o2),
-        (r.machine().amem[0o106], r.machine().amem[0o107]),
+        (support::low(r.machine().amem[0o106]), support::low(r.machine().amem[0o107])),
         "and rtl's is the same PC"
     );
     assert!(o1 < 0o400, "a PC in the PROM");
@@ -2312,7 +2312,7 @@ fn on_main_memory(program: &[muir::isa::Insn], m_words: &[u32]) -> muir::machine
     m.l1_map[0] = 0;
     m.l2_map[0] = (1 << 23) | (1 << 22) | 1;
     for (k, &w) in m_words.iter().enumerate() {
-        m.mmem[k + 1] = w;
+        m.mmem[k + 1] = u64::from(w);
     }
     let mut prom = vec![filler(); 512];
     prom[20..20 + program.len()].copy_from_slice(program);
@@ -2374,7 +2374,7 @@ fn left_after(m: &muir::machine::Machine, cycles: usize, park: &[usize]) -> [Lef
         was = b.granted();
     }
     let rtl = Left {
-        words: park.iter().map(|&p| r.machine().amem[p]).collect(),
+        words: park.iter().map(|&p| support::low(r.machine().amem[p])).collect(),
         cycles: r.bus_cycles() - rtl_before,
         writes: Some(writes),
     };
@@ -2384,7 +2384,7 @@ fn left_after(m: &muir::machine::Machine, cycles: usize, park: &[usize]) -> [Lef
         e.step().unwrap();
     }
     let micro = Left {
-        words: park.iter().map(|&p| e.machine().amem[p]).collect(),
+        words: park.iter().map(|&p| support::low(e.machine().amem[p])).collect(),
         cycles: e.memory_cycles(),
         writes: None,
     };
@@ -2621,7 +2621,7 @@ fn a_push_and_a_pop_at_once_count_up_and_pop_the_old_top() {
         p[80] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o202));
         p[81] = Insn::new(here(81));
         let mut m = on_main_memory(&p, &[x as u32, y as u32]);
-        m.amem[0o60] = (1 << 15) | y as u32;
+        m.amem[0o60] = u64::from((1 << 15) | y as u32);
         let [chip, rtl, micro] = left_after(&m, 150, &[0o201, 0o202, 0o203]);
         got.push((what, chip, rtl, micro));
     }
@@ -2704,7 +2704,7 @@ fn two_pops_at_once_count_down_once_and_a_dispatch_without_r_pops_nothing() {
         p[81] = Insn::new(here(81));
         let mut m = on_main_memory(&p, &[x as u32, y as u32]);
         m.amem[0o60] = 1 << 16;
-        m.amem[0o61] = y as u32;
+        m.amem[0o61] = u64::from(y as u32);
         m.amem[0o62] = (1 << 16) | (1 << 15);
         let [chip, rtl, micro] = left_after(&m, 150, &[0o201, 0o202, 0o203]);
         got.push((what, chip, rtl, micro));
@@ -3650,7 +3650,7 @@ fn chip_and_rtl_run_the_opc_readout_the_counter_load_and_the_reset_alike() {
     lock.dbg_write(&mut c, &mut far, &mut clk, &mut r, 0o766174, 0o177000);
     lock.dbg_write(&mut c, &mut far, &mut clk, &mut r, 0o174000, value as u16);
     lock.dbg_write(&mut c, &mut far, &mut clk, &mut r, 0o174002, (value >> 16) as u16);
-    assert_eq!(r.machine().md, value, "CC-WRITE-MD");
+    assert_eq!(r.machine().md, value.into(), "CC-WRITE-MD");
     let insn = ALU | SETM | SRC_MD | a_src(3);
     lock.spy_write(&mut c, &mut far, &mut clk, &mut r, spy::IR_LOW, insn as u16);
     lock.spy_write(&mut c, &mut far, &mut clk, &mut r, spy::IR_MED, (insn >> 16) as u16);
@@ -3797,7 +3797,7 @@ fn chip_and_rtl_arbitrate_a_debug_cycle_against_a_running_processor_alike() {
     m.l1_map[0] = 0;
     m.l2_map[0] = (1 << 23) | (1 << 22) | 0o37766;
     m.amem[3] = 0o123456;
-    m.mmem[1] = busint::unibus_physical(0o766044) & 0xff;
+    m.mmem[1] = u64::from(busint::unibus_physical(0o766044) & 0xff);
     m.mmem[2] = 0;
     let mut prom = vec![filler(); 512];
     // -RESET ERR first, since the board's UB MAP ERROR is up from power-on
@@ -3860,7 +3860,7 @@ fn chip_and_rtl_arbitrate_a_debug_cycle_against_a_running_processor_alike() {
     let done = (0..reads).take_while(|&k| r.machine().amem[0o100 + k] != 0).count();
     assert!(done > 12, "the processor read the register {done} times");
     for k in 0..done {
-        assert_eq!(a.word(&c, 0o100 + k), r.machine().amem[0o100 + k], "read {k}");
+        assert_eq!(u64::from(a.word(&c, 0o100 + k)), r.machine().amem[0o100 + k], "read {k}");
     }
     eprintln!("{done} reads of the error status parked alike on both, at {} ns", r.ns());
 }
@@ -3889,7 +3889,7 @@ fn chip_and_rtl_hold_the_same_location_counter() {
 
     let n = netlist::parse(NETLIST).unwrap();
     let mut m = muir::machine::Machine::new();
-    m.amem[3] = WORD;
+    m.amem[3] = u64::from(WORD);
     let to_lc = muir::isa::Insn::new(
         muir::isa::asm::ALU | muir::isa::asm::SETA | muir::isa::asm::a_src(3) | (1 << 19),
     );
@@ -4281,7 +4281,11 @@ fn chip_and_rtl_drive_the_debug_cable_alike() {
         a.word(&c, 0o102),
         r.machine().amem[0o102]
     );
-    assert_eq!(a.word(&c, 0o102), r.machine().amem[0o102], "the word of the read nothing answered");
+    assert_eq!(
+        u64::from(a.word(&c, 0o102)),
+        r.machine().amem[0o102],
+        "the word of the read nothing answered"
+    );
     assert_eq!(r.machine().bus_error, bus_error::UNIBUS_NXM, "rtl flags the timeout");
     let nxm = bus_n.by_name_id("'UB NXM ERROR'").unwrap();
     assert_eq!(far.board.net(nxm), Level::High, "and so does the board");
@@ -4593,11 +4597,15 @@ fn chip_and_rtl_answer_the_unibus_map_alike() {
     lock.dbg_write(&mut c, &mut far, &mut clk, &mut r, low + 2, 0o7654);
     let word = 0o7654 << 16 | 0o123456;
     assert_eq!(r.machine().main[0o1000], word, "the word in rtl's memory");
-    let on_board = far.xbus.peek(0o1000).unwrap_or(far.buses.machine.main[0o1000]);
-    assert_eq!(on_board, word, "the word in the memory boards");
+    let on_board = far.xbus.peek(0o1000).unwrap_or(support::low(far.buses.machine.main[0o1000]));
+    assert_eq!(u64::from(on_board), word, "the word in the memory boards");
     let lo = lock.dbg_read(&mut c, &mut far, &mut clk, &mut r, low);
     let hi = lock.dbg_read(&mut c, &mut far, &mut clk, &mut r, low + 2);
-    assert_eq!((hi as u32) << 16 | lo as u32, word, "the word read back through the map");
+    assert_eq!(
+        u64::from((hi as u32) << 16 | lo as u32),
+        word,
+        "the word read back through the map"
+    );
 
     // CC-WRITE-MD: map 16 loaded with 177000, whose page has its high five
     // bits ones; the low half buffered, the high half into MD by -UB TO
@@ -4607,10 +4615,10 @@ fn chip_and_rtl_answer_the_unibus_map_alike() {
     lock.dbg_write(&mut c, &mut far, &mut clk, &mut r, 0o174002, 0o125252);
     let md_word = 0o125252 << 16 | 0o52525;
     assert_eq!(r.machine().md, md_word, "MD on rtl");
-    assert_eq!(!c.bus(&n, "-MD", 32) as u32, md_word, "MD on the board");
+    assert_eq!(u64::from(!c.bus(&n, "-MD", 32) as u32), md_word, "MD on the board");
     assert_eq!(r.machine().main[0o1000], word, "memory untouched on rtl");
-    let on_board = far.xbus.peek(0o1000).unwrap_or(far.buses.machine.main[0o1000]);
-    assert_eq!(on_board, word, "and on the boards");
+    let on_board = far.xbus.peek(0o1000).unwrap_or(support::low(far.buses.machine.main[0o1000]));
+    assert_eq!(u64::from(on_board), word, "and on the boards");
 
     // Map 16 onto the same page read-only: the write's low half is
     // buffered, its high half refused; map 15 invalid: the read's low half
@@ -4620,8 +4628,8 @@ fn chip_and_rtl_answer_the_unibus_map_alike() {
     lock.dbg_write(&mut c, &mut far, &mut clk, &mut r, ro, 0o777);
     refused(&mut c, &mut far, &mut clk, &mut r, ro + 2, Some(0o666));
     assert_eq!(r.machine().main[0o1000], word, "the read-only page kept its word on rtl");
-    let on_board = far.xbus.peek(0o1000).unwrap_or(far.buses.machine.main[0o1000]);
-    assert_eq!(on_board, word, "and on the boards");
+    let on_board = far.xbus.peek(0o1000).unwrap_or(support::low(far.buses.machine.main[0o1000]));
+    assert_eq!(u64::from(on_board), word, "and on the boards");
     let status = lock.request(&mut c, &mut far, &mut clk, &mut r, DEBUG_STATUS, false, 0, !0).1;
     assert_eq!(status, Some(0xff00 | bus_error::UB_MAP_ERROR), "UB MAP ERROR, on both");
     lock.dbg_write(&mut c, &mut far, &mut clk, &mut r, 0o766172, 0);
@@ -4636,7 +4644,9 @@ fn chip_and_rtl_answer_the_unibus_map_alike() {
     // one, the buffer having taken the low half too.  On the lower eight
     // pages nothing changes.  Every acknowledgement and every word in the
     // memory boards the same on both.
-    let peek = |far: &FarEnd| far.xbus.peek(0o1000).unwrap_or(far.buses.machine.main[0o1000]);
+    let peek = |far: &FarEnd| {
+        far.xbus.peek(0o1000).unwrap_or(support::low(far.buses.machine.main[0o1000]))
+    };
     lock.dbg_write(&mut c, &mut far, &mut clk, &mut r, 0o766044, 0o200);
     let status = lock.request(&mut c, &mut far, &mut clk, &mut r, DEBUG_STATUS, false, 0, !0).1;
     assert_eq!(status, Some(0xff00 | 0o200), "write-through on, no error, on both");
@@ -4695,7 +4705,7 @@ fn chip_and_rtl_answer_the_processors_own_mapped_cycle_alike() {
         0,
     ];
     for (k, &v) in constants.iter().enumerate() {
-        m.mmem[k + 1] = v;
+        m.mmem[k + 1] = u64::from(v);
     }
     let mut prom = vec![filler(); 512];
     let mut at = 4;
@@ -4747,7 +4757,11 @@ fn chip_and_rtl_answer_the_processors_own_mapped_cycle_alike() {
     assert!(rtl_last_ran < cycles - 20, "rtl halted");
     assert_eq!(c.bus(&n, "PC", 14) as u16, r.pc(), "halted at the same PC");
     for park in [0o101, 0o102, 0o103] {
-        assert_eq!(a.word(&c, park), r.machine().amem[park], "the word parked at {park:o}");
+        assert_eq!(
+            u64::from(a.word(&c, park)),
+            r.machine().amem[park],
+            "the word parked at {park:o}"
+        );
     }
     // The cycles time out --- the interface is not free for a mapped Xbus
     // cycle while its own processor is the Unibus master --- and leave
@@ -4805,7 +4819,7 @@ fn chip_and_rtl_read_the_same_main_memory() {
         spy::CLK as u32, // 6: its address, page 0 being the diagnostic block
     ];
     for (k, &v) in constants.iter().enumerate() {
-        m.mmem[k + 1] = v;
+        m.mmem[k + 1] = u64::from(v);
     }
     let mut prom = vec![filler(); 512];
     let mut at = 20;
@@ -4844,7 +4858,7 @@ fn chip_and_rtl_read_the_same_main_memory() {
     let mut on_boards: Vec<(usize, u32)> = Vec::new();
     for a in 0..boards {
         let got = far.main_word(a as u32).expect("a word of a board that is there");
-        if got != r.machine().main[a] {
+        if u64::from(got) != r.machine().main[a] {
             differ += 1;
             if differ <= 8 {
                 eprintln!("main[{a:o}]: chip {got:o} rtl {:o}", r.machine().main[a]);
@@ -5117,7 +5131,7 @@ fn chip_and_rtl_read_the_microsecond_clock_alike_from_the_first_cycle() {
     m.l1_map[0] = 0;
     m.l2_map[0] = (1 << 23) | (1 << 22) | (phys >> 8);
     m.amem[3] = 0o123456;
-    m.mmem[1] = phys & 0xff;
+    m.mmem[1] = u64::from(phys & 0xff);
     let reads = 60;
     let mut prom = vec![filler(); 512];
     for k in 0..reads {
@@ -5136,7 +5150,7 @@ fn chip_and_rtl_read_the_microsecond_clock_alike_from_the_first_cycle() {
         assert_eq!(c.bus(&n, "PC", 14) as u64, r.pc() as u64, "the PC at {} ns", r.ns());
         parked = (0..reads).take_while(|&k| r.machine().amem[0o100 + k] != 0).count();
         for k in 0..parked {
-            assert_eq!(a.word(&c, 0o100 + k), r.machine().amem[0o100 + k], "read {k}");
+            assert_eq!(u64::from(a.word(&c, 0o100 + k)), r.machine().amem[0o100 + k], "read {k}");
         }
     }
     assert!(parked >= 20, "{parked} reads parked");
@@ -5179,7 +5193,7 @@ fn chip_and_rtl_hold_an_unanswered_cycle_under_the_timeout_inhibit_alike() {
         m.l1_map[0] = 0;
         m.l2_map[0] = (1 << 23) | (1 << 22) | (phys >> 8);
         m.amem[3] = 0o123456;
-        m.mmem[1] = phys & 0xff;
+        m.mmem[1] = u64::from(phys & 0xff);
         let mut prom = vec![filler(); 512];
         // Fillers first: time for the inhibit to be set through the cable.
         let read_at = 30;
@@ -5417,7 +5431,7 @@ fn chip_and_rtl_run_on_alike_after_a_unibus_cycle_nothing_answers() {
     m.l1_map[0] = 0;
     m.l2_map[0] = (1 << 23) | (1 << 22) | (phys >> 8);
     m.amem[3] = 0o123456;
-    m.mmem[1] = phys & 0xff;
+    m.mmem[1] = u64::from(phys & 0xff);
     let mut prom = vec![filler(); 512];
     prom[10] = Insn::new(ALU | SETM | m_src(1) | a_src(3) | START_READ);
     prom[31] = Insn::new(ALU | SETM | SRC_MD | a_src(3) | a_dest(0o101));
@@ -5613,7 +5627,11 @@ fn a_chip_debuggee_answers_an_rtl_debugger_over_tcp() {
     );
     assert_eq!(am.amem[0o102], rm.amem[0o102], "and after the step");
     assert_eq!(am.amem[0o102], am.amem[0o101] + 1, "one step");
-    assert_eq!(pc_on_the_board, am.amem[0o102], "the board stands where the debugger last read it");
+    assert_eq!(
+        u64::from(pc_on_the_board),
+        am.amem[0o102],
+        "the board stands where the debugger last read it"
+    );
     assert_eq!(pc_on_the_board as u16, reference.debuggee.pc(), "and where rtl stands");
     assert_eq!(board.debug_ack(), reference.debuggee.debug_ack(), "the last acknowledgement alike");
 }
@@ -5799,12 +5817,12 @@ fn two_display_boards_answer_at_their_own_straps() {
     const MAIN_WORD: u32 = 0x0fed_cba9;
     const MAP_VALUE: u32 = 0o252;
     const MAP_COLOR: u32 = 5;
-    m.mmem[1] = COLOR_WORD;
+    m.mmem[1] = u64::from(COLOR_WORD);
     m.mmem[2] = 5; // page 0, word 5: 17200005
-    m.mmem[3] = MAIN_WORD;
+    m.mmem[3] = u64::from(MAIN_WORD);
     m.mmem[4] = (1 << 8) | 5; // page 1, word 5: 17000005
-    m.mmem[5] = MAP_VALUE << 8 | MAP_COLOR;
-    m.mmem[6] = (2 << 8) | ((COLOR_TV.control + 4) & 0o377); // 17377754
+    m.mmem[5] = u64::from(MAP_VALUE << 8 | MAP_COLOR);
+    m.mmem[6] = u64::from((2 << 8) | ((COLOR_TV.control + 4) & 0o377)); // 17377754
     m.mmem[7] = 1; // COLOR-EXISTS-P's probe
     m.mmem[8] = 0; // page 0, word 0: 17200000
 
@@ -5898,12 +5916,12 @@ fn chip_and_rtl_start_a_stepped_read_while_halted_alike() {
     use muir::spy;
     let n = netlist::parse(NETLIST).unwrap();
     let bus_n = netlist::parse(BUSINT).unwrap();
-    let word = 0o1234567;
+    let word: u32 = 0o1234567;
     let mut m = writes_a_diagnostic_register(spy::CLK, 0);
     // Virtual page 1 on physical page 100, valid and readable; word 5 of it
     // is the one read.
     m.l2_map[1] = (1 << 23) | (1 << 22) | 0o100;
-    m.main[(0o100 << 8) | 5] = word;
+    m.main[(0o100 << 8) | 5] = word.into();
     m.mmem[3] = (1 << 8) | 5;
     let mut prom = m.prom.clone();
     // Well past where the machine halts, so that the read is the console's
@@ -5930,7 +5948,7 @@ fn chip_and_rtl_start_a_stepped_read_while_halted_alike() {
     }
     let mm = Ram::new(&c, &n, &MEMS[1]);
     assert_eq!(mm.word(&c, 4), word, "the board: the instruction after the read has the word");
-    assert_eq!(r.machine().mmem[4], word, "rtl");
+    assert_eq!(r.machine().mmem[4], u64::from(word), "rtl");
 }
 
 /// **A store that writes both map levels writes level 2 at `{0, MD<12:8>}`,
@@ -6010,7 +6028,7 @@ fn the_interfaces_idle_promise_is_kept_on_the_board() {
     for (speed, mode) in [("extra slow", 0), ("normal", 2), ("fast", 3)] {
         let mut m = page_zero_on_the_diagnostic_block();
         // The error status register at virtual 22, and the mode register at 5.
-        m.mmem[1] = muir::busint::unibus_physical(0o766044) & 0xff;
+        m.mmem[1] = u64::from(muir::busint::unibus_physical(0o766044) & 0xff);
         m.mmem[2] = 0;
         m.mmem[4] = 5;
         m.mmem[5] = mode;

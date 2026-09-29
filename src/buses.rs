@@ -351,7 +351,7 @@ impl Buses {
                     // The boards answer. A write is mirrored into `main`,
                     // which is what the disk controller's DMA reads.
                     if write {
-                        self.machine.main[phys as usize] = Self::word(c, &self.xdata);
+                        self.machine.main[phys as usize] = Self::word(c, &self.xdata).into();
                     }
                     self.xbus_answered = Some(false);
                 } else if let Responder::Memory(k) = responder
@@ -366,9 +366,10 @@ impl Buses {
                     if now >= at {
                         self.machine.ns = now;
                         if write {
-                            self.machine.bus_write(phys, Self::word(c, &self.xdata));
+                            self.machine.bus_write(phys, Self::word(c, &self.xdata).into());
                         } else {
-                            let data = self.machine.bus_read(phys);
+                            // The CADR's Xbus carries 32 bits.
+                            let data = self.machine.bus_read(phys) as u32;
                             self.assert_data(data);
                         }
                         self.asserting[self.xignpar as usize] = Some(Level::Low);
@@ -386,15 +387,16 @@ impl Buses {
                     // by the address.
                     if write && self.is_display(phys) {
                         self.machine.ns = now;
-                        self.machine.bus_write(phys, Self::word(c, &self.xdata));
+                        self.machine.bus_write(phys, Self::word(c, &self.xdata).into());
                     }
                     self.xbus_answered = Some(false);
                 } else if matches!(responder, Responder::Memory(_) | Responder::Device) {
                     self.machine.ns = now;
                     if write {
-                        self.machine.bus_write(phys, Self::word(c, &self.xdata));
+                        self.machine.bus_write(phys, Self::word(c, &self.xdata).into());
                     } else {
-                        let data = self.machine.bus_read(phys);
+                        // The CADR's Xbus carries 32 bits.
+                        let data = self.machine.bus_read(phys) as u32;
                         self.assert_data(data);
                     }
                     // "Should it not be convenient for the device to produce
@@ -451,9 +453,9 @@ impl Buses {
                         // The counter's low half is the count at `-MSYN`.
                         self.machine.ns = if r == ioboard::USEC_LOW { msyn_at } else { now };
                         if write {
-                            self.machine.bus_write(phys, Self::word(c, &self.ubdata));
+                            self.machine.bus_write(phys, Self::word(c, &self.ubdata).into());
                         } else {
-                            let data = self.machine.bus_read(phys) & 0xffff;
+                            let data = self.machine.bus_read(phys) as u32 & 0xffff;
                             Self::put(c, &self.ubdata, data);
                         }
                         c.drive(self.ssyn, Level::Low);

@@ -141,7 +141,7 @@ fn on_quux_the_registers_are_the_block_disk_s() {
     m.main[0o777] = 0o1000;
     m.bus_write(REGS + 1, 0o777);
     m.bus_write(REGS + 2, 2);
-    m.bus_write(REGS, READ);
+    m.bus_write(REGS, READ.into());
     m.bus_write(REGS + 3, 0);
     assert_eq!(m.main[0o1000 + 9], 2 << 16 | 9);
     assert_eq!(m.bus_read(REGS + 2), 2, "the disk address");

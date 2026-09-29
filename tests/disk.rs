@@ -203,7 +203,7 @@ fn the_registers_are_just_below_the_unibus() {
     let mut m = Machine::new();
     assert_eq!(REGS, 0o17377774);
     // Status, with no drive.
-    assert_eq!(m.bus_read(0o17377774), status::NO_DRIVE);
+    assert_eq!(m.bus_read(0o17377774), status::NO_DRIVE.into());
     // The disk address register is the one register that reads back what was
     // written to it.
     m.bus_write(0o17377776, 0o12345670);

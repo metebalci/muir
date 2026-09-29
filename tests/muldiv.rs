@@ -375,10 +375,10 @@ fn md_program(insn: Insn) -> Machine {
     for p in 0..8u32 {
         m.l2_map[p as usize] = (1 << 23) | (1 << 22) | p;
     }
-    m.main[0o1000] = WORD;
+    m.main[0o1000] = u64::from(WORD);
     m.mmem[1] = 0o1000;
-    m.mmem[2] = LOW;
-    m.amem[0o101] = DIVISOR;
+    m.mmem[2] = u64::from(LOW);
+    m.amem[0o101] = u64::from(DIVISOR);
     m
 }
 
@@ -406,7 +406,7 @@ fn md_run<E: Engine>(
     let from = at(1, &mut e);
     let to = at(3, &mut e);
     at(5, &mut e);
-    (to - from, e.machine().mmem[5], e.machine().mmem[6])
+    (to - from, support::low(e.machine().mmem[5]), support::low(e.machine().mmem[6]))
 }
 
 /// **A `DIV` of `MD` divides the word the read brought, and is held nine
@@ -559,7 +559,7 @@ fn a_div_stopped_and_stepped_finishes_right() {
         }
         assert_eq!(ran[0], at, "the first step runs the DIV");
         let got = e.machine().vma;
-        assert_eq!(got, if q { want.1 } else { want.0 }, "Q: {q}");
+        assert_eq!(got, if q { want.1 } else { want.0 }.into(), "Q: {q}");
     }
 }
 

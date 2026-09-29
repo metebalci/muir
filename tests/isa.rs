@@ -53,7 +53,7 @@ fn the_a_memory_destination_address_is_ir_23_14() {
         m
     };
     let written = |m: &Machine| -> Vec<usize> {
-        m.amem.iter().enumerate().filter(|(_, w)| **w == !0).map(|(i, _)| i).collect()
+        m.amem.iter().enumerate().filter(|(_, w)| **w == 0xffff_ffff).map(|(i, _)| i).collect()
     };
     let mut r = Rtl::new(program());
     r.boot();
@@ -99,7 +99,7 @@ fn pcs_with_md(e: &mut impl Engine, md: u32) -> BTreeSet<u16> {
     let mut seen = BTreeSet::new();
     e.boot();
     for n in 0..200 {
-        e.machine_mut().md = md;
+        e.machine_mut().md = u64::from(md);
         e.step().expect("stopped in the wait loop");
         // Past the run-in from the PROM's first two words.
         if n >= 4 {

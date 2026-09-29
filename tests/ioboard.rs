@@ -193,13 +193,16 @@ fn the_bus_reaches_the_board_at_the_microcodes_own_addresses() {
     // byte read as ones, as they do on the netlist board.
     assert_eq!(
         m.bus_read(0o17772045),
-        (ioboard::csr::CLOCK_READY | ioboard::csr::FLOATING) as u32,
+        ((ioboard::csr::CLOCK_READY | ioboard::csr::FLOATING) as u32).into(),
         "nothing typed, so not ready"
     );
     assert_eq!(m.bus_error, 0, "the board answers, so the cycle does not time out");
 
     m.ioboard.press(0o15);
-    assert_eq!(m.bus_read(0o17772045) & csr::KBD_READY as u32, csr::KBD_READY as u32);
+    assert_eq!(
+        m.bus_read(0o17772045) & u64::from(csr::KBD_READY as u32),
+        (csr::KBD_READY as u32).into()
+    );
     assert_eq!(m.bus_read(0o17772040) & 0o77, 0o15, "the keycode the microcode reads");
     assert_eq!(m.bus_error, 0);
 }
@@ -212,10 +215,10 @@ fn the_chaosnet_interface_answers_with_nothing_on_its_cable() {
     use muir::chaos::interface::{self as chaos, csr};
     let mut m = Machine::new();
     let my = m.bus_read(busint::unibus_physical(chaos::MY_ADDRESS));
-    assert_eq!(my, m.chaos.address as u32, "the switches");
+    assert_eq!(my, (m.chaos.address as u32).into(), "the switches");
     assert_eq!(m.bus_error & bus_error::UNIBUS_NXM, 0, "answered");
-    m.bus_write(busint::unibus_physical(chaos::CSR), csr::RESET as u32);
-    m.bus_write(busint::unibus_physical(chaos::CSR), csr::CLEAR_RECEIVER as u32);
+    m.bus_write(busint::unibus_physical(chaos::CSR), (csr::RESET as u32).into());
+    m.bus_write(busint::unibus_physical(chaos::CSR), (csr::CLEAR_RECEIVER as u32).into());
     for w in [1 << 8, 4, 0o3060, 0, 0o3050, 1, 1, 0, 0x4954, 0x454d, 0o3060] {
         m.bus_write(busint::unibus_physical(chaos::WRITE_BUFFER), w);
     }

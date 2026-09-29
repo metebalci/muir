@@ -149,7 +149,7 @@ fn shot(e: &impl Engine, name: &str) -> String {
 /// `%MICROCODE-VERSION-NUMBER`, A memory's word 40 (`mcr::Mcr::version`
 /// has where that is from), as the running machine holds it.
 fn microcode_version(e: &impl Engine) -> u32 {
-    e.machine().amem[0o40] & 0o77777777
+    support::low(e.machine().amem[0o40]) & 0o77777777
 }
 
 /// **The band is System 2000 on microcode 2000**, as the disk says: its
@@ -403,14 +403,19 @@ fn band_symbol_in(band: &str, name: &str, space: &str) -> u16 {
 /// microcycles and the time, and where the machine is.
 fn machine_state<E: Engine>(e: &E) -> impl PartialEq + std::fmt::Debug + use<E> {
     let m = e.machine();
-    let digest = |w: &[u32]| {
-        w.iter().fold(0xcbf29ce484222325u64, |h, &x| (h ^ x as u64).wrapping_mul(0x100000001b3))
+    let digest = |w: &mut dyn Iterator<Item = u64>| {
+        w.fold(0xcbf29ce484222325u64, |h, x| (h ^ x).wrapping_mul(0x100000001b3))
     };
     let imem: Vec<u64> = m.imem.iter().map(|i| i.raw()).collect();
     (
         (m.cycles, m.ns, e.pc(), m.lc, m.spcptr, m.pdl_pointer, m.pdl_index),
         (m.amem.to_vec(), m.mmem, m.spc, m.q, m.vma, m.md),
-        (digest(&m.dmem), digest(&m.pdl), digest(&m.main), digest(m.tv.buffer())),
+        (
+            digest(&mut m.dmem.iter().map(|&x| u64::from(x))),
+            digest(&mut m.pdl.iter().copied()),
+            digest(&mut m.main.iter().copied()),
+            digest(&mut m.tv.buffer().iter().map(|&x| u64::from(x))),
+        ),
         imem.iter().fold(0u64, |h, &x| (h ^ x).wrapping_mul(0x100000001b3)),
     )
 }

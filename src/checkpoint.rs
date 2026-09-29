@@ -43,29 +43,79 @@ pub fn bad(what: impl std::fmt::Display) -> Error {
     Error::new(ErrorKind::InvalidData, format!("checkpoint: {what}"))
 }
 
+/// A word of a 32-bit machine, as a checkpoint has always written it: four
+/// bytes. A wider machine's words take [`Writer::set_word_bits`]'s bytes.
+const WORD_BYTES_32: usize = 4;
+
+/// How many bytes a word of `bits` takes: 4 for 32 bits, 5 for 40.
+fn word_bytes(bits: u32) -> usize {
+    bits.div_ceil(8) as usize
+}
+
 /// The fields of a checkpoint, in order, little-endian.
-#[derive(Default)]
-pub struct Writer(Vec<u8>);
+pub struct Writer {
+    out: Vec<u8>,
+    /// The bytes a word ([`crate::machine::Word`]) takes: four on a 32-bit
+    /// machine, five on a 40-bit one. The machine sets it before its words
+    /// ([`crate::machine::Machine::save`]), and the engine's words after
+    /// it take the same.
+    word_bytes: usize,
+}
+
+impl Default for Writer {
+    fn default() -> Writer {
+        Writer { out: Vec::new(), word_bytes: WORD_BYTES_32 }
+    }
+}
 
 impl Writer {
     pub fn new() -> Writer {
         Writer::default()
     }
 
+    /// Words from here on are `bits` wide: 32 or 40.
+    pub fn set_word_bits(&mut self, bits: u32) {
+        self.word_bytes = word_bytes(bits);
+    }
+
+    /// A word ([`crate::machine::Word`]), in as many bytes as the width
+    /// takes. Nothing above the width is written: a 32-bit machine's word
+    /// is four bytes, as it always was.
+    pub fn word(&mut self, v: u64) {
+        self.out.extend_from_slice(&v.to_le_bytes()[..self.word_bytes]);
+    }
+
+    /// A count, then the words. Main memory is most of a checkpoint, so a
+    /// 32-bit machine's words take the four-byte road straight.
+    pub fn words(&mut self, v: &[u64]) {
+        self.u64(v.len() as u64);
+        let n = self.word_bytes;
+        self.out.reserve(n * v.len());
+        if n == WORD_BYTES_32 {
+            for &x in v {
+                self.out.extend_from_slice(&(x as u32).to_le_bytes());
+            }
+        } else {
+            for &x in v {
+                self.out.extend_from_slice(&x.to_le_bytes()[..n]);
+            }
+        }
+    }
+
     pub fn u8(&mut self, v: u8) {
-        self.0.push(v);
+        self.out.push(v);
     }
 
     pub fn u16(&mut self, v: u16) {
-        self.0.extend_from_slice(&v.to_le_bytes());
+        self.out.extend_from_slice(&v.to_le_bytes());
     }
 
     pub fn u32(&mut self, v: u32) {
-        self.0.extend_from_slice(&v.to_le_bytes());
+        self.out.extend_from_slice(&v.to_le_bytes());
     }
 
     pub fn u64(&mut self, v: u64) {
-        self.0.extend_from_slice(&v.to_le_bytes());
+        self.out.extend_from_slice(&v.to_le_bytes());
     }
 
     pub fn bool(&mut self, v: bool) {
@@ -98,7 +148,7 @@ impl Writer {
     /// A count, then the items.
     pub fn bytes(&mut self, v: &[u8]) {
         self.u64(v.len() as u64);
-        self.0.extend_from_slice(v);
+        self.out.extend_from_slice(v);
     }
 
     pub fn u16s(&mut self, v: &[u16]) {
@@ -122,8 +172,13 @@ impl Writer {
         }
     }
 
+    /// The width words are written at, in bits of whole bytes.
+    pub fn word_bits(&self) -> u32 {
+        self.word_bytes as u32 * 8
+    }
+
     pub fn finish(self) -> Vec<u8> {
-        self.0
+        self.out
     }
 }
 
@@ -135,7 +190,7 @@ impl Writer {
 /// field is: each carries its own counts.
 impl io::Write for Writer {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.extend_from_slice(buf);
+        self.out.extend_from_slice(buf);
         Ok(buf.len())
     }
 
@@ -149,11 +204,52 @@ impl io::Write for Writer {
 pub struct Reader<'a> {
     data: &'a [u8],
     at: usize,
+    /// The bytes a word takes, as [`Writer`] has it. The body does not say:
+    /// whoever reads it knows the width, as a resume knows the memory
+    /// boards from the header.
+    word_bytes: usize,
 }
 
 impl<'a> Reader<'a> {
+    /// A body of a 32-bit machine's.
     pub fn new(data: &'a [u8]) -> Reader<'a> {
-        Reader { data, at: 0 }
+        Reader { data, at: 0, word_bytes: WORD_BYTES_32 }
+    }
+
+    /// A body of a machine whose words are `bits` wide, 32 or 40.
+    pub fn for_word_bits(data: &'a [u8], bits: u32) -> Reader<'a> {
+        Reader { data, at: 0, word_bytes: word_bytes(bits) }
+    }
+
+    /// The width this reader takes words at.
+    pub fn word_bits(&self) -> u32 {
+        self.word_bytes as u32 * 8
+    }
+
+    /// A word, [`Writer::word`].
+    pub fn word(&mut self) -> io::Result<u64> {
+        let mut b = [0u8; 8];
+        b[..self.word_bytes].copy_from_slice(self.take(self.word_bytes)?);
+        Ok(u64::from_le_bytes(b))
+    }
+
+    /// A count that has to be the slot's own size, then the words into it.
+    pub fn words_into(&mut self, into: &mut [u64]) -> io::Result<()> {
+        let n = self.count_for(into.len())?;
+        let size = self.word_bytes;
+        let bytes = self.take(n * size)?;
+        if size == WORD_BYTES_32 {
+            for (x, b) in into.iter_mut().zip(bytes.chunks_exact(size)) {
+                *x = u32::from_le_bytes(b.try_into().unwrap()).into();
+            }
+        } else {
+            for (x, b) in into.iter_mut().zip(bytes.chunks_exact(size)) {
+                let mut w = [0u8; 8];
+                w[..size].copy_from_slice(b);
+                *x = u64::from_le_bytes(w);
+            }
+        }
+        Ok(())
     }
 
     fn take(&mut self, n: usize) -> io::Result<&'a [u8]> {

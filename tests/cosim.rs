@@ -265,8 +265,8 @@ fn the_engines_hold_the_same_lc_until_their_clocks_part() {
     let (x, y) = (a.machine(), b.machine());
     let sync = muir::tv::mode::VSYNC | muir::tv::mode::HSYNC;
     assert_eq!(
-        (x.md ^ y.md) & !sync,
-        muir::tv::mode::VERT,
+        (x.md ^ y.md) & u64::from(!sync),
+        muir::tv::mode::VERT.into(),
         "MD differs in the vertical flag, the sync bits aside"
     );
     assert_ne!(x.tv.vert_flag(x.ns), y.tv.vert_flag(y.ns), "and the flag itself is what differs");
@@ -426,11 +426,11 @@ fn the_lc_shift_selects_the_byte_the_diagnostics_expect() {
         let mut m = Machine::new();
         // The constants the program takes from A memory, and the all-ones
         // word it shifts, in M memory 2.
-        m.amem[10] = (byte_mode as u32) << 29;
-        m.amem[11] = lc;
+        m.amem[10] = u64::from((byte_mode as u32) << 29);
+        m.amem[11] = u64::from(lc);
         m.amem[12] = 0;
-        m.mmem[2] = !0;
-        m.amem[2] = !0;
+        m.mmem[2] = 0xffff_ffff;
+        m.amem[2] = 0xffff_ffff;
         // `tests/chip.rs`'s encoding: `IR<13:12>` = 1 puts the ALU on OB,
         // `IR<8:3>` = 5 is SETA, the A address is `IR<41:32>` and a
         // functional destination is `IR<23:19>` with `IR<25>` clear.
@@ -461,7 +461,7 @@ fn the_lc_shift_selects_the_byte_the_diagnostics_expect() {
         for _ in 0..8 {
             e.step().unwrap();
         }
-        e.machine().amem[0o200]
+        support::low(e.machine().amem[0o200])
     }
     let cases = [
         (true, 1, 8, 0xffu32),
@@ -601,14 +601,14 @@ fn a_push_and_a_pop_at_once_count_up_and_pop_the_old_top() {
         prom[y as usize] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o202));
         prom[y as usize + 1] = here(y as u64 + 1);
         let set = |m: &mut Machine| {
-            m.mmem[1] = x;
-            m.mmem[2] = y;
-            m.amem[0o60] = (1 << 15) | y;
+            m.mmem[1] = u64::from(x);
+            m.mmem[2] = u64::from(y);
+            m.amem[0o60] = u64::from((1 << 15) | y);
         };
         let (e, r) = both(&prom, &set, 40);
         // Pointer 2 over the word, wherever it is recorded.
         let want = want.map(|w| if w == 0 { 0 } else { (2 << 24) | w });
-        let got = |m: &Machine| [m.amem[0o201], m.amem[0o202], m.amem[0o203]];
+        let got = |m: &Machine| [m.amem[0o201], m.amem[0o202], m.amem[0o203]].map(support::low);
         assert_eq!(got(r.machine()), want, "{what}: rtl");
         assert_eq!(got(e.machine()), want, "{what}: micro");
         assert_eq!(e.machine().spcptr, r.machine().spcptr, "{what}: the pointer");
@@ -685,14 +685,14 @@ fn two_pops_at_once_count_down_once_and_a_dispatch_without_r_pops_nothing() {
         prom[y as usize] = Insn::new(ALU | SETM | src(0o1) | a_dest(0o202));
         prom[y as usize + 1] = here(y as u64 + 1);
         let set = |m: &mut Machine| {
-            m.mmem[1] = x;
-            m.mmem[2] = y;
+            m.mmem[1] = u64::from(x);
+            m.mmem[2] = u64::from(y);
             m.amem[0o60] = 1 << 16;
-            m.amem[0o61] = y;
+            m.amem[0o61] = u64::from(y);
             m.amem[0o62] = (1 << 16) | (1 << 15);
         };
         let (e, r) = both(&prom, &set, 40);
-        let got = |m: &Machine| [m.amem[0o201], m.amem[0o202], m.amem[0o203]];
+        let got = |m: &Machine| [m.amem[0o201], m.amem[0o202], m.amem[0o203]].map(support::low);
         assert_eq!(got(r.machine()), want, "{what}: rtl");
         assert_eq!(got(e.machine()), want, "{what}: micro");
         assert_eq!(e.machine().spcptr, r.machine().spcptr, "{what}: the pointer");
@@ -755,14 +755,16 @@ fn a_return_pop_with_the_pop_source_arms_no_fetch() {
         prom[x as usize + 1] = Insn::new(ALU | SETM | src(0o13) | a_dest(0o211));
         prom[x as usize + 2] = here(x as u64 + 2);
         let set = |m: &mut Machine| {
-            m.mmem[1] = x | (1 << 14);
-            m.mmem[2] = y;
+            m.mmem[1] = u64::from(x | (1 << 14));
+            m.mmem[2] = u64::from(y);
             m.mmem[3] = 0o20 << 2;
             m.amem[0o60] = 1 << 16;
             m.amem[0o62] = (1 << 16) | (1 << 15);
         };
         let (e, r) = both(&prom, &set, 40);
-        let got = |m: &Machine| [m.amem[0o201], m.amem[0o211], m.amem[0o203], m.amem[0o213]];
+        let got = |m: &Machine| {
+            [m.amem[0o201], m.amem[0o211], m.amem[0o203], m.amem[0o213]].map(support::low)
+        };
         assert_eq!(got(r.machine()), want, "{what}: rtl");
         assert_eq!(got(e.machine()), want, "{what}: micro");
         assert_eq!(e.machine().spcptr, r.machine().spcptr, "{what}: the pointer");
@@ -786,8 +788,8 @@ fn a_refused_read_leaves_md_alone() {
         Insn::new(ALU | SETM | SRC_MD | a_dest(0o200)),
     ];
     let (e, r) = both(&prom, &|_| {}, 40);
-    assert_eq!(r.machine().amem[0o200], !0, "rtl: MD kept its word");
-    assert_eq!(e.machine().amem[0o200], !0, "micro: MD kept its word");
+    assert_eq!(r.machine().amem[0o200], 0xffff_ffff, "rtl: MD kept its word");
+    assert_eq!(e.machine().amem[0o200], 0xffff_ffff, "micro: MD kept its word");
 }
 
 /// **An instruction fetch is a memory cycle.** `IFETCH` is one of `MEMOP`'s
@@ -843,8 +845,12 @@ fn a_dispatch_to_a_return_and_push_entry_falls_through() {
     let set = |m: &mut Machine| m.dmem[7] = (1 << 16) | (1 << 15) | (1 << 14) | 0o100;
     let (e, r) = both(&prom, &set, 40);
     let got = |m: &Machine| [m.amem[0o201], m.amem[0o202], m.amem[0o203]];
-    assert_eq!(got(r.machine()), [0, !0, !0], "rtl: the slot inhibited, then straight on");
-    assert_eq!(got(e.machine()), [0, !0, !0], "micro likewise");
+    assert_eq!(
+        got(r.machine()),
+        [0, 0xffff_ffff, 0xffff_ffff],
+        "rtl: the slot inhibited, then straight on"
+    );
+    assert_eq!(got(e.machine()), [0, 0xffff_ffff, 0xffff_ffff], "micro likewise");
 }
 
 /// **The POPJ bit wins over a taken jump.** Page CONTRL's next-address
@@ -868,8 +874,8 @@ fn the_popj_bit_wins_over_a_taken_jump() {
     };
     let (e, r) = both(&prom, &set, 40);
     let got = |m: &Machine| (m.amem[0o201], m.amem[0o202]);
-    assert_eq!(got(r.machine()), (0, !0), "rtl pops to word 6");
-    assert_eq!(got(e.machine()), (0, !0), "micro pops to word 6");
+    assert_eq!(got(r.machine()), (0, 0xffff_ffff), "rtl pops to word 6");
+    assert_eq!(got(e.machine()), (0, 0xffff_ffff), "micro pops to word 6");
 }
 
 /// **The functional sources MIT leaves unassigned read as all ones, and
@@ -894,13 +900,13 @@ fn an_unassigned_functional_source_reads_all_ones() {
     ]);
     let (e, r) = both(&prom, &|_| {}, 40);
     let ones = |m: &Machine| [m.amem[0o201], m.amem[0o202], m.amem[0o203]];
-    assert_eq!(ones(r.machine()), [!0; 3], "rtl");
-    assert_eq!(ones(e.machine()), [!0; 3], "micro");
+    assert_eq!(ones(r.machine()), [0xffff_ffff; 3], "rtl");
+    assert_eq!(ones(e.machine()), [0xffff_ffff; 3], "micro");
     // The OPC moves with every microcycle, so the two reads of it are one
     // apart on each engine; the engines differ in how far behind the PC the
     // OPC runs, which is not what is checked here.
     for (name, m) in [("rtl", r.machine()), ("micro", e.machine())] {
-        assert_ne!(m.amem[0o204], !0, "{name}: source 26 is driven");
+        assert_ne!(m.amem[0o204], 0xffff_ffff, "{name}: source 26 is driven");
         assert_eq!(m.amem[0o205], m.amem[0o204] + 1, "{name}: 26 is the OPC, as 6 is");
     }
 }
@@ -962,8 +968,8 @@ fn the_map_write_lands_the_cycle_after_the_store() {
     let machine = || {
         let mut m = Machine::new();
         m.l1_map[L1] = 1;
-        m.amem[0o100] = MAP_WORD;
-        m.amem[0o101] = VIRTUAL;
+        m.amem[0o100] = u64::from(MAP_WORD);
+        m.amem[0o101] = u64::from(VIRTUAL);
         m.load_prom(&[
             // ((MD) SETA A-MEM 101)
             Insn::new(alu | seta | a_src(0o101) | functional(0o30)),
@@ -986,7 +992,7 @@ fn the_map_write_lands_the_cycle_after_the_store() {
             assert!(n < 64, "the map entry never appeared");
             e.step().unwrap();
             n += 1;
-            if stored.is_none() && e.machine().vma == MAP_WORD {
+            if stored.is_none() && e.machine().vma == MAP_WORD.into() {
                 stored = Some(n);
             }
             if e.machine().l2_map[L2] == (MAP_WORD & 0o77777777) {
@@ -1037,17 +1043,17 @@ fn a_map_write_whose_store_pops_into_a_fetch_still_lands() {
         filler(),
     ];
     let set = |m: &mut Machine| {
-        m.mmem[1] = VIRTUAL;
+        m.mmem[1] = u64::from(VIRTUAL);
         // LC counts bytes.
-        m.mmem[2] = FETCH_WORD << 2;
-        m.mmem[3] = MAP_WORD;
+        m.mmem[2] = u64::from(FETCH_WORD << 2);
+        m.mmem[3] = u64::from(MAP_WORD);
         m.l1_map[VIRTUAL as usize >> 13] = 1;
         // The return address for the POPJ, with bit 14: fetch on the way out.
         m.spcptr = 1;
         m.spc[1] = 3 | (1 << 14);
     };
     let (e, r) = both(&prom, &set, 12);
-    assert_eq!(r.machine().vma, FETCH_WORD, "rtl: VMA is the fetch address by the end");
+    assert_eq!(r.machine().vma, FETCH_WORD.into(), "rtl: VMA is the fetch address by the end");
     assert_eq!(r.machine().l2_map[L2], MAP_WORD & 0o77777777, "rtl: the map word landed");
     assert_eq!(e.machine().vma, r.machine().vma, "micro: VMA");
     // The counter the fetch address came from, which each engine keeps in
@@ -1137,7 +1143,7 @@ fn a_popjs_fetch_comes_the_microcycle_after_the_popj() {
     ];
     let set = |m: &mut Machine| {
         // LC counts bytes, and page 1 is mapped so the fetch is answered.
-        m.mmem[2] = FETCH_WORD << 2;
+        m.mmem[2] = u64::from(FETCH_WORD << 2);
         m.l2_map[FETCH_WORD as usize >> 8] = (1 << 23) | (1 << 22) | 0o100;
         m.spcptr = 1;
         m.spc[1] = 4 | (1 << 14);
@@ -1177,7 +1183,7 @@ fn a_fetch_armed_by_a_return_lands_in_the_inhibited_microcycle() {
         filler(),
     ];
     let set = |m: &mut Machine| {
-        m.mmem[2] = FETCH_WORD << 2;
+        m.mmem[2] = u64::from(FETCH_WORD << 2);
         m.l2_map[FETCH_WORD as usize >> 8] = (1 << 23) | (1 << 22) | 0o100;
         m.spcptr = 1;
         m.spc[1] = 4 | (1 << 14);
@@ -1212,7 +1218,7 @@ fn a_fetch_armed_before_a_write_i_mem_lands_with_it() {
         filler(),
     ];
     let set = |m: &mut Machine| {
-        m.mmem[2] = FETCH_WORD << 2;
+        m.mmem[2] = u64::from(FETCH_WORD << 2);
         m.l2_map[FETCH_WORD as usize >> 8] = (1 << 23) | (1 << 22) | 0o100;
         m.spcptr = 1;
         m.spc[1] = 2 | (1 << 14);
@@ -1251,8 +1257,8 @@ fn a_pdl_read_right_after_a_push_gets_the_old_word() {
     ];
     let (e, r) = both(&prom, &|_| {}, 40);
     let got = |m: &Machine| (m.amem[0o201], m.amem[0o202]);
-    assert_eq!(got(r.machine()), (0, !0), "rtl");
-    assert_eq!(got(e.machine()), (0, !0), "micro");
+    assert_eq!(got(r.machine()), (0, 0xffff_ffff), "rtl");
+    assert_eq!(got(e.machine()), (0, 0xffff_ffff), "micro");
 }
 
 /// **The same for the SPC stack's M source.** The pointer moves at the edge
@@ -1290,8 +1296,8 @@ fn a_return_right_after_a_push_takes_the_pushed_word() {
     prom[0o10] = Insn::new(ALU | SETO | a_dest(0o202));
     let (e, r) = both(&prom, &|m| m.mmem[1] = 0o10, 40);
     let got = |m: &Machine| (m.amem[0o201], m.amem[0o202]);
-    assert_eq!(got(r.machine()), (0, !0), "rtl returns to 10");
-    assert_eq!(got(e.machine()), (0, !0), "micro returns to 10");
+    assert_eq!(got(r.machine()), (0, 0xffff_ffff), "rtl returns to 10");
+    assert_eq!(got(e.machine()), (0, 0xffff_ffff), "micro returns to 10");
 }
 
 /// **While a memory cycle starts, the map is addressed by `VMA`.** `MAPI`
@@ -1344,8 +1350,8 @@ fn a_map_dispatch_right_after_a_start_takes_the_vma_page_bit() {
     };
     let (e, r) = both(&prom, &set, 60);
     let got = |m: &Machine| (m.amem[0o210], m.amem[0o211]);
-    assert_eq!(got(r.machine()), (0, !0), "rtl goes to 51");
-    assert_eq!(got(e.machine()), (0, !0), "micro goes to 51");
+    assert_eq!(got(r.machine()), (0, 0xffff_ffff), "rtl goes to 51");
+    assert_eq!(got(e.machine()), (0, 0xffff_ffff), "micro goes to 51");
 }
 
 /// **A jump's bit test takes the location counter's byte select** when
@@ -1370,8 +1376,8 @@ fn a_jump_bit_test_takes_the_lc_rotate() {
     };
     let (e, r) = both(&prom, &set, 20);
     let got = |m: &Machine| (m.amem[0o201], m.amem[0o202]);
-    assert_eq!(got(r.machine()), (0, !0), "rtl takes it");
-    assert_eq!(got(e.machine()), (0, !0), "micro takes it");
+    assert_eq!(got(r.machine()), (0, 0xffff_ffff), "rtl takes it");
+    assert_eq!(got(e.machine()), (0, 0xffff_ffff), "micro takes it");
 }
 
 /// **Functional source 6 is the OPC shift register's last stage**, eight

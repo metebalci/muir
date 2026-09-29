@@ -44,8 +44,8 @@ fn each_word_is_its_unibus_register() {
         let (u, p) = at(k);
         match write {
             Some(v) => {
-                a.bus_write(u, v);
-                b.bus_write(p, v);
+                a.bus_write(u, v.into());
+                b.bus_write(p, v.into());
                 (0, 0)
             }
             None => (a.bus_read(u) & 0xffff, b.bus_read(p)),
@@ -66,8 +66,12 @@ fn each_word_is_its_unibus_register() {
     for (n, (u, p)) in reads.iter().enumerate() {
         assert_eq!(u, p, "read {n}: Unibus {u:o}, page {p:o}");
     }
-    assert_ne!(reads[0].1 & enables, 0, "the enables read back");
-    assert_eq!(reads[1].1, a.ioboard.chaos.as_ref().unwrap().address() as u32, "my address");
+    assert_ne!(reads[0].1 & u64::from(enables), 0, "the enables read back");
+    assert_eq!(
+        reads[1].1,
+        (a.ioboard.chaos.as_ref().unwrap().address() as u32).into(),
+        "my address"
+    );
     assert_eq!(b.bus_error & bus_error::XBUS_NXM, 0, "the page answered");
 }
 
@@ -86,8 +90,8 @@ fn a_frame_goes_out_and_its_answer_comes_back() {
         .serving(root.path().to_path_buf())
         .at_time(support::time::TEST_UNIVERSAL)
         .plug(&mut m, 0);
-    m.bus_write(NET, (csr::RESET | csr::CLEAR_RECEIVER) as u32);
-    m.bus_write(NET, csr::RECEIVE_INT_ENABLE as u32);
+    m.bus_write(NET, ((csr::RESET | csr::CLEAR_RECEIVER) as u32).into());
+    m.bus_write(NET, (csr::RECEIVE_INT_ENABLE as u32).into());
     let rfc = Packet {
         opcode: op::RFC,
         forward: 0,
@@ -100,14 +104,14 @@ fn a_frame_goes_out_and_its_answer_comes_back() {
         data: b"STATUS".to_vec(),
     };
     for w in rfc.to_buffer(host) {
-        m.bus_write(NET + 1, w as u32);
+        m.bus_write(NET + 1, (w as u32).into());
     }
     m.bus_read(NET + 5);
     let mut done = false;
     for _ in 0..20_000 {
         m.ns += 5_000;
         m.ioboard.advance(m.ns);
-        if m.bus_read(NET) & csr::RECEIVE_DONE as u32 != 0 {
+        if m.bus_read(NET) & u64::from(csr::RECEIVE_DONE as u32) != 0 {
             done = true;
             break;
         }
@@ -145,7 +149,7 @@ fn only_the_five_registers_are_decoded() {
         w.finish()
     };
     let mut m = quux();
-    m.bus_write(NET, csr::RECEIVE_INT_ENABLE as u32);
+    m.bus_write(NET, (csr::RECEIVE_INT_ENABLE as u32).into());
     let csr_now = m.bus_read(NET);
     assert_ne!(csr_now, 0, "the CSR reads something to alias");
     for k in [4, 6, 7] {
@@ -162,7 +166,7 @@ fn only_the_five_registers_are_decoded() {
     m.bus_write(NET + 1, 0o1234);
     assert!(state(&m) != s, "141 written: the write buffer took the word");
     m.bus_write(NET, 0);
-    assert_eq!(m.bus_read(NET) & csr::RECEIVE_INT_ENABLE as u32, 0, "140 written");
+    assert_eq!(m.bus_read(NET) & u64::from(csr::RECEIVE_INT_ENABLE as u32), 0, "140 written");
 }
 
 /// **The CADR has none of it on the page**: word 140 is in its Unibus

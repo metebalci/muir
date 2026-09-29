@@ -29,6 +29,7 @@
 
 use crate::disk_image::Disk;
 use crate::disk_unit::BLOCK_WORDS;
+use crate::machine::MemoryWord;
 
 /// The registers' first physical address: word 200 of the register page
 /// (contract Q13).
@@ -167,7 +168,7 @@ impl BlockDisk {
 
     /// `main` is physical memory, which a transfer reads and writes
     /// directly, the disk being a bus master.
-    pub fn write(&mut self, register: u32, v: u32, main: &mut [u32]) {
+    pub fn write<W: MemoryWord>(&mut self, register: u32, v: u32, main: &mut [W]) {
         match register & 3 {
             COMMAND => {
                 self.cmd = v;
@@ -181,7 +182,7 @@ impl BlockDisk {
         }
     }
 
-    fn start(&mut self, main: &mut [u32]) {
+    fn start<W: MemoryWord>(&mut self, main: &mut [W]) {
         self.past_end = false;
         self.nxm = false;
         self.bad_command = false;
@@ -201,7 +202,7 @@ impl BlockDisk {
             // "Only bits <15:0> of the CLP can count", as on the CADR.
             let clp = self.clp & !0xffff | (self.clp.wrapping_add(n)) & 0xffff;
             self.last_memory_address = clp;
-            let Some(&ccw) = main.get(clp as usize) else {
+            let Some(ccw) = main.get(clp as usize).map(|&w| w.low()) else {
                 self.nxm = true;
                 break;
             };
@@ -213,13 +214,15 @@ impl BlockDisk {
             let ok = if read {
                 match disk.read_block(block) {
                     Some(b) => {
-                        main[page..page + BLOCK_WORDS].copy_from_slice(&b);
+                        for (m, &d) in main[page..page + BLOCK_WORDS].iter_mut().zip(&b) {
+                            *m = W::of(d);
+                        }
                         true
                     }
                     None => false,
                 }
             } else {
-                let b: [u32; BLOCK_WORDS] = main[page..page + BLOCK_WORDS].try_into().unwrap();
+                let b: [u32; BLOCK_WORDS] = std::array::from_fn(|k| main[page + k].low());
                 disk.write_block(block, &b)
             };
             if !ok {

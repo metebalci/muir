@@ -23,8 +23,8 @@ mod support;
 use support::{CHAOS_100, boot_to_the_prompt, machine_with_pack, type_at};
 
 /// A fixnum out of A memory, signed from its 24-bit pointer field.
-fn fixnum(word: u32) -> i32 {
-    ((word & 0o77777777) as i32) << 8 >> 8
+fn fixnum(word: muir::machine::Word) -> i32 {
+    ((support::low(word) & 0o77777777) as i32) << 8 >> 8
 }
 
 /// **A viewer's pointer moves the machine's mouse.** The boot runs over

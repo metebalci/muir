@@ -51,7 +51,7 @@ use crate::busint;
 use crate::clock::Speed;
 use crate::engine::Engine;
 use crate::isa::{Insn, Op};
-use crate::machine::{Halt, LVMO_AT_POWER_ON, Machine};
+use crate::machine::{Halt, LVMO_AT_POWER_ON, Machine, Word};
 use crate::muldiv;
 use crate::spy;
 use crate::ttl;
@@ -89,16 +89,16 @@ pub struct Micro {
     oa_low: u64,
     oa_high: u64,
 
-    new_md: u32,
+    new_md: Word,
     new_md_delay: u8,
 
     aaddr: u16,
     maddr: u8,
-    adata: u32,
-    mdata: u32,
-    alu_out: u32,
-    old_q: u32,
-    out: u32,
+    adata: Word,
+    mdata: Word,
+    alu_out: Word,
+    old_q: Word,
+    out: Word,
     iwr: u64,
 
     executed: Option<u16>,
@@ -163,7 +163,7 @@ pub struct Micro {
     /// The PDL buffer write an instruction hands to the next microcycle's
     /// write phase, `PDLWRITED`: the address and the word, the address
     /// [`PDL_AT_INDEX`] for a write by PDL-INDEX.
-    pdl_write: Option<(u16, u32)>,
+    pdl_write: Option<(u16, Word)>,
     /// The SPC write the same way, `SPUSHD`: the pointer and the word.
     spc_write: Option<(u8, u32)>,
     /// The OPC shift register on page OPCS, eight deep, and its clock's
@@ -378,7 +378,7 @@ impl Micro {
     /// `-MEMSTART`, so it is `VMA` through the microcycle after a memory
     /// operation and `MD` otherwise.
     fn map_address(&self) -> u32 {
-        if self.memstart { self.m.vma } else { self.m.md }
+        (if self.memstart { self.m.vma } else { self.m.md }) as u32
     }
 
     /// The write phase of this microcycle, which writes what the one
@@ -530,7 +530,7 @@ impl Micro {
         let inc = if self.m.byte_mode() { 1 } else { 2 };
         let stepped = (self.m.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
         let rotate = self.lc_rotation(stepped, crate::machine::macro_dispatch::INDEX_ROTATE);
-        let rotated = rol(self.m.mmem[0o31], rotate);
+        let rotated = rol(self.m.mmem[0o31] as u32, rotate);
         match self.m.macro_dispatch.fused_return(word, rotated) {
             Some(f) => {
                 if f.keep {
@@ -680,7 +680,7 @@ impl Micro {
             // `LC<25:2>` under it, so the fetch is a memory cycle like any
             // read: the map word latched, the clock charged, `MD` loaded
             // only if the map permits.
-            self.m.vma = fetch_from;
+            self.m.vma = fetch_from.into();
             self.start_read();
         }
 
@@ -708,7 +708,7 @@ impl Micro {
     ///
     /// `(X)` is the PDL addressed by the index and `(P)` by the pointer.
     /// Code 4 MIT calls illegal, and 15 to 17 it leaves unassigned.
-    fn read_functional(&mut self, source: u8) -> Result<u32, Halt> {
+    fn read_functional(&mut self, source: u8) -> Result<Word, Halt> {
         // The SPC word carries the pointer above the entry it selects.
         let spc_word =
             |m: &Machine| ((m.spcptr as u32) << 24) | (m.spc[m.spcptr as usize] & 0o1777777);
@@ -723,12 +723,12 @@ impl Micro {
             |m: &Machine| if by_pointer { m.pdl_pointer as usize } else { m.pdl_index as usize };
         Ok(match source & 0o17 {
             // Dispatch Constant
-            0o0 => self.m.dispatch_constant as u32,
+            0o0 => self.m.dispatch_constant.into(),
             // SPC pointer and data
-            0o1 => spc_word(&self.m),
+            0o1 => spc_word(&self.m).into(),
             // Pdl Buffer Pointer, Pdl Buffer Index
-            0o2 => (self.m.pdl_pointer & self.m.geometry.pdl_mask()) as u32,
-            0o3 => (self.m.pdl_index & self.m.geometry.pdl_mask()) as u32,
+            0o2 => (self.m.pdl_pointer & self.m.geometry.pdl_mask()).into(),
+            0o3 => (self.m.pdl_index & self.m.geometry.pdl_mask()).into(),
             // Pdl Buffer Pop: by the pointer as 24, or by the index as 4,
             // MIT's `Illegal (Pdl)`, the pointer counting down either way
             // (`PDLCNT` on page PDLCTL).
@@ -742,7 +742,7 @@ impl Micro {
             0o5 => self.m.pdl[pdl_at(&self.m)],
             // OPC, Q.  Page OPCD drives `MF<13:0>` from the shift register's
             // last stage, eight microcycles back.
-            0o6 => self.opc[7] as u32,
+            0o6 => self.opc[7].into(),
             0o7 => self.m.q,
             // VMA
             0o10 => self.m.vma,
@@ -762,40 +762,36 @@ impl Micro {
                 let t = self.map_seen.unwrap_or_else(|| self.m.translate(self.map_address()));
                 let pfr = (self.lvmo >> 23) & 1 != 0;
                 let pfw = !((self.lvmo >> 22) & 1 == 0 && self.wrcyc);
-                ((!pfw as u32) << 31)
+                (((!pfw as u32) << 31)
                     | ((!pfr as u32) << 30)
                     | ((t.l1_data & self.m.geometry.l1_mask()) << 24)
-                    | (t.l2_data & 0o77777777)
+                    | (t.l2_data & 0o77777777))
+                    .into()
             }
             // MD
             0o12 => self.m.md,
             // Location Counter.  Bit 0 only means anything in byte mode.
-            0o13 => {
-                if self.m.byte_mode() {
-                    self.m.lc
-                } else {
-                    self.m.lc & !1
-                }
-            }
+            0o13 => (if self.m.byte_mode() { self.m.lc } else { self.m.lc & !1 }).into(),
             // SPC ptr & data, pop
             0o14 => {
                 let v = spc_word(&self.m);
                 self.m.spcptr = self.m.spcptr.wrapping_sub(1) & 0o37;
                 self.spc_popped = true;
-                v
+                v.into()
             }
             // QUUX's MACHINE-ID, where it has one (`Geometry::QUUX`).
             0o16 if self.m.geometry.machine_id.is_some() => {
-                self.m.geometry.machine_id.unwrap_or(!0)
+                self.m.geometry.machine_id.unwrap_or(!0).into()
             }
             // QUUX's microsecond clock (`machine::Timers`).
-            0o15 if self.m.geometry.tick => crate::machine::Timers::microseconds(self.m.ns),
+            0o15 if self.m.geometry.tick => crate::machine::Timers::microseconds(self.m.ns).into(),
             // Functional sources 0o15, 0o16 and 0o17: the 74S138 for the
             // upper eight has those three outputs unconnected, so no part
             // drives the M bus and an undriven TTL bus reads high, as `chip`
             // shows. Microcode 323 reads 0o15 once, at 0o20535. On QUUX,
-            // 0o17 too since revision 10 (contract Q11).
-            _ => !0,
+            // 0o17 too since revision 10 (contract Q11). All the word's
+            // bits: 32 on every machine the executables run.
+            _ => self.m.geometry.word_mask(),
         })
     }
 
@@ -845,7 +841,7 @@ impl Micro {
     /// registers do: `-WP1` fires before the edge that would change them.
     /// Held to `rtl` in `tests/cosim.rs`.
     fn arm_map_write(&mut self) {
-        self.map_write = Some((self.m.vma, self.m.md));
+        self.map_write = Some((self.m.vma as u32, self.m.md as u32));
     }
 
     /// `MAPWR0D` and `MAPWR1D` fire from `WMAPD`, in the microcycle after
@@ -874,7 +870,9 @@ impl Micro {
     /// 3 to 7 are the low group with no decoder output, so only M is
     /// written; and the memory group decodes `IR<20:19>` without `IR<21>`,
     /// so 24 to 27 are 20 to 23 and 34 to 37 are 30 to 33.
-    fn write_functional(&mut self, dest: u16, data: u32) -> Result<(), Halt> {
+    fn write_functional(&mut self, dest: u16, word: Word) -> Result<(), Halt> {
+        // The destinations that are not words take `<31:0>`.
+        let data = word as u32;
         let code = (dest >> 5) & 0o37;
         let code = if code & 0o20 != 0 { code & !0o4 } else { code };
         match code {
@@ -917,12 +915,12 @@ impl Micro {
             // Pdl Buffer Top, Push, (Index), Index, Pointer
             // The word is written in the next microcycle's write phase,
             // [`Micro::land_writes`].
-            0o10 => self.pdl_write = Some((self.m.pdl_pointer, data)),
+            0o10 => self.pdl_write = Some((self.m.pdl_pointer, word)),
             0o11 => {
                 self.m.pdl_pointer = (self.m.pdl_pointer + 1) & self.m.geometry.pdl_mask();
-                self.pdl_write = Some((self.m.pdl_pointer, data));
+                self.pdl_write = Some((self.m.pdl_pointer, word));
             }
-            0o12 => self.pdl_write = Some((PDL_AT_INDEX, data)),
+            0o12 => self.pdl_write = Some((PDL_AT_INDEX, word)),
             0o13 => self.m.pdl_index = data as u16 & self.m.geometry.pdl_mask(),
             0o14 => self.m.pdl_pointer = data as u16 & self.m.geometry.pdl_mask(),
             // SPC, push
@@ -938,31 +936,31 @@ impl Micro {
                 self.oah = true;
             }
             // VMA, and the three that start a cycle with it
-            0o20 => self.m.vma = data,
+            0o20 => self.m.vma = word,
             0o21 => {
-                self.m.vma = data;
+                self.m.vma = word;
                 self.start_read();
             }
             0o22 => {
-                self.m.vma = data;
+                self.m.vma = word;
                 self.start_write();
             }
             0o23 => {
-                self.m.vma = data;
+                self.m.vma = word;
                 self.arm_map_write();
             }
             // MD, and the three that start a cycle with it
-            0o30 => self.m.md = data,
+            0o30 => self.m.md = word,
             0o31 => {
-                self.m.md = data;
+                self.m.md = word;
                 self.start_read();
             }
             0o32 => {
-                self.m.md = data;
+                self.m.md = word;
                 self.start_write();
             }
             0o33 => {
-                self.m.md = data;
+                self.m.md = word;
                 self.arm_map_write();
             }
             _ => {}
@@ -973,13 +971,13 @@ impl Micro {
     /// A read, with the diagnostic block answered by this engine and not by
     /// [`Machine`]: what the cpu drives onto `SPY<15:0>` under `-DBREAD` is
     /// its own state, which `Machine` does not have.
-    fn read(&mut self, vma: u32) -> u32 {
+    fn read(&mut self, vma: u32) -> Word {
         let t = self.m.translate(vma);
         if t.access_permitted
             && let Some(eadr) = busint::unibus_address(t.physical).and_then(spy::register)
         {
             self.m.vmaok = true;
-            return self.spy_read(eadr) as u32;
+            return self.spy_read(eadr).into();
         }
         self.m.vm_read(vma)
     }
@@ -1021,7 +1019,7 @@ impl Micro {
             self.write_goes_out();
         }
         self.memop = true;
-        self.lvmo = self.m.translate(self.m.vma).l2_data;
+        self.lvmo = self.m.translate(self.m.vma as u32).l2_data;
         self.wrcyc = write;
         if !lost {
             self.m.ns += self.memory_cycle_ns;
@@ -1059,7 +1057,7 @@ impl Micro {
     fn start_write(&mut self) {
         let after_a_start = self.memstart;
         self.start_cycle(true);
-        let t = self.m.translate(self.m.vma);
+        let t = self.m.translate(self.m.vma as u32);
         self.m.vmaok = t.access_permitted && t.write_permitted;
         if self.m.vmaok {
             let when = if after_a_start && self.m.geometry.unibus {
@@ -1130,8 +1128,8 @@ impl Micro {
     /// tests for the fault.
     fn start_read(&mut self) {
         self.start_cycle(false);
-        if self.m.translate(self.m.vma).access_permitted {
-            self.new_md = self.read(self.m.vma);
+        if self.m.translate(self.m.vma as u32).access_permitted {
+            self.new_md = self.read(self.m.vma as u32);
             self.new_md_delay = 2;
         } else {
             self.m.vmaok = false;
@@ -1186,6 +1184,10 @@ enum WriteOut {
 /// the write lands: no PDL address, which is fourteen bits at most.
 const PDL_AT_INDEX: u16 = u16::MAX;
 
+/// A word's `<31:0>`: the CADR's whole word, and what the arithmetic,
+/// the shifts and the rotator act on in a 40-bit one (contract G2 §2.2).
+const LOW: Word = 0xffff_ffff;
+
 /// Rotate left, the machine's only shifter primitive.
 fn rol(v: u32, n: u32) -> u32 {
     v.rotate_left(n & 31)
@@ -1205,32 +1207,38 @@ impl Micro {
             true,
             false,
         );
-        let alu = ttl::alu(self.mdata, self.adata, ctl.aluf, ctl.alumode, ctl.cin);
-        self.alu_out = alu.f as u32;
+        let alu = ttl::alu(self.mdata as u32, self.adata as u32, ctl.aluf, ctl.alumode, ctl.cin);
+        // A 40-bit word's `<39:32>`: M's, or a logical function's of both
+        // (contract G2 §2.2). Every shift and step below acts on `<31:0>`.
+        let mtag = self.mdata & !LOW;
+        let tag = if self.m.geometry.wide() {
+            ttl::alu_tag(self.mdata, self.adata, ctl.aluf, ctl.alumode)
+        } else {
+            0
+        };
+        self.alu_out = (alu.f & LOW) | tag;
         self.old_q = self.m.q;
 
         // QUUX's multiply and divide drive the output bus and load Q
-        // whatever IR<13:12> and IR<1:0> say.
+        // whatever IR<13:12> and IR<1:0> say: on `<31:0>`, the output's
+        // `<39:32>` M's and Q's its own.
         if let Some(op) = self.muldiv() {
-            let (out, q) = muldiv::run(op, self.mdata, self.adata, self.m.q);
-            self.m.q = q;
-            self.out = out;
+            let (out, q) = muldiv::run(op, self.mdata as u32, self.adata as u32, self.m.q as u32);
+            self.m.q = (self.m.q & !LOW) | Word::from(q);
+            self.out = mtag | Word::from(out);
             return self.write_dest(dest);
         }
 
-        // Q control, IR<1:0>.
+        // Q control, IR<1:0>: the shifts on `Q<31:0>`, whatever is above.
+        let q_low = self.m.q as u32;
         match self.ir(0, 2) {
             1 => {
-                self.m.q <<= 1;
-                if self.alu_out & 0x8000_0000 == 0 {
-                    self.m.q |= 1;
-                }
+                let low = q_low << 1 | (self.alu_out & 0x8000_0000 == 0) as u32;
+                self.m.q = (self.m.q & !LOW) | Word::from(low);
             }
             2 => {
-                self.m.q >>= 1;
-                if self.alu_out & 1 != 0 {
-                    self.m.q |= 0x8000_0000;
-                }
+                let low = q_low >> 1 | (self.alu_out as u32 & 1) << 31;
+                self.m.q = (self.m.q & !LOW) | Word::from(low);
             }
             3 => self.m.q = self.alu_out,
             _ => {}
@@ -1256,11 +1264,11 @@ impl Micro {
                 }
                 let left = (rotate + self.ir(5, 5)) & 0o37;
                 let mask = (!0u32 >> (31 - left)) & (!0u32 << rotate);
-                (rol(self.mdata, rotate) & mask) | (self.adata & !mask)
+                Word::from(rol(self.mdata as u32, rotate) & mask) | (self.adata & !Word::from(mask))
             }
             1 => self.alu_out,
-            2 => (alu.f >> 1) as u32,
-            _ => (self.alu_out << 1) | (self.old_q >> 31),
+            2 => mtag | ((alu.f >> 1) & LOW),
+            _ => mtag | Word::from((self.alu_out as u32) << 1 | (self.old_q as u32) >> 31),
         };
 
         self.write_dest(dest)
@@ -1291,9 +1299,9 @@ impl Micro {
     /// instruction is not a BYTE.
     fn jump_condition(&mut self) -> bool {
         let rotate = if self.ir(10, 2) == 3 { self.lc_byte_mode() } else { self.ir(0, 5) };
-        let r = rol(self.mdata, rotate);
+        let r = rol(self.mdata as u32, rotate);
         if self.ir(5, 1) == 0 {
-            self.mdata = r;
+            self.mdata = (self.mdata & !LOW) | Word::from(r);
             return r & 1 != 0;
         }
         let ctl = ttl::alu_control(
@@ -1303,7 +1311,7 @@ impl Micro {
             false,
             true,
         );
-        let alu = ttl::alu(self.mdata, self.adata, ctl.aluf, ctl.alumode, ctl.cin);
+        let alu = ttl::alu(self.mdata as u32, self.adata as u32, ctl.aluf, ctl.alumode, ctl.cin);
         let alu32 = alu.f >> 32 & 1 != 0;
         // `INT.ENABLE` and `SEQUENCE.BREAK` are bits 27 and 26 of
         // INTERRUPT-CONTROL, the 25LS2519 at FLAG 3E08 (`Machine::byte_mode`
@@ -1441,7 +1449,7 @@ impl Micro {
             pos = self.lc_byte_mode();
         }
 
-        let m = rol(self.mdata, pos);
+        let m = rol(self.mdata as u32, pos);
         let mask = if len == 0 { 0 } else { !0u32 >> (31 - ((len - 1) & 0o37)) };
 
         // Level-2 map bits.  The CADR documentation says 14 and 15; the
@@ -1482,7 +1490,7 @@ impl Micro {
             // netlist's answer, the word written; QUUX defines the one
             // standing before ([`Geometry::old_word_while_written`],
             // `tests/dispatch_write_order.rs`).
-            let new = self.adata & 0o377777;
+            let new = self.adata as u32 & 0o377777;
             self.m.dmem[(addr & 0o3777) as usize] = new;
             let entry = if self.m.geometry.old_word_while_written { entry } else { new };
             self.ignpopj(entry);
@@ -1566,8 +1574,8 @@ impl Micro {
         // (`MR`), so LDB and DPB rotate, selective deposit and function 0 do
         // not; and every BYTE puts the mask network's word on the bus, `OSEL`
         // being 0 on the class.
-        let m = if func & 1 != 0 { rol(self.mdata, pos) } else { self.mdata };
-        self.out = (m & mask) | (self.adata & !mask);
+        let m = if func & 1 != 0 { rol(self.mdata as u32, pos) } else { self.mdata as u32 };
+        self.out = Word::from(m & mask) | (self.adata & !Word::from(mask));
         self.write_dest(dest)
     }
 }
@@ -1679,15 +1687,15 @@ impl Engine for Micro {
         w.bool(*oah);
         w.u64(*oa_low);
         w.u64(*oa_high);
-        w.u32(*new_md);
+        w.word(*new_md);
         w.u8(*new_md_delay);
         w.u16(*aaddr);
         w.u8(*maddr);
-        w.u32(*adata);
-        w.u32(*mdata);
-        w.u32(*alu_out);
-        w.u32(*old_q);
-        w.u32(*out);
+        w.word(*adata);
+        w.word(*mdata);
+        w.word(*alu_out);
+        w.word(*old_q);
+        w.word(*out);
         w.u64(*iwr);
         w.opt(*executed, crate::checkpoint::Writer::u16);
         let map = |w: &mut crate::checkpoint::Writer, (vma, md): (u32, u32)| {
@@ -1715,7 +1723,7 @@ impl Engine for Micro {
         });
         w.opt(*pdl_write, |w, (adr, word)| {
             w.u16(adr);
-            w.u32(word);
+            w.word(word);
         });
         w.opt(*spc_write, |w, (ptr, word)| {
             w.u8(ptr);
@@ -1741,15 +1749,15 @@ impl Engine for Micro {
         self.oah = r.bool()?;
         self.oa_low = r.u64()?;
         self.oa_high = r.u64()?;
-        self.new_md = r.u32()?;
+        self.new_md = r.word()?;
         self.new_md_delay = r.u8()?;
         self.aaddr = r.u16()?;
         self.maddr = r.u8()?;
-        self.adata = r.u32()?;
-        self.mdata = r.u32()?;
-        self.alu_out = r.u32()?;
-        self.old_q = r.u32()?;
-        self.out = r.u32()?;
+        self.adata = r.word()?;
+        self.mdata = r.word()?;
+        self.alu_out = r.word()?;
+        self.old_q = r.word()?;
+        self.out = r.word()?;
         self.iwr = r.u64()?;
         self.executed = r.opt(crate::checkpoint::Reader::u16)?;
         self.map_write = r.opt(|r| Ok((r.u32()?, r.u32()?)))?;
@@ -1782,7 +1790,7 @@ impl Engine for Micro {
             };
             Ok((physical, when))
         })?;
-        self.pdl_write = r.opt(|r| Ok((r.u16()?, r.u32()?)))?;
+        self.pdl_write = r.opt(|r| Ok((r.u16()?, r.word()?)))?;
         self.spc_write = r.opt(|r| Ok((r.u8()?, r.u32()?)))?;
         r.u16s_into(&mut self.opc)?;
         self.opc_ck = r.bool()?;
@@ -1928,7 +1936,8 @@ impl Engine for Micro {
         };
         self.adata = self.m.amem[self.aaddr as usize];
         self.land_writes();
-        self.iwr = ((self.adata as u64 & 0o177777) << 32) | self.mdata as u64;
+        // `IWR<47:32>` from `A<15:0>` and `IWR<31:0>` from `M<31:0>`.
+        self.iwr = ((self.adata & 0o177777) << 32) | (self.mdata & LOW);
 
         match self.p0.op() {
             Op::Alu => self.alu()?,

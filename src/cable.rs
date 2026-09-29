@@ -661,7 +661,7 @@ impl FarEnd {
         let pages: Vec<usize> = std::mem::take(&mut self.buses.machine.disk.dma_written);
         for page in pages {
             for a in page..page + crate::disk_unit::BLOCK_WORDS {
-                self.xbus.poke(a as u32, self.buses.machine.main[a]);
+                self.xbus.poke(a as u32, self.buses.machine.main[a] as u32);
             }
         }
     }
@@ -800,7 +800,7 @@ impl FarEnd {
     /// instant --- which is the caveat any probe carries.
     pub fn main_word(&self, phys: u32) -> Option<u32> {
         if self.xbus.boards.is_empty() {
-            self.buses.machine.main.get(phys as usize).copied()
+            self.buses.machine.main.get(phys as usize).map(|&w| w as u32)
         } else {
             self.xbus.peek(phys)
         }

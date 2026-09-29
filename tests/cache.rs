@@ -77,7 +77,7 @@ fn reader() -> Machine {
         m.l2_map[p as usize] = (1 << 23) | (1 << 22) | p;
     }
     for (k, w) in m.main[..2048].iter_mut().enumerate() {
-        *w = (k as u32).wrapping_mul(2_654_435_761);
+        *w = u64::from((k as u32).wrapping_mul(2_654_435_761));
     }
     m.mmem[1] = 0o1000;
     m

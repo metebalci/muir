@@ -22,6 +22,12 @@ pub mod server;
 pub mod status;
 pub mod time;
 
+/// `<31:0>` of a word of a 32-bit machine, which has nothing above bit 31:
+/// a word with more is a fault to report, not a value to cut.
+pub fn low(w: muir::machine::Word) -> u32 {
+    u32::try_from(w).expect("a 32-bit machine's word with bits above 31")
+}
+
 pub use server::ChaosServer;
 
 use std::collections::{BTreeMap, BTreeSet};

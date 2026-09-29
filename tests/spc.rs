@@ -58,6 +58,10 @@ fn the_word_after_a_push_reads_the_stale_slot_and_not_the_pushed_word() {
     let ptr = 1u32 << 24;
     assert_eq!(e.machine().spcptr, 1, "the pointer moved on the call's edge");
     assert_eq!(e.machine().spc[1], 2, "the return address landed a microcycle later");
-    assert_eq!(e.machine().amem[0o100], ptr | 0o12345, "the delay slot read the stale slot");
-    assert_eq!(e.machine().amem[0o101], ptr | 2, "the target read the pushed word");
+    assert_eq!(
+        e.machine().amem[0o100],
+        (ptr | 0o12345).into(),
+        "the delay slot read the stale slot"
+    );
+    assert_eq!(e.machine().amem[0o101], (ptr | 2).into(), "the target read the pushed word");
 }

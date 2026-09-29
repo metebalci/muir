@@ -41,6 +41,43 @@ pub const QUUX_PROM_BASE: u16 = 0o36000;
 /// Physical pages above the memory are devices, or nothing.
 pub const MAIN_WORDS: usize = 2 * 1024 * 1024;
 
+/// A word of the datapath and of main memory: 32 bits on the CADR and on
+/// QUUX to revision 12, 40 on a machine whose [`Geometry::word_bits`] says
+/// so (contract G2 §2.1), held in 64 bits either way. A, M, the PDL
+/// buffer, `Q`, `VMA`, `MD` and main memory are words; the numeric
+/// registers beside them --- the SPC stack, the location counter, the
+/// map --- keep their own widths.
+pub type Word = u64;
+
+/// A word of main memory as the devices that move main memory see it ---
+/// the disk controller, block-disk and the file device --- which carry
+/// 32 bits: they read `<31:0>` of a word and write a word with 0 above bit
+/// 31. Main memory is [`Word`]s; a test's memory may be `u32`s.
+pub trait MemoryWord: Copy + PartialEq {
+    /// `<31:0>`.
+    fn low(self) -> u32;
+    /// A word with `<31:0>` `v` and 0 above.
+    fn of(v: u32) -> Self;
+}
+
+impl MemoryWord for u32 {
+    fn low(self) -> u32 {
+        self
+    }
+    fn of(v: u32) -> Self {
+        v
+    }
+}
+
+impl MemoryWord for u64 {
+    fn low(self) -> u32 {
+        self as u32
+    }
+    fn of(v: u32) -> Self {
+        v.into()
+    }
+}
+
 /// Bits of the bus error status, which the console reads over SPY and the
 /// microcode tests. Three bits can be set here --- the two NXM bits and the
 /// Unibus map error; the rest of the register is parity errors, which
@@ -74,6 +111,10 @@ pub mod bus_error {
 /// machine, `VMA<12:8>` choosing one in it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Geometry {
+    /// Bits in a word ([`Word`]): 32 on every machine the executables run,
+    /// the CADR and QUUX to revision 12; 40 on a test geometry until
+    /// revision 13 (contract G2 §2.1).
+    pub word_bits: u32,
     /// Bits in a level-1 map entry.
     pub l1_bits: u32,
     /// Bits in the PDL buffer's pointer and index.
@@ -134,6 +175,7 @@ pub struct Geometry {
 impl Geometry {
     /// The CADR's.
     pub const CADR: Geometry = Geometry {
+        word_bits: 32,
         l1_bits: 5,
         pdl_bits: 10,
         machine_id: None,
@@ -187,6 +229,7 @@ impl Geometry {
     /// the processor type, 4, in 3:0. A CADR's open bus reads all ones there,
     /// which can never carry the signature.
     pub const QUUX: Geometry = Geometry {
+        word_bits: 32,
         l1_bits: 6,
         pdl_bits: 14,
         machine_id: Some((0x5155 << 16) | (12 << 4) | 4),
@@ -218,6 +261,16 @@ impl Geometry {
     pub fn l1_from_vma(self, vma: u32) -> u32 {
         let low = (vma >> 27) & 0o37;
         if self.l1_bits > 5 { low | ((vma >> 24) & 1) << 5 } else { low }
+    }
+
+    /// A word's bits, [`Geometry::word_bits`] of ones.
+    pub fn word_mask(self) -> Word {
+        (1 << self.word_bits) - 1
+    }
+
+    /// Whether a word is wider than 32 bits, `<39:32>` above the CADR's.
+    pub fn wide(self) -> bool {
+        self.word_bits > 32
     }
 
     /// A level-1 entry's bits.
@@ -493,7 +546,7 @@ pub struct MacroDispatch {
     /// a register beside M memory (`crate::memory_port`, `rtl` alone),
     /// loaded into it at the end of the next microcycle. Kept in a
     /// checkpoint.
-    pub m31: Option<u32>,
+    pub m31: Option<Word>,
     /// How many returns have been fused: a count for the profile and the
     /// tests, not kept in a checkpoint.
     pub fused: u64,
@@ -544,17 +597,17 @@ impl MacroDispatch {
     /// A write of A memory at `adr`: the copy of `A-LOCALP` takes it when
     /// the register names that address. An M destination writes A as well,
     /// and calls this too.
-    pub fn a_written(&mut self, adr: usize, v: u32) {
+    pub fn a_written(&mut self, adr: usize, v: Word) {
         if adr == macro_dispatch::localp_address(self.register) {
-            self.localp = v & macro_dispatch::BASE_BITS;
+            self.localp = v as u32 & macro_dispatch::BASE_BITS;
         }
     }
 
     /// A write of M memory at `adr`: the copy of `M-AP` takes it when the
     /// register names that address.
-    pub fn m_written(&mut self, adr: usize, v: u32) {
+    pub fn m_written(&mut self, adr: usize, v: Word) {
         if adr == macro_dispatch::ap_address(self.register) {
-            self.ap = v & macro_dispatch::BASE_BITS;
+            self.ap = v as u32 & macro_dispatch::BASE_BITS;
         }
     }
 
@@ -599,7 +652,7 @@ impl MacroDispatch {
             w.bool(o.arg);
             w.u8(o.delta);
         });
-        w.opt(self.m31, |w, v| w.u32(v));
+        w.opt(self.m31, |w, v| w.word(v));
     }
 
     fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
@@ -609,7 +662,7 @@ impl MacroDispatch {
         self.localp = r.u32()? & macro_dispatch::BASE_BITS;
         self.ap = r.u32()? & macro_dispatch::BASE_BITS;
         self.operand = r.opt(|r| Ok(Operand { arg: r.bool()?, delta: r.u8()? & 0o77 }))?;
-        self.m31 = r.opt(|r| r.u32())?;
+        self.m31 = r.opt(|r| r.word())?;
         if self.index as usize >= macro_dispatch::ENTRIES {
             return Err(crate::checkpoint::bad(format!(
                 "MACRO DISPATCH MEMORY index {:o}, wider than its ten bits",
@@ -950,13 +1003,14 @@ pub struct Machine {
     // PDL buffer 2000, micro stack 40, level-1 map 4000, level-2 map 2000.
     // `chip_and_rtl_hold_the_same_memories` in `tests/chip.rs` holds them to
     // the netlist's RAMs.
-    pub amem: [u32; 1024],
-    pub mmem: [u32; 32],
+    pub amem: [Word; 1024],
+    pub mmem: [Word; 32],
     pub dmem: [u32; 2048],
     /// The PDL buffer: 1,024 words on the CADR, and room for the largest
     /// QUUX's, [`PDL_WORDS`]; [`Geometry::pdl_bits`] says how much of it the
-    /// machine has.
-    pub pdl: [u32; PDL_WORDS],
+    /// machine has. On the heap, as main memory is: 16K words would make
+    /// the machine too big for a thread's stack.
+    pub pdl: Vec<Word>,
     pub spc: [u32; 32],
 
     /// 5 bits.
@@ -965,15 +1019,15 @@ pub struct Machine {
     pub pdl_pointer: u16,
     /// 10 bits.
     pub pdl_index: u16,
-    pub q: u32,
+    pub q: Word,
     /// The PC of the instruction that just executed.
     pub opc: u16,
     /// Location counter.  The 26 bits of address [`LC_COUNTER`] leaves, plus
     /// NEED-FETCH in bit 31 and the interrupt-control flags mirrored in bits
     /// 29:26.
     pub lc: u32,
-    pub vma: u32,
-    pub md: u32,
+    pub vma: Word,
+    pub md: Word,
     pub interrupt_control: u32,
     /// `IR<41:32>` of the last DISPATCH, readable as functional source 0.
     pub dispatch_constant: u16,
@@ -986,7 +1040,7 @@ pub struct Machine {
     /// 24-bit entries, addressed by the level-1 output and `VMA<12:8>`:
     /// 1024 on the CADR, and room for the largest machine's, QUUX's 2048.
     pub l2_map: [u32; L2_MAP_WORDS],
-    pub main: Vec<u32>,
+    pub main: Vec<Word>,
     /// What the last bus cycles left in the error register; see
     /// [`bus_error`]. A write of the error status register clears it,
     /// in `Machine::interface_write`.
@@ -1120,7 +1174,7 @@ impl Machine {
             amem: [0; 1024],
             mmem: [0; 32],
             dmem: [0; 2048],
-            pdl: [0; PDL_WORDS],
+            pdl: vec![0; PDL_WORDS],
             spc: [0; 32],
             spcptr: 0,
             pdl_pointer: 0,
@@ -1215,8 +1269,18 @@ impl Machine {
     }
 
     /// Why a checkpoint of this machine cannot be written now, if it
-    /// cannot: the file device with a handle open or a command queued.
+    /// cannot: the file device with a handle open or a command queued; or
+    /// words wider than 32 bits, which a checkpoint's body carries
+    /// ([`crate::checkpoint::Reader::for_word_bits`]) and its file's header
+    /// does not say, so that no file is written that a resume would read
+    /// wrong.
     pub fn checkpoint_refusal(&self) -> Option<String> {
+        if self.geometry.wide() {
+            return Some(format!(
+                "its words are {} bits, and a checkpoint file holds 32-bit ones",
+                self.geometry.word_bits
+            ));
+        }
         self.geometry.file_device.then(|| self.file_device.checkpoint_refusal()).flatten()
     }
 
@@ -1369,7 +1433,7 @@ impl Machine {
     ///
     /// `VMAOK` is `(-PFR) AND (-PFW)`, so a read needs access permission and
     /// a write needs both.
-    pub fn vm_read(&mut self, vaddr: u32) -> u32 {
+    pub fn vm_read(&mut self, vaddr: u32) -> Word {
         let t = self.translate(vaddr);
         self.vmaok = t.access_permitted;
         if !self.vmaok {
@@ -1378,7 +1442,7 @@ impl Machine {
         self.bus_read(t.physical)
     }
 
-    pub fn vm_write(&mut self, vaddr: u32, value: u32) {
+    pub fn vm_write(&mut self, vaddr: u32, value: Word) {
         let t = self.translate(vaddr);
         self.vmaok = t.access_permitted && t.write_permitted;
         if self.vmaok {
@@ -1655,9 +1719,9 @@ impl Machine {
                 // A page with its high five bits ones is `MD`, not the
                 // Xbus: `-UB TO MD`, CC's `CC-WRITE-MD`.
                 if busint::map_to_md(page) {
-                    self.md = word;
+                    self.md = word as Word;
                 } else {
-                    self.bus_write((page << 8) | access.word, word);
+                    self.bus_write((page << 8) | access.word, word as Word);
                 }
                 true
             }
@@ -1830,13 +1894,16 @@ impl Machine {
     /// page at `17377000`, the CADR's display and disk registers after it,
     /// and the rest of the Unibus window, which QUUX does not have
     /// (contract Q5).
-    pub fn bus_read(&mut self, phys: u32) -> u32 {
+    ///
+    /// **Only main memory holds a whole word** (contract G2 §2.5): every
+    /// other thing on the bus reads 0 above bit 31.
+    pub fn bus_read(&mut self, phys: u32) -> Word {
         if let Some(w) = self.geometry.feature_word(phys) {
             // Words 11 to 13 are the main screen, from the board fitted:
             // width in 31:16 and height in 15:0; bits a pixel in 31:16 and
             // words a line in 15:0; and the buffer's first physical address.
             let (width, height, words_per_line) = self.tv.screen();
-            return match phys & 0o377 {
+            return Word::from(match phys & 0o377 {
                 0o11 => (width as u32) << 16 | height as u32,
                 0o12 => 1 << 16 | words_per_line as u32,
                 0o13 => tv::NORMAL_TV.buffer,
@@ -1874,10 +1941,10 @@ impl Machine {
                 // The video controller's mode (contract Q13).
                 0o210 if self.tv.board() == tv::Board::Video => self.tv.read_control(0, self.ns),
                 k => self.quux_input.read(k).unwrap_or(w),
-            };
+            });
         }
         if let Some(off) = self.tv.buffer_offset(phys) {
-            return self.tv.read_buffer(off);
+            return self.tv.read_buffer(off).into();
         }
         if self.geometry.has_register_page() {
             return match self.quux_memory(phys) {
@@ -1887,27 +1954,27 @@ impl Machine {
         }
         if let Some(r) = disk_controller::register(phys) {
             self.disk.advance(self.ns);
-            return self.disk.read(r);
+            return self.disk.read(r).into();
         }
         if let Some(r) = self.tv_register(phys) {
-            return self.tv.read_control(r, self.ns);
+            return self.tv.read_control(r, self.ns).into();
         }
         // The color TV, when one is fitted: the same board at the other
         // strap.  `device` has already given the NXM when it is not.
         if let Some(tv) = self.color_tv.as_ref() {
             if let Some(off) = tv::COLOR_TV.buffer_offset(phys) {
-                return tv.read_buffer(off);
+                return tv.read_buffer(off).into();
             }
             if let Some(r) = tv::COLOR_TV.control_register(phys) {
-                return tv.read_control(r, self.ns);
+                return tv.read_control(r, self.ns).into();
             }
         }
         // The Unibus carries 16 bits, in the bottom of one Lisp machine word.
         if let Some(r) = busint::unibus_address(phys).and_then(busint::register) {
-            return self.interface_read(r) as u32;
+            return self.interface_read(r).into();
         }
         if let Some(r) = busint::unibus_address(phys).and_then(|u| ioboard::answers(u, false)) {
-            return self.ioboard.read(r, self.ns) as u32;
+            return self.ioboard.read(r, self.ns).into();
         }
         match self.device(phys) {
             Some(a) => self.main[a],
@@ -1934,7 +2001,10 @@ impl Machine {
         }
     }
 
-    pub fn bus_write(&mut self, phys: u32, value: u32) {
+    /// **Only main memory takes a whole word** (contract G2 §2.5): every
+    /// other thing on the bus takes `<31:0>` of it.
+    pub fn bus_write(&mut self, phys: u32, word: Word) {
+        let value = word as u32;
         if let Some(log) = self.register_log.as_mut()
             && (self.geometry.feature_word(phys).is_some()
                 || (!self.geometry.has_register_page()
@@ -2004,7 +2074,7 @@ impl Machine {
         }
         if self.geometry.has_register_page() {
             if let Some(a) = self.quux_memory(phys) {
-                self.main[a] = value;
+                self.main[a] = word;
                 if let Some(log) = self.store_log.as_mut() {
                     log.push(a as u32);
                 }
@@ -2045,7 +2115,7 @@ impl Machine {
             return;
         }
         if let Some(a) = self.device(phys) {
-            self.main[a] = value;
+            self.main[a] = word;
             if let Some(log) = self.store_log.as_mut() {
                 log.push(a as u32);
             }
@@ -2153,6 +2223,9 @@ impl Machine {
             cycles,
             ns,
         } = self;
+        // Words from here on, the engine's after the machine's, at the
+        // machine's width: four bytes on a 32-bit machine, as always.
+        w.set_word_bits(geometry.word_bits);
         w.u64s(&prom.iter().map(|i| i.raw()).collect::<Vec<_>>());
         w.u64s(&imem.iter().map(|i| i.raw()).collect::<Vec<_>>());
         mode.save(w);
@@ -2161,19 +2234,19 @@ impl Machine {
         w.u64(*debug_ir);
         w.bool(*prog_reset);
         w.bool(*prog_boot);
-        w.u32s(amem);
-        w.u32s(mmem);
+        w.words(amem);
+        w.words(mmem);
         w.u32s(dmem);
-        w.u32s(pdl);
+        w.words(pdl);
         w.u32s(spc);
         w.u8(*spcptr);
         w.u16(*pdl_pointer);
         w.u16(*pdl_index);
-        w.u32(*q);
+        w.word(*q);
         w.u16(*opc);
         w.u32(*lc);
-        w.u32(*vma);
-        w.u32(*md);
+        w.word(*vma);
+        w.word(*md);
         w.u32(*interrupt_control);
         w.u16(*dispatch_constant);
         w.u32s(l1_map);
@@ -2182,6 +2255,11 @@ impl Machine {
         w.bool(geometry.muldiv);
         w.bool(geometry.tick);
         w.bool(geometry.macro_dispatch);
+        // A wider word says so, which a 32-bit machine's checkpoint never
+        // has: its bytes stay what they were.
+        if geometry.wide() {
+            w.u8(geometry.word_bits as u8);
+        }
         timers.save(w);
         macro_dispatch.save(w);
         rtc.save(w);
@@ -2189,7 +2267,7 @@ impl Machine {
         w.bool(*dma_written);
         w.u32s(l2_map);
         w.u32(self.memory_boards() as u32);
-        w.u32s(main);
+        w.words(main);
         w.u16(*bus_error);
         w.u16(*interrupt_status);
         w.bool(*write_through);
@@ -2234,10 +2312,10 @@ impl Machine {
         self.debug_ir = r.u64()?;
         self.prog_reset = r.bool()?;
         self.prog_boot = r.bool()?;
-        r.u32s_into(&mut self.amem)?;
-        r.u32s_into(&mut self.mmem)?;
+        r.words_into(&mut self.amem)?;
+        r.words_into(&mut self.mmem)?;
         r.u32s_into(&mut self.dmem)?;
-        r.u32s_into(&mut self.pdl)?;
+        r.words_into(&mut self.pdl)?;
         r.u32s_into(&mut self.spc)?;
         // Pointers into the SPC stack and the PDL buffer: `SPCPTR<4:0>`,
         // five bits for the 32 words of the 82S21s on page SPC, and for the
@@ -2257,17 +2335,28 @@ impl Machine {
         self.spcptr = spcptr;
         self.pdl_pointer = pdl_pointer;
         self.pdl_index = pdl_index;
-        self.q = r.u32()?;
+        self.q = r.word()?;
         self.opc = r.u16()?;
         self.lc = r.u32()?;
-        self.vma = r.u32()?;
-        self.md = r.u32()?;
+        self.vma = r.word()?;
+        self.md = r.word()?;
         self.interrupt_control = r.u32()?;
         self.dispatch_constant = r.u16()?;
         r.u32s_into(&mut self.l1_map)?;
         let (l1_bits, pdl_bits, muldiv) = (r.u8()? as u32, r.u8()? as u32, r.bool()?);
         let tick = r.bool()?;
         let fused = r.bool()?;
+        // The word's width is the reader's to know; a wider machine's
+        // checkpoint says it too, and the two must agree.
+        let word_bits = r.word_bits();
+        if word_bits != 32 {
+            let said = r.u8()? as u32;
+            if said != word_bits {
+                return Err(crate::checkpoint::bad(format!(
+                    "{said}-bit words, read as {word_bits}-bit ones"
+                )));
+            }
+        }
         self.timers = Timers::load(r)?;
         self.macro_dispatch.load(r)?;
         self.rtc = Rtc::load(r)?;
@@ -2275,13 +2364,19 @@ impl Machine {
         self.dma_written = r.bool()?;
         // The CADR, or a QUUX with a PDL buffer of 1K to 16K words.
         // Revision 12, or 11 without the fused return.
-        self.geometry = match (l1_bits, pdl_bits, muldiv, tick, fused) {
-            (5, 10, false, false, false) => Geometry::CADR,
-            (6, 10..=14, true, true, true) => Geometry { pdl_bits, ..Geometry::QUUX },
-            (6, 10..=14, true, true, false) => Geometry { pdl_bits, ..Geometry::QUUX_11 },
+        // A 40-bit word only on a QUUX, which a test builds (contract G2
+        // §2.1).
+        self.geometry = match (word_bits, l1_bits, pdl_bits, muldiv, tick, fused) {
+            (32, 5, 10, false, false, false) => Geometry::CADR,
+            (32 | 40, 6, 10..=14, true, true, true) => {
+                Geometry { word_bits, pdl_bits, ..Geometry::QUUX }
+            }
+            (32 | 40, 6, 10..=14, true, true, false) => {
+                Geometry { word_bits, pdl_bits, ..Geometry::QUUX_11 }
+            }
             _ => {
                 return Err(crate::checkpoint::bad(format!(
-                    "a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer, multiply and divide {muldiv}, tick {tick}, fused return {fused}, is no machine's"
+                    "{word_bits}-bit words, a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer, multiply and divide {muldiv}, tick {tick}, fused return {fused}, is no machine's"
                 )));
             }
         };
@@ -2319,7 +2414,7 @@ impl Machine {
                 self.memory_boards()
             )));
         }
-        r.u32s_into(&mut self.main)?;
+        r.words_into(&mut self.main)?;
         self.bus_error = r.u16()?;
         self.interrupt_status = r.u16()?;
         self.write_through = r.bool()?;
