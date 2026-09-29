@@ -32,8 +32,18 @@ use crate::part::Level;
 const MAGIC: &[u8; 16] = b"muir checkpoint\n";
 
 /// Bumped whenever any type changes what it writes; a file from another
-/// version is refused rather than read wrong.
+/// version is refused rather than read wrong. A 32-bit machine's: the CADR
+/// and QUUX to revision 12.
 pub const VERSION: u32 = 49;
+
+/// A 40-bit machine's, QUUX revision 13's (contract G2 appendix A1.13):
+/// every word 5 bytes, `<7:0>` first and the tag last, so that main memory
+/// is G1 §4.1's packed storage; the dispatch memory of 4,096 entries, the
+/// map's 8,192 and 4,096, the overflow flag, and revision 13's location
+/// counter and devices. The version says the width: a resume reads the
+/// body at 40 bits, and a revision-12 checkpoint, version [`VERSION`], is
+/// refused on revision 13 ([`crate::machine::Machine::load`]).
+pub const VERSION_40: u32 = 50;
 
 /// The shortest run of zero bytes worth a count of its own.
 const MIN_ZERO_RUN: usize = 4;
@@ -401,19 +411,43 @@ impl io::Read for Reader<'_> {
 /// A checkpoint read back: what its header says, and its body.
 #[derive(Debug)]
 pub struct Checkpoint {
+    /// The format's version: [`VERSION`], or [`VERSION_40`].
+    pub version: u32,
+    /// The machine's word, as the version says: 32 or 40 bits.
+    pub word_bits: u32,
     /// The engine that wrote it, `micro` or `rtl`.
     pub engine: String,
-    /// How many 64K-word memory boards the machine had.
+    /// How many 64K-word memory boards the machine had: on revision 13,
+    /// main memory in 64K-word units.
     pub memory_boards: usize,
     pub body: Vec<u8>,
 }
 
-/// Writes `body`, packed, under the header naming `engine` and the
-/// machine's `memory_boards`, and says how big the file came.
-pub fn write(path: &Path, engine: &str, memory_boards: usize, body: &[u8]) -> io::Result<u64> {
+impl Checkpoint {
+    /// A reader of the body at the machine's width.
+    pub fn reader(&self) -> Reader<'_> {
+        Reader::for_word_bits(&self.body, self.word_bits)
+    }
+}
+
+/// Writes `body`, packed, under the header naming `engine`, the machine's
+/// `memory_boards` and, by the version, its `word_bits`, and says how big
+/// the file came.
+pub fn write(
+    path: &Path,
+    engine: &str,
+    memory_boards: usize,
+    word_bits: u32,
+    body: &[u8],
+) -> io::Result<u64> {
+    let version = match word_bits {
+        32 => VERSION,
+        40 => VERSION_40,
+        _ => return Err(bad(format!("{word_bits}-bit words are no machine's"))),
+    };
     let mut out = Vec::with_capacity(64);
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&VERSION.to_le_bytes());
+    out.extend_from_slice(&version.to_le_bytes());
     out.push(engine.len() as u8);
     out.extend_from_slice(engine.as_bytes());
     out.extend_from_slice(&(memory_boards as u32).to_le_bytes());
@@ -430,14 +464,20 @@ pub fn read(path: &Path) -> io::Result<Checkpoint> {
         return Err(bad("not a muir checkpoint"));
     }
     let version = r.u32()?;
-    if version != VERSION {
-        return Err(bad(format!("format version {version}; this build reads {VERSION}")));
-    }
+    let word_bits = match version {
+        VERSION => 32,
+        VERSION_40 => 40,
+        _ => {
+            return Err(bad(format!(
+                "format version {version}; this build reads {VERSION} and {VERSION_40}"
+            )));
+        }
+    };
     let n = r.u8()? as usize;
     let engine = std::str::from_utf8(r.take(n)?).map_err(|_| bad("the engine's name"))?;
     let memory_boards = r.u32()? as usize;
     let body = unpack(&file[r.at..])?;
-    Ok(Checkpoint { engine: engine.to_string(), memory_boards, body })
+    Ok(Checkpoint { version, word_bits, engine: engine.to_string(), memory_boards, body })
 }
 
 // --- Packing ----------------------------------------------------------------

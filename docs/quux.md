@@ -37,7 +37,7 @@ differences, what it needed:
 | The video controller, the display | nothing | 2000: the run light in the video controller's buffer, no TV vertical flag | System 2000 sizes the main screen from the feature page | the terminal, screenshots and captures show whichever screen is fitted |
 | The real-time clock | nothing | nothing | System 2000 sets the time from it at boot, ahead of the network, when word 15 `<0>` of the feature page says it is there, and its wall clock reads it from then on (muir-sys `sys/io1/time.lisp:461-471`, `:493`, `:691-696`) | `--rtc` |
 | The file device | nothing | 2000 waits at `RESET-MACHINE` for it to be quiet, word 161 `<1>`, after reset devices | System 2000's `SYS:` is on it, HOST's `/sys` and `/site` (`site/sys.translations`) | `--file-root` |
-| The fused return: the MACRO-DISPATCH register and the MACRO DISPATCH MEMORY, destinations 5 to 7 (revision 12) | nothing | nothing: 2000 writes none of destinations 5 to 7, so the fused return stays off | nothing | the profile harness's `MUIR_H8A` fills and enables it |
+| The fused return: the MACRO-DISPATCH register and the MACRO DISPATCH MEMORY, destinations 5 to 7 (revision 12) | nothing | 2000 writes destinations 5 to 7 only in `RESET-MACHINE`'s fill of the MACRO DISPATCH MEMORY (`tests/unused_codes.rs`) | nothing | the profile harness's `MUIR_H8A` fills and enables it |
 
 ## What each change measured
 
@@ -394,7 +394,7 @@ on it, and `micro`'s clock counts the same ticks.
 The ticks are a board's: the number its fit proves its longest path settles
 in. **Four ticks, 40 ns, is met on the Arty Z7-20**: muir-fpga's QUUX at
 four ticks, with contracts Q1-Q5 and block-disk, its commit `2535395`
-(against muir at `8598fbd`), has a worst setup slack of +0.461 ns and no
+(against muir at `bcb6242`), has a worst setup slack of +0.461 ns and no
 failing path, in 11,974 LUTs; an earlier fit of
 the same design measured the longest chains as MD through both
 map levels and the M bus to the control-store address, 28.0 ns of 40, and
@@ -1674,6 +1674,95 @@ regions. Using QUUX's other 32 takes microcode written for QUUX. From its source
 **Unverified:** that nothing else in the band assumes 32 blocks. What is
 known is by reading the sources, and a band run on QUUX's own microcode would
 settle it.
+
+## Revision 13: the 40-bit word
+
+muir has QUUX revision 13 beside revision 12: `Geometry::QUUX_13` in the
+library, which no flag selects and no executable runs, and whose system no
+test here boots. Its word is 40 bits: the tag `<39:32>` over the field
+`<31:0>`. What follows is what muir's revision 13 does and which tests hold
+it; everything it does not mention is revision 12's.
+
+**The processor** (`tests/revision_13.rs`, on `micro` and `rtl`):
+
+| | |
+|---|---|
+| Words | A, M, the PDL buffer, `Q`, `VMA`, `MD` and main memory carry 40 bits (`tests/word_width.rs`); numeric sources read `<39:32>` as 0, an unassigned one all 40 bits as ones; MACHINE-ID says revision 13 |
+| The ALU | logical functions on 40 bits; arithmetic, the shifts, `MUL` and `DIV` on `<31:0>`, the result's `<39:32>` M's |
+| Fields | BYTE: rotate `IR<5:0>`, length − 1 `IR<11:6>`, LC byte mode by `IR<24>` on an LDB alone, and no misc function; JUMP and DISPATCH: `IR<47>` the rotate's bit 5; DISPATCH: address `IR<23:12>`; ALU output select 0: rotate `IR<5:0>`, length − 1 `IR<9:6>`, no LC byte mode |
+| Rotator and masker | a ring of 40, a rotate taken mod 40; a byte that does not fit in bits 0-39 gives an empty mask, the A source showing through |
+| LC byte mode | the rotate plus 0 or 24 for halfwords 0 and 1 (`LC<1>` 1 and 0), and 0, 32, 24, 16 for bytes 0 to 3 (`LC<1:0>` 1, 2, 3, 0), mod 40 |
+| Conditions | in condition mode `IR<4:0>`: M < A and M ≤ A on the fields, signed; M = A on all 40 bits; 10 the fixnum overflow flag, which every executed ALU word loads, 1 for an arithmetic function whose 33-bit result has bit 32 unlike bit 31; 11 M < A on the fields, unsigned; the rest as `IR<2:0>` |
+| Location counter | `LC<29:0>`, a fetch taking `LC<29:2>`; read with NEED-FETCH in `<39>` and INTERRUPT-CONTROL's flags in `<37:34>`, which a write of destination 2 takes from there |
+| Dispatch memory | 4,096 entries |
+| The map | level 1 8,192 seven-bit entries by `VA<27:15>`, level 2 4,096 28-bit entries by the level-1 entry and `VA<14:10>`; 1024-word pages, the word `{L2<17:0>, VA<9:0>}`; `<27:26>` the access bits and `<23:22>` the dispatch's map bits; an address with `<31:28>` set reads block 177, and a map write there writes nothing; `MAP(MD)` has level 1 in `<38:32>`, the fault bits in `<31:30>` and level 2 in `<27:0>`, and the map write's word in `VMA` the same, `<29>` writing level 1 and `<28>` level 2, both writing level 1 alone |
+| The fused return | the halfword's index is M 31 rotated by 34, 40 − 6, under LC byte mode's addend; the operand's delta is `<39:34>` |
+
+**The physical space** is 28 bits (`the_physical_space_is_28_bits` and
+`the_frame_buffer_window_holds_the_field`, `tests/revision_13.rs`, on both
+engines; `tests/revision_13_memory.rs`):
+
+| Physical | What |
+|---|---|
+| `0` up to main memory's end | main memory, whole 40-bit words; revision 12's `17000000` and `17777400` are main memory when there is that much of it, and nothing when there is not |
+| `1760000000` up to the video controller's buffer's end | the frame buffer window: a write stores `<31:0>` and drops the tag, a read gives the field with tag `005` |
+| `1777777400`-`1777777777` | the register page, revision 12's offsets: feature word 0 MACHINE-ID, 1 the level-1 entry's 7 bits, 2 4,096 level-2 entries, 6 4,096 dispatch-memory entries, 13 `1760000000` |
+| anything else | nothing: reads 0 and sets word 101's NXM bit. Revision 12's Unibus window and its diagnostic registers are not there |
+
+**The memory cache** has lines of 8 words, the lines of packed storage,
+2-way, 4K words; `--cache`'s sizes keep the 8-word line. A fill takes the
+board's time for today's 2-beat line and a tick for each further beat,
+3 in main memory (40 bytes, 5 beats) and 2 in the window (32 bytes, 4):
+**unverified**, until a fill is measured at 40 bits. The 4 KiB boundary a
+line crosses 4 times in 512, which the boards' ports issue as two bursts,
+costs nothing more here.
+
+**The prefetch** takes the page's reach, the next word in the fetched
+word's 1024-word page when the cache holds it, over 28-bit virtual
+addresses; line reach stays selectable (`Rtl::set_prefetch`). Page reach
+was measured at 8-word lines on the profile's workloads at 1.67% less time
+on the Arty's timing and 1.13% on the DE25-Nano's.
+
+**Block-disk** (`tests/revision_13_memory.rs`) moves a 1024-word page an
+entry, `<27:10>` the page and `<0>` More, `<9:1>` ignored; command `<12>`
+chooses the transfer:
+
+| | Blocks a page | On the disk |
+|---|---|---|
+| Packed, `<12>` 0 | 5 | the page's 5,120 bytes as main memory holds them: word w at bytes 5w to 5w + 4, `<7:0>` first, the tag last |
+| 4-byte, `<12>` 1 | 4 | `<31:0>` of word w at bytes 4w to 4w + 3, low first; a read writes tag `005`, a write drops the tag |
+
+The command list pointer and word 201 are 28 bits; the disk address is
+left at the last block moved, or at the one that failed, and word 201 at
+the last word moved; a page outside main memory, the window's included,
+stops the transfer with NXM `<20>`. A page is read whole before memory is
+written, so a transfer that runs past the disk's end leaves the page it
+stopped in as it was. The GPT fixture read by a 4-byte transfer and taken
+4 bytes a word is the file's bytes.
+
+**The file device** takes rings and buffers at 28-bit addresses on an
+8-word line, a ring on a 4-word line being refused, and writes every word
+it fills, a buffer's or a response's, as a fixnum, tag `005`; it reads
+`<31:0>` of what it reads.
+
+**The checkpoint** of a 40-bit machine is its own version, 50, which says
+the width: every word 5 bytes, `<7:0>` first, so that main memory in it is
+packed storage byte for byte; the larger dispatch memory and map, the
+overflow flag, and the rest. A revision-13 machine refuses a checkpoint of
+32-bit words, revision 12's among them. A 32-bit machine's checkpoint is
+version 49 as before.
+
+**The `.mcr`** at 40 bits has a dispatch memory section of `10000`
+entries and A memory as section 5, each location two 32-bit words,
+`<31:0>` and then `<39:32>` in `<7:0>`; the parser reads both, in
+partition order as in MIT's.
+
+At 32 M words of main memory muir holds 256 MiB for it, 8 bytes a word. A
+checkpoint's body is 168,204,521 bytes, main memory 5 bytes a word; the
+file packs runs of zeros, and is 248 bytes of an empty memory and
+167,772,410 of one full of other words, against 8,388,854 for revision
+12's 2 M words full. Writing that full checkpoint on `micro` peaked at
+757 MB of host memory, against 44 MB for revision 12's.
 
 ## Not modeled
 

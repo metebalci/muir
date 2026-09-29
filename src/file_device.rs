@@ -21,6 +21,12 @@
 //! slot is the index mod the size. An entry is 8 words, the layout's
 //! (`execute`'s comments say which word is which).
 //!
+//! **Revision 13** (contract G1 §4.4, G2 §4.3, appendix A1.10): the rings'
+//! bases and the buffers' addresses are 28-bit physical word addresses on
+//! an 8-word line; a buffer still holds 4 bytes a word, in `<31:0>`; every
+//! word the device writes, a buffer's or a response's, is a fixnum, tag
+//! `005`; and it reads `<31:0>` of what it reads, whatever the tag.
+//!
 //! **Time.** A command completes at its due time ([`due`]): 20 us and
 //! 100 us a KiB of the buffer lengths its entry names, after the latest of
 //! its producer write landing (once the processor's write buffer is empty),
@@ -509,9 +515,9 @@ struct Buf {
     len: u32,
 }
 
-fn buffer<W: MemoryWord>(main: &[W], addr: u32, len: u32) -> Result<Buf, u32> {
-    let at = (addr & 0xff_ffff) as usize;
-    if at & 3 != 0 || len > MAX_BUFFER || at + (len as usize).div_ceil(4) > main.len() {
+fn buffer<W: MemoryWord>(main: &[W], addr: u32, len: u32, layout: Layout) -> Result<Buf, u32> {
+    let at = (addr & layout.address) as usize;
+    if at & layout.line != 0 || len > MAX_BUFFER || at + (len as usize).div_ceil(4) > main.len() {
         return Err(status::BAD_BUFFER);
     }
     Ok(Buf { at, len })
@@ -523,12 +529,33 @@ fn bytes_of<W: MemoryWord>(main: &[W], b: Buf) -> Vec<u8> {
 }
 
 /// `data` into the buffer at `at`: `ceil(n/4)` words, the bytes past n in
-/// the last one 0, and no other word.
-fn put_bytes<W: MemoryWord>(main: &mut [W], at: usize, data: &[u8]) {
+/// the last one 0, and no other word; each word tagged `tag`.
+fn put_bytes<W: MemoryWord>(main: &mut [W], at: usize, data: &[u8], tag: u8) {
     for (k, chunk) in data.chunks(4).enumerate() {
         let mut w = [0u8; 4];
         w[..chunk.len()].copy_from_slice(chunk);
-        main[at + k] = W::of(u32::from_le_bytes(w));
+        main[at + k] = W::tagged(u32::from_le_bytes(w), tag);
+    }
+}
+
+/// The machine's addresses and words, as the device takes them: revision
+/// 12's, 24-bit addresses on a 4-word line and untagged words; revision
+/// 13's (G1 §4.4, G2 §4.3, appendix A1.10), 28-bit addresses on an 8-word
+/// line, and every word it writes a fixnum, tag `005`.
+#[derive(Clone, Copy)]
+struct Layout {
+    address: u32,
+    line: usize,
+    tag: u8,
+}
+
+impl Layout {
+    fn of(revision_13: bool) -> Layout {
+        if revision_13 {
+            Layout { address: 0o1777777777, line: 7, tag: 0o005 }
+        } else {
+            Layout { address: 0xff_ffff, line: 3, tag: 0 }
+        }
     }
 }
 
@@ -584,6 +611,10 @@ pub struct FileDevice {
     /// Every line LOG printed, in order, when a test asks for the record by
     /// setting it to `Some`. Not kept in a checkpoint.
     pub log: Option<Vec<Vec<u8>>>,
+    /// Whether the machine is revision 13, whose addresses and tags the
+    /// device takes (the module's docs): the machine's, set
+    /// by it before each access. Not in a checkpoint.
+    pub revision_13: bool,
 }
 
 impl Default for FileDevice {
@@ -611,6 +642,7 @@ impl FileDevice {
             head_due: None,
             handles: vec![None; MAX_HANDLES],
             log: None,
+            revision_13: false,
         }
     }
 
@@ -714,8 +746,11 @@ impl FileDevice {
                 let (enable, ie) = (v & 1 != 0, v & 0x100 != 0);
                 match (on, enable) {
                     (false, true) => {
+                        let line = Layout::of(self.revision_13).line;
                         let fits = |base: u32, log2: u32| {
-                            base & 3 == 0 && log2 <= 8 && base as usize + (8 << log2) <= main.len()
+                            base as usize & line == 0
+                                && log2 <= 8
+                                && base as usize + (8 << log2) <= main.len()
                         };
                         if fits(self.cmd_base, self.cmd_log2)
                             && fits(self.resp_base, self.resp_log2)
@@ -732,9 +767,9 @@ impl FileDevice {
                     (false, false) => {}
                 }
             }
-            CMD_BASE if !on => self.cmd_base = v & 0xff_ffff,
+            CMD_BASE if !on => self.cmd_base = v & Layout::of(self.revision_13).address,
             CMD_SIZE if !on => self.cmd_log2 = v & 0o17,
-            RESP_BASE if !on => self.resp_base = v & 0xff_ffff,
+            RESP_BASE if !on => self.resp_base = v & Layout::of(self.revision_13).address,
             RESP_SIZE if !on => self.resp_log2 = v & 0o17,
             CMD_PROD if on => {
                 let new = v as u16;
@@ -833,9 +868,10 @@ impl FileDevice {
             }
         };
         let r = self.resp_base as usize + 8 * (self.cmd_cons % self.resp_entries()) as usize;
-        main[r] = W::of(tag | st << 16 | opcode << 24);
+        let fix = Layout::of(self.revision_13).tag;
+        main[r] = W::tagged(tag | st << 16 | opcode << 24, fix);
         for (m, &v) in main[r + 1..r + 8].iter_mut().zip(&reply.0) {
-            *m = W::of(v);
+            *m = W::tagged(v, fix);
         }
         self.cmd_cons = self.cmd_cons.wrapping_add(1);
     }
@@ -857,8 +893,9 @@ impl FileDevice {
         if flags & !allowed != 0 {
             return Err(status::BAD_ARGUMENT);
         }
-        let a = || buffer(main, c[2], c[3]);
-        let b = || buffer(main, c[4], c[5]);
+        let layout = Layout::of(self.revision_13);
+        let a = || buffer(main, c[2], c[3], layout);
+        let b = || buffer(main, c[4], c[5], layout);
         match opcode {
             op::OPEN => {
                 let a = a()?;
@@ -878,7 +915,7 @@ impl FileDevice {
                 let n = (b.len as u64).min(len - offset) as usize;
                 let mut data = vec![0u8; n];
                 file.read_exact_at(&mut data, offset).map_err(|e| host_status(&e))?;
-                put_bytes(main, b.at, &data);
+                put_bytes(main, b.at, &data, layout.tag);
                 r.count(n as u32);
                 Ok(())
             }
@@ -915,7 +952,7 @@ impl FileDevice {
                     next += 1;
                 }
                 for (m, &v) in main[b.at..b.at + words.len()].iter_mut().zip(&words) {
-                    *m = W::of(v);
+                    *m = W::tagged(v, layout.tag);
                 }
                 r.count(4 * words.len() as u32);
                 r.w6(if next < entries.len() { next as u32 } else { 0 });
@@ -945,7 +982,7 @@ impl FileDevice {
                 if lcp.len() > b.len as usize {
                     return Err(status::BAD_ARGUMENT);
                 }
-                put_bytes(main, b.at, lcp);
+                put_bytes(main, b.at, lcp, layout.tag);
                 r.count(lcp.len() as u32);
                 r.w6(matches.len() as u32);
                 if let Some(exact) = matches.iter().find(|e| e.name.as_bytes() == lcp) {
@@ -1399,6 +1436,6 @@ fn record(e: &Entry) -> Vec<u32> {
         e.mtime,
     ];
     out.resize(words, 0);
-    put_bytes(&mut out[3..], 0, e.name.as_bytes());
+    put_bytes(&mut out[3..], 0, e.name.as_bytes(), 0);
     out
 }

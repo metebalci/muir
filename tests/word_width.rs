@@ -303,12 +303,11 @@ fn the_cadr_and_quux_are_32_bits_wide() {
     assert_eq!(WIDE.word_mask(), 0xff_ffff_ffff);
 }
 
-/// **No checkpoint file is written of a 40-bit machine**: its body carries
-/// the words, and the file's header, which a resume reads first, does not
-/// say how wide they are.
+/// **A checkpoint file is written of a 40-bit machine too**: its header's
+/// version says the width (`tests/revision_13_memory.rs` has the file).
 #[test]
-fn a_40_bit_machine_writes_no_checkpoint_file() {
-    assert!(machine(WIDE).checkpoint_refusal().is_some_and(|why| why.contains("40 bits")));
+fn a_40_bit_machine_writes_a_checkpoint_file() {
+    assert_eq!(machine(WIDE).checkpoint_refusal(), None);
     assert_eq!(machine(Geometry::QUUX).checkpoint_refusal(), None);
 }
 

@@ -58,6 +58,9 @@ pub trait MemoryWord: Copy + PartialEq {
     fn low(self) -> u32;
     /// A word with `<31:0>` `v` and 0 above.
     fn of(v: u32) -> Self;
+    /// A word with `<31:0>` `v` and the tag `<39:32>` `tag`, where the
+    /// word has them; a 32-bit word is `v`.
+    fn tagged(v: u32, tag: u8) -> Self;
 }
 
 impl MemoryWord for u32 {
@@ -65,6 +68,9 @@ impl MemoryWord for u32 {
         self
     }
     fn of(v: u32) -> Self {
+        v
+    }
+    fn tagged(v: u32, _: u8) -> Self {
         v
     }
 }
@@ -75,6 +81,9 @@ impl MemoryWord for u64 {
     }
     fn of(v: u32) -> Self {
         v.into()
+    }
+    fn tagged(v: u32, tag: u8) -> Self {
+        u64::from(tag) << 32 | u64::from(v)
     }
 }
 
@@ -363,9 +372,17 @@ impl Geometry {
     /// Below revision 9 word 15 reads 0, below revision 10 word 16 and below
     /// revision 12 word 17, as every unused word does. Read-only, as every
     /// word 0-77 is.
+    ///
+    /// Revision 13's page is at `1777777400`, the last page of its 28-bit
+    /// physical space ([`REGISTER_PAGE_13`]), with the same offsets.
     pub fn feature_word(self, phys: u32) -> Option<u32> {
         let id = self.machine_id?;
-        if (phys >> 8) & 0o37777 != Self::FEATURE_PAGE {
+        let on_page = if self.wide() {
+            phys & !0o377 == REGISTER_PAGE_13
+        } else {
+            (phys >> 8) & 0o37777 == Self::FEATURE_PAGE
+        };
+        if !on_page {
             return None;
         }
         Some(match phys & 0o377 {
@@ -1357,24 +1374,17 @@ impl Machine {
     /// that wrote main memory invalidates QUUX's cache before that cycle, as
     /// a disk transfer does.
     pub fn advance_file_device(&mut self) {
+        self.file_device.revision_13 = self.geometry.wide();
         if self.geometry.file_device && self.file_device.advance(self.ns, &mut self.main) {
             self.dma_written = true;
         }
     }
 
     /// Why a checkpoint of this machine cannot be written now, if it
-    /// cannot: the file device with a handle open or a command queued; or
-    /// words wider than 32 bits, which a checkpoint's body carries
-    /// ([`crate::checkpoint::Reader::for_word_bits`]) and its file's header
-    /// does not say, so that no file is written that a resume would read
-    /// wrong.
+    /// cannot: the file device with a handle open or a command queued. A
+    /// 40-bit machine's file says its width by its version
+    /// ([`crate::checkpoint::VERSION_40`]).
     pub fn checkpoint_refusal(&self) -> Option<String> {
-        if self.geometry.wide() {
-            return Some(format!(
-                "its words are {} bits, and a checkpoint file holds 32-bit ones",
-                self.geometry.word_bits
-            ));
-        }
         self.geometry.file_device.then(|| self.file_device.checkpoint_refusal()).flatten()
     }
 
@@ -2069,6 +2079,7 @@ impl Machine {
             return Word::from(match phys & 0o377 {
                 0o11 => (width as u32) << 16 | height as u32,
                 0o12 => 1 << 16 | words_per_line as u32,
+                0o13 if self.geometry.wide() => WINDOW_13,
                 0o13 => tv::NORMAL_TV.buffer,
                 // The register page (contract Q2): who interrupted, the
                 // bus errors, and the mode.
@@ -2105,6 +2116,13 @@ impl Machine {
                 0o210 if self.tv.board() == tv::Board::Video => self.tv.read_control(0, self.ns),
                 k => self.quux_input.read(k).unwrap_or(w),
             });
+        }
+        if self.geometry.wide() {
+            return match self.space_13(phys) {
+                Space13::Window(off) => UNBOXED_TAG | Word::from(self.tv.read_buffer(off)),
+                Space13::Main(a) => self.main[a],
+                Space13::Nothing => 0,
+            };
         }
         if let Some(off) = self.tv.buffer_offset(phys) {
             return self.tv.read_buffer(off).into();
@@ -2149,6 +2167,20 @@ impl Machine {
     /// names, if it is one the board has.
     fn tv_register(&self, phys: u32) -> Option<u32> {
         tv::control_register(phys).filter(|&r| self.tv.control_registers() >> r & 1 != 0)
+    }
+
+    /// Revision 13, past the register page: the window's word, main
+    /// memory's, or nothing there, which sets word 101 `<0>`
+    /// ([`busint::decode_quux_13`]).
+    fn space_13(&mut self, phys: u32) -> Space13 {
+        match busint::decode_quux_13(phys, self.main.len(), self.tv.buffer_words()) {
+            busint::Responder::Memory(_) if phys >= WINDOW_13 => Space13::Window(phys - WINDOW_13),
+            busint::Responder::Memory(_) => Space13::Main(phys as usize),
+            _ => {
+                self.bus_error |= bus_error::XBUS_NXM;
+                Space13::Nothing
+            }
+        }
     }
 
     /// On QUUX, past the register page and the frame buffer: main memory's
@@ -2199,6 +2231,7 @@ impl Machine {
                 // buffer is empty.
                 k @ 0o160..=0o171 if self.geometry.file_device => {
                     self.advance_file_device();
+                    self.file_device.revision_13 = self.geometry.wide();
                     let (ns, drained) = (self.ns, self.write_buffer_empty_at);
                     self.file_device.write(k, value, ns, drained, &self.main);
                 }
@@ -2217,7 +2250,11 @@ impl Machine {
                 k @ 0o200..=0o203 => {
                     if let Some(d) = self.block_disk.as_mut() {
                         d.advance(self.ns);
-                        d.write(k - 0o200, value, &mut self.main);
+                        if self.geometry.wide() {
+                            d.write_40(k - 0o200, value, &mut self.main);
+                        } else {
+                            d.write(k - 0o200, value, &mut self.main);
+                        }
                         self.dma_written = true;
                     }
                 }
@@ -2228,6 +2265,20 @@ impl Machine {
                 k => {
                     self.quux_input.write(k, value);
                 }
+            }
+            return;
+        }
+        if self.geometry.wide() {
+            match self.space_13(phys) {
+                // The window stores the field and drops the tag (G1 §4.2).
+                Space13::Window(off) => self.tv.write_buffer(off, value),
+                Space13::Main(a) => {
+                    self.main[a] = word;
+                    if let Some(log) = self.store_log.as_mut() {
+                        log.push(a as u32);
+                    }
+                }
+                Space13::Nothing => {}
             }
             return;
         }
@@ -2313,6 +2364,23 @@ impl Default for Machine {
 /// `MAP[MD]` before any memory cycle is what would fix it.
 pub const LVMO_AT_POWER_ON: u32 = (1 << 23) | (1 << 22) | 0x3fff;
 
+/// **Revision 13's physical space** (contract G1 §3.2, G2 §4.1): 28-bit
+/// word addresses, main memory from 0, the frame buffer window from
+/// [`WINDOW_13`], the register page at the last page, and nothing
+/// anywhere else.
+///
+/// The register page, `1777777400`-`1777777777`: revision 12's offsets.
+pub const REGISTER_PAGE_13: u32 = 0o1777777400;
+
+/// The frame buffer window, `1760000000`-`1777775777`: the video
+/// controller's buffer from its base, 4 bytes a word, the field only (G1
+/// §4.2). Main memory ends below it.
+pub const WINDOW_13: u32 = 0o1760000000;
+
+/// The tag a word read from the window, a 4-byte transfer or the file
+/// device's buffers carries: `005`, the unboxed fixnum's (G1 §2.6).
+pub const UNBOXED_TAG: Word = 0o005 << 32;
+
 /// Revision 13's invalid level-2 block, whose 32 entries the software
 /// keeps 0: what level 1 reads for an address with `<31:28>` not zero
 /// (A1.7; today's `A-LEVEL-1-MAP-INVALID`, `77`).
@@ -2326,6 +2394,15 @@ pub const MAP_LEVEL_2_13: u32 = (1 << 28) - 1;
 /// in it (A1.7).
 pub fn map_level_2_index_13(l1: u32, addr: u32) -> usize {
     (((l1 & 0o177) << 5) | ((addr >> 10) & 0o37)) as usize
+}
+
+/// Where a revision-13 physical address lands past the register page.
+enum Space13 {
+    /// The frame buffer window, at this word of the buffer.
+    Window(u32),
+    /// Main memory, at this word.
+    Main(usize),
+    Nothing,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2580,14 +2657,30 @@ impl Machine {
     /// checkpoint is before it builds anything, or before an engine's
     /// refusal would say something less to the point.
     pub fn checkpointed_geometry(body: &[u8]) -> std::io::Result<Geometry> {
+        Self::checkpointed_geometry_at(body, 32)
+    }
+
+    /// [`Machine::checkpointed_geometry`] of a body of `word_bits`-bit
+    /// words, as its file's version says
+    /// ([`crate::checkpoint::Checkpoint::word_bits`]).
+    pub fn checkpointed_geometry_at(body: &[u8], word_bits: u32) -> std::io::Result<Geometry> {
         let mut m = Machine::with_memory_boards(1);
-        m.load_to_geometry(&mut crate::checkpoint::Reader::new(body))?;
+        m.load_to_geometry(&mut crate::checkpoint::Reader::for_word_bits(body, word_bits))?;
         Ok(m.geometry)
     }
 
     /// Back from a checkpoint, into a machine built as the flags say: the
     /// same memory, the same pack under it, the same Chaosnet on it.
+    ///
+    /// **A revision-12 checkpoint is refused by a revision-13 machine**
+    /// (contract G2 §2.8): its words are 32 bits and its map, dispatch
+    /// memory and devices revision 12's.
     pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
+        if self.geometry.wide() && r.word_bits() == 32 {
+            return Err(crate::checkpoint::bad(
+                "a checkpoint of 32-bit words, the CADR's or revision 12's, and this is revision 13",
+            ));
+        }
         self.load_to_geometry(r)?;
         let l2 = if self.geometry.wide() { L2_MAP_WORDS } else { 2048 };
         r.u32s_into(&mut self.l2_map[..l2])?;

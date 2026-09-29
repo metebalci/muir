@@ -41,9 +41,9 @@
 //! cache puts out together. Nothing else happens: no memory cycle, no map
 //! lookup, no arbitration and no second read of the cache's RAMs, so it
 //! cannot fault. [`Reach::Page`], which looks in the next line too when the
-//! cache holds it, never past the page, is no revision's: a measurement's
-//! option ([`MemoryPort::set_prefetch`]), needing a second cache read
-//! port. The buffer is dropped by a write of the location counter, a store
+//! cache holds it, never past the page, needing a second cache read port,
+//! is revision 13's ([`Reach::REVISION_13`]), over its 8-word lines,
+//! 1024-word pages and 28-bit virtual addresses ([`Layout`]). The buffer is dropped by a write of the location counter, a store
 //! to its word, a transfer by block-disk or the file device, a map write,
 //! and -RESET; a checkpoint keeps it, with a fetch's address the port is
 //! yet to answer. What uses it is the fused return
@@ -63,21 +63,27 @@ pub enum Reach {
     /// Revision 12's ([`Reach::REVISION_12`]).
     Line,
     /// Anywhere in the fetched word's page that the cache holds: the next
-    /// line's word is a lookup of its own, a second read port. No
-    /// revision's; for measurement.
+    /// line's word is a lookup of its own, a second read port. Revision
+    /// 13's ([`Reach::REVISION_13`]).
     Page,
 }
 
 impl Reach {
     /// The prefetch revision 12 has: the line's reach.
     pub const REVISION_12: Reach = Reach::Line;
+    /// Revision 13's: the page's (contract G2 §9, which takes page reach
+    /// where it gains at least 1% and the fabric allows it; measured at 8-word
+    /// lines, 1.67% of time on the Arty's timing and 1.13% on the DE25's).
+    /// Line reach stays selectable ([`MemoryPort::set_prefetch`]) for the
+    /// fabric to take back if its fit does not allow the second port.
+    pub const REVISION_13: Reach = Reach::Page;
 }
 
 /// The word the prefetch holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Prefetched {
     /// Its virtual word address, `VMA<23:0>` as the stream's fetch of it
-    /// would give it: `LC<25:2>`.
+    /// would give it: `LC<25:2>`; on revision 13 `VMA<27:0>`, `LC<29:2>`.
     pub vaddr: u32,
     /// Its physical word address.
     pub phys: u32,
@@ -171,6 +177,37 @@ pub struct MemoryPort {
     prefetched: Option<Prefetched>,
     fetch_vaddr: Option<u32>,
     pub prefetch_counts: PrefetchCounts,
+    /// The revision's layout, [`Layout`]: the line, the page and the
+    /// virtual address. Not in a checkpoint: the geometry's.
+    layout: Layout,
+}
+
+/// What differs between revision 12's port and revision 13's (contract G1
+/// §3.3, §4.1-§4.2, G2 §3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    /// Words a cache line, which [`MemoryPort::set_cache`] keeps.
+    pub line_words: u32,
+    /// Words a page, which the prefetch never looks past.
+    pub page_words: u32,
+    /// The virtual word address's bits.
+    pub vaddr_mask: u32,
+    /// Whether a line fill has beats past today's two, a tick each
+    /// ([`MemoryPort::fill_ns`]): not to revision 12; on revision 13 3 in
+    /// main memory, a line of 40 bytes in 5 beats, and 2 in the frame
+    /// buffer window, 32 bytes in 4.
+    pub more_beats: bool,
+}
+
+impl Layout {
+    /// Revision 12's, and the CADR's cache: 4-word lines, 256-word pages,
+    /// 24-bit virtual addresses.
+    pub const REVISION_12: Layout =
+        Layout { line_words: 4, page_words: 256, vaddr_mask: 0x00ff_ffff, more_beats: false };
+    /// Revision 13's: 8-word lines, 1024-word pages, 28-bit virtual
+    /// addresses, and fills of 5 beats.
+    pub const REVISION_13: Layout =
+        Layout { line_words: 8, page_words: 1024, vaddr_mask: 0x0fff_ffff, more_beats: true };
 }
 
 impl Default for MemoryPort {
@@ -183,12 +220,31 @@ impl MemoryPort {
     /// QUUX's port: the cache at its shape, main memory at the nominal
     /// timing.
     pub fn new() -> MemoryPort {
+        Self::with_layout(Layout::REVISION_12)
+    }
+
+    /// The port a machine of `geometry` has: revision 13's layout, cache
+    /// shape and page reach on a 40-bit machine, and otherwise [`new`]'s
+    /// without the prefetch, which the engine fits for revision 12.
+    ///
+    /// [`new`]: MemoryPort::new
+    pub fn for_geometry(geometry: &crate::machine::Geometry) -> MemoryPort {
+        if geometry.wide() {
+            let mut p = Self::with_layout(Layout::REVISION_13);
+            p.prefetch = Some(Reach::REVISION_13);
+            p
+        } else {
+            Self::new()
+        }
+    }
+
+    fn with_layout(layout: Layout) -> MemoryPort {
         MemoryPort {
             state: State::Idle,
             write: false,
             addr: 0,
             memory: false,
-            cache: Cache::new(CacheConfig::QUUX),
+            cache: Cache::new(CacheConfig { line_words: layout.line_words, ..CacheConfig::QUUX }),
             timing: MemoryTiming::NOMINAL,
             memory_free_at: 0,
             buffer_free_at: 0,
@@ -197,7 +253,13 @@ impl MemoryPort {
             prefetched: None,
             fetch_vaddr: None,
             prefetch_counts: PrefetchCounts::default(),
+            layout,
         }
+    }
+
+    /// The revision's layout.
+    pub fn layout(&self) -> Layout {
+        self.layout
     }
 
     /// The cache-only prefetch fitted with its reach, or taken out: `None`
@@ -219,7 +281,7 @@ impl MemoryPort {
     /// The cycle just requested is the stream's macroinstruction fetch of
     /// virtual word `vaddr`.
     pub fn mark_fetch(&mut self, vaddr: u32) {
-        self.fetch_vaddr = Some(vaddr & 0x00ff_ffff);
+        self.fetch_vaddr = Some(vaddr & self.layout.vaddr_mask);
     }
 
     /// The buffer dropped, if it holds a word, and counted by `why`.
@@ -245,7 +307,7 @@ impl MemoryPort {
         c.fetches += 1;
         let next = self.addr + 1;
         let line = self.cache.config.line_words;
-        if next & 0xff == 0 || next as usize >= main.len() {
+        if next.is_multiple_of(self.layout.page_words) || next as usize >= main.len() {
             c.page_end += 1;
             return;
         }
@@ -260,7 +322,7 @@ impl MemoryPort {
             c.next_line += 1;
         }
         self.prefetched = Some(Prefetched {
-            vaddr: (vaddr + 1) & 0x00ff_ffff,
+            vaddr: (vaddr + 1) & self.layout.vaddr_mask,
             phys: next,
             word: main[next as usize],
         });
@@ -270,8 +332,15 @@ impl MemoryPort {
         &self.cache
     }
 
-    /// Another shape of cache, before the machine runs: `--cache`.
+    /// Another shape of cache, before the machine runs: `--cache`. On
+    /// revision 13 the line stays 8 words, a line of packed storage (G1
+    /// §4.1).
     pub fn set_cache(&mut self, config: CacheConfig) {
+        let config = if self.layout == Layout::REVISION_13 {
+            CacheConfig { line_words: self.layout.line_words, ..config }
+        } else {
+            config
+        };
         self.cache = Cache::new(config);
     }
 
@@ -349,7 +418,7 @@ impl MemoryPort {
             return now + hit_ns;
         }
         let start = now.max(self.memory_free_at);
-        let done = start + if self.write { self.timing.write_ns } else { self.timing.read_ns };
+        let done = start + if self.write { self.timing.write_ns } else { self.fill_ns() };
         self.memory_free_at = done;
         if self.write && self.cache.config.write_buffer {
             let at = (now + hit_ns).max(self.buffer_free_at);
@@ -358,6 +427,23 @@ impl MemoryPort {
         } else {
             done
         }
+    }
+
+    /// A line fill's time: the board's [`MemoryTiming::read_ns`], which is
+    /// a 4-word line's, two 64-bit beats; on revision 13 a tick more for
+    /// each further beat --- 40 bytes, 5 beats, in main memory, and 32
+    /// bytes, 4, in the frame buffer window (G1 §4.1-§4.2). A line that
+    /// crosses a 4 KiB boundary, which the fabric issues as two bursts (4
+    /// in every 512), is taken as one: **unverified**, until muir-fpga
+    /// measures a fill at 40 bits (D5).
+    fn fill_ns(&self) -> u64 {
+        const TICK: u64 = 10;
+        let beats = match (self.layout.more_beats, self.addr >= crate::machine::WINDOW_13) {
+            (false, _) => 0,
+            (true, false) => 3,
+            (true, true) => 2,
+        };
+        self.timing.read_ns + beats * TICK
     }
 
     /// Advances to `now` and reports the acknowledgement if it has come.
@@ -425,6 +511,8 @@ impl MemoryPort {
             prefetched,
             fetch_vaddr,
             prefetch_counts: _,
+            // The geometry's.
+            layout: _,
         } = self;
         match *state {
             State::Idle => w.u8(0),
@@ -482,9 +570,13 @@ impl MemoryPort {
         // The word the prefetch held, and a fetch it is to look past; kept
         // only where the engine has the prefetch fitted.
         let prefetched = r.opt(|r| {
-            Ok(Prefetched { vaddr: r.u32()? & 0x00ff_ffff, phys: r.u32()?, word: r.word()? })
+            Ok(Prefetched {
+                vaddr: r.u32()? & self.layout.vaddr_mask,
+                phys: r.u32()?,
+                word: r.word()?,
+            })
         })?;
-        let fetch_vaddr = r.opt(|r| Ok(r.u32()? & 0x00ff_ffff))?;
+        let fetch_vaddr = r.opt(|r| Ok(r.u32()? & self.layout.vaddr_mask))?;
         if self.prefetch.is_some() {
             self.prefetched = prefetched;
             self.fetch_vaddr = fetch_vaddr;

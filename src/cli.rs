@@ -1822,7 +1822,7 @@ const HELP: &[(Whose, &str)] = &[
 
 /// What this build calls itself: the crate's version, the commit it was
 /// built from, and whether it was built with optimizations off ---
-/// `muir 0.1.0-e4d8aeb-release`. `--version` prints it, and every run says
+/// `muir 0.1.0-8a69eea-release`. `--version` prints it, and every run says
 /// it in its first line, so a report of a run says which muir made it.
 ///
 /// **A tree with uncommitted work in it says `-dirty` after the commit**,
@@ -3970,7 +3970,8 @@ fn write_checkpoint<E: Engine>(name: &str, e: &E, path: &Path) {
     }
     let mut w = crate::checkpoint::Writer::new();
     e.save(&mut w);
-    match crate::checkpoint::write(path, name, e.machine().memory_boards(), &w.finish()) {
+    let (boards, bits) = (e.machine().memory_boards(), e.machine().geometry.word_bits);
+    match crate::checkpoint::write(path, name, boards, bits, &w.finish()) {
         Ok(n) => eprintln!(
             "checkpoint: {} at {} microcycles, {n} bytes",
             path.display(),
@@ -4198,7 +4199,7 @@ fn refuse_other_executable((path, c): &(PathBuf, Checkpoint), exe: &str) {
     let saved = if c.engine == "chip" {
         Some(crate::machine::Geometry::CADR)
     } else {
-        crate::machine::Machine::checkpointed_geometry(&c.body).ok()
+        crate::machine::Machine::checkpointed_geometry_at(&c.body, c.word_bits).ok()
     };
     if let Some(saved) = saved
         && executable_of(saved) != exe
@@ -4276,7 +4277,7 @@ fn resume_engine<E: Engine>(
             c.engine
         ));
     }
-    let mut r = crate::checkpoint::Reader::new(&c.body);
+    let mut r = c.reader();
     // The machine first: a board refused on another machine's checkpoint
     // is only the machine's default board, and a disk the same (QUUX's is
     // block-disk). The geometry is read before either, so a load that

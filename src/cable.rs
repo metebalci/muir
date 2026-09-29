@@ -976,7 +976,7 @@ pub fn write_checkpoint(
     clk.save(&mut w)?;
     far.checkpoint(&mut w)?;
     let boards = far.buses.machine.memory_boards();
-    crate::checkpoint::write(path, ENGINE, boards, &w.finish())
+    crate::checkpoint::write(path, ENGINE, boards, 32, &w.finish())
 }
 
 /// The name a netlist machine's checkpoint carries in its header, which is

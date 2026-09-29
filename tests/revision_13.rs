@@ -18,8 +18,8 @@ use muir::engine::Engine;
 use muir::isa::Insn;
 use muir::isa::asm::{
     ADD, ALU, ALWAYS, AND, BYTE, DEP, DISPATCH, DMEM_WRITE, DPB, INVERT, IOR, JUMP, LDB, M_PLUS_C,
-    MD, N, OB_RIGHT, POPJ, Q_LOAD, SETA, SETCM, SETM, SETO, SRC_MD, START_READ, SUB, XOR, a_dest,
-    a_src, filler, m_dest, m_src, src, target,
+    MD, N, OB_RIGHT, POPJ, Q_LOAD, SETA, SETCM, SETM, SETO, SRC_MD, START_READ, START_WRITE, SUB,
+    XOR, a_dest, a_src, filler, m_dest, m_src, src, target,
 };
 use muir::machine::{Geometry, Machine, Word, macro_dispatch};
 use muir::micro::Micro;
@@ -741,9 +741,9 @@ fn the_dispatch_memory_is_4096_entries() {
         assert_eq!(m.dmem[0o7777], 1 << 16 | 1 << 15, "{engine}: entry 7777 written");
         assert_eq!(m.dmem[0o3777], 0, "{engine}: entry 3777 not written");
     }
-    let word_6 = Geometry::FEATURE_PAGE << 8 | 6;
+    let word_6 = muir::machine::REGISTER_PAGE_13 | 6;
     assert_eq!(REV13.feature_word(word_6), Some(4096), "feature word 6");
-    assert_eq!(Geometry::QUUX.feature_word(word_6), Some(2048));
+    assert_eq!(Geometry::QUUX.feature_word(Geometry::FEATURE_PAGE << 8 | 6), Some(2048));
 }
 
 // --- sources and constants ---------------------------------------------------
@@ -951,4 +951,209 @@ fn the_fused_return_takes_the_halfword_in_the_ring_of_40() {
     for (engine, m) in &ms {
         assert_eq!(m.macro_dispatch.fused, 1, "{engine}: one fused return");
     }
+}
+
+// --- the physical space at 28 bits (G1 §3.2, G2 §3-§4) --------------------------
+
+/// Physical addresses the space tests reach, each through a virtual page of
+/// its own: revision 13's register page, `1777777400`; revision 12's,
+/// `17777400`; the frame buffer window, `1760000000`; main memory above 22
+/// bits, `20000000`; the first word past main memory; and `17773000`, which
+/// revision 12's decode of the old Unibus window takes for the diagnostic
+/// registers.
+const REGISTER_PAGE: u32 = 0o1777777400;
+const OLD_REGISTER_PAGE: u32 = 0o17777400;
+const WINDOW: u32 = 0o1760000000;
+const HIGH: u32 = 0o20000000;
+/// Main memory for the space tests: 4M words and a page, so that [`HIGH`]
+/// and the old Unibus window are in it.
+const MAIN_13: usize = 0o20002000;
+const SPY: u32 = 0o17773000;
+
+/// The virtual address that reaches physical `phys` through virtual page
+/// `vpage` (below 32, so in level-1 block 0), and its map entry: readable,
+/// writable, the page `phys<27:10>`.
+fn through(m: &mut Machine, vpage: u32, phys: u32) -> Word {
+    m.l2_map[vpage as usize] = 1 << 27 | 1 << 26 | phys >> 10;
+    ((vpage << 10) | (phys & 0o1777)) as Word
+}
+
+impl Prog {
+    /// M `slot` <- the word at the virtual address in A `a`.
+    fn read_to(&mut self, a: u64, slot: u64) -> &mut Self {
+        self.op(ALU | SETA | a_src(a) | START_READ);
+        self.op(filler().raw()).op(filler().raw());
+        self.op(ALU | SETM | SRC_MD | m_dest(slot))
+    }
+    /// The word in A `word` to the virtual address in A `a`.
+    fn write_from(&mut self, word: u64, a: u64) -> &mut Self {
+        self.op(ALU | SETA | a_src(word) | MD);
+        self.op(ALU | SETA | a_src(a) | START_WRITE);
+        self.op(filler().raw()).op(filler().raw())
+    }
+}
+
+/// **The physical space is 28 bits** (G1 §3.2, G2 §4.1, A1.10): the
+/// register page at `1777777400`, whose feature words say revision 13 and
+/// its sizes, the video controller's buffer at `1760000000`; main memory,
+/// not a register, at revision 12's page, `17777400`, when there is that
+/// much of it (`tests/revision_13_memory.rs` has it nothing when there is
+/// not); main memory whole above 22 bits, up to its end, and nothing past
+/// it, which fails with word 101's NXM bit; and main memory, not the
+/// diagnostic registers, at `17773000`.
+#[test]
+fn the_physical_space_is_28_bits() {
+    let va = |m: &mut Machine| {
+        [
+            through(m, 1, REGISTER_PAGE),
+            through(m, 2, OLD_REGISTER_PAGE),
+            through(m, 4, HIGH),
+            through(m, 5, MAIN_13 as u32),
+            through(m, 6, SPY),
+        ]
+    };
+    let mut p = Prog::default();
+    let mut probe = Machine::new();
+    let [reg, old, high, past, spy] = va(&mut probe);
+    for (k, off) in [0u64, 1, 2, 6, 0o13].into_iter().enumerate() {
+        p.a(0o60 + k as u64, reg + off);
+        p.read_to(0o60 + k as u64, 0o10 + k as u64);
+    }
+    // Revision 12's page: main memory, and word 101 has no NXM.
+    p.a(0o65, old).a(0o66, reg + 0o101);
+    p.read_to(0o65, 0o15).read_to(0o66, 0o16);
+    // Main memory above 22 bits, a whole word; past its end nothing.
+    p.a(0o67, high + 5).a(0o70, w(0o025, 0x1357_9bdf)).a(0o71, past);
+    p.write_from(0o70, 0o67).read_to(0o67, 0o20).read_to(0o71, 0o21).read_to(0o66, 0o22);
+    // A write of word 101 clears it.
+    p.write_from(ZERO, 0o66).read_to(0o66, 0o17);
+    // The old Unibus window's diagnostic registers are main memory here.
+    p.a(0o72, spy + 5);
+    p.read_to(0o72, 0o23);
+    p.stop();
+    let setup = |m: &mut Machine| {
+        m.main = vec![0; MAIN_13];
+        va(m);
+        m.main[SPY as usize + 5] = w(0o031, 0xab_cdef);
+        m.main[OLD_REGISTER_PAGE as usize] = w(0o031, 0o400);
+    };
+    let ms = run_with(&p, &setup, &|_| {});
+    expect(
+        &ms,
+        &[
+            (0o10, (0x5155 << 16) | (13 << 4) | 4, "word 0, MACHINE-ID"),
+            (0o11, 7, "word 1, the level-1 entry's bits"),
+            (0o12, 4096, "word 2, the level-2 entries"),
+            (0o13, 4096, "word 6, the dispatch memory's entries"),
+            (0o14, WINDOW as Word, "word 13, the video controller's buffer"),
+            (0o15, w(0o031, 0o400), "17777400: main memory"),
+            (0o16, 0, "word 101: no NXM"),
+            (0o17, 0, "word 101 cleared by its write"),
+            (0o20, w(0o025, 0x1357_9bdf), "main memory at 20000005"),
+            (0o21, 0, "past main memory: nothing"),
+            (0o22, 1, "word 101: NXM"),
+            (0o23, w(0o031, 0xab_cdef), "main memory at 17773005"),
+        ],
+    );
+    for (engine, m) in &ms {
+        assert_eq!(m.main[HIGH as usize + 5], w(0o025, 0x1357_9bdf), "{engine}: main memory");
+    }
+}
+
+/// **The frame buffer window, 4 bytes a word** (G1 §4.2): from `1760000000`,
+/// a write stores the field and drops the tag, and a read returns the field
+/// with the unboxed tag `005`; past the buffer's end, nothing.
+#[test]
+fn the_frame_buffer_window_holds_the_field() {
+    let va = |m: &mut Machine| [through(m, 3, WINDOW), through(m, 7, WINDOW + 0o2000)];
+    let mut p = Prog::default();
+    let mut probe = Machine::new();
+    let [window, _] = va(&mut probe);
+    p.a(0o60, window + 7).a(0o61, w(0o025, 0x1234_5678)).a(0o62, window + 0o1777);
+    p.write_from(0o61, 0o60).read_to(0o60, 0o10);
+    p.write_from(0o61, 0o62).read_to(0o62, 0o11);
+    p.stop();
+    let setup = |m: &mut Machine| {
+        va(m);
+    };
+    let ms = run_with(&p, &setup, &|_| {});
+    expect(
+        &ms,
+        &[
+            (0o10, w(0o005, 0x1234_5678), "the window: the field, tag 005"),
+            (0o11, w(0o005, 0x1234_5678), "the window's word 1777"),
+        ],
+    );
+    for (engine, m) in &ms {
+        assert_eq!(m.tv.read_buffer(7), 0x1234_5678, "{engine}: the buffer holds the field");
+        assert_eq!(m.tv.read_buffer(0o1777), 0x1234_5678, "{engine}: and at 1777");
+    }
+}
+
+/// **A store to a word that spans two beats** (G1 §4.1): the words at a
+/// line's offsets 1, 3, 4 and 6 lie across two of its five 64-bit beats in
+/// packed storage. Stored on both engines, each is whole in main memory, and
+/// the machine's checkpoint holds the line as packed storage lays it out,
+/// 5 bytes a word, `<7:0>` first and the tag last.
+#[test]
+fn a_store_to_a_word_spanning_two_beats_is_whole() {
+    let words = [
+        w(0o101, 0x0102_0304),
+        w(0o303, 0x0506_0708),
+        w(0o104, 0x090a_0b0c),
+        w(0o306, 0x0d0e_0f10),
+    ];
+    let mut p = Prog::default();
+    for (k, (&x, off)) in words.iter().zip([1u64, 3, 4, 6]).enumerate() {
+        p.a(0o60 + k as u64, x).a(0o70 + k as u64, 0o400 + off);
+        p.write_from(0o60 + k as u64, 0o70 + k as u64);
+    }
+    p.stop();
+    let mut line = [0 as Word; 8];
+    for (&x, off) in words.iter().zip([1usize, 3, 4, 6]) {
+        line[off] = x;
+    }
+    let packed: Vec<u8> =
+        line.iter().flat_map(|&x| (0..5).map(move |k| (x >> (8 * k)) as u8)).collect();
+    for (engine, m) in run(&p) {
+        assert_eq!(m.main[0o400..0o410], line, "{engine}: the words whole");
+        let mut wr = muir::checkpoint::Writer::new();
+        m.save(&mut wr);
+        let body = wr.finish();
+        assert!(
+            body.windows(40).any(|x| x == packed),
+            "{engine}: the line packed in the checkpoint"
+        );
+    }
+}
+
+/// **On `rtl` main memory above 22 bits and the frame buffer window go
+/// through the cache** (G2 §3; G1 §3.2): a second read of either word
+/// hits, where an address the port does not decode as memory would not be
+/// cached at all.
+#[test]
+fn on_rtl_high_memory_and_the_window_are_cached() {
+    let va = |m: &mut Machine| [through(m, 3, WINDOW), through(m, 4, HIGH)];
+    let mut p = Prog::default();
+    let mut probe = Machine::new();
+    let [window, high] = va(&mut probe);
+    p.a(0o60, window + 3).a(0o61, high + 3);
+    for slot in [0o10, 0o11] {
+        p.read_to(0o60, slot);
+    }
+    for slot in [0o12, 0o13] {
+        p.read_to(0o61, slot);
+    }
+    p.stop();
+    let setup = |m: &mut Machine| {
+        m.main = vec![0; MAIN_13];
+        va(m);
+    };
+    let mut r = Rtl::new(machine(&p, &setup));
+    r.boot();
+    let before = r.cache().unwrap().hits;
+    finish(&mut r, "rtl");
+    let c = r.cache().unwrap();
+    assert!(c.hits - before >= 2, "the second reads hit: {} hits, {} misses", c.hits, c.misses);
+    assert!(c.holds(WINDOW + 3) && c.holds(HIGH + 3), "both lines held");
 }

@@ -1078,7 +1078,7 @@ both being one muir: the name, the version, the commit
 it was built from --- with `-dirty` after it where the tree had uncommitted
 work, since the commit alone would name something that was never built ---
 and whether it was built with optimizations off: `muir
-0.1.0-e4d8aeb-release`. The commit is stamped in at build time, so a built
+0.1.0-8a69eea-release`. The commit is stamped in at build time, so a built
 muir never runs git; built where there is no repository, a source archive or
 a machine without git, there is no commit to name and the version is the
 crate's and the build's alone. Every run says the same line first, so a

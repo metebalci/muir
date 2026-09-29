@@ -34,6 +34,11 @@
 //! the microcode and the boot PROM. [`parse_partition_order`] reads it;
 //! [`swap_halves`] turns either order into the other. The CADR's `.mcr`
 //! stays MIT's.
+//!
+//! **QUUX revision 13's `.mcr`** (contract G2 appendix A1.4, A1.12) has a
+//! dispatch memory section of `10000` entries and A memory as section 5,
+//! 40-bit words, each location two 32-bit words: `<31:0>`, then `<39:32>`
+//! in `<7:0>`.
 
 use crate::isa::Insn;
 
@@ -65,9 +70,18 @@ pub struct Mcr {
     /// address in 13:0 (`ir.bits`).  `WRITE-D-MEM` puts each word out as
     /// two halves, the high one carrying bit 16 in its bit 0 and odd parity
     /// in its bit 1, the low one bits 15-0.
+    ///
+    /// 2,048 entries, `4000`; QUUX revision 13's 4,096, `10000` (contract G2
+    /// appendix A1.4).
     pub dmem: Vec<u32>,
     pub amem_start: u32,
-    pub amem: Vec<u32>,
+    /// A memory: section 4's 32-bit words, or revision 13's section 5,
+    /// 40-bit ones ([`Mcr::amem_wide`]).
+    pub amem: Vec<crate::machine::Word>,
+    /// Whether A memory came as section 5 (contract G2 appendix A1.12):
+    /// each location two 32-bit words, `<31:0>` and then `<39:32>` in
+    /// `<7:0>` with `<31:8>` zero.
+    pub amem_wide: bool,
     /// The main-memory section, where the file has one: its relative disk
     /// block and its number of blocks ([`parse`] says which field is which).
     pub main_memory: Option<(u32, u32)>,
@@ -84,7 +98,7 @@ impl Mcr {
     /// word 40.
     pub fn version(&self) -> Option<u32> {
         let i = 0o40usize.checked_sub(self.amem_start as usize)?;
-        self.amem.get(i).map(|w| w & 0o77777777)
+        self.amem.get(i).map(|&w| w as u32 & 0o77777777)
     }
 }
 
@@ -166,9 +180,12 @@ pub fn parse(bytes: &[u8]) -> Result<Mcr, String> {
                 mcr.imem_start = start;
                 mcr.imem = (0..size).map(|_| r.insn()).collect::<Result<_, _>>()?;
             }
+            // 2,048 entries, and revision 13's 4,096 (A1.4).
             2 => {
-                if size != 0o4000 {
-                    return Err(format!("dispatch memory is {size:o} words, expected 4000"));
+                if size != 0o4000 && size != 0o10000 {
+                    return Err(format!(
+                        "dispatch memory is {size:o} words, expected 4000 or 10000"
+                    ));
                 }
                 mcr.dmem_start = start;
                 mcr.dmem = (0..size).map(|_| r.u32_pdp()).collect::<Result<_, _>>()?;
@@ -188,7 +205,28 @@ pub fn parse(bytes: &[u8]) -> Result<Mcr, String> {
                     return Err(format!("the A memory section starts at {start:o}, past A memory"));
                 }
                 mcr.amem_start = start;
-                mcr.amem = (0..size).map(|_| r.u32_pdp()).collect::<Result<_, _>>()?;
+                mcr.amem =
+                    (0..size).map(|_| r.u32_pdp().map(u64::from)).collect::<Result<_, _>>()?;
+                break;
+            }
+            // Revision 13's A memory at 40 bits, the last section as 4 is
+            // (A1.12).
+            5 => {
+                if start >= 0o2000 {
+                    return Err(format!("the A memory section starts at {start:o}, past A memory"));
+                }
+                mcr.amem_start = start;
+                mcr.amem_wide = true;
+                for k in 0..size {
+                    let (low, high) = (r.u32_pdp()?, r.u32_pdp()?);
+                    if high >> 8 != 0 {
+                        return Err(format!(
+                            "A memory {:o}'s high word is {high:o}, more than the tag",
+                            start as usize + k
+                        ));
+                    }
+                    mcr.amem.push(u64::from(high) << 32 | u64::from(low));
+                }
                 break;
             }
             _ => return Err(format!("unknown section code {code:o} at offset {}", r.at - 12)),

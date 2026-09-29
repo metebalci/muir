@@ -132,11 +132,12 @@ impl Bus {
         if m.geometry.unibus {
             Bus::Cadr(Box::new(Busint::with_timing_model(m.memory_boards(), model)))
         } else {
-            let mut p = MemoryPort::new();
+            let mut p = MemoryPort::for_geometry(&m.geometry);
             p.keep_timing_model(model);
             // Revision 12's cache-only prefetch, which only its fused
-            // return uses (contract H8a §3.5).
-            if m.geometry.macro_dispatch {
+            // return uses (contract H8a §3.5); revision 13's port has its
+            // own.
+            if m.geometry.macro_dispatch && !m.geometry.wide() {
                 p.set_prefetch(Some(crate::memory_port::Reach::REVISION_12));
             }
             Bus::Quux(Box::new(p))
@@ -2528,7 +2529,12 @@ impl Rtl {
                     // memory, through the cache (contract Q7); the register
                     // page's device registers; nothing else from 17000000
                     // up, the Unibus window included (contracts Q5, Q13).
-                    busint::decode_quux(self.bus_addr, self.m.main.len(), self.m.tv.buffer_words())
+                    let decode = if self.m.geometry.wide() {
+                        busint::decode_quux_13
+                    } else {
+                        busint::decode_quux
+                    };
+                    decode(self.bus_addr, self.m.main.len(), self.m.tv.buffer_words())
                 } else {
                     busint::decode_for(
                         self.bus_addr,
@@ -2549,7 +2555,10 @@ impl Rtl {
                 }
                 self.bus_cycles += 1;
                 self.bus_written = false;
-                self.bus_spy = busint::unibus_address(self.bus_addr).and_then(spy::register);
+                // Revision 13 has no Unibus window (`Machine::bus_read`).
+                self.bus_spy = busint::unibus_address(self.bus_addr)
+                    .and_then(spy::register)
+                    .filter(|_| !self.m.geometry.wide());
                 self.bus_sampled = false;
                 self.bus_pulsed = false;
                 // `READ IN PROGRESS` comes up on the same edge, for a read,

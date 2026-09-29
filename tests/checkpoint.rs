@@ -83,7 +83,7 @@ fn the_file_names_its_engine_and_refuses_other_files() {
     let path = dir.join("a.chk");
     let body: Vec<u8> =
         (0..300u32).map(|i| if i % 7 == 0 { i } else { 0 }).flat_map(|v| v.to_le_bytes()).collect();
-    let size = checkpoint::write(&path, "micro", 4, &body).unwrap();
+    let size = checkpoint::write(&path, "micro", 4, 32, &body).unwrap();
     assert_eq!(size, std::fs::metadata(&path).unwrap().len());
     let back = checkpoint::read(&path).unwrap();
     assert_eq!(back.engine, "micro");
@@ -111,7 +111,7 @@ fn the_file_names_its_engine_and_refuses_other_files() {
 /// of the fetch a `POPJ` asks for, version 10 the disk controller's
 /// overrun, version 11 the drives on a netlist disk controller's
 /// cable and the multiplexor between them, version 12 one format for the
-/// harness and the binary (`af676fa`), version 13 the disk
+/// harness and the binary (`a2f4aa2`), version 13 the disk
 /// controller's header ECC error, version 14 `LC` among the signals
 /// `rtl` records for the cosimulation to compare, version 15 the instant
 /// a drive's attention comes rather than whether it has come, version 16
@@ -199,7 +199,7 @@ fn the_format_is_version_49_and_another_version_is_refused() {
     let dir = std::env::temp_dir().join(format!("muir-checkpoint-version-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.chk");
-    checkpoint::write(&path, "micro", 4, &[1, 2, 3]).unwrap();
+    checkpoint::write(&path, "micro", 4, 32, &[1, 2, 3]).unwrap();
     let good = std::fs::read(&path).unwrap();
     // The version is the four bytes after the magic line.
     let at = b"muir checkpoint\n".len();

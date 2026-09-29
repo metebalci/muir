@@ -409,7 +409,14 @@ pub fn main_dump_wide(
     read: impl Fn(usize) -> Option<u64>,
     bits: u32,
 ) -> Result<String, String> {
-    if from >= PHYSICAL_WORDS {
+    // Revision 13's physical addresses are 28 bits (contract G1 §3.2).
+    if bits > 32 && from >= 1 << 28 {
+        return Err(format!(
+            "physical addresses are 28 bits and {from:o} is more than that; \
+             mem takes a physical address and does not go through the map"
+        ));
+    }
+    if bits == 32 && from >= PHYSICAL_WORDS {
         return Err(format!(
             "the Xbus carries 22 bits of address and {from:o} is more than that; \
              mem takes a physical address and does not go through the map"

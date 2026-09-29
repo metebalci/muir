@@ -26,6 +26,18 @@
 //! The words move inside the store to START, as the CADR model's do; the
 //! controller then stays busy for [`BLOCK_NS`] a block moved, which is when
 //! it goes not-active and the done interrupt comes.
+//!
+//! **Revision 13** ([`BlockDisk::write_40`]; contract G2 §4.2, appendix
+//! A1.11) moves 1024-word pages of 40-bit words, one a command list entry,
+//! `<27:10>` the page and `<0>` More, `<9:1>` and `<39:28>` ignored; its
+//! registers take 28-bit addresses. Command `<12>` chooses the transfer:
+//! 0 the **packed transfer**, 5 blocks a page, the 5,120 bytes as main
+//! memory holds them (G1 §4.1: word w at bytes 5w to 5w + 4, `<7:0>` first
+//! and the tag last); 1 the **4-byte transfer**, 4 blocks a page, `<31:0>`
+//! of word w at bytes 4w to 4w + 3, a read writing tag `005` and a write
+//! dropping the tag. A page is read whole before memory is written, so a
+//! transfer that runs past the end of the disk leaves the page it stopped
+//! in as it was.
 
 use crate::disk_image::Disk;
 use crate::disk_unit::BLOCK_WORDS;
@@ -164,6 +176,117 @@ impl BlockDisk {
             DA => self.da,
             _ => 0,
         }
+    }
+
+    /// Revision 13's registers and transfers ([module docs](self)): the
+    /// command list pointer 28 bits, and a transfer of pages. `main` is
+    /// physical memory, main memory's words from 0.
+    pub fn write_40(&mut self, register: u32, v: u32, main: &mut [crate::machine::Word]) {
+        match register & 3 {
+            START => self.start_40(main),
+            CLP => self.clp = v & 0o1777777777,
+            _ => self.write(register, v, main),
+        }
+    }
+
+    fn start_40(&mut self, main: &mut [crate::machine::Word]) {
+        use crate::machine::{UNBOXED_TAG, Word};
+        const PAGE: usize = 1024;
+        self.past_end = false;
+        self.nxm = false;
+        self.bad_command = false;
+        let read = match self.cmd & 0o17 {
+            0o00 => true,
+            0o11 => false,
+            _ => {
+                self.bad_command = true;
+                return;
+            }
+        };
+        // Blocks a page, and a page's bytes.
+        let four = self.cmd & (1 << 12) != 0;
+        let (per_page, bytes) = if four { (4usize, 4usize) } else { (5, 5) };
+        let Some(mut disk) = self.disk.take() else { return };
+        let mut moved = 0u64;
+        let mut n = 0u32;
+        let mut block = self.da;
+        loop {
+            // "Only bits <15:0> of the CLP can count", as on the CADR.
+            let clp = self.clp & !0xffff | (self.clp.wrapping_add(n)) & 0xffff;
+            self.last_memory_address = clp;
+            let Some(&ccw) = main.get(clp as usize) else {
+                self.nxm = true;
+                break;
+            };
+            // Main memory, which ends below the frame buffer window (G1
+            // §3.2): a page in the window is outside it.
+            let page = (ccw & 0o1777776000) as usize;
+            if page + PAGE > main.len() {
+                self.nxm = true;
+                break;
+            }
+            let mut failed = None;
+            if read {
+                let mut buf = Vec::with_capacity(per_page * 1024);
+                for k in 0..per_page as u32 {
+                    match disk.read_block(block + k) {
+                        Some(b) => buf.extend(b.iter().flat_map(|w| w.to_le_bytes())),
+                        None => {
+                            failed = Some(block + k);
+                            break;
+                        }
+                    }
+                }
+                if failed.is_none() {
+                    for (w, m) in main[page..page + PAGE].iter_mut().enumerate() {
+                        let b = &buf[bytes * w..bytes * w + bytes];
+                        *m = if four {
+                            UNBOXED_TAG | Word::from(u32::from_le_bytes(b.try_into().unwrap()))
+                        } else {
+                            b.iter().rev().fold(0, |x, &y| x << 8 | Word::from(y))
+                        };
+                    }
+                }
+            } else {
+                let buf: Vec<u8> = main[page..page + PAGE]
+                    .iter()
+                    .flat_map(|&w| w.to_le_bytes().into_iter().take(bytes))
+                    .collect();
+                for k in 0..per_page {
+                    let b: [u32; BLOCK_WORDS] = std::array::from_fn(|j| {
+                        let at = 1024 * k + 4 * j;
+                        u32::from_le_bytes(buf[at..at + 4].try_into().unwrap())
+                    });
+                    if !disk.write_block(block + k as u32, &b) {
+                        failed = Some(block + k as u32);
+                        break;
+                    }
+                }
+            }
+            if let Some(at) = failed {
+                self.past_end = true;
+                moved += (at - block) as u64;
+                block = at;
+                break;
+            }
+            if let Some(log) = self.log.as_mut() {
+                for k in 0..per_page as u32 {
+                    log.push(Transfer { write: !read, block: block + k, page: page as u32 });
+                }
+            }
+            self.last_memory_address = (page + PAGE - 1) as u32;
+            moved += per_page as u64;
+            block += per_page as u32 - 1;
+            if ccw & 1 == 0 {
+                break;
+            }
+            n += 1;
+            block += 1;
+        }
+        // The last block moved, or the one that failed.
+        self.da = block;
+        self.disk = Some(disk);
+        self.done_at = self.now + moved * self.block_ns;
     }
 
     /// `main` is physical memory, which a transfer reads and writes

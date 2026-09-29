@@ -76,7 +76,7 @@ jobs:
       # a machine that has only this repository --- which also says the
       # scripts run on a fresh clone. A netlist whose script no longer
       # reproduces it looks exactly like one that does, and that has
-      # happened once already (7c0c5b0).
+      # happened once already (31a403b).
       - name: Netlists regenerate byte-identical
         run: tools/check-netlists.sh
 

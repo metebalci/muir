@@ -1106,6 +1106,27 @@ pub fn decode_quux(phys: u32, memory_words: usize, tv_words: u32) -> Responder {
     }
 }
 
+/// **Revision 13's decode** (contract G1 §3.2, G2 §3-§4): 28-bit
+/// physical word addresses. The register page,
+/// [`crate::machine::REGISTER_PAGE_13`], a device; the frame buffer window
+/// from [`crate::machine::WINDOW_13`], `tv_words` of it, on the memory bus
+/// with main memory; main memory from 0 up to `memory_words`, below the
+/// window; and nothing else, revision 12's page at `17777400` and its
+/// frame buffer at `17000000` among it, which are main memory's addresses
+/// when there is that much of it.
+pub fn decode_quux_13(phys: u32, memory_words: usize, tv_words: u32) -> Responder {
+    use crate::machine::{REGISTER_PAGE_13, WINDOW_13};
+    if phys & !0o377 == REGISTER_PAGE_13 {
+        Responder::Device
+    } else if phys.wrapping_sub(WINDOW_13) < tv_words
+        || (phys < WINDOW_13 && (phys as usize) < memory_words)
+    {
+        Responder::Memory(0)
+    } else {
+        Responder::NoXbus
+    }
+}
+
 pub fn decode_for(
     phys: u32,
     memory_words: usize,

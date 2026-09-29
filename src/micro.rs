@@ -1026,7 +1026,10 @@ impl Micro {
     /// its own state, which `Machine` does not have.
     fn read(&mut self, vma: u32) -> Word {
         let t = self.m.translate(vma);
+        // Revision 13 has no Unibus window, and its 28-bit space puts main
+        // memory where revision 12's decode finds the diagnostic registers.
         if t.access_permitted
+            && !self.m.geometry.wide()
             && let Some(eadr) = busint::unibus_address(t.physical).and_then(spy::register)
         {
             self.m.vmaok = true;
