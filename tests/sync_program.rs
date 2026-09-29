@@ -196,7 +196,7 @@ fn the_window_systems_program_at_sixty_hertz() {
 #[test]
 fn the_color_program_is_two_fields_of_ntsc() {
     let Some(src) = support::release("window/color.lisp") else {
-        eprintln!("skipped: needs vendor/system-100-0 (tools/fetch-system-100.sh)");
+        eprintln!("skipped: needs vendor/system-100-0 (tools/fetch-system-100-for-cadr.sh)");
         return;
     };
     let at = src.find("(DEFCONST SYNC '(").expect("COLOR:SYNC");

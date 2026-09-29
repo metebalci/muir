@@ -13,6 +13,8 @@ use muir::machine::{Geometry, Machine};
 use muir::micro::Micro;
 use muir::rtl::Rtl;
 
+mod support;
+
 /// Where QUUX's PROM starts.
 const BASE: u16 = 0o36000;
 
@@ -118,9 +120,9 @@ fn the_cadr_keeps_the_overlay() {
 /// Where 36000's `JUMP GO` goes: `GO`, at 36043 since muir-sys's commit
 /// `7749360` put the halts `ERROR-TWO-MAIN-MEM-SECTIONS` at 36040 and
 /// `ERROR-BUFFER-NOT-LOADED` at 36042 before it, and still there in the GPT
-/// PROM of revision 11: the hand-over's symbol table `promh.sym` says `GO
+/// PROM of revision 11: the release's symbol table `promh.sym` says `GO
 /// I-MEM 36043`
-/// ([`the_built_in_quux_prom_is_the_hand_over`]).
+/// ([`the_built_in_quux_prom_is_the_release_s`]).
 const GO: u64 = 0o36043;
 
 /// The PROM's last word: the revision 11 PROM's `promh.locs` says `(I-MEM
@@ -148,7 +150,7 @@ const GPT_HALTS: [(u64, &str); 3] = [
 ];
 
 /// `A-DISK-REGS`, where the PROM keeps block-disk's virtual address: A
-/// memory 62 in the hand-over's `promh.sym`, unchanged by revision 11.
+/// memory 62 in the release's `promh.sym`, unchanged by revision 11.
 const A_DISK_REGS: usize = 0o62;
 
 /// **The built-in PROM maps the register page where revision 11 has it**
@@ -158,7 +160,7 @@ const A_DISK_REGS: usize = 0o62;
 /// block-disk's registers at virtual 1200, words 200-203 of that page,
 /// where it kept 774; and virtual page 1, which named the old disk
 /// registers' page 36777, is mapped no more. A stale PROM fails this on
-/// every machine, with or without the hand-over.
+/// every machine, with or without the release.
 #[test]
 fn quux_s_prom_maps_the_register_page_at_37777() {
     fn check<E: Engine>(mut e: E, name: &str) {
@@ -231,24 +233,29 @@ fn quux_s_prom_is_mit_s_promh_changed() {
     assert_ne!(quux.imem, mits.imem, "the program is QUUX's");
 }
 
-/// **The built-in QUUX PROM is muir-sys's hand-over, byte for byte**, where
-/// the hand-over (`ref/band-2000`, whose `promh.*` are PROM 2000, the GPT
-/// PROM for revision 11, from muir-sys `62c4503`'s `promh.text`) is present; its
-/// symbols and error table say version 2000, 3720 octal; and they put what
-/// [`GO`], [`LAST`], [`DISK_AWAIT_PACK`] and [`GPT_HALTS`] say where they
-/// say.
+/// **The built-in QUUX PROM is QUUX's release's, byte for byte**, where
+/// the release (`release-2000`, fetched by `tools/fetch-system-for-quux.sh`)
+/// is present: its `release-2000-promh.mcr`, PROM 2000, the GPT PROM for
+/// revision 11 and later, and the `sys/ubin/promh.mcr` its sources carry,
+/// assembled from their `promh.text`; its symbols and error table there say
+/// version 2000, 3720 octal; and they put what [`GO`], [`LAST`],
+/// [`DISK_AWAIT_PACK`] and [`GPT_HALTS`] say where they say.
 #[test]
-fn the_built_in_quux_prom_is_the_hand_over() {
-    let handed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000");
-    let Ok(bytes) = std::fs::read(handed.join("promh.mcr")) else {
-        eprintln!("skipped: {} is not present", handed.display());
+fn the_built_in_quux_prom_is_the_release_s() {
+    let (Some(asset), Some(ubin)) = (
+        support::quux_release(&[&format!("{}-promh.mcr", support::QUUX_RELEASE)]),
+        support::quux_release(&["sys", "ubin"]),
+    ) else {
         return;
     };
-    assert!(bytes == include_bytes!("../data/quux-promh.mcr"), "the hand-over");
-    let locs = std::fs::read_to_string(handed.join("promh.locs")).unwrap();
+    let bytes = std::fs::read(asset).unwrap();
+    assert!(bytes == include_bytes!("../data/quux-promh.mcr"), "the release's asset");
+    let assembled = std::fs::read(ubin.join("promh.mcr")).unwrap();
+    assert!(assembled == include_bytes!("../data/quux-promh.mcr"), "the sources' sys/ubin/");
+    let locs = std::fs::read_to_string(ubin.join("promh.locs")).unwrap();
     assert!(locs.contains(&format!("(I-MEM {:o})", LAST + 1)), "{locs}");
-    let tbl = std::fs::read_to_string(handed.join("promh.tbl")).unwrap();
-    let sym = std::fs::read_to_string(handed.join("promh.sym")).unwrap();
+    let tbl = std::fs::read_to_string(ubin.join("promh.tbl")).unwrap();
+    let sym = std::fs::read_to_string(ubin.join("promh.sym")).unwrap();
     assert!(
         tbl.contains(&format!("MICROCODE-ERROR-TABLE-VERSION-NUMBER {:o})", 2000)),
         "version 2000 in promh.tbl"

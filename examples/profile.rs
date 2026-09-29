@@ -3,9 +3,10 @@
 
 //! Where a band's microcycles go, workload by workload.
 //!
-//! Boots System 1001's pack (`tools/fetch-system-1001.sh`) on the CADR, and
-//! muir-sys's latest System 2000 band on QUUX (`MUIR_BAND`, or
-//! `ref/band-2000`), with the test harness's Chaosnet server at OZ,
+//! Boots the CADR's release, System 1002 (`tools/fetch-system-for-cadr.sh`),
+//! on the CADR, and QUUX's, System 2000 (`tools/fetch-system-for-quux.sh`),
+//! or another System 2000 band (`MUIR_BAND`), on QUUX, with the test
+//! harness's Chaosnet server at OZ,
 //! logs in, defines a set of workloads at the listener and runs them one at
 //! a time, counting every control-store address the engine executes. Each workload ends by writing a marker
 //! file through the FILE service, which is how the run knows it is over:
@@ -95,7 +96,7 @@ mod support;
 use support::profile::Span;
 
 /// LISPM-1 and OZ, as the release's `site/hosts.text` gives them.
-const CHAOS_1001: (u16, u16) = (0o177201, 0o177200);
+const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
 /// The workloads: a name, and the form that runs it. Each is typed as
 /// `(progn <form> (w-done "<name>"))`.
@@ -841,14 +842,20 @@ fn profile<E: Profiled + support::macro_dispatch::Executes>(
 ) {
     let on_quux = geometry != muir::machine::Geometry::CADR;
     let dir = support::scratch("profile");
-    // QUUX runs only muir-sys's latest band: `MUIR_BAND`, or
-    // `ref/band-2000`, its GPT disk (a `.vhd`, or a raw `.img`) and the
-    // tree it was built from, which unpacks to one `release-*` directory.
-    // The CADR runs System 1001's release.
-    let (pack, sources) = if on_quux {
-        let band = std::env::var_os("MUIR_BAND")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000"));
+    // QUUX runs only muir-sys's System 2000: QUUX's release, or
+    // `MUIR_BAND`, a directory holding a band's GPT disk (a `.vhd`, or a
+    // raw `.img`) and the tree it was built from, which unpacks to one
+    // `release-*` directory. The CADR runs the CADR's release.
+    let quux_band = std::env::var_os("MUIR_BAND").map(PathBuf::from);
+    let (pack, sources) = if on_quux && quux_band.is_none() {
+        let (Some(pack), Some(sources)) = (
+            support::vendor(&["run", &format!("{}-disk.vhd", support::QUUX_RELEASE)]),
+            support::quux_release(&[]),
+        ) else {
+            return;
+        };
+        (pack, sources)
+    } else if let Some(band) = quux_band.filter(|_| on_quux) {
         let file = |suffixes: &[&str]| {
             std::fs::read_dir(&band)
                 .unwrap_or_else(|e| panic!("{}: {e}", band.display()))
@@ -872,7 +879,7 @@ fn profile<E: Profiled + support::macro_dispatch::Executes>(
         (file(&[".vhd", ".img"]), release)
     } else {
         let (Some(pack), Some(sources)) =
-            (support::vendor(&["run", "release-1001-pack.img"]), support::vendor(&["system-1001"]))
+            (support::vendor(&["run", "release-1002-pack.img"]), support::vendor(&["system-1002"]))
         else {
             return;
         };
@@ -1046,7 +1053,7 @@ fn measure<E: Profiled>(
     home: PathBuf,
     wanted: &[&(&str, &str)],
 ) {
-    let ran = support::boot_to_the_prompt_within(&mut e, CHAOS_1001, root.clone(), 400_000_000);
+    let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root.clone(), 400_000_000);
     eprintln!("listener after {ran} microcycles");
     let mut k = Keyboard::new();
     let mut plain = |e: &mut E| {

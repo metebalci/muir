@@ -135,29 +135,12 @@ fn run(m: Machine, chaos: (u16, u16), root: PathBuf) -> Found {
 /// revision 10 drops, has no user.
 #[test]
 fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000");
-    if !from.join("pack-2000.vhd").exists() {
-        eprintln!("skipped: {} is not present", from.display());
+    // QUUX's release (`tools/fetch-system-for-quux.sh`): a copy of its
+    // disk, a dynamic VHD booted as it is, which the machine writes, and
+    // its sources.
+    let Some((_dir, pack, root)) = support::quux_release_band("unused-codes-2000") else {
         return;
-    }
-    // A copy of the disk, a dynamic VHD booted as it is: the machine
-    // writes it.
-    let dir = support::scratch("unused-codes-2000");
-    let pack = dir.join("pack.vhd");
-    std::fs::copy(from.join("pack-2000.vhd"), &pack).unwrap();
-    let untar = std::process::Command::new("tar")
-        .arg("xzf")
-        .arg(from.join("tree-2000.tar.gz"))
-        .arg("-C")
-        .arg(dir.path())
-        .status()
-        .unwrap();
-    assert!(untar.success());
-    let root = dir.join("root");
-    std::fs::create_dir_all(root.join("lispm")).unwrap();
-    for part in ["sys", "site"] {
-        std::os::unix::fs::symlink(dir.join("release-2000").join(part), root.join(part)).unwrap();
-    }
+    };
     let mut m = Machine::new();
     m.load_prom(&muir::prom::quux_boot_prom());
     let mut d = muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS);
@@ -179,8 +162,8 @@ fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
     assert!(made.is_empty(), "made by the OA registers at {}", octal(made));
     assert!(found.dest_3.is_empty(), "destination 3 written: {:?}", found.dest_3);
     assert!(found.dest_4.is_empty(), "destination 4 written: {:?}", found.dest_4);
-    let symbols =
-        muir::sym::parse(&std::fs::read_to_string(from.join("ucadr.sym")).unwrap()).unwrap();
+    let sym = support::quux_release(&["sys", "ubin", "ucadr.sym"]).unwrap();
+    let symbols = muir::sym::parse(&std::fs::read_to_string(sym).unwrap()).unwrap();
     let at = |name| {
         symbols
             .address(muir::sym::Space::IMem, name)
@@ -202,16 +185,18 @@ fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
     assert!(found.timer_0_on, "timer 0 on at the end");
 }
 
-/// **System 1001 on MIT's 323, on the CADR, never runs them at all**, the
-/// OA registers' words included, through its boot to the listener.
+/// **System 1002 on the CADR's microcode 1000, MIT's 323 with three of
+/// MIT's fixes, never runs them at all**, the OA registers' words included,
+/// through its boot to the listener. The CADR's release, fetched by
+/// `tools/fetch-system-for-cadr.sh`.
 #[test]
-fn system_1001_on_323_never_runs_the_codes() {
+fn system_1002_on_1000_never_runs_the_codes() {
     let (Some(pack), Some(sources)) =
-        (support::vendor(&["run", "release-1001-pack.img"]), support::vendor(&["system-1001"]))
+        (support::vendor(&["run", "release-1002-pack.img"]), support::vendor(&["system-1002"]))
     else {
         return;
     };
-    let dir = support::scratch("unused-codes-1001");
+    let dir = support::scratch("unused-codes-1002");
     let copy = dir.join("pack.img");
     std::fs::copy(&pack, &copy).unwrap();
     let root = dir.join("root");

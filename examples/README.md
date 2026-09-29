@@ -56,8 +56,8 @@ there the drive takes its own time --- about 3% on a run that touches no
 pack, and days on one that reads a band. See the note on `report` in
 `benchmark.rs`.
 
-`profile` is where a band's microcycles go. It boots System 1001's pack with
-the test harness's Chaosnet server, logs in, and types thirteen workloads at
+`profile` is where a band's microcycles go. It boots QUUX's release, or the
+CADR's muir-sys release on the CADR, with the test harness's Chaosnet server, logs in, and types thirteen workloads at
 the listener --- the empty form, compiling, two kinds of recursion, consing,
 fixnum multiply and remainder, flonum arithmetic, `aset` and `aref`, sorting,
 bignums, `intern`, printing, and compiling again --- each ending by writing a
@@ -82,6 +82,7 @@ prints says what it is of.
 `dcmicro`, `reconcile`, `trident-tables` and `benchmark` read only what is
 committed. `screen`, `band`, `cc` and `coverage` need the System 100 release in `vendor/` --- `cc`
 needs the system sources too, since the Chaosnet server serves them to the
-machine as `SYS:`. `tools/fetch-system-100.sh` puts both in place.
-`profile` needs System 1001's pack and sources instead, from
-`tools/fetch-system-1001.sh`.
+machine as `SYS:`. `tools/fetch-system-100-for-cadr.sh` puts both in place.
+`profile` needs a muir-sys release instead: QUUX's from
+`tools/fetch-system-for-quux.sh`, the CADR's from
+`tools/fetch-system-for-cadr.sh`.

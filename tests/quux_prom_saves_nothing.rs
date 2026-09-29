@@ -25,10 +25,10 @@
 //! `data/quux-disk.img`, the GPT disk sgdisk made, with MIT's microcode
 //! 323, `mit/sys/ubin/ucadr.mcr`, turned into partition order, in its
 //! current `MCR1`. The PROM does not care whose microcode it loads, only
-//! about its sections. The other is muir-sys's System 2000 disk,
-//! `ref/band-2000/pack-2000.vhd`, a dynamic VHD whose `MCR1` holds the
-//! hand-over's `ucadr.mcr`, microcode 2000, as it is; it skips when that is
-//! not present.
+//! about its sections. The other is QUUX's release's disk,
+//! `release-2000-disk.vhd.gz` (`tools/fetch-system-for-quux.sh`), a dynamic
+//! VHD whose `MCR1` holds the release's `sys/ubin/ucadr.mcr`, microcode
+//! 2000, as it is; it skips when the release is not present.
 
 use std::path::Path;
 
@@ -211,22 +211,16 @@ fn quux_s_prom_saves_nothing_on_a_disk_made_here() {
     holds(&pack, "img", &mcr, &dir);
 }
 
-/// **The same on System 2000's disk**, the dynamic VHD as muir-sys handed
-/// it over, whose current `MCR1`, at block 17, holds the hand-over's
+/// **The same on System 2000's disk**, the dynamic VHD as QUUX's release
+/// publishes it, whose current `MCR1`, at block 17, holds the release's
 /// partition-order microcode 2000 as `dd` put it there.
 #[test]
 fn quux_s_prom_saves_nothing_on_system_2000_s_disk() {
-    let band = Path::new(env!("CARGO_MANIFEST_DIR")).join("ref/band-2000");
-    let (vhd, ucode) = (band.join("pack-2000.vhd"), band.join("ucadr.mcr"));
-    for p in [&vhd, &ucode] {
-        if !p.exists() {
-            eprintln!("skipped: {} is not present", p.display());
-            return;
-        }
-    }
-    let dir = support::scratch("quux-prom-saves-nothing-2000");
-    let pack = dir.join("pack.vhd");
-    std::fs::copy(&vhd, &pack).unwrap();
+    let Some((dir, pack, _root)) = support::quux_release_band("quux-prom-saves-nothing-2000")
+    else {
+        return;
+    };
+    let ucode = support::quux_release(&["sys", "ubin", "ucadr.mcr"]).unwrap();
     let mcr = std::fs::read(&ucode).unwrap();
     let mut d = muir::disk_image::Disk::open(&pack).unwrap();
     let mcr1 = support::gpt_partition(&mut d, "MCR1");
@@ -238,13 +232,13 @@ fn quux_s_prom_saves_nothing_on_system_2000_s_disk() {
             .iter()
             .flat_map(|w| w.to_le_bytes())
             .collect();
-        assert!(on_disk == block, "MCR1's block {k} is the hand-over's ucadr.mcr");
+        assert!(on_disk == block, "MCR1's block {k} is the release's ucadr.mcr");
     }
     holds(&pack, "vhd", &mcr, &dir);
 }
 
 /// `ERROR-NO-GPT`, where the GPT PROM halts when block 0's second sector
-/// is not a GPT header (the hand-over's `promh.tbl`, held by
+/// is not a GPT header (the release's `promh.tbl`, held by
 /// `tests/quux_prom.rs`).
 const ERROR_NO_GPT: u16 = 0o36642;
 

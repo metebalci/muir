@@ -1,26 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! System 2000 on QUUX with the video controller: muir-sys's development band on
+//! System 2000 on QUUX with the video controller: QUUX's release on
 //! microcode 2000, which sizes its main screen from the feature page.
 //!
-//! It is in the gitignored `ref/band-2000` (muir-sys's hand-over of its
-//! main `6aa92cc` for contract H8a, on revision 12; contracts Q8, Q11, Q13
-//! and H8a): a GPT disk as a dynamic VHD, which QUUX boots as it is,
-//! with microcode 2000 in its current `MCR1`, "MCR1 UCADR 2000", and the
-//! band, "LOD4 System 2000", in its current `LOD4`; PROM 2000, the PROM it
-//! was built and tested with, which is muir's built-in
+//! It is muir-sys's `release-2000`, fetched by
+//! `tools/fetch-system-for-quux.sh` into the gitignored `vendor/`: a GPT
+//! disk as a dynamic VHD, which QUUX boots as it is, with microcode 2000 in
+//! its current `MCR1`, "MCR1 UCADR 2000", and the band, "LOD1 System 2000",
+//! in its current `LOD1`; PROM 2000, which is muir's built-in
 //! `data/quux-promh.mcr` byte for byte (`tests/quux_prom.rs`); and the
-//! tree it was built from, `release-2000/`. No TV sync program, no speed
-//! bits, and no CADR disk controller: QUUX's disk is block-disk. The band
-//! takes the screen's size from the feature page at every boot. Its
-//! microcode fills the MACRO DISPATCH MEMORY and writes the MACRO-DISPATCH
-//! register at `RESET-MACHINE`, at every start, with specialised handlers
-//! for some entries. The band before, microcode 2000 with nothing of H8a
-//! (muir-sys's Q13 hand-over for revision 11, whose microcode and PROM
-//! sources are muir-sys `62c4503`'s), is `ref/band-2000-q13`: the tests of
-//! a microcode that never writes the register boot it. Without a band the
-//! tests skip and say so.
+//! sources it was built from, which unpack to `release-2000/`. No TV sync
+//! program, no speed bits, and no CADR disk controller: QUUX's disk is
+//! block-disk. The band takes the screen's size from the feature page at
+//! every boot. Its microcode fills the MACRO DISPATCH MEMORY and writes the
+//! MACRO-DISPATCH register at `RESET-MACHINE`, at every start, with
+//! specialised handlers for some entries. The band before, microcode 2000
+//! with nothing of H8a (muir-sys's Q13 hand-over for revision 11, whose
+//! microcode and PROM sources are muir-sys `62c4503`'s), is no release: it
+//! is the gitignored `ref/band-2000-q13`, and the tests of a microcode that
+//! never writes the register boot it. Without a band the tests skip and say
+//! so.
 
 use std::path::PathBuf;
 
@@ -36,53 +36,82 @@ mod support;
 /// LISPM-1 and OZ, as the release's `site/hosts.text` gives them.
 const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
-/// A copy of the disk, which the machine writes, and the served tree, in a
-/// scratch directory.
+/// A copy of the release's disk, which the machine writes, and the served
+/// tree, in a scratch directory.
 fn band_2000(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
-    band_in(BAND, name)
+    Band::Release.copy(name)
 }
 
-/// The same for the band in `band`, a directory of the tree.
-fn band_in(band: &str, name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(band);
-    if !from.join(PACK).exists() {
-        eprintln!("skipped: {} is not present", from.display());
-        return None;
-    }
-    let dir = support::scratch(name);
-    let pack = dir.join("pack.vhd");
-    std::fs::copy(from.join(PACK), &pack).unwrap();
-    // Booted as it is: a dynamic VHD of a T-300's 263,245 blocks, the
-    // hand-over's README says.
-    let (format, bytes) = muir::disk_image::probe(&pack).unwrap();
-    assert_eq!((format, bytes / 1024), (muir::disk_image::Format::DynamicVhd, 263_245));
-    let untar = std::process::Command::new("tar")
-        .arg("xzf")
-        .arg(from.join(TREE))
-        .arg("-C")
-        .arg(dir.path())
-        .status()
-        .unwrap();
-    assert!(untar.success(), "the tree unpacks");
-    let root = dir.join("root");
-    std::fs::create_dir_all(root.join("lispm")).unwrap();
-    for part in ["sys", "site"] {
-        std::os::unix::fs::symlink(dir.join(RELEASE).join(part), root.join(part)).unwrap();
-    }
-    Some((dir, pack, root))
+/// Where a band comes from.
+#[derive(Clone, Copy, Debug)]
+enum Band {
+    /// QUUX's release, `release-2000`.
+    Release,
+    /// Microcode 2000 and System 2000 as they were before contract H8a,
+    /// muir-sys's hand-over in `ref/band-2000-q13`: the microcode writes
+    /// none of destinations 5 to 7.
+    BeforeH8a,
 }
 
-/// The band, muir-sys's hand-over: its disk, its tree, and the directory
-/// the tree unpacks to.
-const BAND: &str = "ref/band-2000";
-/// Microcode 2000 and System 2000 as they were before contract H8a: the
-/// microcode writes none of destinations 5 to 7.
+impl Band {
+    /// A copy of the band's disk and its served tree in a scratch directory
+    /// named `name`, or `None` with the skip line.
+    fn copy(self, name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
+        let (dir, pack, root) = match self {
+            Band::Release => support::quux_release_band(name)?,
+            Band::BeforeH8a => {
+                let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND_Q13);
+                if !from.join("pack-2000.vhd").exists() {
+                    eprintln!("skipped: {} is not present", from.display());
+                    return None;
+                }
+                let dir = support::scratch(name);
+                let pack = dir.join("pack.vhd");
+                std::fs::copy(from.join("pack-2000.vhd"), &pack).unwrap();
+                let untar = std::process::Command::new("tar")
+                    .arg("xzf")
+                    .arg(from.join("tree-2000.tar.gz"))
+                    .arg("-C")
+                    .arg(dir.path())
+                    .status()
+                    .unwrap();
+                assert!(untar.success(), "the tree unpacks");
+                let root = dir.join("root");
+                std::fs::create_dir_all(root.join("lispm")).unwrap();
+                for part in ["sys", "site"] {
+                    std::os::unix::fs::symlink(
+                        dir.join(support::QUUX_RELEASE).join(part),
+                        root.join(part),
+                    )
+                    .unwrap();
+                }
+                (dir, pack, root)
+            }
+        };
+        // Booted as it is: a dynamic VHD of a T-300's 263,245 blocks, as
+        // the release's notes and the hand-over's README say.
+        let (format, bytes) = muir::disk_image::probe(&pack).unwrap();
+        assert_eq!((format, bytes / 1024), (muir::disk_image::Format::DynamicVhd, 263_245));
+        Some((dir, pack, root))
+    }
+
+    /// The band's microcode's symbols, `ucadr.sym`: the release's
+    /// `sys/ubin/`, or the hand-over's own.
+    fn symbols(self) -> PathBuf {
+        match self {
+            Band::Release => support::quux_release(&["sys", "ubin", "ucadr.sym"])
+                .expect("the release, as its disk was"),
+            Band::BeforeH8a => {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND_Q13).join("ucadr.sym")
+            }
+        }
+    }
+}
+
+/// Microcode 2000 and System 2000 as they were before contract H8a.
 const BAND_Q13: &str = "ref/band-2000-q13";
-const PACK: &str = "pack-2000.vhd";
-const TREE: &str = "tree-2000.tar.gz";
-const RELEASE: &str = "release-2000";
 
-/// The size muir-sys checked `band-2000` at (its hand-over's screens); it
+/// The size muir-sys checked System 2000's bands at (its hand-overs' screens); it
 /// takes whatever size the feature page says at boot
 /// ([`system_2000_sizes_its_screen_at_boot`]).
 const BAND_SIZE: (usize, usize) = (1280, 1024);
@@ -153,21 +182,18 @@ fn microcode_version(e: &impl Engine) -> u32 {
 }
 
 /// **The band is System 2000 on microcode 2000**, as the disk says: its
-/// current `MCR1` is named "MCR1 UCADR 2000" and holds the hand-over's
-/// `ucadr.mcr`, whose `A-VERSION` is 2000, and its current `LOD4` is named
-/// "LOD4 System 2000". No boot; the running band's own word is
+/// current `MCR1` is named "MCR1 UCADR 2000" and holds the release's
+/// `sys/ubin/ucadr.mcr`, whose `A-VERSION` is 2000, and its current `LOD1`
+/// is named "LOD1 System 2000". No boot; the running band's own word is
 /// `tests/system_2000_timers.rs`'s M10.
 #[test]
 fn band_2000_is_system_2000_on_microcode_2000() {
-    let from = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND);
-    if !from.join(PACK).exists() {
-        eprintln!("skipped: {} is not present", from.display());
-        return;
-    }
-    let bytes = std::fs::read(from.join("ucadr.mcr")).unwrap();
+    let Some((_dir, pack, _root)) = band_2000("system-2000-names") else { return };
+    let ucode = support::quux_release(&["sys", "ubin", "ucadr.mcr"]).unwrap();
+    let bytes = std::fs::read(ucode).unwrap();
     let mcr = muir::mcr::parse_partition_order(&bytes).unwrap();
     assert_eq!(mcr.version(), Some(2000), "ucadr.mcr's A-VERSION");
-    let mut d = muir::disk_image::Disk::open(from.join(PACK)).unwrap();
+    let mut d = muir::disk_image::Disk::open(&pack).unwrap();
     let parts = support::gpt_partitions(&mut d);
     let current = |lisp: &str| {
         parts
@@ -176,7 +202,7 @@ fn band_2000_is_system_2000_on_microcode_2000() {
             .unwrap_or_else(|| panic!("no current {lisp}: {parts:?}"))
     };
     assert_eq!(current("MCR").name, "MCR1 UCADR 2000");
-    assert_eq!(current("LOD").name, "LOD4 System 2000");
+    assert_eq!(current("LOD").name, "LOD1 System 2000");
     let mcr1 = current("MCR");
     for (k, block) in bytes.chunks(1024).enumerate() {
         let on_disk: Vec<u8> = d
@@ -185,7 +211,7 @@ fn band_2000_is_system_2000_on_microcode_2000() {
             .iter()
             .flat_map(|w| w.to_le_bytes())
             .collect();
-        assert!(on_disk == block, "MCR1's block {k} is the hand-over's ucadr.mcr");
+        assert!(on_disk == block, "MCR1's block {k} is the release's ucadr.mcr");
     }
 }
 
@@ -285,7 +311,7 @@ const DISK_AWAIT_READY: &str = "DISK-AWAIT-READY";
 const DISK_REGS: (u32, u32) = (0o77777600, 0o17777600);
 
 /// **System 2000 restores its own band and comes back to the listener**:
-/// booted at 1280 by 1024, `(si:disk-restore 4)` answered `yes` reads LOD4
+/// booted at 1280 by 1024, `(si:disk-restore 1)` answered `yes` reads LOD1
 /// back in and boots it to the listener again, on `micro`. The microcode's
 /// cold boot maps the disk registers and the run light with
 /// `COLD-FAKE-L2-MAP`, and when the two took the same level-2 slot the
@@ -310,7 +336,7 @@ fn system_2000_restores_its_band_to_the_listener() {
         return;
     };
     let await_ready = band_symbol(DISK_AWAIT_READY, "I-MEM");
-    let lod4 = support::gpt_partition(&mut muir::disk_image::Disk::open(&pack).unwrap(), "LOD4");
+    let lod1 = support::gpt_partition(&mut muir::disk_image::Disk::open(&pack).unwrap(), "LOD1");
     let mut m = quux(&pack, &root);
     m.block_disk.as_mut().unwrap().log = Some(Vec::new());
     let mut e = Micro::new(m);
@@ -318,8 +344,8 @@ fn system_2000_restores_its_band_to_the_listener() {
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
     eprintln!("listener after {ran} microcycles");
     let mut k = Keyboard::new();
-    support::type_at(&mut e, &mut k, "(si:disk-restore 4)");
-    // Time for the question, whether to reload LOD4, before its answer.
+    support::type_at(&mut e, &mut k, "(si:disk-restore 1)");
+    // Time for the question, whether to reload LOD1, before its answer.
     for _ in 0..20_000_000 {
         e.step().unwrap();
     }
@@ -356,14 +382,14 @@ fn system_2000_restores_its_band_to_the_listener() {
     let log = &e.machine().block_disk.as_ref().unwrap().log.as_ref().unwrap()[from..];
     let band_reads = log
         .iter()
-        .filter(|t| !t.write && (lod4.first..lod4.first + lod4.blocks).contains(&t.block))
+        .filter(|t| !t.write && (lod1.first..lod1.first + lod1.blocks).contains(&t.block))
         .count();
     eprintln!(
-        "band read, {band_reads} blocks of LOD4, after {n} microcycles, {waited} at \
+        "band read, {band_reads} blocks of LOD1, after {n} microcycles, {waited} at \
          DISK-AWAIT-READY ({await_ready:o})"
     );
     assert!(waited > 0, "DISK-AWAIT-READY, {await_ready:o}, never ran: the check held nothing");
-    assert!(band_reads > 0, "LOD4 read");
+    assert!(band_reads > 0, "LOD1 read");
     let fused = e.machine().macro_dispatch.fused;
     let again = support::wait_for_the_prompt_within(&mut e, 400_000_000);
     eprintln!("listener again after {} microcycles more", again);
@@ -379,15 +405,15 @@ fn system_2000_restores_its_band_to_the_listener() {
     assert!(d.fused > fused, "returns fused again after the restore");
 }
 
-/// The control store or dispatch memory address of a symbol of the band's
-/// microcode, from its `ucadr.sym`: `QMLP I-MEM 124`.
+/// The control store or dispatch memory address of a symbol of the
+/// release's microcode, from its `ucadr.sym`: `QMLP I-MEM 124`.
 fn band_symbol(name: &str, space: &str) -> u16 {
-    band_symbol_in(BAND, name, space)
+    band_symbol_in(Band::Release, name, space)
 }
 
-/// The same for the band in `band`.
-fn band_symbol_in(band: &str, name: &str, space: &str) -> u16 {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(band).join("ucadr.sym");
+/// The same for the microcode of `band`.
+fn band_symbol_in(band: Band, name: &str, space: &str) -> u16 {
+    let path = band.symbols();
     let text = std::fs::read_to_string(&path).unwrap();
     text.lines()
         .find_map(|l| {
@@ -429,7 +455,7 @@ fn revision_12_runs_as_revision_11<E: Engine>(engine: &str, make: impl Fn(Machin
     for geometry in [Geometry::QUUX_11, Geometry::QUUX] {
         let revision = geometry.machine_id.unwrap() >> 4 & 0o7777;
         let Some((_dir, pack, root)) =
-            band_in(BAND_Q13, &format!("system-2000-rev-{engine}-{revision}"))
+            Band::BeforeH8a.copy(&format!("system-2000-rev-{engine}-{revision}"))
         else {
             return;
         };
@@ -614,8 +640,8 @@ fn system_2000_boots_with_the_generic_operand_fill_on_micro() {
 /// Boots the band in `band` on `micro` with the register enabled for its
 /// own main loop and every entry poisoned to `ILLOP`, left over from before
 /// the boot, to the listener; returns the engine and `ILLOP`'s address.
-fn boots_from_a_stale_memory(band: &str, name: &str) -> Option<(Micro, u16)> {
-    let (_dir, pack, root) = band_in(band, name)?;
+fn boots_from_a_stale_memory(band: Band, name: &str) -> Option<(Micro, u16)> {
+    let (_dir, pack, root) = band.copy(name)?;
     // The symbols after the band: without it the test skips.
     let (qmlp, illop) =
         (band_symbol_in(band, "QMLP", "I-MEM"), band_symbol_in(band, "ILLOP", "I-MEM"));
@@ -625,8 +651,8 @@ fn boots_from_a_stale_memory(band: &str, name: &str) -> Option<(Micro, u16)> {
     e.machine_mut().macro_dispatch.entries.fill(illop as u32);
     set_register(e.machine_mut(), muir::machine::macro_dispatch::word(qmlp, 0, 0));
     let n = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 400_000_000);
-    eprintln!("{band}: listener after {n} steps");
-    assert!(drawn_at_its_words_a_line(&e), "{band}: the listener");
+    eprintln!("{band:?}: listener after {n} steps");
+    assert!(drawn_at_its_words_a_line(&e), "{band:?}: the listener");
     Some((e, illop))
 }
 
@@ -639,7 +665,7 @@ fn boots_from_a_stale_memory(band: &str, name: &str) -> Option<(Micro, u16)> {
 /// main-loop return would go to `ILLOP`.
 #[test]
 fn a_stale_macro_dispatch_memory_never_runs() {
-    let Some((e, illop)) = boots_from_a_stale_memory(BAND_Q13, "system-2000-stale") else {
+    let Some((e, illop)) = boots_from_a_stale_memory(Band::BeforeH8a, "system-2000-stale") else {
         return;
     };
     let d = &e.machine().macro_dispatch;
@@ -654,7 +680,8 @@ fn a_stale_macro_dispatch_memory_never_runs() {
 /// fused, no entry left poisoned and the register its own.
 #[test]
 fn a_stale_macro_dispatch_memory_is_filled_again() {
-    let Some((e, illop)) = boots_from_a_stale_memory(BAND, "system-2000-stale-filled") else {
+    let Some((e, illop)) = boots_from_a_stale_memory(Band::Release, "system-2000-stale-filled")
+    else {
         return;
     };
     let (qmlp, localp, ap) = (

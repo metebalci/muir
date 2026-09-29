@@ -30,40 +30,77 @@ clone with nothing fetched.
 git clone https://github.com/metebalci/muir-sim
 cd muir-sim
 cargo build --release
-tools/fetch-system-100.sh
+tools/fetch-system-for-quux.sh
+tools/fetch-system-100-for-cadr.sh
 ```
 
-The engines boot from a pack, which is not part of the repository.
-`tools/fetch-system-100.sh` puts the System 100 pack and the release's
-sources under `vendor/`, where the tests look, and checks every file against
-its SHA-256 sum. They come from muir-sim's own GitHub release
-[`system-100-0`](https://github.com/metebalci/muir-sim/releases/tag/system-100-0),
-so that the bytes the tests were written against stay the bytes: the pack
-byte for byte as [upstream](https://tumbleweed.nu/lm-3/) publishes it, and
-the script says exactly what it fetched and from where. Everything in it is
-under the AGPL, muir-sim's own license. Without it, every test needing a pack
-skips and says so. Windows is untested; the script is POSIX shell, so use
-WSL.
+The machines boot from a disk or a pack, which is not part of the
+repository. Four scripts fetch them into `vendor/`, where the tests look,
+and check every file against its SHA-256 sum:
 
-A band also wants its file and time host, which is not muir ---
+| Script | Fetches | Puts |
+|---|---|---|
+| `tools/fetch-system-for-quux.sh` | QUUX's current release of [muir-sys](https://github.com/metebalci/muir-sys), `release-2000`: System 2000 | `vendor/system-2000/`, the disk `vendor/run/release-2000-disk.vhd`, and the machine's host folder `vendor/run/release-2000-root/` |
+| `tools/fetch-dev-system-for-quux.sh` | QUUX's system in development, muir-sys's rolling release `dev-system-for-quux`, replaced with each build | `vendor/dev-system-for-quux/`, `vendor/run/dev-system-for-quux-disk.vhd`, `vendor/run/dev-system-for-quux-root/` |
+| `tools/fetch-system-100-for-cadr.sh` | MIT's System 100, the CADR's reference | `vendor/system-100-0/`, the pack `vendor/run/disk-sys-100-0.img`, and `vendor/run/file-root/` |
+| `tools/fetch-system-for-cadr.sh` | the CADR's current muir-sys release, `release-1002`: System 1002 | `vendor/system-1002/`, the pack `vendor/run/release-1002-pack.img` |
+
+The stable scripts are pinned: each holds its release's tag and the SHA-256
+of every file it takes, so the bytes the tests were written against stay
+the bytes, and a newer release comes with a commit that changes them. The
+rolling release is not pinned, so its script checks its files against the
+release's own `SHA256SUMS`, downloaded before them and again after, and
+replaces what it fetched last time only when all of them agree; it is for
+trying the newest system, never for the tests. Each script also checks
+that what it fetched is for its machine before it unpacks anything: QUUX's
+sources unpack to `release-2NNN/` or `dev-system-for-quux/` and its disk is
+a VHD holding a GPT; the CADR's unpack to `release-1NNN/` and its pack
+begins with `LABL`.
+
+The machine writes to its disk and under its host folder, so both are
+copies: the scripts keep what they downloaded beside them. The stable
+scripts leave a disk or a folder already in place alone; the rolling
+release's replaces its disk, and its folder's `sys/` and `site/`, only with
+a new build, and keeps the home. QUUX's host folder holds copies of the
+release's `sys/` and `site/`, where the band's `SYS:` is, and an empty
+`home/lispm/`, the login's home.
+
+System 100 comes from muir-sim's own GitHub release
+[`system-100-0`](https://github.com/metebalci/muir-sim/releases/tag/system-100-0):
+the pack byte for byte as [upstream](https://tumbleweed.nu/lm-3/) publishes
+it, and the script says exactly what it fetched and from where. Everything
+the four fetch is under the AGPL, muir-sim's own license. Without them,
+every test needing a disk or a pack skips and says so. Windows is untested;
+the scripts are POSIX shell, so use WSL.
+
+A CADR band also wants its file and time host, which is not muir ---
 [the Chaosnet](#the-chaosnet) says why --- and
 [ozd](https://github.com/metebalci/ozd) is built and run beside it, as its
-own README says.
+own README says. QUUX needs none: its file device serves its host folder.
 
 ## Running it
 
-muir builds to two executables that are machines: `cadr`, MIT's CADR as
-built, and [`quux`](#quux), the CADR evolved. **The executable is the
-machine**: each takes only the flags that mean something on its own. Run
-`cadr` with no flags and it starts an `rtl` machine, presses the boot
+muir builds to two executables that are machines: [`quux`](#quux), the
+CADR evolved, and `cadr`, MIT's CADR as built. **The executable is the
+machine**: each takes only the flags that mean something on its own.
+
+QUUX boots its release's disk, with its host folder as the file device's
+root:
+
+```text
+target/release/quux --disk-pack vendor/run/release-2000-disk.vhd \
+    --file-root vendor/run/release-2000-root
+```
+
+Run `cadr` with no flags and it starts an `rtl` machine, presses the boot
 button, and runs the boot PROM with no pack in the drive, which the boot
 waits on for ever. A pack is named: `--disk-pack
-vendor/run/disk-sys-100-0.img`, where `tools/fetch-system-100.sh` puts the
-System 100 pack, and with it `--chaos-address 3050`, which is that band's
-own address, `--chaos-udp`, which is the cable, and `--chaos-udp-peer
-3060@<where ozd is>`, which is where that band looks for its files and the
-date. ozd has the protocol's own port, 42042, so a machine on the same
-computer takes another.
+vendor/run/disk-sys-100-0.img`, where `tools/fetch-system-100-for-cadr.sh`
+puts the System 100 pack, and with it `--chaos-address 3050`, which is that
+band's own address, `--chaos-udp`, which is the cable, and
+`--chaos-udp-peer 3060@<where ozd is>`, which is where that band looks for
+its files and the date. ozd has the protocol's own port, 42042, so a
+machine on the same computer takes another.
 
 ```text
 target/release/cadr

@@ -37,7 +37,7 @@ const PLACING: u64 = 2_000_000_000;
 #[ignore = "boots the band: seconds; run with --ignored"]
 fn the_band_writes_a_file_through_the_file_service() {
     let Some(mut cc) = cc_harness::boot_and_login() else {
-        eprintln!("skipped: no pack, or no file root; tools/fetch-system-100.sh");
+        eprintln!("skipped: no pack, or no file root; tools/fetch-system-100-for-cadr.sh");
         return;
     };
     let name = "file-write";

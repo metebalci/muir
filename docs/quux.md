@@ -354,7 +354,8 @@ ones. Microcode 323 writes destinations 3 to 7 and reads sources 15 and 17
 nowhere, by a scan of every control-store word, and running shows the same
 of what the OA registers make at run time: `tests/unused_codes.rs` reads
 every executed microinstruction as it stood in `IR` through a boot to the
-listener. System 1001 on 323, on the CADR, runs none. System 2000 on
+listener. System 1002 on the CADR's microcode 1000, MIT's 323 with three
+of MIT's fixes, on the CADR, runs none. System 2000 on
 microcode 2000 runs them at four addresses through its boot and a moment
 after on revision 11, each a control-store word that carries them, and
 each a read of source 15, the microsecond clock: in `RESET-MACHINE`, the
@@ -640,20 +641,20 @@ sgdisk, and writes nothing (`quux_s_disk_is_named_and_left_alone` in
 microcode and System 2000's band read the GPT; MIT's label in block 0 is
 the CADR's.
 
-**System 2000's band is on a GPT disk in a dynamic VHD**: muir-sys's
-development band for revision 12, its microcode from muir-sys `6aa92cc`
-and its PROM from `62c4503`, a T-300's 263,245
-blocks with the current `MCR1` at block 17, "MCR1 UCADR 2000", holding
-microcode 2000 and the current `LOD4`, "LOD4 System 2000", the band, no
-FILE and no TEMP (`band_2000_is_system_2000_on_microcode_2000`). QUUX
-boots the VHD as it is, a copy of it, the disk being written; the tests
-find it in the gitignored `ref/band-2000` and skip without it. Its `SYS:`
-is on the file device, which the tests serve the band's tree through. It
-reaches its listener, drawn at the screen's own words a line, in 156.5 M
+**System 2000's band is on a GPT disk in a dynamic VHD**: QUUX's
+release, muir-sys's `release-2000`, which `tools/fetch-system-for-quux.sh`
+fetches, a T-300's 263,245 blocks with the current `MCR1` at block 17,
+"MCR1 UCADR 2000", holding microcode 2000 and the current `LOD1`, "LOD1
+System 2000", the band, no FILE and no TEMP
+(`band_2000_is_system_2000_on_microcode_2000`). QUUX boots the VHD as it
+is, a copy of it, the disk being written; the tests find the release in
+the gitignored `vendor/` and skip without it. Its `SYS:` is on the file
+device, which the tests serve the release's sources through. It reaches
+its listener, drawn at the screen's own words a line, in 156.5 M
 microcycles on `micro` and 165.5 M on `rtl` at 1280 by 1024, with 2000 in A
 memory's `A-VERSION` (`system_2000_runs_on_the_video_controller`, measured to the half
-million). It restores its own band: `(si:disk-restore 4)`, answered
-`yes`, reads 18,593 blocks of `LOD4` in 24 M microcycles and is back at
+million). It restores its own band: `(si:disk-restore 1)`, answered
+`yes`, reads 18,632 blocks of `LOD1` in 24 M microcycles and is back at
 the listener 131.5 M later, on `micro`
 (`system_2000_restores_its_band_to_the_listener`). That
 test holds, at every microcycle in `DISK-AWAIT-READY`, the disk registers'
@@ -892,9 +893,10 @@ stays MIT's, and so does `diskpack`, which is the CADR's.
 `tests/quux_prom.rs` holds the start at 36000, the PROM read only, the RAM
 below live with no disable, the CADR's overlay, and the file read from
 36000 in partition order, and the built-in file byte for byte the
-hand-over's PROM 2000, whose symbols and error table say version 2000
-(`the_built_in_quux_prom_is_the_hand_over`, where `ref/band-2000` is
-present); `tests/system_2000.rs` boots System 2000 on it.
+PROM 2000 of QUUX's release, both its `release-2000-promh.mcr` and the
+`sys/ubin/promh.mcr` of its sources, whose symbols and error table say
+version 2000 (`the_built_in_quux_prom_is_the_release_s`, where the release
+is present); `tests/system_2000.rs` boots System 2000 on it.
 `--prom` on `quux` takes a file in partition order assembled at 36000, and
 refuses one in MIT's order or assembled at 0.
 
@@ -1646,14 +1648,16 @@ reads back as the invalid entry the MACHINE-ID promised, and stops at
 QUUX's microcode 1000, muir-sys's first change to MIT's 323, made from
 System 1001's sources, ran on both machines: without the signature it took
 the CADR's map, processor type 1, five-bit level-1 entries, invalid block
-37. `tests/system_1001.rs` holds that build, with its files in the
-gitignored `ref/ucode-1000`: System 1001, the band as released, reaches its
-listener on QUUX on both engines with version 1000 and type 4, and on the
-CADR with version 1000 and type 1 and no level-1 entry above block 37. The
-band reads the error table for the running version at boot, `SYS: UBIN;
-UCADR TBL 1000`, so the served `sys/ubin/ucadr.tbl` must be that
-microcode's. It is not the CADR's microcode 1000, muir-sys's change to 323
-for the CADR, which no test here runs.
+37. System 1001's band reached its listener on it on QUUX on both engines
+with version 1000 and type 4. `tests/system_1002.rs` holds that build on
+the CADR, with its files in the gitignored `ref/ucode-1000`: the CADR's
+System 1002, the band as released, reaches its listener on it on both
+engines with version 1000 and type 1 and no level-1 entry above block 37.
+The band reads the error table for the running version at boot, `SYS:
+UBIN; UCADR TBL 1000`, so the served `sys/ubin/ucadr.tbl` must be that
+microcode's. It is not the CADR's own microcode 1000, muir-sys's change to
+323 for the CADR, which System 1002 was built on and on which
+`tests/system_1002.rs` boots it too.
 
 ## What the microcode had to do differently
 

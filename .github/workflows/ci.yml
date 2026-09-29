@@ -12,6 +12,12 @@
 # diagnostic of the machine among them. The two downloads, some 34 MB, are
 # cached on the script's hash; the pack is unpacked from them on every run.
 #
+# `system-for-quux` and `system-for-cadr` do the same with muir-sys's
+# releases, the ones the stable fetch scripts are pinned to: QUUX's, which
+# its tests boot, and the CADR's current one. Each is cached on its script's
+# hash, so a bump of the pin is one fresh download. Never the rolling
+# release: its bytes move, and a test run has to be repeatable.
+#
 # The compiler version comes from rust-toolchain.toml, so it is pinned here
 # the same way it is pinned on a desk. `--locked` refuses to update
 # Cargo.lock, so a dependency added without regenerating it fails the build
@@ -103,12 +109,79 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor/system-100-0
-          key: system-100-${{ hashFiles('tools/fetch-system-100.sh') }}
+          key: system-100-${{ hashFiles('tools/fetch-system-100-for-cadr.sh') }}
 
       - name: Fetch the System 100 release
-        run: tools/fetch-system-100.sh
+        run: tools/fetch-system-100-for-cadr.sh
 
       # Everything, with the pack there: the engines boot the band, the
       # tests' Chaosnet server serves the sources, and CC checks the machine.
       - name: Tests, with the release
+        run: cargo test --locked
+
+  system-for-quux:
+    runs-on: ubuntu-latest
+    # A safety net, not a budget: the job takes far less. Without it a
+    # test that hangs runs until GitHub's six-hour limit.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-system-for-quux-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache QUUX's release
+        uses: actions/cache@v4
+        with:
+          path: vendor/system-2000
+          key: system-for-quux-${{ hashFiles('tools/fetch-system-for-quux.sh') }}
+
+      - name: Fetch QUUX's release
+        run: tools/fetch-system-for-quux.sh
+
+      # Everything, with QUUX's release there: its disk booted on both
+      # engines, its sources served through the file device, its PROM held
+      # to the built-in one.
+      - name: Tests, with QUUX's release
+        run: cargo test --locked
+
+  system-for-cadr:
+    runs-on: ubuntu-latest
+    # A safety net, not a budget: the job takes far less. Without it a
+    # test that hangs runs until GitHub's six-hour limit.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-system-for-cadr-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache the CADR's release
+        uses: actions/cache@v4
+        with:
+          path: vendor/system-1002
+          key: system-for-cadr-${{ hashFiles('tools/fetch-system-for-cadr.sh') }}
+
+      - name: Fetch the CADR's release
+        run: tools/fetch-system-for-cadr.sh
+
+      # Everything, with the CADR's muir-sys release there: its pack booted
+      # to the listener on both engines, and opened read-only.
+      - name: Tests, with the CADR's release
         run: cargo test --locked

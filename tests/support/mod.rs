@@ -55,7 +55,7 @@ pub fn mit_text(parts: &[&str]) -> String {
 }
 
 /// The pack the machine tests boot: **System 100**, what this project
-/// targets, put there by `tools/fetch-system-100.sh`. It is also the
+/// targets, put there by `tools/fetch-system-100-for-cadr.sh`. It is also the
 /// fixture the label and band tests are written against --- their
 /// partition table, pack name and band comments are its.
 pub fn pack_100() -> Option<PathBuf> {
@@ -92,6 +92,52 @@ pub const CHAOS_100: (u16, u16) = (0o3050, 0o3060);
 /// makes `SYS:` resolve, and the release's fetch script makes that link.
 pub fn file_root() -> Option<PathBuf> {
     vendor(&["run", "file-root"])
+}
+
+/// QUUX's release, the one `tools/fetch-system-for-quux.sh` is pinned to:
+/// its tag, which is also the directory its sources unpack to.
+pub const QUUX_RELEASE: &str = "release-2000";
+
+/// A file of QUUX's release, under `vendor/system-2000/` where
+/// `tools/fetch-system-for-quux.sh` puts the release's files and unpacks
+/// its sources, or `None` with the skip line.
+pub fn quux_release(parts: &[&str]) -> Option<PathBuf> {
+    let mut p = vec!["system-2000"];
+    p.extend(parts);
+    vendor(&p)
+}
+
+/// QUUX's release in a scratch directory, or `None` with the skip line:
+/// its disk decompressed from the release's own `release-2000-disk.vhd.gz`
+/// to `pack.vhd`, which the machine writes; its sources unpacked from
+/// `release-2000-sys.tar.gz` beside it, to `release-2000/`; and a file root,
+/// `root/`, with the sources' `sys` and `site` and an empty `lispm` and
+/// `home/lispm`. The disk is not `vendor/run/release-2000-disk.vhd`, the
+/// one the fetch script leaves for running `quux` by hand, which a machine
+/// has written to once it has run.
+pub fn quux_release_band(name: &str) -> Option<(Scratch, PathBuf, PathBuf)> {
+    let disk = quux_release(&[&format!("{QUUX_RELEASE}-disk.vhd.gz")])?;
+    let sources = quux_release(&[&format!("{QUUX_RELEASE}-sys.tar.gz")])?;
+    let dir = scratch(name);
+    let pack = dir.join("pack.vhd");
+    let out = std::process::Command::new("gzip").arg("-dc").arg(&disk).output().expect("gzip");
+    assert!(out.status.success(), "{} decompresses", disk.display());
+    std::fs::write(&pack, out.stdout).unwrap();
+    let untar = std::process::Command::new("tar")
+        .arg("xzf")
+        .arg(&sources)
+        .arg("-C")
+        .arg(dir.path())
+        .status()
+        .unwrap();
+    assert!(untar.success(), "{} unpacks", sources.display());
+    let root = dir.join("root");
+    std::fs::create_dir_all(root.join("lispm")).unwrap();
+    std::fs::create_dir_all(root.join("home/lispm")).unwrap();
+    for part in ["sys", "site"] {
+        std::os::unix::fs::symlink(dir.join(QUUX_RELEASE).join(part), root.join(part)).unwrap();
+    }
+    Some((dir, pack, root))
 }
 
 /// A file under `vendor/`, where the fetch script puts the release, or

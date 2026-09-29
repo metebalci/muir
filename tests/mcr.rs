@@ -6,7 +6,7 @@
 //! The boot PROM's and microcode 323's files are committed in `mit/`, and
 //! the tests that parse them read those.  The ones that hold the committed
 //! copies to the release's own need `vendor/`, from
-//! `tools/fetch-system-100.sh`; without it they report that they were
+//! `tools/fetch-system-100-for-cadr.sh`; without it they report that they were
 //! skipped.
 
 use muir::isa::Op;

@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mete Balci
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! System 1001, the release that continues System 100, boots on muir.
+//! System 1002, the CADR's current muir-sys release, boots on muir.
 //!
-//! The pack and the sources are muir-sys's `release-1001`, fetched by
-//! `tools/fetch-system-1001.sh`; without them these tests say they were
-//! skipped. The band's site puts the machine LISPM-1 at 177201 and its
+//! System 1002 continues System 100 and 1001 on the CADR's microcode 1000,
+//! MIT's 323 with three of MIT's fixes. The pack and the sources are
+//! muir-sys's `release-1002`, fetched by `tools/fetch-system-for-cadr.sh`;
+//! without them these tests say they were skipped. The band's site puts the machine LISPM-1 at 177201 and its
 //! file and time host OZ at 177200 (`site/hosts.text` in the sources), and
 //! its `SYS:` translations send `SYS: SITE;` to `/site/` and the rest to
 //! `/sys/` on OZ (`site/sys.translations`), so the harness's server is given
@@ -18,17 +19,17 @@ use muir::micro::Micro;
 use muir::rtl::Rtl;
 
 mod support;
-use support::{boot_to_the_prompt, boot_to_the_prompt_within, machine_with_pack};
+use support::{boot_to_the_prompt_within, machine_with_pack};
 
 /// LISPM-1 and OZ, as `site/hosts.text` gives them.
-const CHAOS_1001: (u16, u16) = (0o177201, 0o177200);
+const CHAOS_1002: (u16, u16) = (0o177201, 0o177200);
 
 /// A copy of the release's pack, which a run writes to, and a file root
 /// serving the release's `sys` and `site`, in a scratch directory; or
 /// `None` with the skip line.
-fn release_1001(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
-    let pack = support::vendor(&["run", "release-1001-pack.img"])?;
-    let sources = support::vendor(&["system-1001"])?;
+fn release_1002(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
+    let pack = support::vendor(&["run", "release-1002-pack.img"])?;
+    let sources = support::vendor(&["system-1002"])?;
     let dir = support::scratch(name);
     let copy = dir.join("pack.img");
     std::fs::copy(&pack, &copy).unwrap();
@@ -45,7 +46,7 @@ fn release_1001(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
 /// with no version in the name, so a served tree holds one microcode's
 /// table.
 fn serving_table(root: &std::path::Path, table: &std::path::Path) {
-    let sources = support::vendor(&["system-1001"]).unwrap();
+    let sources = support::vendor(&["system-1002"]).unwrap();
     std::fs::remove_file(root.join("sys")).unwrap();
     std::fs::create_dir_all(root.join("sys/ubin")).unwrap();
     for entry in std::fs::read_dir(sources.join("sys")).unwrap() {
@@ -84,49 +85,50 @@ fn microcode_version(e: &impl Engine) -> u32 {
     support::low(e.machine().amem[0o40]) & 0o77777777
 }
 
-/// **System 1001 reaches its listener on `micro`, on microcode 323.** The
-/// screen at that point was looked at once: the herald says "Experimental
-/// System 1001" and "Microcode 323" above ";Reading at top level in Lisp
-/// Listener 1".
+/// **System 1002 reaches its listener on `micro`, on microcode 1000.** It
+/// reads its microcode's error table at every boot, so it takes longer than
+/// the hundred million microcycles of `support::boot_to_the_prompt`: 163.5
+/// million on `micro` and 163 million on `rtl` (measured to the half
+/// million).
 #[test]
-fn system_1001_reaches_the_listener_on_micro() {
-    let Some((_dir, pack, root)) = release_1001("system-1001-micro") else { return };
+fn system_1002_reaches_the_listener_on_micro() {
+    let Some((_dir, pack, root)) = release_1002("system-1002-micro") else { return };
     let mut e = Micro::new(machine_with_pack(&pack));
     e.boot();
-    let ran = boot_to_the_prompt(&mut e, CHAOS_1001, root);
+    let ran = boot_to_the_prompt_within(&mut e, CHAOS_1002, root, 400_000_000);
     eprintln!("listener after {ran} microcycles");
-    assert_eq!(microcode_version(&e), 323);
+    assert_eq!(microcode_version(&e), 1000);
 }
 
 /// **And on `rtl`.**
 #[test]
-fn system_1001_reaches_the_listener_on_rtl() {
-    let Some((_dir, pack, root)) = release_1001("system-1001-rtl") else { return };
+fn system_1002_reaches_the_listener_on_rtl() {
+    let Some((_dir, pack, root)) = release_1002("system-1002-rtl") else { return };
     let mut e = Rtl::new(machine_with_pack(&pack));
     e.boot();
-    let ran = boot_to_the_prompt(&mut e, CHAOS_1001, root);
+    let ran = boot_to_the_prompt_within(&mut e, CHAOS_1002, root, 400_000_000);
     eprintln!("listener after {ran} microcycles");
-    assert_eq!(microcode_version(&e), 323);
+    assert_eq!(microcode_version(&e), 1000);
 }
 
-/// **Step 0: System 1001 runs on a microcode rebuilt with a new version
-/// number, and no rebuilt band.** muir-sys's reassembly of the release's
+/// **Step 0: System 1002 runs on a microcode rebuilt with a new version
+/// number, and no rebuilt band.** muir-sys's reassembly of System 1001's
 /// sources, which differs from 323 in its version alone (`ref/ucode-324`),
 /// loaded into MCR2 and made current with `diskpack`, which writes the
 /// partition's comment as MIT's `LOAD-MCR-FILE` does; the band's error table
 /// served for that version. The band reaches its listener on `micro` and
 /// `rtl` with the new version in A memory.
 #[test]
-fn system_1001_runs_on_a_rebuilt_microcode() {
+fn system_1002_runs_on_a_rebuilt_microcode() {
     use muir::diskpack::{Command, Pack};
     let Some(ucode) = rebuilt_microcode("ucode-324") else { return };
     let want = muir::mcr::parse(&std::fs::read(ucode.join("ucadr.mcr")).unwrap())
         .unwrap()
         .version()
         .expect("the microcode says its version");
-    assert_ne!(want, 323, "a rebuilt version, not the release's");
+    assert_ne!(want, 1000, "a rebuilt version, not the release's");
     for engine in ["micro", "rtl"] {
-        let Some((_dir, pack, root)) = release_1001(&format!("system-1001-rebuilt-{engine}"))
+        let Some((_dir, pack, root)) = release_1002(&format!("system-1002-rebuilt-{engine}"))
         else {
             return;
         };
@@ -143,14 +145,14 @@ fn system_1001_runs_on_a_rebuilt_microcode() {
             "micro" => {
                 let mut e = Micro::new(m);
                 e.boot();
-                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1002, root, 400_000_000);
                 assert_eq!(microcode_version(&e), want, "micro");
                 ran
             }
             _ => {
                 let mut e = Rtl::new(m);
                 e.boot();
-                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1002, root, 400_000_000);
                 assert_eq!(microcode_version(&e), want, "rtl");
                 ran
             }
@@ -201,7 +203,7 @@ fn quux_s_microcode_1000_halts_on_a_cadr() {
         panic!("{name}: never halted at MACHINE-NOT-QUUX-4; PC {:o}", e.pc());
     }
     for engine in ["micro", "rtl"] {
-        let Some((_d, pack, root)) = release_1001(&format!("system-1001-quux4-on-cadr-{engine}"))
+        let Some((_d, pack, root)) = release_1002(&format!("system-1002-quux4-on-cadr-{engine}"))
         else {
             return;
         };
@@ -226,7 +228,7 @@ fn quux_s_microcode_1000_runs_on_a_cadr_as_a_cadr() {
     let Some(ucode) = rebuilt_microcode("ucode-1000") else { return };
     let type_code = a_mem(&ucode, "A-PROCESSOR-TYPE-CODE");
     for engine in ["micro", "rtl"] {
-        let Some((_dir, pack, root)) = release_1001(&format!("system-1001-1000-cadr-{engine}"))
+        let Some((_dir, pack, root)) = release_1002(&format!("system-1002-1000-cadr-{engine}"))
         else {
             return;
         };
@@ -236,7 +238,7 @@ fn quux_s_microcode_1000_runs_on_a_cadr_as_a_cadr() {
             "micro" => {
                 let mut e = Micro::new(m);
                 e.boot();
-                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1002, root, 400_000_000);
                 let m = e.machine();
                 (
                     ran,
@@ -248,7 +250,7 @@ fn quux_s_microcode_1000_runs_on_a_cadr_as_a_cadr() {
             _ => {
                 let mut e = Rtl::new(m);
                 e.boot();
-                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1001, root, 400_000_000);
+                let ran = boot_to_the_prompt_within(&mut e, CHAOS_1002, root, 400_000_000);
                 let m = e.machine();
                 (
                     ran,
@@ -285,8 +287,8 @@ fn sha256(path: &std::path::Path) -> String {
 #[test]
 fn a_read_only_pack_boots_as_a_writable_one_and_its_file_never_changes() {
     use support::{Run, cadr, text};
-    let Some(pack) = support::vendor(&["run", "release-1001-pack.img"]) else { return };
-    let dir = support::scratch("system-1001-ro");
+    let Some(pack) = support::vendor(&["run", "release-1002-pack.img"]) else { return };
+    let dir = support::scratch("system-1002-ro");
     let before = sha256(&pack);
     let mut ends = Vec::new();
     for spelled in ["ro", "rw"] {

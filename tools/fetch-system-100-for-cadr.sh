@@ -43,7 +43,7 @@
 # Re-running this is safe: whatever is already in place is left alone, and
 # nothing else in vendor/ is touched.
 #
-# usage: tools/fetch-system-100.sh
+# usage: tools/fetch-system-100-for-cadr.sh
 
 set -eu
 muir=$(cd "$(dirname "$0")/.." && pwd)
@@ -96,6 +96,14 @@ if [ -f "$run/disk-sys-100-0.img" ]; then
     echo "have vendor/run/disk-sys-100-0.img"
 else
     gunzip -c "$rel/disk-sys-100-0.img.gz" > "$run/disk-sys-100-0.img.part"
+    # The format, as the CADR's other script checks it: a CADR pack begins
+    # with its label. The number needs no check here: the sums above are
+    # System 100's alone, and its sources unpack to `sys/`, with none.
+    if [ "$(head -c 4 "$run/disk-sys-100-0.img.part")" != LABL ]; then
+        rm -f "$run/disk-sys-100-0.img.part"
+        echo "vendor/run/disk-sys-100-0.img does not begin with LABL: it is not a CADR pack" >&2
+        exit 1
+    fi
     mv "$run/disk-sys-100-0.img.part" "$run/disk-sys-100-0.img"
 fi
 

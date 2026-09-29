@@ -8,13 +8,14 @@
 //! R3). Microcode 2000 reaches timer 0 through the register page, writing
 //! its period at `RESET-MACHINE` and turning it on at `BEG06`, and writes
 //! reset devices at every start of the microcode (`uc-cold-disk.lisp` in
-//! the hand-over's tree).
+//! the release's sources).
 //!
-//! The band is the gitignored `ref/band-2000` (muir-sys's hand-over,
-//! `tests/system_2000.rs`), named by digest; without it the tests skip and
-//! say so. M9, M10 and M11 run on muir's built-in PROM,
-//! `data/quux-promh.mcr`, PROM 2000, the hand-over's `promh.mcr` byte for
-//! byte (with contract Q11's steps 2, 5 and 6). The runs on the PROM before
+//! The band is QUUX's release, `release-2000`, which
+//! `tools/fetch-system-for-quux.sh` fetches into the gitignored `vendor/`
+//! and pins by digest (`tests/system_2000.rs`); without it the tests skip
+//! and say so. M9, M10 and M11 run on muir's built-in PROM,
+//! `data/quux-promh.mcr`, PROM 2000, the release's `release-2000-promh.mcr`
+//! byte for byte (with contract Q11's steps 2, 5 and 6). The runs on the PROM before
 //! Q11, M11's discriminating run and M12, booted revision 10's register
 //! page and cannot run on revision 11; their figures stay in
 //! `docs/quux.md` (Interval timers).
@@ -33,10 +34,6 @@ use muir::tv::Board;
 
 mod support;
 
-const BAND: &str = "ref/band-2000";
-const PACK: &str = "pack-2000.vhd";
-const TREE: &str = "tree-2000.tar.gz";
-const RELEASE: &str = "release-2000";
 /// LISPM-1 and OZ, as the release's `site/hosts.text` gives them.
 const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
@@ -51,74 +48,26 @@ const RESET_DEVICES: u32 = PAGE + 0o104;
 const FDEV_CONTROL: u32 = PAGE + 0o160;
 const FDEV_STATUS: u32 = PAGE + 0o161;
 
-/// The hand-over's files this names, by their SHA-256 in its `SHA256SUMS`.
-const DIGESTS: [(&str, &str); 4] = [
-    (PACK, "510be9584a7c293a039a4255fa3abcd60f6613cdeb9e0ac3e6d4ff51b140d1f3"),
-    (TREE, "e508edd7e69359fe1774c5850eb14c543f14edc248493c4a45f23c8c0d22f369"),
-    ("ucadr.sym", "e92ca3e5db5f4f972fa1be987760a33c6f14d5f86cadeb07c137b73ff170b7a7"),
-    ("promh.mcr", "1fcb62bc6d8cf8e1170a422e1401a2261043d1d1c1f9fb5f3f9450fdc0a54058"),
-];
-
-fn from() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND)
-}
-
-/// The SHA-256 of `path`, by `sha256sum`.
-fn sha256(path: &Path) -> String {
-    let out = std::process::Command::new("sha256sum").arg(path).output().expect("sha256sum");
-    String::from_utf8(out.stdout).unwrap().split_whitespace().next().unwrap().to_string()
-}
-
-/// Whether the hand-over is here; if not, says the test is skipped.
-fn present() -> bool {
-    let here = from().join(PACK).exists();
-    if !here {
-        eprintln!("skipped: {} is not present", from().display());
-    }
-    here
-}
-
-/// A copy of the disk, which the machine writes, and the served tree, in
-/// a scratch directory, after checking the hand-over's digests.
+/// A copy of the release's disk, which the machine writes, and the served
+/// tree, in a scratch directory.
 fn band(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
-    if !present() {
-        return None;
-    }
-    for (file, digest) in DIGESTS {
-        assert_eq!(sha256(&from().join(file)), digest, "{file}: not band-2000's");
-    }
-    let dir = support::scratch(name);
-    let pack = dir.join("pack.vhd");
-    std::fs::copy(from().join(PACK), &pack).unwrap();
-    let untar = std::process::Command::new("tar")
-        .arg("xzf")
-        .arg(from().join(TREE))
-        .arg("-C")
-        .arg(dir.path())
-        .status()
-        .unwrap();
-    assert!(untar.success(), "the tree unpacks");
-    let root = dir.join("root");
-    std::fs::create_dir_all(root.join("lispm")).unwrap();
-    std::fs::create_dir_all(root.join("home/lispm")).unwrap();
-    for part in ["sys", "site"] {
-        std::os::unix::fs::symlink(dir.join(RELEASE).join(part), root.join(part)).unwrap();
-    }
-    Some((dir, pack, root))
+    support::quux_release_band(name)
 }
 
-/// The band's microcode's address of `name`, from the hand-over's
+/// The release's microcode's symbols, its `sys/ubin/ucadr.sym`.
+fn symbols() -> sym::Symbols {
+    let path = support::quux_release(&["sys", "ubin", "ucadr.sym"]).expect("the release");
+    sym::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// The band's microcode's address of `name`, from the release's
 /// `ucadr.sym`.
 fn ucadr(name: &str) -> u16 {
-    let text = std::fs::read_to_string(from().join("ucadr.sym")).unwrap();
-    let symbols = sym::parse(&text).unwrap();
-    symbols.address(Space::IMem, name).unwrap_or_else(|| panic!("{name} in ucadr.sym")) as u16
+    symbols().address(Space::IMem, name).unwrap_or_else(|| panic!("{name} in ucadr.sym")) as u16
 }
 
 fn a_mem(name: &str) -> usize {
-    let text = std::fs::read_to_string(from().join("ucadr.sym")).unwrap();
-    let symbols = sym::parse(&text).unwrap();
-    symbols.address(Space::AMem, name).unwrap_or_else(|| panic!("{name} in ucadr.sym")) as usize
+    symbols().address(Space::AMem, name).unwrap_or_else(|| panic!("{name} in ucadr.sym")) as usize
 }
 
 /// QUUX with `prom` at 36000, the disk on block-disk, the video controller at the
