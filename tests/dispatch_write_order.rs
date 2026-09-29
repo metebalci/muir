@@ -157,10 +157,10 @@ fn board(m: &Machine, main: &[(u32, u32)]) -> Board {
     for (k, &v) in m.spc.iter().enumerate() {
         spc.store(&mut c, k, v & 0o1777777);
     }
-    for (k, &v) in m.dmem.iter().enumerate() {
+    for (k, &v) in m.dmem[..m.geometry.dmem_words()].iter().enumerate() {
         dm.store(&mut c, k, v & 0o377777);
     }
-    for (k, &v) in m.l1_map.iter().enumerate() {
+    for (k, &v) in m.l1_map[..l1.len()].iter().enumerate() {
         l1.store(&mut c, k, v & 0o37);
     }
     for (k, &v) in m.l2_map[..l2.len()].iter().enumerate() {
@@ -223,7 +223,7 @@ fn on_engine<E: Engine>(
     let mm = e.machine();
     let end = End {
         mmem: mm.mmem.iter().map(|&w| support::low(w)).collect(),
-        dmem: mm.dmem.iter().map(|&w| w & 0o377777).collect(),
+        dmem: mm.dmem[..mm.geometry.dmem_words()].iter().map(|&w| w & 0o377777).collect(),
         l2: mm.l2_map[..1024].iter().map(|&w| w & 0o77777777).collect(),
         pdl: mm.pdl[..1024].iter().map(|&w| support::low(w)).collect(),
         spc: mm.spc.iter().map(|&w| w & 0o1777777).collect(),
@@ -1122,7 +1122,7 @@ fn rtl_timed(
     let mm = e.machine();
     let end = End {
         mmem: mm.mmem.iter().map(|&w| support::low(w)).collect(),
-        dmem: mm.dmem.iter().map(|&w| w & 0o377777).collect(),
+        dmem: mm.dmem[..mm.geometry.dmem_words()].iter().map(|&w| w & 0o377777).collect(),
         l2: mm.l2_map[..1024].iter().map(|&w| w & 0o77777777).collect(),
         pdl: mm.pdl[..1024].iter().map(|&w| support::low(w)).collect(),
         spc: mm.spc.iter().map(|&w| w & 0o1777777).collect(),

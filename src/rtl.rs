@@ -87,15 +87,15 @@ const SPEEDCLK_NS: u64 = 60;
 /// board waits and the model does not.
 const MFINISHD_NS: u64 = busint::MFINISHD_NS;
 
-/// What the latch at VMEMDR comes up holding, as `chip` has it.
-///
-/// `Chip::power_on` puts every register's outputs low, and the latch's are
-/// the active-low `-LVMO23`, `-LVMO22` and `-PMA21..8`, so the positive word
-/// is the two permission bits and the page all ones. The board's own
-/// power-on state is undefined, so this is a convention shared with `chip`
-/// and not a fact about the hardware; what it decides is bit 30 of the first
-/// `MAP(MD)` the boot PROM reads, which nothing uses.
-use crate::machine::LVMO_AT_POWER_ON;
+// What the latch at VMEMDR comes up holding, as `chip` has it,
+// `Geometry::lvmo_at_power_on`.
+//
+// `Chip::power_on` puts every register's outputs low, and the latch's are
+// the active-low `-LVMO23`, `-LVMO22` and `-PMA21..8`, so the positive word
+// is the two permission bits and the page all ones. The board's own
+// power-on state is undefined, so this is a convention shared with `chip`
+// and not a fact about the hardware; what it decides is bit 30 of the first
+// `MAP(MD)` the boot PROM reads, which nothing uses.
 
 /// Why the clock generator is being held off.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -498,7 +498,7 @@ pub struct Rtl {
     /// Held positive here. What it comes up holding is undefined on the
     /// board, and it is read once before any memory cycle has loaded it: the
     /// `MEMORY-MAP-DATA` at `SET-UP-THE-MAP`, which keeps only `-VMAP<4:0>`
-    /// of what it gets. See [`LVMO_AT_POWER_ON`].
+    /// of what it gets. See [`crate::machine::LVMO_AT_POWER_ON`].
     lvmo: u32,
     /// Nanoseconds spent in waits and hangs, for [`Rtl::stalled_ns`].
     stalled_ns: u64,
@@ -617,8 +617,11 @@ struct Read {
     /// `<39:32>` of the ALU's output on a 40-bit word, in place: M's, or a
     /// logical function's ([`ttl::alu_tag`]); 0 on a 32-bit one.
     alu_tag: Word,
-    r: u32,
+    r: Word,
     ob: Word,
+    /// Revision 13's fixnum overflow flag as an executed ALU-class word
+    /// loads it at the edge, or `None` when this word leaves it (A1.3).
+    overflow: Option<bool>,
 
     n: bool,
     npc: u16,
@@ -707,6 +710,15 @@ fn bit(v: u64, n: u32) -> bool {
     (v >> n) & 1 != 0
 }
 
+/// Revision 13's shifter: `<39:0>` of `v` rotated left by `n` mod 40
+/// (contract G2 §2.3, appendix A1.2).
+fn ring_40(v: Word, n: u32) -> Word {
+    const RING: Word = (1 << 40) - 1;
+    let n = n % 40;
+    let v = v & RING;
+    if n == 0 { v } else { ((v << n) | (v >> (40 - n))) & RING }
+}
+
 fn field(v: u64, hi: u32, lo: u32) -> u32 {
     ((v >> lo) & ((1u64 << (hi - lo + 1)) - 1)) as u32
 }
@@ -714,6 +726,7 @@ fn field(v: u64, hi: u32, lo: u32) -> u32 {
 impl Rtl {
     pub fn new(m: Machine) -> Self {
         let on_quux = m.geometry.machine_id.is_some();
+        let lvmo_at_power_on = m.geometry.lvmo_at_power_on();
         let m_bus = Bus::for_machine(&m, TimingModel::Cadr);
         let mut r = Rtl {
             m,
@@ -778,7 +791,7 @@ impl Rtl {
             rdcyc: false,
             wrcyc: false,
             wmapd: false,
-            lvmo: LVMO_AT_POWER_ON,
+            lvmo: lvmo_at_power_on,
             stalled_ns: 0,
             bus_cycles: 0,
             spushd: false,
@@ -1138,10 +1151,77 @@ impl Rtl {
         (adr0, adr1)
     }
 
+    /// `MAPI` as a word: `VMA` while `MEMSTART` is up and `MD` otherwise,
+    /// `<31:0>` of it, which revision 13's map looks up whole (A1.7).
+    fn mapi(&self) -> u32 {
+        (if self.memstart { self.m.vma } else { self.m.md }) as u32
+    }
+
+    /// The word address a fetch takes from `LC`: `LC<25:2>`, and on
+    /// revision 13 `LC<29:2>` (A1.6).
+    fn fetch_mask(&self) -> u32 {
+        self.m.geometry.lc_counter() >> 2
+    }
+
+    /// **Revision 13's LC byte mode** (contract G2 §2.3, appendix A1.2):
+    /// the rotate `rotate` plus an addend the location counter `lc` gives,
+    /// mod 40. In halfword mode `LC<1>` = 1 adds 0 and `LC<1>` = 0 adds 24;
+    /// in byte mode `LC<1:0>` = 1, 2, 3 and 0 add 0, 32, 24 and 16, the
+    /// word's bytes 0 to 3 in stream order.
+    fn lc_rotation_13(&self, lc: u32, rotate: u32) -> u32 {
+        let add = match (self.lc_byte_mode, bit(lc as u64, 1), bit(lc as u64, 0)) {
+            (false, true, _) => 0,
+            (false, false, _) => 24,
+            (true, false, true) => 0,
+            (true, true, false) => 32,
+            (true, true, true) => 24,
+            (true, false, false) => 16,
+        };
+        (rotate + add) % 40
+    }
+
+    /// **Revision 13's rotator and masker** for the word in `IR`
+    /// (contract G2 §2.3, appendix A1.1-A1.2): M rotated left in a ring of
+    /// 40, and the mask. A BYTE word rotates by `IR<5:0>` --- an LDB with
+    /// `IR<24>` by LC byte mode's rotation --- and masks `IR<11:6>` + 1
+    /// bits; a JUMP or DISPATCH rotates by `{IR<47>, IR<4:0>}`, by LC byte
+    /// mode's rotation under `IR<11:10>` = 3; an ALU word, whose output
+    /// select 0 is the masker as a DPB, by `IR<5:0>` with `IR<9:6>` + 1 bits
+    /// and no LC byte mode. The mask starts at the rotate where page
+    /// SMCTL's `MR` is up, as today (a selective deposit and a DPB, and
+    /// every class but BYTE), at 0 otherwise, and is empty for a byte that
+    /// does not fit in bits 0-39: the rule at 32 bits, where the mask is
+    /// empty whenever its left end passes bit 31.
+    fn rotate_and_mask_13(&self, ir: u64, m: Word) -> (Word, Word) {
+        let class = field(ir, 44, 43);
+        let byte = class == 3;
+        let (rotate, n, lc_mode) = match class {
+            // BYTE
+            3 => (field(ir, 5, 0), field(ir, 11, 6), field(ir, 13, 12) == 1 && bit(ir, 24)),
+            // JUMP, DISPATCH
+            1 | 2 => (
+                (bit(ir, 47) as u32) << 5 | field(ir, 4, 0),
+                field(ir, 9, 6),
+                field(ir, 11, 10) == 3,
+            ),
+            // ALU
+            _ => (field(ir, 5, 0), field(ir, 9, 6), false),
+        };
+        let shift = if lc_mode { self.lc_rotation_13(self.lc, rotate) } else { rotate };
+        let mr = !byte || bit(ir, 13);
+        let sr = !byte || bit(ir, 12);
+        let right = if mr { rotate } else { 0 };
+        let msk = if right + n > 39 { 0 } else { ((1 << (n + 1)) - 1) << right };
+        (if sr { ring_40(m, shift) } else { m }, msk)
+    }
+
     /// The whole combinational network, once, with `CLK` high.
     #[allow(clippy::nonminimal_bool)]
     fn read_phase(&self) -> Read {
         let ir = self.ir;
+        // Revision 13 (contract G2, appendix A1): its fields, rotator,
+        // conditions, dispatch memory, location counter and map.
+        let wide = self.m.geometry.wide();
 
         // page TRAP, CONTRL.  `-NOPA` is the open-collector 74S08 at CONTRL
         // 3E14, `AND(-NOP11, -INOP)`, `-INOP` being the 74S175's own `-Q` at
@@ -1164,7 +1244,9 @@ impl Rtl {
                 _ => (true, false, false, false),
             }
         };
-        let funct: u8 = if nop { 0 } else { 1 << field(ir, 11, 10) };
+        // Revision 13's BYTE words decode no misc function: `IR<11:10>` are
+        // length bits there (A1.1).
+        let funct: u8 = if nop || (wide && irbyte) { 0 } else { 1 << field(ir, 11, 10) };
 
         let src = field(ir, 28, 26);
         let group_a = bit(ir, 31) && !bit(ir, 29);
@@ -1248,10 +1330,16 @@ impl Rtl {
         let ifetch = needfetch && lcinc;
         let newlc_in = have_wrong_word && !lcinc;
 
-        // pages VMAS, VMEM0 and VMEM1
-        let (adr0, adr1) = self.map_address();
-        let mut vmap = self.m.l1_map[adr0 as usize];
-        let mut vmo = self.m.l2_map[adr1 as usize];
+        // pages VMAS, VMEM0 and VMEM1; on revision 13 its two levels, with
+        // block `177` for an address whose `<31:28>` is not zero (A1.7).
+        let (mut vmap, mut vmo) = if wide {
+            let mapi = self.mapi();
+            let vmap = self.m.map_level_1_13(mapi);
+            (vmap, self.m.l2_map[crate::machine::map_level_2_index_13(vmap, mapi)])
+        } else {
+            let (adr0, adr1) = self.map_address();
+            (self.m.l1_map[adr0 as usize], self.m.l2_map[adr1 as usize])
+        };
         // A map store's write lands in this microcycle's write pulse. On
         // the CADR the word the edge registers is the one the RAM shows
         // after it, as `chip` has it; QUUX defines the one from before,
@@ -1278,12 +1366,24 @@ impl Rtl {
         //     VCTL2 1D26  74S04A  -PFR = NOT(-LVMO23)
         //     VCTL1 1D17  74S00   -PFW = NAND(-LVMO22, WRCYC)
         //     VCTL1 1D17  74S00O  -VMAOK = NAND(-PFR, -PFW)
-        let pfr = bit(lvmo as u64, 23);
-        let pfw = !(!bit(lvmo as u64, 22) && self.wrcyc);
+        // Revision 13's access bits are the entry's `<27:26>` (A1.7).
+        let access = if wide { 27 } else { 23 };
+        let pfr = bit(lvmo as u64, access);
+        let pfw = !(!bit(lvmo as u64, access - 1) && self.wrcyc);
         let vmaok = pfr && pfw;
 
         // mux MF
-        let mf: Word = if srclc {
+        let mf: Word = if srclc && wide {
+            // Revision 13's location counter as read (A1.6): NEED-FETCH in
+            // `<39>`, the four flags in `<37:34>`, the counter in `<29:0>`.
+            (needfetch as Word) << 39
+                | (self.lc_byte_mode as Word) << 37
+                | (self.prog_unibus_reset as Word) << 36
+                | (self.int_enable as Word) << 35
+                | (self.sequence_break as Word) << 34
+                | Word::from(self.lc & crate::machine::LC_COUNTER_13 & !1)
+                | lc0b as Word
+        } else if srclc {
             ((needfetch as u32) << 31
                 | (self.lc_byte_mode as u32) << 29
                 | (self.prog_unibus_reset as u32) << 28
@@ -1308,6 +1408,12 @@ impl Rtl {
             self.m.md
         } else if srcvma {
             self.m.vma
+        } else if srcmap && wide {
+            // Revision 13's MAP(MD) (A1.7): the level-1 entry in `<38:32>`,
+            // the fault bits in `<31:30>`, the level-2 entry in `<27:0>`.
+            (vmap as Word & 0o177) << 32
+                | Word::from((!pfw as u32) << 31 | (!pfr as u32) << 30)
+                | Word::from(vmo & crate::machine::MAP_LEVEL_2_13)
         } else if srcmap {
             // Bit 29 is **zero**, not one. VMEMDR 1A01 puts `-PFW`, `-PFR`,
             // `HI12` and `-VMAP<4:0>` onto `MF<31:24>` through a 74S240,
@@ -1388,10 +1494,16 @@ impl Rtl {
         let shift = if sr { bits(sh4, sh3) } else { 0 };
         let mskl = mskr.wrapping_add(field(ir, 9, 5)) & 0o37;
 
-        // page SHIFT0-1: a 32-bit rotate left by `shift`, of `M<31:0>`
-        let r = (m as u32).rotate_left(shift);
-        // page MSKG4
-        let msk = (!0u32 >> (31 - mskl)) & (!0u32 << mskr);
+        // page SHIFT0-1: a 32-bit rotate left by `shift`, of `M<31:0>`;
+        // page MSKG4. Revision 13's are [`Rtl::rotate_and_mask_13`].
+        let (r, msk) = if wide {
+            self.rotate_and_mask_13(ir, m)
+        } else {
+            (
+                Word::from((m as u32).rotate_left(shift)),
+                Word::from((!0u32 >> (31 - mskl)) & (!0u32 << mskr)),
+            )
+        };
 
         // page ALU0-1 / ALUC4
         let ctl = ttl::alu_control(ir, bit(self.m.q, 0), bit(a, 31), iralu, irjump);
@@ -1412,7 +1524,7 @@ impl Rtl {
             op.map_or((0, 0), |op| muldiv::run(op, m as u32, a as u32, self.m.q as u32));
 
         // page MO
-        let mo = Word::from(msk & r) | (a & !Word::from(msk));
+        let mo = (msk & r) | (a & !msk);
         let osel = (bit(ir, 13) && iralu) as u32 * 2 + (bit(ir, 12) && iralu) as u32;
         let ob = match osel {
             _ if op.is_some() => mtag | Word::from(muldiv_ob),
@@ -1422,20 +1534,35 @@ impl Rtl {
             _ => mtag | Word::from(((alu << 1) as u32 & !1) | (self.m.q as u32 >> 31)),
         };
 
-        // page FLAG
+        // Revision 13's fixnum overflow flag (A1.3): an executed ALU-class
+        // word loads it, 1 for an arithmetic function (`IR<8:3>` 20-37)
+        // whose 33-bit result has bit 32 unlike bit 31.
+        let overflow =
+            (wide && iralu).then(|| field(ir, 8, 3) & 0o60 == 0o20 && bit(alu, 32) != bit(alu, 31));
+
+        // page FLAG. On revision 13 `AEQM` is the fields' equality, which
+        // M < A takes; M = A is all 40 bits (A1.3).
         let aluneg = !aeqm && bit(alu, 32);
         let sint = self.sintr && self.int_enable;
         let pgf_or_int = !vmaok || sint;
         let pgf_or_int_or_sb = pgf_or_int || self.sequence_break;
-        let conds = if bit(ir, 5) { field(ir, 2, 0) } else { 0 };
+        // Revision 13 decodes `IR<4:0>`: 10 the overflow flag, 11 M < A
+        // on the fields unsigned, every other number as its `IR<2:0>`.
+        let conds = match (bit(ir, 5), wide, field(ir, 4, 0)) {
+            (false, ..) => 0,
+            (true, true, c @ (0o10 | 0o11)) => c,
+            (true, ..) => field(ir, 2, 0),
+        };
         let jcond = match conds {
-            0 => bit(r as u64, 0),
+            0 => bit(r, 0),
             1 => aluneg,
             2 => bit(alu, 32),
-            3 => aeqm,
+            3 => aeqm && (!wide || m >> 32 == a >> 32),
             4 => !vmaok,
             5 => pgf_or_int,
             6 => pgf_or_int_or_sb,
+            0o10 => self.m.overflow,
+            0o11 => (m as u32) < (a as u32),
             _ => true,
         };
 
@@ -1453,14 +1580,19 @@ impl Rtl {
         // `TRANSPORT` is `Q-DATA-TYPE-PLUS-ONE-BIT` for exactly this reason:
         // the field is one bit wider than the type so that the type lands at
         // `DADR<5:1>` and the map bit has bit 0 to itself.
+        //
+        // Revision 13's address is `IR<23:12>`, into 4,096 entries, and its
+        // map bits the entry's `<22>` and `<23>` (A1.4, A1.7).
         let len = field(ir, 7, 5);
         let dmask = (1u32 << len) - 1;
         let map = bit(ir, 8) || bit(ir, 9);
-        let daddr0 = (bit(ir, 8) && bit(vmo as u64, 18))
-            || (bit(ir, 9) && bit(vmo as u64, 19))
-            || (!map && (dmask & 1 != 0) && bit(r as u64, 0))
+        let meta = if wide { 22 } else { 18 };
+        let daddr0 = (bit(ir, 8) && bit(vmo as u64, meta))
+            || (bit(ir, 9) && bit(vmo as u64, meta + 1))
+            || (!map && (dmask & 1 != 0) && bit(r, 0))
             || bit(ir, 12);
-        let dadr = (((field(ir, 22, 13) << 1) | daddr0 as u32) | (dmask & r & 0o176)) as u16;
+        let dhigh = if wide { field(ir, 23, 13) } else { field(ir, 22, 13) };
+        let dadr = (((dhigh << 1) | daddr0 as u32) | (dmask & r as u32 & 0o176)) as u16;
         let dispwr = irdisp && (funct & 4) != 0;
         // A dispatch memory write with `POPJ` reads the word it writes: on
         // the CADR the one written, as `chip` has it, and on QUUX the one
@@ -1518,7 +1650,7 @@ impl Rtl {
         // started counts as having dropped it.
         let buffered = match &self.bus {
             Bus::Quux(p) if needfetch && !have_wrong_word && !self.m.dma_written => {
-                p.prefetched().filter(|w| w.vaddr == (self.lc >> 2) & 0x00ff_ffff)
+                p.prefetched().filter(|w| w.vaddr == (self.lc >> 2) & self.fetch_mask())
             }
             _ => None,
         };
@@ -1548,8 +1680,10 @@ impl Rtl {
             && !destintctl
         {
             let inc = if self.lc_byte_mode { 1 } else { 2 };
-            let lcs = self.lc.wrapping_add(inc) & 0o377777777;
-            let rotate = crate::machine::macro_dispatch::INDEX_ROTATE as u64;
+            let counter = self.m.geometry.lc_counter();
+            let lcs = self.lc.wrapping_add(inc) & counter;
+            let index_rotate = crate::machine::macro_dispatch::index_rotate(wide);
+            let rotate = index_rotate as u64;
             let lc0b = bit(lcs as u64, 0) && self.lc_byte_mode;
             let left = !(bit(lcs as u64, 1) ^ lc0b);
             let sh4 = !(left ^ !bit(rotate, 4));
@@ -1562,7 +1696,12 @@ impl Rtl {
             } else {
                 self.m.mmem[0o31]
             };
-            self.m.macro_dispatch.fused_return(spc, (m31 as u32).rotate_left(shift))
+            let rotated = if wide {
+                ring_40(m31, self.lc_rotation_13(lcs, index_rotate))
+            } else {
+                Word::from((m31 as u32).rotate_left(shift))
+            };
+            self.m.macro_dispatch.fused_return(spc, rotated, index_rotate)
         } else {
             None
         };
@@ -1617,7 +1756,7 @@ impl Rtl {
         // page VCTRL1 / VCTRL2
         let memop = memrd | memwr | ifetch;
         let vmaenb = destvma | ifetch;
-        let vmas = if !ifetch { ob } else { Word::from((self.lc >> 2) & 0x00ff_ffff) };
+        let vmas = if !ifetch { ob } else { Word::from((self.lc >> 2) & self.fetch_mask()) };
 
         // page ICTL: the boot PROM overlays the bottom of the control store,
         // and `-PROMENABLE` is off while `IWRITEDA` is up.  In that cycle
@@ -1680,6 +1819,7 @@ impl Rtl {
             alu_tag: tag,
             r,
             ob,
+            overflow,
             n,
             npc,
             dest,
@@ -1765,7 +1905,12 @@ impl Rtl {
         if r.dispwr {
             self.m.dmem[r.dadr as usize] = r.a as u32 & 0o377777;
         }
-        if self.wmapd {
+        if self.wmapd && self.m.geometry.wide() {
+            // Revision 13's map write (A1.7), at the address on `MAPI` as
+            // on every machine.
+            let mapi = self.mapi();
+            self.m.write_map_13(self.m.vma, mapi);
+        } else if self.wmapd {
             // `MAPWR0D` is `WMAPD AND VMA26` and `MAPWR1D` is `WMAPD AND
             // VMA25` at VCTL2 1C15, and both pulses are `-WP1`, so the two
             // levels are written in the same write phase.  Address and data
@@ -2340,11 +2485,22 @@ impl Rtl {
     /// address; **unverified** what the board does when the second start's
     /// address is on another responder, which a start on main memory then
     /// one on the Unibus would settle.
+    /// The cycle's physical address, from the latched map word and `VMA`:
+    /// the page `VMO<13:0>` and `VMA<7:0>`, and on revision 13 the page
+    /// `<17:0>` and `VMA<9:0>`, 1024-word pages (contract G2 §2.6, A1.7).
+    fn physical(&self) -> u32 {
+        if self.m.geometry.wide() {
+            (self.lvmo & 0o777777) << 10 | (self.m.vma as u32 & 0o1777)
+        } else {
+            (self.lvmo & 0x3fff) << 8 | (self.m.vma as u32 & 0xff)
+        }
+    }
+
     fn start_bus_cycle(&mut self, r: &Read, wrcyc: bool) {
         if self.memstart {
             self.lvmo = r.vmo;
             if r.vmaok && self.mbusy {
-                self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma as u32 & 0xff);
+                self.bus_addr = self.physical();
                 self.bus_data = self.m.md;
                 if self.rdcyc {
                     self.rd_in_progress = true;
@@ -2365,7 +2521,7 @@ impl Rtl {
                 // board's too, `MD` passing through the bus interface with
                 // no latch (`the_engines_write_the_md_of_the_microcycle_after_the_start`,
                 // `tests/chip.rs`).
-                self.bus_addr = (self.lvmo & 0x3fff) << 8 | (self.m.vma as u32 & 0xff);
+                self.bus_addr = self.physical();
                 self.bus_data = self.m.md;
                 self.bus_responder = if self.m.geometry.has_register_page() {
                     // QUUX: its frame buffer on the memory bus with main
@@ -2555,12 +2711,18 @@ impl Rtl {
         self.div_from_ns = self.ns;
 
         // page LC
+        // Revision 13's counter is `LC<29:0>` (A1.6).
+        let counter = self.m.geometry.lc_counter();
         if r.destlc {
-            self.lc = r.ob as u32 & 0o377777777;
+            self.lc = r.ob as u32 & counter;
             self.drop_prefetched(crate::memory_port::Drop::LcWrite);
         } else {
             let inc = (r.lcinc && !self.lc_byte_mode) as u32 + r.lcinc as u32;
-            self.lc = (self.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
+            self.lc = (self.lc & counter).wrapping_add(inc) & counter;
+        }
+        // Revision 13's fixnum overflow flag (A1.3).
+        if let Some(v) = r.overflow {
+            self.m.overflow = v;
         }
         // QUUX's MACRO-DISPATCH register and MACRO DISPATCH MEMORY
         // (`machine::macro_dispatch`).
@@ -2571,7 +2733,13 @@ impl Rtl {
             self.m.macro_dispatch.fused += 1;
         }
         // page FLAG
-        if r.destintctl {
+        if r.destintctl && self.m.geometry.wide() {
+            // Revision 13 takes the flags from `<37:34>` (A1.6).
+            self.lc_byte_mode = bit(r.ob, 37);
+            self.prog_unibus_reset = bit(r.ob, 36);
+            self.int_enable = bit(r.ob, 35);
+            self.sequence_break = bit(r.ob, 34);
+        } else if r.destintctl {
             self.lc_byte_mode = bit(r.ob, 29);
             let reset = bit(r.ob, 28);
             if reset != self.prog_unibus_reset {
@@ -3072,7 +3240,7 @@ impl Rtl {
                 r.a,
                 r.m,
                 r.alu & 0xffff_ffff,
-                r.r as u64,
+                r.r,
                 r.ob,
                 self.m.dispatch_constant as u64,
                 self.opc[7] as u64,
@@ -3574,7 +3742,7 @@ impl Engine for Rtl {
     /// The 74S169 counters at LC 1A26-2C05, which is where this engine
     /// keeps the location counter: `Machine::lc` is never written here.
     fn lc(&self) -> u32 {
-        self.lc & crate::machine::LC_COUNTER
+        self.lc & self.m.geometry.lc_counter()
     }
 
     /// The sixteen registers off this engine's state between two

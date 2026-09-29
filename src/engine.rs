@@ -81,7 +81,7 @@ pub trait Engine {
     /// register is asked for instead and the mask is what makes the
     /// answers comparable.
     fn lc(&self) -> u32 {
-        self.machine().lc & crate::machine::LC_COUNTER
+        self.machine().lc & self.machine().geometry.lc_counter()
     }
 
     /// What the cpu drives onto `SPY<15:0>` while `-DBREAD` is low with

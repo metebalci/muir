@@ -2067,7 +2067,8 @@ fn same_program_on(
     for (k, &v) in m.spc.iter().enumerate() {
         spc.store(&mut c, k, v & 0o1777777);
     }
-    for (k, &v) in m.l1_map.iter().enumerate() {
+    // The CADR's 2,048: the rest is room for revision 13's.
+    for (k, &v) in m.l1_map[..l1.len()].iter().enumerate() {
         l1.store(&mut c, k, v & 0o37);
     }
     // The CADR's 1,024, the board's RAM: the rest is room for QUUX's.

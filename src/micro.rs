@@ -51,7 +51,7 @@ use crate::busint;
 use crate::clock::Speed;
 use crate::engine::Engine;
 use crate::isa::{Insn, Op};
-use crate::machine::{Halt, LVMO_AT_POWER_ON, Machine, Word};
+use crate::machine::{Halt, Machine, Word};
 use crate::muldiv;
 use crate::spy;
 use crate::ttl;
@@ -105,11 +105,11 @@ pub struct Micro {
 
     /// `WMAP`, the level a `MAP(MD)VMA` store puts up, with `VMA` and `MD`
     /// as it leaves them: what the register below takes at the edge.
-    map_write: Option<(u32, u32)>,
+    map_write: Option<(Word, Word)>,
     /// `WMAPD`, the 74S374 at VCTL2 1C15 --- the same level a microcycle
     /// later, which is what gates the two write pulses.
     /// [`Micro::land_map_write`] is that write phase.
-    map_write_d: Option<(u32, u32)>,
+    map_write_d: Option<(Word, Word)>,
     /// The map as this microcycle's instruction reads it, when a map write
     /// landed at its start: the word from before the write.
     map_seen: Option<crate::machine::Translation>,
@@ -203,6 +203,7 @@ impl Micro {
         } else {
             0
         };
+        let lvmo = m.geometry.lvmo_at_power_on();
         Micro {
             m,
             p0: Insn::new(0),
@@ -232,7 +233,7 @@ impl Micro {
             map_write: None,
             map_write_d: None,
             map_seen: None,
-            lvmo: LVMO_AT_POWER_ON,
+            lvmo,
             wrcyc: false,
             speed: Speed::ExtraSlow,
             speed_a: Speed::ExtraSlow,
@@ -488,7 +489,23 @@ impl Micro {
 
     /// The rotate `IR<4:0>` = `rotate` gives under `IR<11:10>` = 3 with the
     /// location counter at `lc`: [`Micro::lc_byte_mode`]'s gates.
+    ///
+    /// **Revision 13** adds instead, in the ring of 40 (contract G2 §2.3,
+    /// appendix A1.2): `rotate`, the word's 6-bit rotate, plus 0 or 24 for
+    /// halfwords 0 and 1, keyed on `LC<1>` = 1 and 0; and in byte mode 0,
+    /// 32, 24 and 16 for `LC<1:0>` = 1, 2, 3 and 0, bytes 0 to 3 in stream
+    /// order; mod 40.
     fn lc_rotation(&self, lc: u32, rotate: u32) -> u32 {
+        if self.m.geometry.wide() {
+            let add = if self.m.byte_mode() {
+                [16, 0, 32, 24][(lc & 3) as usize]
+            } else if lc & 2 != 0 {
+                0
+            } else {
+                24
+            };
+            return (rotate + add) % 40;
+        }
         let ir4 = (rotate >> 4) & 1;
         let ir3 = (rotate >> 3) & 1;
         let lc1 = (lc >> 1) & 1;
@@ -528,10 +545,17 @@ impl Micro {
             return target;
         }
         let inc = if self.m.byte_mode() { 1 } else { 2 };
-        let stepped = (self.m.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
-        let rotate = self.lc_rotation(stepped, crate::machine::macro_dispatch::INDEX_ROTATE);
-        let rotated = rol(self.m.mmem[0o31] as u32, rotate);
-        match self.m.macro_dispatch.fused_return(word, rotated) {
+        let counter = self.m.geometry.lc_counter();
+        let stepped = (self.m.lc & counter).wrapping_add(inc) & counter;
+        let wide = self.m.geometry.wide();
+        let index_rotate = crate::machine::macro_dispatch::index_rotate(wide);
+        let rotate = self.lc_rotation(stepped, index_rotate);
+        let rotated = if wide {
+            rol40(self.m.mmem[0o31], rotate)
+        } else {
+            rol(self.m.mmem[0o31] as u32, rotate).into()
+        };
+        match self.m.macro_dispatch.fused_return(word, rotated, index_rotate) {
             Some(f) => {
                 if f.keep {
                     self.m.spcptr = (self.m.spcptr + 1) & 0o37;
@@ -669,10 +693,13 @@ impl Micro {
         // LC counts bytes and a word is four of them, so the word to fetch is
         // the counter *before* the step, shifted down by two. The counter is
         // `LC<25:0>` (page LC); the flags this engine keeps above it stay.
-        let fetch_from = (self.m.lc & 0o377777777) >> 2;
+        // Revision 13's counter is `LC<29:0>` (A1.6), and a fetch takes
+        // `LC<29:2>`.
+        let counter = self.m.geometry.lc_counter();
+        let fetch_from = (self.m.lc & counter) >> 2;
         let inc = if self.m.byte_mode() { 1 } else { 2 };
-        let lc = (self.m.lc & 0o377777777).wrapping_add(inc) & 0o377777777;
-        self.m.lc = (self.m.lc & !0o377777777) | lc;
+        let lc = (self.m.lc & counter).wrapping_add(inc) & counter;
+        self.m.lc = (self.m.lc & !counter) | lc;
 
         if self.needfetch() {
             self.m.lc &= !(1 << 31);
@@ -758,6 +785,17 @@ impl Micro {
             // `TRANS-OLD0`'s `DISPATCH L2-MAP-STATUS-CODE` reads exactly the
             // bits of the last cycle's page. The rest is live, at whatever
             // `MAPI` addresses: `VMA` just after a start, `MD` otherwise.
+            // Revision 13's layout is A1.7's: the level-1 entry in
+            // `<38:32>`, the two fault bits in `<31:30>` from the latched
+            // entry's `<27:26>`, and the 28-bit level-2 entry in `<27:0>`.
+            0o11 if self.m.geometry.wide() => {
+                let t = self.map_seen.unwrap_or_else(|| self.m.translate(self.map_address()));
+                let pfr = (self.lvmo >> 27) & 1 != 0;
+                let pfw = !((self.lvmo >> 26) & 1 == 0 && self.wrcyc);
+                Word::from(t.l1_data & 0o177) << 32
+                    | Word::from((!pfw as u32) << 31 | (!pfr as u32) << 30)
+                    | Word::from(t.l2_data & crate::machine::MAP_LEVEL_2_13)
+            }
             0o11 => {
                 let t = self.map_seen.unwrap_or_else(|| self.m.translate(self.map_address()));
                 let pfr = (self.lvmo >> 23) & 1 != 0;
@@ -771,6 +809,15 @@ impl Micro {
             // MD
             0o12 => self.m.md,
             // Location Counter.  Bit 0 only means anything in byte mode.
+            // Revision 13's layout is A1.6's: NEED-FETCH in `<39>`, the
+            // four flags in `<37:34>`, the counter in `<29:0>`.
+            0o13 if self.m.geometry.wide() => {
+                let counter = self.m.lc & crate::machine::LC_COUNTER_13;
+                let counter = if self.m.byte_mode() { counter } else { counter & !1 };
+                Word::from(self.needfetch()) << 39
+                    | Word::from(self.m.interrupt_control & (0o17 << 26)) << 8
+                    | Word::from(counter)
+            }
             0o13 => (if self.m.byte_mode() { self.m.lc } else { self.m.lc & !1 }).into(),
             // SPC ptr & data, pop
             0o14 => {
@@ -841,7 +888,7 @@ impl Micro {
     /// registers do: `-WP1` fires before the edge that would change them.
     /// Held to `rtl` in `tests/cosim.rs`.
     fn arm_map_write(&mut self) {
-        self.map_write = Some((self.m.vma as u32, self.m.md as u32));
+        self.map_write = Some((self.m.vma, self.m.md));
     }
 
     /// `MAPWR0D` and `MAPWR1D` fire from `WMAPD`, in the microcycle after
@@ -880,7 +927,8 @@ impl Micro {
             0o0 => {}
             // LOCATION-COUNTER.  Writing it always sets NEED-FETCH.
             0o1 => {
-                self.m.lc = (self.m.lc & !0o377777777) | (data & 0o377777777);
+                let counter = self.m.geometry.lc_counter();
+                self.m.lc = (self.m.lc & !counter) | (data & counter);
                 if !self.m.byte_mode() {
                     self.m.lc &= !1;
                 }
@@ -893,6 +941,11 @@ impl Micro {
             // into LC. QUUX has no `PROG.UNIBUS.RESET` (contract Q11): the
             // bit is kept and read back, and drives nothing; its devices
             // are reset by the register page's word 104.
+            // Revision 13 takes the four flags from `<37:34>` (A1.6), and
+            // the location counter source reads them from here.
+            0o2 if self.m.geometry.wide() => {
+                self.m.interrupt_control = (word >> 8) as u32 & (0o17 << 26);
+            }
             0o2 => {
                 let was = self.m.interrupt_control & (1 << 28) != 0;
                 self.m.interrupt_control = data;
@@ -1193,6 +1246,25 @@ fn rol(v: u32, n: u32) -> u32 {
     v.rotate_left(n & 31)
 }
 
+/// Revision 13's rotator, a ring of 40: `<39:0>` of `v` rotated left by
+/// `n` mod 40, for any 6-bit `n` (contract G2 §2.3, appendix A1.2).
+fn rol40(v: Word, n: u32) -> Word {
+    const RING: Word = (1 << 40) - 1;
+    let v = v & RING;
+    match n % 40 {
+        0 => v,
+        k => (v << k | v >> (40 - k)) & RING,
+    }
+}
+
+/// Revision 13's masker (A1.2): bits `right` to `right + n`, if that
+/// fits in bits 0-39, and none otherwise, so that the A source shows
+/// through; at 32 bits it is the CADR's rule, whose mask is empty when
+/// `right + n` passes bit 31.
+fn mask40(right: u32, n: u32) -> Word {
+    if right + n > 39 { 0 } else { ((1 << (n + 1)) - 1) << right }
+}
+
 impl Micro {
     fn alu(&mut self) -> Result<(), Halt> {
         let dest = self.ir(14, 12) as u16;
@@ -1218,6 +1290,13 @@ impl Micro {
         };
         self.alu_out = (alu.f & LOW) | tag;
         self.old_q = self.m.q;
+        // Revision 13's fixnum overflow flag, loaded by every ALU-class
+        // word that executes: an arithmetic function's (`IR<8:3>` 20-37)
+        // 33-bit result with bit 32 unlike bit 31 (A1.3).
+        if self.m.geometry.wide() {
+            let arithmetic = self.ir(3, 6) & 0o60 == 0o20;
+            self.m.overflow = arithmetic && (alu.f >> 32 & 1) != (alu.f >> 31 & 1);
+        }
 
         // QUUX's multiply and divide drive the output bus and load Q
         // whatever IR<13:12> and IR<1:0> say: on `<31:0>`, the output's
@@ -1257,6 +1336,14 @@ impl Micro {
             // eleven such words, all zero and with no destination;
             // `tests/output_bus.rs` holds all three engines to the network's
             // word on one with a destination.
+            // Revision 13's: the rotate `IR<5:0>` in the ring of 40, the
+            // length − 1 `IR<9:6>`, and no LC byte mode, `IR<11:10>` being
+            // misc in an ALU word (A1.2).
+            0 if self.m.geometry.wide() => {
+                let rotate = self.ir(0, 6);
+                let mask = mask40(rotate, self.ir(6, 4));
+                (rol40(self.mdata, rotate) & mask) | (self.adata & !mask)
+            }
             0 => {
                 let mut rotate = self.ir(0, 5);
                 if self.ir(10, 2) == 3 {
@@ -1298,6 +1385,9 @@ impl Micro {
     /// makes `SH4` and `SH3` for every class, `SR` being up whenever the
     /// instruction is not a BYTE.
     fn jump_condition(&mut self) -> bool {
+        if self.m.geometry.wide() {
+            return self.jump_condition_13();
+        }
         let rotate = if self.ir(10, 2) == 3 { self.lc_byte_mode() } else { self.ir(0, 5) };
         let r = rol(self.mdata as u32, rotate);
         if self.ir(5, 1) == 0 {
@@ -1326,6 +1416,54 @@ impl Micro {
             4 => !self.m.vmaok,
             5 => !self.m.vmaok || pending,
             6 => !self.m.vmaok || pending || (self.m.interrupt_control & (1 << 26) != 0),
+            _ => true,
+        }
+    }
+
+    /// **Revision 13's conditions** (contract G2 §2.2, appendix A1.3). The
+    /// bit tested is bit 0 of M rotated in the ring of 40 by `{IR<47>,
+    /// IR<4:0>}`, or by LC byte mode's rotation under `IR<11:10>` = 3. In
+    /// condition mode the number is `IR<4:0>`: 1 is M < A on the fields,
+    /// signed, with the fields' equality in place of `AEQM`; 2 is bit 32 of
+    /// the fields' 33-bit M − A − 1; 3 is M = A over all 40 bits, the
+    /// fields' `AEQM` and the tags alike; 10 is the fixnum overflow flag;
+    /// 11 is M < A on the fields, unsigned; every other number decodes as
+    /// its `IR<2:0>`.
+    fn jump_condition_13(&mut self) -> bool {
+        let mut rotate = self.ir(47, 1) << 5 | self.ir(0, 5);
+        if self.ir(10, 2) == 3 {
+            rotate = self.lc_rotation(self.m.lc, rotate);
+        }
+        let r = rol40(self.mdata, rotate);
+        if self.ir(5, 1) == 0 {
+            self.mdata = r;
+            return r & 1 != 0;
+        }
+        let ctl = ttl::alu_control(
+            self.p0.raw(),
+            self.m.q & 1 != 0,
+            self.adata & 0x8000_0000 != 0,
+            false,
+            true,
+        );
+        let alu = ttl::alu(self.mdata as u32, self.adata as u32, ctl.aluf, ctl.alumode, ctl.cin);
+        let alu32 = alu.f >> 32 & 1 != 0;
+        let int_enabled = self.m.interrupt_control & (1 << 27) != 0;
+        let pending = int_enabled && self.m.interrupt();
+        let code = match self.ir(0, 5) {
+            c @ (0o10 | 0o11) => c,
+            c => c & 7,
+        };
+        match code {
+            0 => r & 1 != 0,
+            1 => !alu.aeqm && alu32,
+            2 => alu32,
+            3 => alu.aeqm && self.mdata >> 32 == self.adata >> 32,
+            4 => !self.m.vmaok,
+            5 => !self.m.vmaok || pending,
+            6 => !self.m.vmaok || pending || (self.m.interrupt_control & (1 << 26) != 0),
+            0o10 => self.m.overflow,
+            0o11 => (self.mdata as u32) < (self.adata as u32),
             _ => true,
         }
     }
@@ -1417,10 +1555,14 @@ impl Micro {
     }
 
     fn dispatch(&mut self) -> Result<(), Halt> {
-        let mut pos = self.ir(0, 5);
+        // Revision 13: the rotate `{IR<47>, IR<4:0>}` in the ring of 40, and
+        // the address `IR<23:12>` into 4,096 entries (A1.1, A1.4).
+        let wide = self.m.geometry.wide();
+        let mut pos = if wide { self.ir(47, 1) << 5 | self.ir(0, 5) } else { self.ir(0, 5) };
         let len = self.ir(5, 3);
         let map = self.ir(8, 2);
-        let mut addr = self.ir(12, 11);
+        let mut addr = if wide { self.ir(12, 12) } else { self.ir(12, 11) };
+        let dmem_mask = self.m.geometry.dmem_words() as u32 - 1;
         let use_lpc = self.ir(25, 1) != 0;
         let advance = self.ir(24, 1) != 0;
 
@@ -1446,10 +1588,10 @@ impl Micro {
         // from correct if a chip has failed.
         let write = self.ir(10, 2) == 2;
         if self.ir(10, 2) == 3 {
-            pos = self.lc_byte_mode();
+            pos = if wide { self.lc_rotation(self.m.lc, pos) } else { self.lc_byte_mode() };
         }
 
-        let m = rol(self.mdata as u32, pos);
+        let m = if wide { rol40(self.mdata, pos) as u32 } else { rol(self.mdata as u32, pos) };
         let mask = if len == 0 { 0 } else { !0u32 >> (31 - ((len - 1) & 0o37)) };
 
         // Level-2 map bits.  The CADR documentation says 14 and 15; the
@@ -1462,11 +1604,14 @@ impl Micro {
         // whenever a map bit is selected.  ORing the map bit into the
         // field's is the easy misreading of that NAND-OR; the bit takes
         // the place, as `rtl` and `chip` show.
+        // Revision 13's are the entry's `<22>` and `<23>`, the meta bits
+        // moved up by 4 with the rest (A1.7).
         if map != 0 {
             let bits =
                 self.map_seen.unwrap_or_else(|| self.m.translate(self.map_address())).l2_data;
-            let b18 = (bits >> 18) & 1;
-            let b19 = (bits >> 19) & 1;
+            let at = if wide { 22 } else { 18 };
+            let b18 = (bits >> at) & 1;
+            let b19 = (bits >> (at + 1)) & 1;
             addr |= (m & mask & !1)
                 | match map {
                     1 => b18,
@@ -1477,7 +1622,7 @@ impl Micro {
             addr |= m & mask;
         }
 
-        let entry = self.m.dmem[(addr & 0o3777) as usize];
+        let entry = self.m.dmem[(addr & dmem_mask) as usize];
         if write {
             // The write goes to the address the dispatch would have read:
             // `DADR` takes the field and the M-source bits whatever the
@@ -1491,7 +1636,7 @@ impl Micro {
             // standing before ([`Geometry::old_word_while_written`],
             // `tests/dispatch_write_order.rs`).
             let new = self.adata as u32 & 0o377777;
-            self.m.dmem[(addr & 0o3777) as usize] = new;
+            self.m.dmem[(addr & dmem_mask) as usize] = new;
             let entry = if self.m.geometry.old_word_while_written { entry } else { new };
             self.ignpopj(entry);
             if self.popj && (entry >> 16) & 1 == 0 {
@@ -1557,7 +1702,31 @@ impl Micro {
         }
     }
 
+    /// **Revision 13's BYTE** (contract G2 §2.3, appendix A1.1-A1.2): the
+    /// rotate `IR<5:0>`, the length − 1 `IR<11:6>`, in the ring of 40, with
+    /// the masker's rule at 40 bits ([`mask40`]); LC byte mode by `IR<24>`,
+    /// on an LDB alone; and `IR<11:10>`, length bits here, decode no misc
+    /// function.
+    fn byte_13(&mut self) -> Result<(), Halt> {
+        let dest = self.ir(14, 12) as u16;
+        let func = self.ir(12, 2);
+        let rotate = self.ir(0, 6);
+        let pos = if func == 1 && self.ir(24, 1) != 0 {
+            self.lc_rotation(self.m.lc, rotate)
+        } else {
+            rotate
+        };
+        let right = if func & 2 != 0 { rotate } else { 0 };
+        let mask = mask40(right, self.ir(6, 6));
+        let m = if func & 1 != 0 { rol40(self.mdata, pos) } else { self.mdata };
+        self.out = (m & mask) | (self.adata & !mask);
+        self.write_dest(dest)
+    }
+
     fn byte(&mut self) -> Result<(), Halt> {
+        if self.m.geometry.wide() {
+            return self.byte_13();
+        }
         let dest = self.ir(14, 12) as u16;
         let func = self.ir(12, 2);
         let mut pos = self.ir(0, 5);
@@ -1698,9 +1867,9 @@ impl Engine for Micro {
         w.word(*out);
         w.u64(*iwr);
         w.opt(*executed, crate::checkpoint::Writer::u16);
-        let map = |w: &mut crate::checkpoint::Writer, (vma, md): (u32, u32)| {
-            w.u32(vma);
-            w.u32(md);
+        let map = |w: &mut crate::checkpoint::Writer, (vma, md): (Word, Word)| {
+            w.word(vma);
+            w.word(md);
         };
         w.opt(*map_write, map);
         w.opt(*map_write_d, map);
@@ -1760,8 +1929,8 @@ impl Engine for Micro {
         self.out = r.word()?;
         self.iwr = r.u64()?;
         self.executed = r.opt(crate::checkpoint::Reader::u16)?;
-        self.map_write = r.opt(|r| Ok((r.u32()?, r.u32()?)))?;
-        self.map_write_d = r.opt(|r| Ok((r.u32()?, r.u32()?)))?;
+        self.map_write = r.opt(|r| Ok((r.word()?, r.word()?)))?;
+        self.map_write_d = r.opt(|r| Ok((r.word()?, r.word()?)))?;
         self.lvmo = r.u32()?;
         self.wrcyc = r.bool()?;
         self.speed = r.speed()?;
@@ -1949,7 +2118,9 @@ impl Engine for Micro {
         // `IR<11:10>` = 1 on any class is misc function 1, `HALT-CONS`:
         // `-FUNCT1` off the 74S139 at SOURCE 3D05, which the 74S374 at
         // OLORD2 1A05 registers as `HALTED` at the next edge.
-        self.halted = self.ir(10, 2) == 1;
+        // Revision 13's BYTE words decode no misc function: `IR<11:10>`
+        // are length bits there (A1.1).
+        self.halted = self.ir(10, 2) == 1 && !(self.m.geometry.wide() && self.p0.op() == Op::Byte);
 
         if self.popj {
             let mut t = self.pop_spc();

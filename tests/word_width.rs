@@ -4,10 +4,10 @@
 //! **The word width as a parameter of the engines** (contract G2 §8.1):
 //! `micro`, `rtl`, the machine, main memory and the checkpoint carry a word
 //! of 32 or 40 bits, as [`Geometry::word_bits`] says. The CADR and QUUX
-//! revisions 11 and 12 are 32; no machine the executables run is 40 yet.
+//! revisions 11 and 12 are 32; revision 13, [`Geometry::QUUX_13`], is 40,
+//! and no machine the executables run is 40 yet.
 //!
-//! A test geometry of 40-bit words, QUUX's with [`Geometry::word_bits`] 40,
-//! runs a hand program that moves words with `<39:32>` set through every
+//! Revision 13's geometry runs a hand program that moves words with `<39:32>` set through every
 //! word register G2 §2.1 widens: main memory into `MD`, `MD` into M, M
 //! into A, A back into M on the A pass-around, M into M on the M
 //! pass-around, `Q`, the PDL buffer, `VMA`, and `MD` back into main memory
@@ -18,9 +18,9 @@
 //! What the ALU does to `<39:32>` is G2 §2.2's output rule: a logical
 //! function acts on all 40 bits, and an arithmetic one leaves M's. The
 //! program uses `SETM` and `SETA`, which are logical, to move the words, and
-//! one `XOR` and one `ADD` to show the rule. The conditions, the rotator
-//! and the masker, and the numeric sources are still 32 bits wide here
-//! (revision 13's, G2 §2.2-§2.5).
+//! one `XOR` and one `ADD` to show the rule. The rest of revision 13's
+//! datapath, its fields, rotator, conditions and map, is
+//! `tests/revision_13.rs`'s.
 
 use muir::checkpoint::{Reader, Writer};
 use muir::engine::Engine;
@@ -35,18 +35,20 @@ use muir::rtl::Rtl;
 
 mod support;
 
-/// QUUX's geometry with 40-bit words: a test geometry, not a revision.
-const WIDE: Geometry = Geometry { word_bits: 40, ..Geometry::QUUX };
+/// QUUX's 40-bit geometry, revision 13.
+const WIDE: Geometry = Geometry::QUUX_13;
 
-/// The words the program moves, each with `<39:32>` set, and `<31>` too so
-/// that a sign extension would show. `W2`'s `<23:0>` is an address on the
-/// mapped page, so that it can stand in `VMA` for a store.
+/// The words the program moves, each with `<39:32>` set, and `W1`'s and
+/// `W3`'s `<31>` too so that a sign extension would show. `W2`'s `<31:0>`
+/// is an address on the mapped page, so that it can stand in `VMA` for a
+/// store: revision 13's map translates `<27:0>`, ignores `<39:32>` and
+/// faults on `<31:28>` (contract G2 §2.6).
 const W1: Word = 0xa5 << 32 | 0x8000_0001;
-const W2: Word = 0x3c << 32 | 0x8000_0000 | 0o411;
+const W2: Word = 0x3c << 32 | 0o411;
 const W3: Word = 0xc3 << 32 | 0x8765_4321;
 
-/// Where the words are in main memory, on page 1, which the map sends to
-/// physical page 1.
+/// Where the words are in main memory, on page 0, which the map sends to
+/// physical page 0.
 const IN_W1: u32 = 0o400;
 const IN_W2: u32 = 0o401;
 const IN_W3: u32 = 0o402;
@@ -114,8 +116,10 @@ fn program() -> Vec<Insn> {
 }
 
 /// The machine the program runs on, with its words in main memory and its
-/// addresses in A memory, and page 1 mapped to physical page 1, readable
-/// and writable.
+/// addresses in A memory, and the page they are on mapped to itself,
+/// readable and writable: on revision 13 page 0 of 1024 words, its
+/// level-2 entry's access bits `<27:26>` (appendix A1.7); on a 32-bit QUUX
+/// page 1 of 256, `<23:22>`.
 fn machine(geometry: Geometry) -> Machine {
     let mut m = Machine::new();
     m.geometry = geometry;
@@ -129,7 +133,11 @@ fn machine(geometry: Geometry) -> Machine {
     m.amem[0o42] = IN_W3 as Word;
     m.amem[0o43] = OUT_W1 as Word;
     m.amem[0o44] = OUT_W3 as Word;
-    m.l2_map[1] = (1 << 23) | (1 << 22) | 1;
+    if geometry.wide() {
+        m.l2_map[0] = (1 << 27) | (1 << 26);
+    } else {
+        m.l2_map[1] = (1 << 23) | (1 << 22) | 1;
+    }
     m
 }
 
@@ -284,8 +292,8 @@ fn a_32_bit_machine_keeps_32_bits() {
     check("rtl", &run(Rtl::new(machine(Geometry::QUUX))), &expect);
 }
 
-/// **The machines the executables run are 32 bits wide**; only a test
-/// builds a 40-bit one.
+/// **The machines the executables run are 32 bits wide**; only revision 13,
+/// which a test builds, is 40.
 #[test]
 fn the_cadr_and_quux_are_32_bits_wide() {
     for g in [Geometry::CADR, Geometry::QUUX, Geometry::QUUX_11] {
@@ -307,7 +315,8 @@ fn a_40_bit_machine_writes_no_checkpoint_file() {
 /// **A 32-bit machine's checkpoint is the bytes it always was**: every
 /// word four bytes, so that a checkpoint written before the width was a
 /// parameter reads the same, and the 40-bit machine's is longer by a byte
-/// a word.
+/// a word, and by revision 13's larger dispatch memory and map and its
+/// overflow flag (contract G2 §2.4, §2.6, §2.2).
 #[test]
 fn a_32_bit_checkpoint_writes_four_bytes_a_word() {
     let body = |g: Geometry| {
@@ -316,5 +325,10 @@ fn a_32_bit_checkpoint_writes_four_bytes_a_word() {
         w.finish().len()
     };
     let words = 1024 + 32 + muir::machine::PDL_WORDS + 3 + muir::machine::MAIN_WORDS;
-    assert_eq!(body(WIDE) - body(Geometry::QUUX), words + 1, "a byte a word, and the width");
+    let entries = (4096 - 2048) + (8192 - 2048) + (4096 - 2048);
+    assert_eq!(
+        body(WIDE) - body(Geometry::QUUX),
+        words + 1 + 1 + 4 * entries,
+        "a byte a word, the width, the overflow flag, and 4 bytes a new entry"
+    );
 }

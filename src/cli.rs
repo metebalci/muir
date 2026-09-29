@@ -3261,10 +3261,10 @@ impl Hold {
                 // cells and the same address picks the board.
                 Ok(Some(Command::Mem { from, words })) => {
                     let m = e.machine();
-                    // `<31:0>` of each word: a 40-bit word is no machine's
-                    // the executables run (contract G2 §8.1).
-                    let read = |a: usize| m.main.get(a).map(|&w| w as u32);
-                    match crate::prompt::main_dump(from, words, m.main.len(), read) {
+                    // Each word whole, at the machine's width.
+                    let read = |a: usize| m.main.get(a).copied();
+                    let bits = m.geometry.word_bits;
+                    match crate::prompt::main_dump_wide(from, words, m.main.len(), read, bits) {
                         Ok(dump) => print!("{dump}"),
                         Err(what) => println!("prompt: {what}"),
                     }
@@ -3757,20 +3757,23 @@ fn say_machrun_low(why: &str) {
 /// at a time through the OPC control register.
 fn say_registers<E: Engine>(e: &E) -> String {
     let m = e.machine();
-    crate::prompt::registers(&[
-        ("PC", e.pc() as u32),
-        ("OPC", m.opc as u32),
-        // `<31:0>`: a 40-bit word is no machine's the executables run.
-        ("Q", m.q as u32),
-        ("VMA", m.vma as u32),
-        ("MD", m.md as u32),
-        ("LC", m.lc),
-        ("SPCPTR", m.spcptr as u32),
-        ("PDLPTR", m.pdl_pointer as u32),
-        ("PDLIDX", m.pdl_index as u32),
-        ("DISPATCH CONSTANT", m.dispatch_constant as u32),
-        ("INTERRUPT CONTROL", m.interrupt_control),
-    ])
+    // The words whole, at the machine's width; the rest as they are kept.
+    crate::prompt::registers_wide(
+        &[
+            ("PC", e.pc().into()),
+            ("OPC", m.opc.into()),
+            ("Q", m.q),
+            ("VMA", m.vma),
+            ("MD", m.md),
+            ("LC", m.lc.into()),
+            ("SPCPTR", m.spcptr.into()),
+            ("PDLPTR", m.pdl_pointer.into()),
+            ("PDLIDX", m.pdl_index.into()),
+            ("DISPATCH CONSTANT", m.dispatch_constant.into()),
+            ("INTERRUPT CONTROL", m.interrupt_control.into()),
+        ],
+        m.geometry.word_bits,
+    )
 }
 
 /// The prompt's answer to `amem`, `mmem`, `dmem`, `pdl` and `spc`: so many
@@ -3808,15 +3811,15 @@ fn say_memory(
     from: usize,
     words: Option<usize>,
 ) -> Result<String, String> {
-    // A, M and the PDL buffer by `<31:0>`: a 40-bit word is no machine's
-    // the executables run (contract G2 §8.1).
-    let low = |w: &[crate::machine::Word]| w.iter().map(|&w| w as u32).collect::<Vec<u32>>();
-    let all: Vec<u32> = match memory {
-        Memory::Amem => low(&m.amem),
-        Memory::Mmem => low(&m.mmem),
-        Memory::Dmem => m.dmem.to_vec(),
-        Memory::Pdl => low(&m.pdl),
-        Memory::Spc => m.spc.to_vec(),
+    // A, M and the PDL buffer whole, at the machine's width; the dispatch
+    // memory as many entries as the machine has.
+    let wide = |w: &[u32]| w.iter().map(|&w| w.into()).collect::<Vec<u64>>();
+    let (all, bits): (Vec<u64>, u32) = match memory {
+        Memory::Amem => (m.amem.to_vec(), m.geometry.word_bits),
+        Memory::Mmem => (m.mmem.to_vec(), m.geometry.word_bits),
+        Memory::Dmem => (wide(&m.dmem[..m.geometry.dmem_words()]), 32),
+        Memory::Pdl => (m.pdl.to_vec(), m.geometry.word_bits),
+        Memory::Spc => (wide(&m.spc), 32),
     };
     if from >= all.len() {
         return Err(format!(
@@ -3832,7 +3835,7 @@ fn say_memory(
         Some(n) => from.saturating_add(n).min(all.len()),
         None => all.len(),
     };
-    Ok(crate::prompt::dump(&all[from..to], from))
+    Ok(crate::prompt::dump_wide(&all[from..to], from, bits))
 }
 
 /// The prompt: a line on stdin is a command to muir itself,

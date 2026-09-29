@@ -111,9 +111,11 @@ pub mod bus_error {
 /// machine, `VMA<12:8>` choosing one in it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Geometry {
-    /// Bits in a word ([`Word`]): 32 on every machine the executables run,
-    /// the CADR and QUUX to revision 12; 40 on a test geometry until
-    /// revision 13 (contract G2 §2.1).
+    /// Bits in a word ([`Word`]): 32 on the CADR and QUUX to revision 12;
+    /// 40 on QUUX revision 13, [`Geometry::QUUX_13`], whose fields,
+    /// rotator, jump conditions, dispatch memory, location counter and map
+    /// come with the word (contract G2 §2-§3, appendix A1): what
+    /// [`Geometry::wide`] says.
     pub word_bits: u32,
     /// Bits in a level-1 map entry.
     pub l1_bits: u32,
@@ -255,6 +257,28 @@ impl Geometry {
         ..Geometry::QUUX
     };
 
+    /// **QUUX's, revision 13** (contract G2, with its appendix A1; not a
+    /// machine the executables run until revision 13 lands): revision 12
+    /// with a 40-bit word (G2 §2.1) and what comes with it, all keyed on
+    /// [`Geometry::wide`]. The BYTE fields are 6 bits, the JUMP and
+    /// DISPATCH rotates take `IR<47>` as their bit 5, the DISPATCH address
+    /// is `IR<23:12>` into a dispatch memory of 4,096 entries (A1.1,
+    /// A1.4); the rotator is a ring of 40 and the masker empty for a byte
+    /// that does not fit in bits 0-39 (A1.2); the conditions compare
+    /// fields, equality sees the tag, and two conditions are new, fixnum
+    /// overflow and unsigned less than (A1.3); the location counter has 30
+    /// bits and its flags above bit 31 (A1.6); and the map is two levels
+    /// of 8,192 7-bit and 4,096 28-bit entries over 1024-word pages, a
+    /// 28-bit virtual address and an 18-bit physical page (A1.7). The
+    /// MACHINE-ID says revision 13, and feature words 1, 2 and 6 the sizes
+    /// ([`Geometry::feature_word`]).
+    pub const QUUX_13: Geometry = Geometry {
+        word_bits: 40,
+        l1_bits: 7,
+        machine_id: Some((0x5155 << 16) | (13 << 4) | 4),
+        ..Geometry::QUUX
+    };
+
     /// The level-1 entry a map store writes: `VMA<31:27>` on every machine
     /// (`mit/cadr/ir.bits`, "VMA<26>=1 writes the level 1 map from
     /// VMA<31-27>"), and on QUUX `VMA<24>` as its sixth bit.
@@ -268,9 +292,31 @@ impl Geometry {
         (1 << self.word_bits) - 1
     }
 
-    /// Whether a word is wider than 32 bits, `<39:32>` above the CADR's.
+    /// Whether a word is wider than 32 bits, `<39:32>` above the CADR's:
+    /// revision 13, and with it its fields, rotator, conditions, dispatch
+    /// memory, location counter and map ([`Geometry::QUUX_13`]).
     pub fn wide(self) -> bool {
         self.word_bits > 32
+    }
+
+    /// The dispatch memory's entries: 2,048 (`IR<22:12>`), and 4,096
+    /// (`IR<23:12>`) on revision 13 (contract G2 §2.4, A1.4).
+    pub fn dmem_words(self) -> usize {
+        if self.wide() { DMEM_WORDS } else { 2048 }
+    }
+
+    /// The location counter's own bits, the counter without the flags an
+    /// engine keeps beside it: `LC<25:0>` ([`LC_COUNTER`]), and on revision
+    /// 13 `LC<29:0>`, a byte address of a 28-bit word address (A1.6).
+    pub fn lc_counter(self) -> u32 {
+        if self.wide() { LC_COUNTER_13 } else { LC_COUNTER }
+    }
+
+    /// The map word the latch at VMEMDR 1D14 holds before any memory cycle
+    /// has loaded it: [`LVMO_AT_POWER_ON`], and on revision 13 the same
+    /// with its access bits at `<27:26>` and its page 18 bits (A1.7).
+    pub fn lvmo_at_power_on(self) -> u32 {
+        if self.wide() { (1 << 27) | (1 << 26) | 0o777777 } else { LVMO_AT_POWER_ON }
     }
 
     /// A level-1 entry's bits.
@@ -329,7 +375,7 @@ impl Geometry {
             3 => 1 << self.pdl_bits,
             4 => IMEM_WORDS as u32,
             5 => 1024,
-            6 => 2048,
+            6 => self.dmem_words() as u32,
             7 => (self.muldiv as u32) * 3,
             // The tick, timer 0.
             0o10 => self.tick as u32,
@@ -454,6 +500,14 @@ pub mod macro_dispatch {
     /// location counter chooses the halfword as it does for the main loop's
     /// dispatch, whose `IR<4:0>` is 23 for `M-INST-OP`'s `<13:9>`.
     pub const INDEX_ROTATE: u32 = 32 - 6;
+
+    /// [`INDEX_ROTATE`] in a ring of 32, and on revision 13 in the ring of
+    /// 40: 34, which for halfword 1, under LC byte mode's addend of 24,
+    /// gives 18 and brings the halfword's `<6>`, bit 22, to `<0>`
+    /// (contract G2 appendix A1.2).
+    pub fn index_rotate(wide: bool) -> u32 {
+        if wide { 40 - 6 } else { INDEX_ROTATE }
+    }
     /// The halfword's register, `<8:6>`, that names the local block:
     /// `QADLOC` in `QADCM1` (`uc-macrocode.lisp:129-137`).
     pub const LOCAL: u32 = 5;
@@ -491,13 +545,16 @@ pub mod macro_dispatch {
     }
 
     /// The operand address a fused return arms for `rotated`, the halfword
-    /// rotated by [`INDEX_ROTATE`], whose entry is `entry`: the register
-    /// from `<2:0>` of the index and delta from `<31:26>`, the halfword's
-    /// `<8:6>` and `<5:0>`.
-    pub fn operand(entry: u32, rotated: u32) -> Option<super::Operand> {
-        let register = rotated & 7;
-        (entry & OPERAND != 0 && (register == LOCAL || register == ARG))
-            .then_some(super::Operand { arg: register == ARG, delta: (rotated >> 26) as u8 })
+    /// rotated by `index_rotate` ([`index_rotate`]), whose entry is
+    /// `entry`: the register from `<2:0>` of the index and delta from the
+    /// six bits at `index_rotate`, `<31:26>` in a ring of 32 and `<39:34>`
+    /// in one of 40, the halfword's `<8:6>` and `<5:0>`.
+    pub fn operand(entry: u32, rotated: super::Word, index_rotate: u32) -> Option<super::Operand> {
+        let register = rotated as u32 & 7;
+        (entry & OPERAND != 0 && (register == LOCAL || register == ARG)).then_some(super::Operand {
+            arg: register == ARG,
+            delta: (rotated >> index_rotate) as u8 & 0o77,
+        })
     }
 }
 
@@ -618,12 +675,13 @@ impl MacroDispatch {
     }
 
     /// The fused return ([`macro_dispatch`]) for a pop of `popped`, with
-    /// `rotated` the word M 31 gives rotated by [`macro_dispatch::INDEX_ROTATE`]
-    /// under the location counter as the main loop's dispatch would see it:
+    /// `rotated` the word M 31 gives rotated by `index_rotate`
+    /// ([`macro_dispatch::index_rotate`]) under the location counter as
+    /// the main loop's dispatch would see it:
     /// the handler's address, whether the popped word stays on the stack,
     /// and the operand address it arms. The engine has checked everything
     /// the microinstruction does; `None` is today's return.
-    pub fn fused_return(&self, popped: u32, rotated: u32) -> Option<Fused> {
+    pub fn fused_return(&self, popped: u32, rotated: Word, index_rotate: u32) -> Option<Fused> {
         use macro_dispatch::{ENABLE, N, P, R, main};
         if self.register & ENABLE == 0
             || popped & (1 << 14) == 0
@@ -631,14 +689,14 @@ impl MacroDispatch {
         {
             return None;
         }
-        let entry = self.entries[(rotated & (macro_dispatch::ENTRIES as u32 - 1)) as usize];
+        let entry = self.entries[(rotated as usize) & (macro_dispatch::ENTRIES - 1)];
         if entry & (R | P) != 0 {
             return None;
         }
         Some(Fused {
             handler: (entry & 0o37777) as u16,
             keep: entry & N == 0,
-            operand: macro_dispatch::operand(entry, rotated),
+            operand: macro_dispatch::operand(entry, rotated, index_rotate),
         })
     }
 
@@ -949,8 +1007,18 @@ impl Default for Timers {
 /// pointer, 16K words.
 pub const PDL_WORDS: usize = 16 * 1024;
 
-/// The level-2 map's words on the largest machine, QUUX: 64 blocks of 32.
-pub const L2_MAP_WORDS: usize = 2048;
+/// The level-2 map's words on the largest machine, QUUX revision 13: 128
+/// blocks of 32 (contract G2 §2.6, A1.7). Revision 12 has 64 of them.
+pub const L2_MAP_WORDS: usize = 4096;
+
+/// The level-1 map's entries on the largest machine, QUUX revision 13,
+/// indexed by `VA<27:15>` (A1.7). The CADR and revision 12 have 2,048,
+/// indexed by `VMA<23:13>`.
+pub const L1_MAP_WORDS: usize = 8192;
+
+/// The dispatch memory's entries on the largest machine, QUUX revision
+/// 13 (contract G2 §2.4, A1.4); [`Geometry::dmem_words`].
+pub const DMEM_WORDS: usize = 4096;
 
 /// Why a microcycle could not complete.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -969,6 +1037,11 @@ pub enum Halt {
 /// flags in 29:26, and `rtl` holds the byte-mode flags on page FLAG --- so
 /// this is the mask that leaves the register the engines can be held to.
 pub const LC_COUNTER: u32 = 0o377777777;
+
+/// Revision 13's location counter, `LC<29:0>`: a byte address, the word
+/// `<29:2>`, the halfword `<1>` and the byte `<0>` (contract G2 §2.1,
+/// appendix A1.6). [`Geometry::lc_counter`].
+pub const LC_COUNTER_13: u32 = (1 << 30) - 1;
 
 #[derive(Clone)]
 pub struct Machine {
@@ -1005,7 +1078,9 @@ pub struct Machine {
     // the netlist's RAMs.
     pub amem: [Word; 1024],
     pub mmem: [Word; 32],
-    pub dmem: [u32; 2048],
+    /// The dispatch memory: 2,048 entries, and room for revision 13's
+    /// 4,096 ([`Geometry::dmem_words`]). On the heap, as the maps are.
+    pub dmem: Box<[u32; DMEM_WORDS]>,
     /// The PDL buffer: 1,024 words on the CADR, and room for the largest
     /// QUUX's, [`PDL_WORDS`]; [`Geometry::pdl_bits`] says how much of it the
     /// machine has. On the heap, as main memory is: 16K words would make
@@ -1024,22 +1099,40 @@ pub struct Machine {
     pub opc: u16,
     /// Location counter.  The 26 bits of address [`LC_COUNTER`] leaves, plus
     /// NEED-FETCH in bit 31 and the interrupt-control flags mirrored in bits
-    /// 29:26.
+    /// 29:26. On revision 13 the 30 bits of [`LC_COUNTER_13`] and
+    /// NEED-FETCH in bit 31, the flags not mirrored: the location counter
+    /// source reads them from [`Machine::interrupt_control`] (A1.6).
     pub lc: u32,
     pub vma: Word,
     pub md: Word,
+    /// The four flags of INTERRUPT-CONTROL at `<29:26>`, as the CADR's
+    /// output bus carries them: LC byte mode, `PROG.UNIBUS.RESET`,
+    /// `INT.ENABLE` and `SEQUENCE.BREAK`. Revision 13 takes them from
+    /// `<37:34>` and reads them there (A1.6), and keeps them here at
+    /// `<29:26>` all the same.
     pub interrupt_control: u32,
     /// `IR<41:32>` of the last DISPATCH, readable as functional source 0.
     pub dispatch_constant: u16,
+    /// Revision 13's fixnum overflow flag (contract G2 §2.2, A1.3): loaded
+    /// by every ALU-class microinstruction that executes, 1 when its
+    /// function is arithmetic (`IR<8:3>` 20-37) and the 33-bit result over
+    /// the sign-extended `M<31:0>` and `A<31:0>` has bit 32 unlike bit 31,
+    /// 0 otherwise; JUMP, DISPATCH and BYTE words and an inhibited word
+    /// leave it. Jump condition 10 tests it. Never set on a 32-bit machine.
+    pub overflow: bool,
 
     /// The widths of the map and the PDL buffer, [`Geometry::CADR`] unless
     /// the run chose another machine.
     pub geometry: Geometry,
-    /// 2048 five-bit entries, addressed by `VMA<23:13>`.
-    pub l1_map: [u32; 2048],
+    /// 2048 five-bit entries, addressed by `VMA<23:13>`; six bits on QUUX;
+    /// on revision 13 8,192 seven-bit ones, addressed by `VA<27:15>`
+    /// ([`Machine::translate`]).
+    pub l1_map: Box<[u32; L1_MAP_WORDS]>,
     /// 24-bit entries, addressed by the level-1 output and `VMA<12:8>`:
-    /// 1024 on the CADR, and room for the largest machine's, QUUX's 2048.
-    pub l2_map: [u32; L2_MAP_WORDS],
+    /// 1024 on the CADR and 2048 on QUUX; on revision 13 4,096 28-bit
+    /// ones, addressed by the level-1 output and `VA<14:10>`
+    /// ([`Machine::translate`]).
+    pub l2_map: Box<[u32; L2_MAP_WORDS]>,
     pub main: Vec<Word>,
     /// What the last bus cycles left in the error register; see
     /// [`bus_error`]. A write of the error status register clears it,
@@ -1173,7 +1266,7 @@ impl Machine {
             prog_boot: false,
             amem: [0; 1024],
             mmem: [0; 32],
-            dmem: [0; 2048],
+            dmem: Box::new([0; DMEM_WORDS]),
             pdl: vec![0; PDL_WORDS],
             spc: [0; 32],
             spcptr: 0,
@@ -1186,6 +1279,7 @@ impl Machine {
             md: 0,
             interrupt_control: 0,
             dispatch_constant: 0,
+            overflow: false,
             geometry: Geometry::CADR,
             timers: Timers::new(),
             macro_dispatch: MacroDispatch::default(),
@@ -1196,8 +1290,8 @@ impl Machine {
             write_buffer_empty_at: 0,
             store_log: None,
             register_log: None,
-            l1_map: [0; 2048],
-            l2_map: [0; L2_MAP_WORDS],
+            l1_map: Box::new([0; L1_MAP_WORDS]),
+            l2_map: Box::new([0; L2_MAP_WORDS]),
             main: vec![0; boards << 16],
             bus_error: 0,
             interrupt_status: busint::interrupt_status::LOCAL_ENABLE,
@@ -1367,6 +1461,9 @@ impl Machine {
     /// 2 as `-VMO`.  That matters to `src/chip.rs`, which holds cells; this
     /// holds values, so it does not appear here.
     pub fn translate(&self, vaddr: u32) -> Translation {
+        if self.geometry.wide() {
+            return self.translate_13(vaddr);
+        }
         // Only VMA<23:0> reaches MAPI; `ir.bits` writes level 2 from the same
         // 24 bits.
         let vaddr = vaddr & 0x00ff_ffff;
@@ -1385,6 +1482,68 @@ impl Machine {
             // with `WRCYC`.
             write_permitted: l2_data & (1 << 22) != 0,
             access_permitted: l2_data & (1 << 23) != 0,
+        }
+    }
+
+    /// **Revision 13's map** (contract G2 §2.6, appendix A1.7): two levels,
+    /// as today, over a 28-bit virtual address and 1024-word pages.
+    ///
+    /// | level | entries | width | addressed by |
+    /// |---|---|---|---|
+    /// | 1 | 8,192 | 7 | `VA<27:15>` |
+    /// | 2 | 4,096 | 28 | `{L1<6:0>, VA<14:10>}` |
+    ///
+    /// The physical word address is `{L2<17:0>, VA<9:0>}`, 28 bits. The
+    /// level-2 entry is PHT word 2's: `<27>` read access, `<26>` write
+    /// access (the access code `<27:26>`), `<23:22>` the meta bits a
+    /// DISPATCH takes, `<17:0>` the physical page. An address with
+    /// `<31:28>` not zero reads block `177`, the invalid block, whatever
+    /// level 1 holds there, so that the map-miss path runs and nothing
+    /// aliases the low 256 M words; `<39:32>` never reaches the map. The
+    /// appendix's own words for the gate: "the level-1 output reads `177`,
+    /// whatever the RAM holds".
+    fn translate_13(&self, vaddr: u32) -> Translation {
+        let l1_data = self.map_level_1_13(vaddr);
+        let l2_data = self.l2_map[map_level_2_index_13(l1_data, vaddr)];
+        let page = l2_data & 0o777777;
+        Translation {
+            physical: (page << 10) | (vaddr & 0o1777),
+            page,
+            l1_data,
+            l2_data,
+            write_permitted: l2_data & (1 << 26) != 0,
+            access_permitted: l2_data & (1 << 27) != 0,
+        }
+    }
+
+    /// Revision 13's level-1 output for the address `addr` (A1.7): the
+    /// entry at `VA<27:15>`, or block `177` when `<31:28>` is not zero.
+    pub fn map_level_1_13(&self, addr: u32) -> u32 {
+        if addr >> 28 != 0 {
+            MAP_INVALID_BLOCK_13
+        } else {
+            self.l1_map[(addr >> 15) as usize & (L1_MAP_WORDS - 1)] & 0o177
+        }
+    }
+
+    /// Revision 13's map write (A1.7), from the word in `VMA` at the
+    /// address `addr`, which is `MD` (or `VMA` in the microcycle after a
+    /// memory start, as `MAPI` is on every machine): `VMA<29>` writes level
+    /// 1 at `addr<27:15>` with `VMA<38:32>`; `VMA<28>` writes level 2 at
+    /// level 1's output for `addr` and `addr<14:10>` with `VMA<27:0>`. With
+    /// both, level 1 only: the CADR's write of level 2 at block 0 is its
+    /// RAMs' artefact, and on QUUX block 0 is wired. An address with
+    /// `<31:28>` not zero writes neither, or it would land in the invalid
+    /// block or map an alias.
+    pub fn write_map_13(&mut self, vma: Word, addr: u32) {
+        if addr >> 28 != 0 {
+            return;
+        }
+        if vma & (1 << 29) != 0 {
+            self.l1_map[(addr >> 15) as usize & (L1_MAP_WORDS - 1)] = (vma >> 32) as u32 & 0o177;
+        } else if vma & (1 << 28) != 0 {
+            let l1 = self.map_level_1_13(addr);
+            self.l2_map[map_level_2_index_13(l1, addr)] = vma as u32 & MAP_LEVEL_2_13;
         }
     }
 
@@ -1416,7 +1575,11 @@ impl Machine {
     /// first nanoseconds; a CADR running the two-instruction store would
     /// settle it.  Microcode 323 writes the levels in separate stores
     /// (`LEVEL-1-MAP-MISS` in `uc-page-fault.lisp`), so the band never asks.
-    pub fn write_map(&mut self, vma: u32, md: u32) {
+    pub fn write_map(&mut self, vma: Word, md: Word) {
+        if self.geometry.wide() {
+            return self.write_map_13(vma, md as u32);
+        }
+        let (vma, md) = (vma as u32, md as u32);
         let l1_index = (md >> 13) as usize & 0o3777;
         if vma & (1 << 26) != 0 {
             self.l1_map[l1_index] = self.geometry.l1_from_vma(vma);
@@ -2150,11 +2313,26 @@ impl Default for Machine {
 /// `MAP[MD]` before any memory cycle is what would fix it.
 pub const LVMO_AT_POWER_ON: u32 = (1 << 23) | (1 << 22) | 0x3fff;
 
+/// Revision 13's invalid level-2 block, whose 32 entries the software
+/// keeps 0: what level 1 reads for an address with `<31:28>` not zero
+/// (A1.7; today's `A-LEVEL-1-MAP-INVALID`, `77`).
+pub const MAP_INVALID_BLOCK_13: u32 = 0o177;
+
+/// Revision 13's level-2 entry: 28 bits, the 18-bit physical page and the
+/// ten bits above it (A1.7, which corrects G1 §3.3's 29).
+pub const MAP_LEVEL_2_13: u32 = (1 << 28) - 1;
+
+/// Revision 13's level-2 index: the block level 1 gives, and `VA<14:10>`
+/// in it (A1.7).
+pub fn map_level_2_index_13(l1: u32, addr: u32) -> usize {
+    (((l1 & 0o177) << 5) | ((addr >> 10) & 0o37)) as usize
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Translation {
-    /// 22-bit physical address.
+    /// 22-bit physical address; 28 bits on revision 13.
     pub physical: u32,
-    /// 14-bit physical page number.
+    /// 14-bit physical page number; 18 bits on revision 13, of 1024 words.
     pub page: u32,
     pub l1_data: u32,
     pub l2_data: u32,
@@ -2194,6 +2372,7 @@ impl Machine {
             md,
             interrupt_control,
             dispatch_constant,
+            overflow,
             geometry,
             timers,
             macro_dispatch,
@@ -2236,7 +2415,10 @@ impl Machine {
         w.bool(*prog_boot);
         w.words(amem);
         w.words(mmem);
-        w.u32s(dmem);
+        // The dispatch memory and the two map levels at the machine's
+        // sizes: a 32-bit machine's checkpoint keeps the bytes it had.
+        let wide = geometry.wide();
+        w.u32s(&dmem[..geometry.dmem_words()]);
         w.words(pdl);
         w.u32s(spc);
         w.u8(*spcptr);
@@ -2249,7 +2431,7 @@ impl Machine {
         w.word(*md);
         w.u32(*interrupt_control);
         w.u16(*dispatch_constant);
-        w.u32s(l1_map);
+        w.u32s(if wide { &l1_map[..] } else { &l1_map[..2048] });
         w.u8(geometry.l1_bits as u8);
         w.u8(geometry.pdl_bits as u8);
         w.bool(geometry.muldiv);
@@ -2257,15 +2439,16 @@ impl Machine {
         w.bool(geometry.macro_dispatch);
         // A wider word says so, which a 32-bit machine's checkpoint never
         // has: its bytes stay what they were.
-        if geometry.wide() {
+        if wide {
             w.u8(geometry.word_bits as u8);
+            w.bool(*overflow);
         }
         timers.save(w);
         macro_dispatch.save(w);
         rtc.save(w);
         file_device.save(w);
         w.bool(*dma_written);
-        w.u32s(l2_map);
+        w.u32s(if wide { &l2_map[..] } else { &l2_map[..2048] });
         w.u32(self.memory_boards() as u32);
         w.words(main);
         w.u16(*bus_error);
@@ -2314,7 +2497,10 @@ impl Machine {
         self.prog_boot = r.bool()?;
         r.words_into(&mut self.amem)?;
         r.words_into(&mut self.mmem)?;
-        r.u32s_into(&mut self.dmem)?;
+        // Revision 13's sizes on a 40-bit machine, the only one there is.
+        let wide = r.word_bits() > 32;
+        let sizes = |big: usize| if wide { big } else { 2048 };
+        r.u32s_into(&mut self.dmem[..sizes(DMEM_WORDS)])?;
         r.words_into(&mut self.pdl)?;
         r.u32s_into(&mut self.spc)?;
         // Pointers into the SPC stack and the PDL buffer: `SPCPTR<4:0>`,
@@ -2342,7 +2528,7 @@ impl Machine {
         self.md = r.word()?;
         self.interrupt_control = r.u32()?;
         self.dispatch_constant = r.u16()?;
-        r.u32s_into(&mut self.l1_map)?;
+        r.u32s_into(&mut self.l1_map[..sizes(L1_MAP_WORDS)])?;
         let (l1_bits, pdl_bits, muldiv) = (r.u8()? as u32, r.u8()? as u32, r.bool()?);
         let tick = r.bool()?;
         let fused = r.bool()?;
@@ -2356,6 +2542,7 @@ impl Machine {
                     "{said}-bit words, read as {word_bits}-bit ones"
                 )));
             }
+            self.overflow = r.bool()?;
         }
         self.timers = Timers::load(r)?;
         self.macro_dispatch.load(r)?;
@@ -2364,16 +2551,12 @@ impl Machine {
         self.dma_written = r.bool()?;
         // The CADR, or a QUUX with a PDL buffer of 1K to 16K words.
         // Revision 12, or 11 without the fused return.
-        // A 40-bit word only on a QUUX, which a test builds (contract G2
-        // §2.1).
+        // A 40-bit word on revision 13 (contract G2 §2.1).
         self.geometry = match (word_bits, l1_bits, pdl_bits, muldiv, tick, fused) {
             (32, 5, 10, false, false, false) => Geometry::CADR,
-            (32 | 40, 6, 10..=14, true, true, true) => {
-                Geometry { word_bits, pdl_bits, ..Geometry::QUUX }
-            }
-            (32 | 40, 6, 10..=14, true, true, false) => {
-                Geometry { word_bits, pdl_bits, ..Geometry::QUUX_11 }
-            }
+            (32, 6, 10..=14, true, true, true) => Geometry { pdl_bits, ..Geometry::QUUX },
+            (32, 6, 10..=14, true, true, false) => Geometry { pdl_bits, ..Geometry::QUUX_11 },
+            (40, 7, 10..=14, true, true, true) => Geometry { pdl_bits, ..Geometry::QUUX_13 },
             _ => {
                 return Err(crate::checkpoint::bad(format!(
                     "{word_bits}-bit words, a map of {l1_bits}-bit level-1 entries and a {pdl_bits}-bit PDL buffer, multiply and divide {muldiv}, tick {tick}, fused return {fused}, is no machine's"
@@ -2406,7 +2589,8 @@ impl Machine {
     /// same memory, the same pack under it, the same Chaosnet on it.
     pub fn load(&mut self, r: &mut crate::checkpoint::Reader) -> std::io::Result<()> {
         self.load_to_geometry(r)?;
-        r.u32s_into(&mut self.l2_map)?;
+        let l2 = if self.geometry.wide() { L2_MAP_WORDS } else { 2048 };
+        r.u32s_into(&mut self.l2_map[..l2])?;
         let boards = r.u32()? as usize;
         if boards != self.memory_boards() {
             return Err(crate::checkpoint::bad(format!(

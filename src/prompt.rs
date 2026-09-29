@@ -397,6 +397,18 @@ pub fn main_dump(
     fitted: usize,
     read: impl Fn(usize) -> Option<u32>,
 ) -> Result<String, String> {
+    main_dump_wide(from, words, fitted, |a| read(a).map(u64::from), 32)
+}
+
+/// [`main_dump`] of a machine whose words are `bits` wide, 32 or 40
+/// (contract G2 §2.1): each word in as many hex digits as it has.
+pub fn main_dump_wide(
+    from: usize,
+    words: usize,
+    fitted: usize,
+    read: impl Fn(usize) -> Option<u64>,
+    bits: u32,
+) -> Result<String, String> {
     if from >= PHYSICAL_WORDS {
         return Err(format!(
             "the Xbus carries 22 bits of address and {from:o} is more than that; \
@@ -423,7 +435,7 @@ pub fn main_dump(
             None => return Err(format!("nothing holds {a:o}, though the machine has that word")),
         }
     }
-    Ok(dump(&all, from))
+    Ok(dump_wide(&all, from, bits))
 }
 
 /// How many words a dump writes to a line.
@@ -437,9 +449,17 @@ const PER_LINE: usize = 4;
 /// memory that is mostly one value is a few lines.  The last line is
 /// always written whole, so the dump ends at the address it reached.
 pub fn dump(words: &[u32], from: usize) -> String {
+    let words: Vec<u64> = words.iter().map(|&w| w.into()).collect();
+    dump_wide(&words, from, 32)
+}
+
+/// [`dump`] of words `bits` wide, 32 or 40: each in as many hex digits as
+/// it has, eight or ten, and the four characters of its `<31:0>`.
+pub fn dump_wide(words: &[u64], from: usize, bits: u32) -> String {
+    let digits = bits.div_ceil(4) as usize;
     let mut s = String::new();
     let last = words.len().div_ceil(PER_LINE);
-    let mut above: Option<&[u32]> = None;
+    let mut above: Option<&[u64]> = None;
     let mut starred = false;
     for (i, line) in words.chunks(PER_LINE).enumerate() {
         if above == Some(line) && i + 1 < last {
@@ -453,14 +473,14 @@ pub fn dump(words: &[u32], from: usize) -> String {
         above = Some(line);
         write!(s, "{:06o} ", from + i * PER_LINE).unwrap();
         for w in line {
-            write!(s, " {w:08x}").unwrap();
+            write!(s, " {w:0digits$x}").unwrap();
         }
         for _ in line.len()..PER_LINE {
-            s.push_str("         ");
+            s.push_str(&" ".repeat(digits + 1));
         }
         s.push(' ');
         for w in line {
-            write!(s, " {}", characters(*w)).unwrap();
+            write!(s, " {}", characters(*w as u32)).unwrap();
         }
         s.push('\n');
     }
@@ -470,9 +490,18 @@ pub fn dump(words: &[u32], from: usize) -> String {
 /// Registers, one to a line: the name, the value in hex, and the four
 /// characters it holds.
 pub fn registers(rows: &[(&str, u32)]) -> String {
+    let rows: Vec<(&str, u64)> = rows.iter().map(|&(n, v)| (n, v.into())).collect();
+    registers_wide(&rows, 32)
+}
+
+/// [`registers`] of a machine whose words are `bits` wide, 32 or 40: each
+/// value in as many hex digits as a word has, and the four characters of
+/// its `<31:0>`.
+pub fn registers_wide(rows: &[(&str, u64)], bits: u32) -> String {
+    let digits = bits.div_ceil(4) as usize;
     let mut s = String::new();
     for (name, v) in rows {
-        writeln!(s, "{name:<18} {v:08x}  {}", characters(*v)).unwrap();
+        writeln!(s, "{name:<18} {v:0digits$x}  {}", characters(*v as u32)).unwrap();
     }
     s
 }

@@ -114,6 +114,30 @@ fn registers_are_written_in_hex_and_as_characters() {
     );
 }
 
+/// **A 40-bit machine's words are written whole** (contract G2 §2.1):
+/// ten hex digits, the tag `<39:32>` among them, and the four characters
+/// of `<31:0>`; a short last line keeps its columns at that width too.
+#[test]
+fn a_40_bit_word_is_written_in_ten_digits() {
+    let tagged = 0x25_4c42_414c;
+    let s = muir::prompt::registers_wide(&[("MD", tagged), ("PC", 0o4321)], 40);
+    let lines: Vec<&str> = s.lines().collect();
+    assert_eq!(
+        lines,
+        ["MD                 254c42414c  LABL", "PC                 00000008d1  .\u{3bb}.."]
+    );
+    let d = muir::prompt::dump_wide(&[tagged, 0xff_0000_0000], 0o20, 40);
+    assert_eq!(d, "000020  254c42414c ff00000000                        LABL ....\n");
+    let full = muir::prompt::dump_wide(&[tagged; 4], 0, 40);
+    let column = |l: &str| l.find("  LABL").unwrap();
+    assert_eq!(column(full.lines().next().unwrap()), column(d.lines().next().unwrap()));
+    let main = muir::prompt::main_dump_wide(0, 2, 2, |a| [tagged, 1].get(a).copied(), 40);
+    assert_eq!(
+        main.unwrap(),
+        "000000  254c42414c 0000000001                        LABL \u{2193}...\n"
+    );
+}
+
 /// **The Lisp Machine's character set is the one MIT's own character
 /// table gives**: 001 to 037 the graphics, by the table's names for them,
 /// 040 to 176 ASCII, and the keys and font switches from 200 up printing
