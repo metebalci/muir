@@ -703,11 +703,12 @@ release's trimmed one.
 **What a System 100 band does with an address on that subnet is measured,
 not unverified: it never reaches a listener.** The band's routing table is
 96 entries --- `(DEFCONST ROUTING-TABLE-SIZE 96.)` at
-`vendor/system-100-0/sys/network/chaos/chsncp.lisp:253`, where the release
-that continues the line has `256.` at
-`vendor/system-304-0/sys-304-0/network/chaos/chsncp.lisp:253` --- and
+`vendor/system-100-0/sys/network/chaos/chsncp.lisp:253`, where muir-sys's
+System 1002 has `256.` at
+`vendor/system-1002/sys/network/chaos/chsncp.lisp:259` --- and
 `RESET-ROUTING-TABLE` writes `(AREF ROUTING-TABLE MY-SUBNET)`, and the cost
-and type tables likewise, with no bounds test (same file, lines 311 to 317);
+and type tables likewise, with no bounds test (System 100's file, lines 311
+to 317);
 the send path does test a subnet against the table's length (lines 1934 and
 1937). So a subnet of 96 or more is past the end of the table the
 reset writes. Booted on `micro` off the System 100 pack with no

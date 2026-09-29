@@ -160,7 +160,7 @@ pub fn vendor(parts: &[&str]) -> Option<PathBuf> {
 /// **The name says which release**, because a fact read out of one
 /// release's sources is not a fact about another's: `window/shwarm.lisp`,
 /// for one, carries the display geometry as `DEFCONST`s here and does not
-/// in System 304, the release that continues the line.
+/// in LM-3's later System 304.
 pub fn release(file: &str) -> Option<String> {
     let p = vendor(&["system-100-0", "sys", file])?;
     Some(String::from_utf8_lossy(&std::fs::read(p).unwrap()).into_owned())
