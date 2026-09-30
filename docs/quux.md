@@ -381,8 +381,9 @@ CADR's all ones.
 ## QUUX drops the delay lines
 
 **A QUUX microcycle is a fixed number of 10 ns ticks, always**: `sync`,
-`--sync-cycle-ticks` of them, 4 unless a board's fit says otherwise. The
-CADR's clock is a string of delay-line phases: the read phase ends at the
+`--sync-cycle-ticks` of them, 4, the DE25-Nano's, unless a board's fit
+says otherwise: the Arty Z7-20 runs revision 12 at 4 and revision 13
+at 5. The CADR's clock is a string of delay-line phases: the read phase ends at the
 tap the mode register's `SPEED1` and `SPEED0` choose (`mit/cadr/ir.bits`:
 "00 Extra slow, 01 Slow, 10 Normal, 11 Fast"), and a 60 ns restart follows,
 145 ns at normal speed, which muir-fpga's fabric replays as 15 ticks. QUUX
@@ -400,8 +401,8 @@ failing path, in 11,974 LUTs; an earlier fit of
 the same design measured the longest chains as MD through both
 map levels and the M bus to the control-store address, 28.0 ns of 40, and
 the multiplier, 24.1 ns of the 30 a path after the scratchpads gets. Both
-boards run four ticks: three, 30 ns, is out of the DE25-Nano's reach by
-the divider alone, a `DIV` of `MD` needing its word 17 ticks before its
+boards run revision 12 at four ticks: three, 30 ns, is out of the
+DE25-Nano's reach by the divider alone, a `DIV` of `MD` needing its word 17 ticks before its
 hold ends. The DE25-Nano at four ticks meets them at every corner, a worst
 setup slack of +0.180 ns at `2535395`, its thinnest path the microsecond
 clock's count under a constraint a tick tighter than the microcycle's (an
@@ -409,6 +410,14 @@ earlier fit's longest chain was MD through the maps to the next address at
 16.1 ns); the level-1 map's MLAB write-to-read, which Quartus does not time,
 is **unverified** by timing analysis, the rest of that path having 30 ns and
 measuring about 16.
+
+**Revision 13 on the Arty Z7-20 runs at five ticks**, 50 ns: its map, two
+levels through the memory path's decode, misses four ticks on that part by
+about a nanosecond and meets five with a setup slack of +0.153 ns
+(muir-fpga's commit `ccc3d12`). The tick stays 10 ns, so the clocks that
+count ticks keep true time. The DE25-Nano runs revision 13 at four. muir's
+default stays 4 for both revisions; `--sync-cycle-ticks 5` is the Arty's
+revision 13.
 
 What the microcode sees does not change, only the time: every register is
 clocked at the one edge and the late writes land one edge later, as the
@@ -1682,9 +1691,14 @@ settle it.
 ## Revision 13: the 40-bit word
 
 muir has QUUX revision 13 beside revision 12: `Geometry::QUUX_13` in the
-library, which no flag selects and no executable runs, and whose system no
-test here boots. Its word is 40 bits: the tag `<39:32>` over the field
-`<31:0>`. What follows is what muir's revision 13 does and which tests hold
+library, whose system no test here boots. `quux` runs it when the
+environment variable `MUIR_QUUX_REVISION` is `13`; unset or `12` is
+revision 12, and any other value is refused at the start. The switch is not
+a documented flag: `--help` and the manual do not name it, since it goes
+when revision 12 is retired (contract G2 §8.1). `cadr` does not read it
+(`tests/quux_revision.rs`). The start says which revision runs, in its
+`machine:` line, and on `rtl` the cache's 8-word lines. Its word is 40
+bits: the tag `<39:32>` over the field `<31:0>`. What follows is what muir's revision 13 does and which tests hold
 it; everything it does not mention is revision 12's.
 
 **The processor** (`tests/revision_13.rs`, on `micro` and `rtl`):
@@ -1754,14 +1768,19 @@ the width: every word 5 bytes, `<7:0>` first, so that main memory in it is
 packed storage byte for byte; the larger dispatch memory and map, the
 overflow flag, and the rest. A revision-13 machine refuses a checkpoint of
 32-bit words, revision 12's among them. A 32-bit machine's checkpoint is
-version 49 as before.
+version 49 as before. `quux` refuses a checkpoint of the other revision,
+each way, at the start, naming the revision that wrote it and the switch
+that resumes it (`tests/quux_revision.rs`).
 
 **The `.mcr`** at 40 bits has a dispatch memory section of `10000`
 entries and A memory as section 5, each location two 32-bit words,
 `<31:0>` and then `<39:32>` in `<7:0>`; the parser reads both, in
 partition order as in MIT's.
 
-At 32 M words of main memory muir holds 256 MiB for it, 8 bytes a word. A
+**Main memory** is 32 M words by default, the boards' (G2 §3), 512 of
+`--main-memory-boards`' 64K-word boards, which reach 1,024, 64 M words
+(G1 §3.2), where revision 12's stop at 60 (`tests/quux_revision.rs`).
+At 32 M words muir holds 256 MiB for it, 8 bytes a word. A
 checkpoint's body is 168,204,521 bytes, main memory 5 bytes a word; the
 file packs runs of zeros, and is 248 bytes of an empty memory and
 167,772,410 of one full of other words, against 8,388,854 for revision

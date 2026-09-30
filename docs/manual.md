@@ -994,7 +994,7 @@ Default: 380,290, the slower board's.
 `sync` timing. It is a board's: the number its fit proves its longest path
 settles in.
 
-Default: 4, the Arty Z7-20's.
+Default: 4, the DE25-Nano's, and the Arty Z7-20's at revision 12.
 
 ### `--tv netlist|model`
 

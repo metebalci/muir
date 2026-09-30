@@ -41,6 +41,15 @@ pub const QUUX_PROM_BASE: u16 = 0o36000;
 /// Physical pages above the memory are devices, or nothing.
 pub const MAIN_WORDS: usize = 2 * 1024 * 1024;
 
+/// Revision 13's main memory by default: 32 M words, what both boards
+/// have (contract G2 §3), 512 boards of 64K.
+pub const MAIN_WORDS_13: usize = 32 * 1024 * 1024;
+
+/// The most main memory revision 13 has: 64 M words, 1,024 boards of 64K
+/// (contract G1 §3.2, "32 M words to begin, up to 64 M"). Its physical
+/// space has nothing from there to the frame buffer window.
+pub const MAX_MAIN_WORDS_13: usize = 64 * 1024 * 1024;
+
 /// A word of the datapath and of main memory: 32 bits on the CADR and on
 /// QUUX to revision 12, 40 on a machine whose [`Geometry::word_bits`] says
 /// so (contract G2 §2.1), held in 64 bits either way. A, M, the PDL
@@ -294,6 +303,25 @@ impl Geometry {
     pub fn l1_from_vma(self, vma: u32) -> u32 {
         let low = (vma >> 27) & 0o37;
         if self.l1_bits > 5 { low | ((vma >> 24) & 1) << 5 } else { low }
+    }
+
+    /// QUUX's revision, from its MACHINE-ID's `<15:4>`: 11, 12 or 13, and
+    /// `None` on the CADR, which has no MACHINE-ID.
+    pub fn revision(self) -> Option<u32> {
+        self.machine_id.map(|id| id >> 4 & 0o7777)
+    }
+
+    /// Main memory by default, in 64K-word boards: [`MAIN_WORDS`], and
+    /// [`MAIN_WORDS_13`] on a 40-bit machine.
+    pub fn default_memory_boards(self) -> usize {
+        (if self.wide() { MAIN_WORDS_13 } else { MAIN_WORDS }) >> 16
+    }
+
+    /// The most main memory, in 64K-word boards: sixty where the Xbus I/O
+    /// space begins, [`busint::MAX_MEMORY_BOARDS`], and
+    /// [`MAX_MAIN_WORDS_13`] on a 40-bit machine.
+    pub fn max_memory_boards(self) -> usize {
+        if self.wide() { MAX_MAIN_WORDS_13 >> 16 } else { busint::MAX_MEMORY_BOARDS }
     }
 
     /// A word's bits, [`Geometry::word_bits`] of ones.
@@ -1267,10 +1295,17 @@ impl Machine {
     /// what `--main-memory-boards` sets on every engine. From one to
     /// [`busint::MAX_MEMORY_BOARDS`], where the Xbus I/O space begins.
     pub fn with_memory_boards(boards: usize) -> Self {
+        Self::with_geometry(Geometry::CADR, boards)
+    }
+
+    /// A machine of `geometry` with `boards` 64K-word boards of main
+    /// memory, from one to [`Geometry::max_memory_boards`]: past the
+    /// CADR's sixty on revision 13.
+    pub fn with_geometry(geometry: Geometry, boards: usize) -> Self {
         assert!(
-            (1..=busint::MAX_MEMORY_BOARDS).contains(&boards),
-            "{boards} memory boards: the backplane holds 1 to {}",
-            busint::MAX_MEMORY_BOARDS
+            (1..=geometry.max_memory_boards()).contains(&boards),
+            "{boards} memory boards: the machine holds 1 to {}",
+            geometry.max_memory_boards()
         );
         Machine {
             prom: vec![Insn::new(0); PROM_WORDS],
@@ -1297,7 +1332,7 @@ impl Machine {
             interrupt_control: 0,
             dispatch_constant: 0,
             overflow: false,
-            geometry: Geometry::CADR,
+            geometry,
             timers: Timers::new(),
             macro_dispatch: MacroDispatch::default(),
             rtc: Rtc::Host,

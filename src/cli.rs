@@ -2533,8 +2533,7 @@ fn machine(
         &crate::file_device::Mounts,
     ),
 ) -> Machine {
-    let mut m = Machine::with_memory_boards(memory_boards);
-    m.geometry = geometry;
+    let mut m = Machine::with_geometry(geometry, memory_boards);
     m.file_device.mounts = file_roots.clone();
     // Counted from the machine's clock at power-on, which is now.
     m.rtc = match rtc {
@@ -4209,6 +4208,56 @@ fn refuse_other_executable((path, c): &(PathBuf, Checkpoint), exe: &str) {
     }
 }
 
+/// **Which revision `quux` runs** (contract G2 §8.1): `geometry` as it
+/// is, revision 12, unless `MUIR_QUUX_REVISION` says 13. Unset or `12` is
+/// revision 12, the released machine; any other value is refused at the
+/// start, naming the two. `cadr` does not read it. The switch is not a
+/// documented flag: it goes when revision 12 is retired, and a bitstream,
+/// which muir-fpga builds for one revision, could not carry it.
+fn quux_revision(geometry: crate::machine::Geometry) -> crate::machine::Geometry {
+    use crate::machine::Geometry;
+    if geometry != Geometry::QUUX {
+        return geometry;
+    }
+    match std::env::var_os("MUIR_QUUX_REVISION") {
+        None => geometry,
+        Some(v) if v == "12" => geometry,
+        Some(v) if v == "13" => Geometry::QUUX_13,
+        Some(v) => {
+            eprintln!(
+                "{}: MUIR_QUUX_REVISION={:?}: revision 12 or 13",
+                executable(),
+                v.to_string_lossy()
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
+/// **A checkpoint of the other revision is refused**, naming the revision
+/// that wrote it and how to resume it: a revision-13 checkpoint's words
+/// are 40 bits and its map, dispatch memory and devices revision 13's,
+/// and the reverse (contract G2 §2.8). Settled, like
+/// [`refuse_other_executable`], before anything is built.
+fn refuse_other_revision((path, c): &(PathBuf, Checkpoint), geometry: crate::machine::Geometry) {
+    if c.engine == "chip" {
+        return;
+    }
+    let Ok(saved) = crate::machine::Machine::checkpointed_geometry_at(&c.body, c.word_bits) else {
+        return;
+    };
+    // Another revision, 11, is the library's alone, and refused by
+    // `refuse_machine`.
+    if let (Some(theirs @ (12 | 13)), Some(ours)) = (saved.revision(), geometry.revision())
+        && theirs != ours
+    {
+        let p = path.display();
+        usage(&format!(
+            "--resume {p} is revision {theirs}'s, and this is revision {ours}: MUIR_QUUX_REVISION={theirs} quux --resume {p}"
+        ));
+    }
+}
+
 /// A checkpoint of this executable's machine with another geometry --- a
 /// QUUX whose PDL buffer is not this one's --- is refused rather than
 /// loaded: the map and the PDL in it are that machine's.
@@ -5149,9 +5198,15 @@ fn time_chip(
 /// refused by name, saying which executable takes it, and so is a
 /// checkpoint the other one wrote. `netlists` are the boards `--chip`
 /// builds, which only `cadr` takes and so only `cadr` passes.
+///
+/// `quux` is revision 12 unless `MUIR_QUUX_REVISION` says 13
+/// ([`quux_revision`]), read here once, so that everything after it ---
+/// the start's lines, main memory's default and limits, a resume's
+/// refusal, the machine --- is the revision's.
 pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
     let exe = executable_of(geometry);
     let _ = EXECUTABLE.set(exe);
+    let geometry = quux_revision(geometry);
     let mut which: Option<Which> = None;
     let mut packs: Vec<Pack> = Vec::new();
     // The glass TTYs asked for, in the order the flags came. Bound after
@@ -5180,7 +5235,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
     let mut resume: Option<PathBuf> = None;
     let mut stop_at: Option<u16> = None;
     let mut stop_at_prom: Option<u16> = None;
-    let mut boards: usize = 32;
+    let mut boards: usize = geometry.default_memory_boards();
     let mut boards_given = false;
     let mut main_memory_model = false;
     let mut io = true;
@@ -5391,15 +5446,17 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
             // Main memory on every engine, and the backplane on chip: from
             // one board to the sixty the Xbus I/O space leaves room for
             // (`busint::MAX_MEMORY_BOARDS`). Zero is no memory; the model
-            // memory on chip is `--main-memory model`.
+            // memory on chip is `--main-memory model`. Revision 13 has no
+            // Xbus, and its boards reach 64 M words
+            // (`Geometry::max_memory_boards`).
             (None, "--main-memory-boards") => match args.next().and_then(|v| v.parse().ok()) {
-                Some(b) if (1..=crate::busint::MAX_MEMORY_BOARDS).contains(&b) => {
+                Some(b) if (1..=geometry.max_memory_boards()).contains(&b) => {
                     boards = b;
                     boards_given = true;
                 }
                 _ => usage(&format!(
                     "--main-memory-boards wants a count from 1 to {}",
-                    crate::busint::MAX_MEMORY_BOARDS
+                    geometry.max_memory_boards()
                 )),
             },
             (None, "--tv") => match args.next().as_deref() {
@@ -5996,6 +6053,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
     });
     if let Some(r) = &resume {
         refuse_other_executable(r, exe);
+        refuse_other_revision(r, geometry);
     }
     if let Some((path, c)) = &resume {
         if boards_given && boards != c.memory_boards {
@@ -6304,13 +6362,17 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
         }
         // QUUX's main memory is behind its own port, through its cache
         // (contract Q6): `rtl` times both.
-        let quux_rtl = geometry == crate::machine::Geometry::QUUX && which == Which::Rtl;
+        let quux_rtl = geometry.machine_id.is_some() && which == Which::Rtl;
         if quux_rtl {
             let t = memory_timing.unwrap_or(crate::cache::MemoryTiming::NOMINAL);
             writeln!(s, "memory port: a line fill in {} ns, a write in {}", t.read_ns, t.write_ns)
                 .unwrap();
         }
+        // The cache the memory port fits: revision 13 keeps its 8-word
+        // line whatever `--cache` asks for.
+        let layout = crate::memory_port::Layout::of(&geometry);
         if let Some(c) = cache.or(quux_rtl.then_some(crate::cache::CacheConfig::QUUX)) {
+            let c = if quux_rtl { layout.cache(c) } else { c };
             writeln!(
                 s,
                 "cache: {} words, lines of {}, {}-way, a hit in {} ns",
@@ -6318,7 +6380,14 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
             )
             .unwrap();
         }
-        if geometry == crate::machine::Geometry::QUUX {
+        if geometry.revision() == Some(13) {
+            writeln!(
+                s,
+                "machine: quux, revision 13: revision 12 with a 40-bit word, the tag <39:32> over the field <31:0>; a map of two levels over 1024-word pages, 28-bit virtual and physical addresses; a dispatch memory of 4,096 entries; the memory cache's lines of 8 words; the frame buffer window at 1760000000 and the register page at 1777777400"
+            )
+            .unwrap();
+        }
+        if geometry.revision() == Some(12) {
             writeln!(
                 s,
                 "machine: quux, revision 12: a six-bit level-1 map, 63 regions mapped at once, a 16K-word PDL buffer, MUL and DIV in one instruction each, a microsecond clock in the processor, the register page, its boot PROM at control store 36000, main memory and the frame buffer on its own port, its devices reached by their registers, a real-time clock, a file device, three interval timers and reset devices, the register page at 17777400 with block-disk and the video controller on it, and the fused return"

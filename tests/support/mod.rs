@@ -1008,13 +1008,15 @@ pub fn executable(name: &str) -> std::process::Command {
     }
 }
 
-/// The binary at `path`, with stdin closed and `MUIR_RC` naming an empty
-/// file.
+/// The binary at `path`, with stdin closed, `MUIR_RC` naming an empty
+/// file, and no `MUIR_QUUX_REVISION` from the developer's environment:
+/// `quux` is revision 12 unless the test says otherwise.
 fn built(path: Option<&str>, name: &str) -> std::process::Command {
     let Some(path) = path else { panic!("only a test binary is told where {name} is") };
     let mut c = std::process::Command::new(path);
     c.stdin(std::process::Stdio::null());
     c.env("MUIR_RC", "/dev/null");
+    c.env_remove("MUIR_QUUX_REVISION");
     c
 }
 

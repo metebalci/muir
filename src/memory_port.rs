@@ -208,6 +208,23 @@ impl Layout {
     /// addresses, and fills of 5 beats.
     pub const REVISION_13: Layout =
         Layout { line_words: 8, page_words: 1024, vaddr_mask: 0x0fff_ffff, more_beats: true };
+
+    /// The layout of a machine of `geometry`: revision 13's on a 40-bit
+    /// machine, and otherwise revision 12's.
+    pub fn of(geometry: &crate::machine::Geometry) -> Layout {
+        if geometry.wide() { Layout::REVISION_13 } else { Layout::REVISION_12 }
+    }
+
+    /// The cache this layout fits for `config`: revision 13 keeps its
+    /// 8-word line whatever size is asked for; revision 12 takes the
+    /// config as it is.
+    pub fn cache(self, config: CacheConfig) -> CacheConfig {
+        if self == Layout::REVISION_13 {
+            CacheConfig { line_words: self.line_words, ..config }
+        } else {
+            config
+        }
+    }
 }
 
 impl Default for MemoryPort {
@@ -229,7 +246,7 @@ impl MemoryPort {
     ///
     /// [`new`]: MemoryPort::new
     pub fn for_geometry(geometry: &crate::machine::Geometry) -> MemoryPort {
-        if geometry.wide() {
+        if Layout::of(geometry) == Layout::REVISION_13 {
             let mut p = Self::with_layout(Layout::REVISION_13);
             p.prefetch = Some(Reach::REVISION_13);
             p
@@ -244,7 +261,7 @@ impl MemoryPort {
             write: false,
             addr: 0,
             memory: false,
-            cache: Cache::new(CacheConfig { line_words: layout.line_words, ..CacheConfig::QUUX }),
+            cache: Cache::new(layout.cache(CacheConfig::QUUX)),
             timing: MemoryTiming::NOMINAL,
             memory_free_at: 0,
             buffer_free_at: 0,
@@ -336,12 +353,7 @@ impl MemoryPort {
     /// revision 13 the line stays 8 words, a line of packed storage (G1
     /// §4.1).
     pub fn set_cache(&mut self, config: CacheConfig) {
-        let config = if self.layout == Layout::REVISION_13 {
-            CacheConfig { line_words: self.layout.line_words, ..config }
-        } else {
-            config
-        };
-        self.cache = Cache::new(config);
+        self.cache = Cache::new(self.layout.cache(config));
     }
 
     pub fn memory_timing(&self) -> MemoryTiming {

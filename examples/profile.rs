@@ -12,13 +12,14 @@
 //! file through the FILE service, which is how the run knows it is over:
 //! nothing here reads the screen.
 //!
-//!     cargo run --release --example profile -- [micro|rtl] [cadr|quux|quux-11|quux-4k|quux-16k] [workload ...]
+//!     cargo run --release --example profile -- [micro|rtl] [cadr|quux|quux-11|quux-13|quux-4k|quux-16k] [workload ...]
 //!
 //! The machine is the CADR unless `quux` is named: QUUX, as the `quux`
 //! executable runs it.
 //! `quux-4k` and `quux-16k` are QUUX with a PDL buffer of 4K or 16K words,
 //! the sizes being measured for its next revision. `quux-11` is QUUX at
-//! revision 11, without the fused return (contract H8a).
+//! revision 11, without the fused return (contract H8a). `quux-13` is QUUX
+//! at revision 13, the 40-bit word (contract G2).
 //!
 //! On QUUX, `MUIR_H8A` fills the MACRO DISPATCH MEMORY with the generic
 //! handlers, `OPDTB`'s entry for each index's opcode, and enables the
@@ -755,6 +756,7 @@ fn main() {
         Some("cadr") => Some(Geometry::CADR),
         Some("quux") => Some(Geometry::QUUX),
         Some("quux-11") => Some(Geometry::QUUX_11),
+        Some("quux-13") => Some(Geometry::QUUX_13),
         Some("quux-4k") => Some(Geometry { pdl_bits: 12, ..Geometry::QUUX }),
         Some("quux-16k") => Some(Geometry { pdl_bits: 14, ..Geometry::QUUX }),
         _ => None,

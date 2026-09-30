@@ -162,9 +162,11 @@ pub enum TimingModel {
 }
 
 /// `sync`'s microcycle when `--sync-cycle-ticks` does not say: 4 ticks,
-/// 40 ns, the Arty Z7-20's longest measured path of 37.35 ns rounded up
-/// (muir-fpga's routed fit). **Unverified** until a fit at that deadline
-/// meets it.
+/// 40 ns, the DE25-Nano's, and the Arty Z7-20's at revision 12, whose
+/// longest measured path was 37.35 ns (muir-fpga's routed fit). The Arty
+/// runs revision 13 at 5: its two-level map through the memory path's
+/// decode misses 4 ticks there by about a nanosecond (muir-fpga's fit at
+/// its commit `ccc3d12`). The default is the same for both revisions.
 pub const SYNC_CYCLE_TICKS: u8 = 4;
 
 /// The tick of muir-fpga's grid.
