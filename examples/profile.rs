@@ -5,7 +5,8 @@
 //!
 //! Boots the CADR's release, System 1002 (`tools/fetch-system-for-cadr.sh`),
 //! on the CADR, and QUUX's, System 2000 (`tools/fetch-system-for-quux.sh`),
-//! or another System 2000 band (`MUIR_BAND`), on QUUX, with the test
+//! or another band (`MUIR_BAND`), System 2000's or, on revision 13,
+//! System 2001's, on QUUX, with the test
 //! harness's Chaosnet server at OZ,
 //! logs in, defines a set of workloads at the listener and runs them one at
 //! a time, counting every control-store address the engine executes. Each workload ends by writing a marker
@@ -40,6 +41,10 @@
 //! measurement, `MUIR_PREFETCH=page` fits it with the page's reach, which
 //! is no revision's, and `MUIR_PREFETCH=off` takes it out; `line` is
 //! revision 12's own.
+//! `MUIR_MAIN_MEMORY_BOARDS=<n>` gives QUUX `n` 64K-word boards of main
+//! memory, as `--main-memory-boards` does; 32, 2 M words, if not given, on
+//! every revision. Each revision boots its own built-in PROM, PROM 2001 on
+//! revision 13 and PROM 2000 below it.
 //! `MUIR_RTC=<s>`
 //! counts QUUX's real-time clock from second `s` of the Unix epoch in the
 //! machine's own time, as `--rtc` does, in place of the host's clock, so
@@ -844,7 +849,7 @@ fn profile<E: Profiled + support::macro_dispatch::Executes>(
 ) {
     let on_quux = geometry != muir::machine::Geometry::CADR;
     let dir = support::scratch("profile");
-    // QUUX runs only muir-sys's System 2000: QUUX's release, or
+    // QUUX runs muir-sys's systems: QUUX's release, System 2000, or
     // `MUIR_BAND`, a directory holding a band's GPT disk (a `.vhd`, or a
     // raw `.img`) and the tree it was built from, which unpacks to one
     // `release-*` directory. The CADR runs the CADR's release.
@@ -962,8 +967,16 @@ fn profile<E: Profiled + support::macro_dispatch::Executes>(
         // QUUX's own PROM at 36000, the pack on block-disk, the video controller, and
         // the file device serving the root as HOST's `/` and its `sys` and
         // `site` as `/sys` and `/site`, where the band's `SYS:` is.
-        let mut m = muir::machine::Machine::new();
-        m.load_prom(&muir::prom::quux_boot_prom());
+        // `MUIR_MAIN_MEMORY_BOARDS=<n>`: main memory in 64K-word boards, as
+        // `--main-memory-boards` counts it; 32, 2 M words, if not given, on
+        // every revision.
+        let boards = std::env::var("MUIR_MAIN_MEMORY_BOARDS")
+            .map(|v| v.parse().expect("MUIR_MAIN_MEMORY_BOARDS: a count of boards"))
+            .unwrap_or(muir::machine::MAIN_WORDS >> 16);
+        let mut m = muir::machine::Machine::with_geometry(geometry, boards);
+        // The revision's own PROM: PROM 2001 on revision 13, PROM 2000
+        // below it.
+        m.load_prom(&muir::prom::quux_boot_prom_for(geometry));
         let mut d = muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS);
         d.attach(muir::disk_image::Disk::open_rw(&copy).unwrap());
         m.block_disk = Some(d);

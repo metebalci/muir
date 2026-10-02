@@ -25,6 +25,39 @@ fn checkpointed(path: &std::path::Path) -> (Geometry, u32, usize) {
     (g, c.word_bits, c.memory_boards)
 }
 
+/// The boot PROM a checkpoint carries: the one the run loaded.
+fn checkpointed_prom(path: &std::path::Path) -> Vec<muir::isa::Insn> {
+    let c = muir::checkpoint::read(path).unwrap();
+    let g = Machine::checkpointed_geometry_at(&c.body, c.word_bits).unwrap();
+    let mut m = Machine::with_geometry(g, c.memory_boards);
+    m.block_disk = Some(muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS));
+    m.load(&mut c.reader()).unwrap();
+    m.prom.clone()
+}
+
+/// **Each revision's `--prom` is held to its own built-in PROM**: PROM
+/// 2001's file on revision 13, and PROM 2000's on revision 12, are each
+/// said to be QUUX's own word for word, and each on the other revision
+/// is not.
+#[test]
+fn prom_files_are_held_to_their_revision_s_prom() {
+    let file = |f: &str| format!("{}/data/{f}", env!("CARGO_MANIFEST_DIR"));
+    for (rev, own, other) in [
+        ("13", "quux-promh.mcr", "quux-promh-2000.mcr"),
+        ("12", "quux-promh-2000.mcr", "quux-promh.mcr"),
+    ] {
+        for (f, same) in [(own, true), (other, false)] {
+            let out = quux()
+                .env(SWITCH, rev)
+                .args(["--micro", "--prom", &file(f), "--stop-after", "1"])
+                .run();
+            let t = text(&out);
+            assert!(out.status.success(), "{rev} {f}: {t}");
+            assert_eq!(t.contains("QUUX's own word for word"), same, "{rev} {f}: {t}");
+        }
+    }
+}
+
 fn refused(out: &std::process::Output, says: &str) {
     let t = text(out);
     assert_eq!(out.status.code(), Some(2), "not refused at the start:\n{t}");
@@ -32,8 +65,8 @@ fn refused(out: &std::process::Output, says: &str) {
 }
 
 /// **`MUIR_QUUX_REVISION=13` runs revision 13**: a 40-bit word, its
-/// MACHINE-ID saying 13, 32 M words of main memory (G2 §3), and on `rtl`
-/// the memory cache's 8-word lines. The checkpoint is the machine the run
+/// MACHINE-ID saying 13, 32 M words of main memory (G2 §3), PROM 2001
+/// built in, and on `rtl` the memory cache's 8-word lines. The checkpoint is the machine the run
 /// built; the start says the same.
 #[test]
 fn the_switch_runs_revision_13() {
@@ -55,6 +88,8 @@ fn the_switch_runs_revision_13() {
         assert!(t.contains("memory: 512 boards, 32 MW"), "{engine}: {t}");
         assert!(t.contains("machine: quux, revision 13: "), "{engine}: {t}");
         assert!(!t.contains("machine: quux, revision 12"), "{engine}: {t}");
+        assert!(t.contains("QUUX's data/quux-promh.mcr, version 2001"), "{engine}: {t}");
+        assert_eq!(checkpointed_prom(&chk), muir::prom::quux_boot_prom(), "{engine}: PROM 2001");
         if engine == "--rtl" {
             assert!(t.contains("cache: 4096 words, lines of 8, 2-way"), "{t}");
         }
@@ -68,7 +103,7 @@ fn the_switch_runs_revision_13() {
 }
 
 /// **Unset, or 12, is revision 12**, as it was: a 32-bit word, 2 M words,
-/// 4-word lines.
+/// PROM 2000 built in, 4-word lines.
 #[test]
 fn unset_is_revision_12() {
     let dir = scratch("revision-12");
@@ -87,6 +122,15 @@ fn unset_is_revision_12() {
             assert_eq!((bits, boards), (32, 32), "{set:?} {engine}");
             assert!(t.contains("memory: 32 boards, 2 MW"), "{set:?} {engine}: {t}");
             assert!(t.contains("machine: quux, revision 12: "), "{set:?} {engine}: {t}");
+            assert!(
+                t.contains("QUUX's data/quux-promh-2000.mcr, version 2000"),
+                "{set:?} {engine}: {t}"
+            );
+            assert_eq!(
+                checkpointed_prom(&chk),
+                muir::prom::quux_12_boot_prom(),
+                "{set:?} {engine}: PROM 2000"
+            );
             if engine == "--rtl" {
                 assert!(t.contains("cache: 4096 words, lines of 4, 2-way"), "{t}");
             }

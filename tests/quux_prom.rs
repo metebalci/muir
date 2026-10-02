@@ -179,7 +179,7 @@ fn quux_s_prom_maps_the_register_page_at_37777() {
     }
     let mut m = Machine::new();
     m.geometry = Geometry::QUUX;
-    m.load_prom(&muir::prom::quux_boot_prom());
+    m.load_prom(&muir::prom::quux_12_boot_prom());
     check(Micro::new(m.clone()), "micro");
     check(Rtl::new(m), "rtl");
 }
@@ -194,7 +194,7 @@ fn quux_s_prom_maps_the_register_page_at_37777() {
 fn a_quux_prom_file_is_read_from_36000() {
     use muir::mcr::swap_halves;
     use muir::prom::parse_quux_mcr;
-    let file = include_bytes!("../data/quux-promh.mcr");
+    let file = include_bytes!("../data/quux-promh-2000.mcr");
     let words = parse_quux_mcr(file).unwrap();
     assert_eq!(words.len(), 1024);
     // 36000 is `JUMP GO`.
@@ -223,7 +223,7 @@ fn a_quux_prom_file_is_read_from_36000() {
 #[test]
 fn quux_s_prom_is_mit_s_promh_changed() {
     use muir::mcr::{parse, parse_partition_order};
-    let quux = parse_partition_order(include_bytes!("../data/quux-promh.mcr")).unwrap();
+    let quux = parse_partition_order(include_bytes!("../data/quux-promh-2000.mcr")).unwrap();
     let mits = parse(include_bytes!("../mit/sys/ubin/promh.mcr")).unwrap();
     assert_eq!((quux.dmem_start, &quux.dmem), (mits.dmem_start, &mits.dmem), "dispatch memory");
     assert_eq!((quux.amem_start, &quux.amem), (mits.amem_start, &mits.amem), "A memory");
@@ -249,9 +249,9 @@ fn the_built_in_quux_prom_is_the_release_s() {
         return;
     };
     let bytes = std::fs::read(asset).unwrap();
-    assert!(bytes == include_bytes!("../data/quux-promh.mcr"), "the release's asset");
+    assert!(bytes == include_bytes!("../data/quux-promh-2000.mcr"), "the release's asset");
     let assembled = std::fs::read(ubin.join("promh.mcr")).unwrap();
-    assert!(assembled == include_bytes!("../data/quux-promh.mcr"), "the sources' sys/ubin/");
+    assert!(assembled == include_bytes!("../data/quux-promh-2000.mcr"), "the sources' sys/ubin/");
     let locs = std::fs::read_to_string(ubin.join("promh.locs")).unwrap();
     assert!(locs.contains(&format!("(I-MEM {:o})", LAST + 1)), "{locs}");
     let tbl = std::fs::read_to_string(ubin.join("promh.tbl")).unwrap();
@@ -276,6 +276,97 @@ fn the_built_in_quux_prom_is_the_release_s() {
         assert!(tbl.contains(&format!("({at:o} {name})")), "{name} at {at:o} in promh.tbl");
     }
     for (at, name) in GPT_HALTS {
+        assert!(sym.contains(&format!("{name} I-MEM {at:o} ")), "{name} at {at:o} in promh.sym");
+    }
+}
+
+/// PROM 2001's last word: its `promh.locs` says `(I-MEM 36662)`, so the
+/// code is at 36000-36661, and 36661 is its last halt,
+/// `ERROR-A-MEM-SECTION-32-BITS`, where it stops on a microcode partition
+/// without the 40-bit A-memory section (contract G2 §2.8).
+const LAST_2001: usize = 0o36661;
+
+/// PROM 2001's halts that PROM 2000 has not, or has elsewhere, as its
+/// `promh.tbl` and `promh.sym` put them: the GPT's three, moved on by the
+/// 4-byte transfers before them, and the new one.
+const HALTS_2001: [(u64, &str); 4] = [
+    (0o36653, "ERROR-NO-GPT"),
+    (0o36655, "ERROR-NO-CURRENT-MICR"),
+    (0o36657, "ERROR-ODD-MICR-START"),
+    (0o36661, "ERROR-A-MEM-SECTION-32-BITS"),
+];
+
+/// muir-sys's hand-over of System 2001, where PROM 2001 came from: the
+/// gitignored `ref/band-2001-y5` (`tests/system_2001.rs`).
+const BAND_2001: &str = "ref/band-2001-y5";
+
+/// **PROM 2001 is read from 36000, in partition order**, as PROM 2000 is
+/// ([`a_quux_prom_file_is_read_from_36000`]): 36000 is `JUMP GO`, `GO`
+/// where PROM 2000 has it, the code ends at [`LAST_2001`], and the file in
+/// MIT's order is refused saying so. Its sections hold MIT's values, in
+/// revision 13's shapes: A memory as the 40-bit section (contract G2
+/// appendix A1.12) with MIT's words, and the dispatch memory of 4,096
+/// entries whose first 2,048 are MIT's; the main-memory section is four
+/// blocks, as MIT's.
+#[test]
+fn prom_2001_is_read_from_36000_in_partition_order() {
+    use muir::mcr::{parse, parse_partition_order, swap_halves};
+    use muir::prom::parse_quux_mcr;
+    let file = include_bytes!("../data/quux-promh.mcr");
+    let words = parse_quux_mcr(file).unwrap();
+    assert_eq!(words.len(), 1024);
+    assert_eq!(words[0].raw() >> 43 & 3, 1, "a jump");
+    assert_eq!(words[0].jump().target as u64, GO);
+    let base = 0o36000;
+    assert_ne!(words[LAST_2001 - base].raw(), 0, "the last word");
+    assert!(words[LAST_2001 - base + 1..].iter().all(|w| w.raw() == 0), "nothing past it");
+    let err = parse_quux_mcr(&swap_halves(file).unwrap()).unwrap_err();
+    assert!(err.contains("MIT's order"), "{err}");
+    assert_eq!(words, muir::prom::quux_boot_prom(), "the built-in PROM");
+    assert_eq!(muir::prom::quux_boot_prom_for(Geometry::QUUX_13), words, "revision 13's");
+    assert_eq!(
+        muir::prom::quux_boot_prom_for(Geometry::QUUX),
+        muir::prom::quux_12_boot_prom(),
+        "revision 12's is PROM 2000"
+    );
+    assert_ne!(muir::prom::quux_12_boot_prom(), words, "PROM 2000 is another program");
+    let quux = parse_partition_order(file).unwrap();
+    let mits = parse(include_bytes!("../mit/sys/ubin/promh.mcr")).unwrap();
+    assert!(quux.amem_wide, "A memory as the 40-bit section");
+    assert_eq!(quux.amem, mits.amem, "A memory's values MIT's");
+    assert_eq!(quux.dmem.len(), 4096, "revision 13's 4,096 dispatch entries");
+    assert_eq!(quux.dmem[..2048], mits.dmem[..], "the first 2,048 MIT's");
+    assert_eq!(quux.main_memory.map(|m| m.1), Some(4), "four blocks");
+    assert_eq!(quux.imem_start, mits.imem_start, "the control store section from 0");
+}
+
+/// **PROM 2001 is muir-sys's hand-over's, byte for byte**, where the
+/// hand-over (`ref/band-2001-y5`) is present: its `promh.mcr`, assembled
+/// from muir-sys's `promh.text` at the commit the hand-over names; its
+/// symbols and error table say version 2001, 3721 octal, and put `GO`,
+/// the end and the halts of [`HALTS_2001`] where this file's constants
+/// say.
+#[test]
+fn prom_2001_is_the_hand_over_s() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(BAND_2001);
+    if !dir.join("promh.mcr").exists() {
+        eprintln!("skipped: {} is not present", dir.display());
+        return;
+    }
+    let bytes = std::fs::read(dir.join("promh.mcr")).unwrap();
+    assert!(bytes == include_bytes!("../data/quux-promh.mcr"), "the hand-over's promh.mcr");
+    let locs = std::fs::read_to_string(dir.join("promh.locs")).unwrap();
+    assert!(locs.contains(&format!("(I-MEM {:o})", LAST_2001 + 1)), "{locs}");
+    let tbl = std::fs::read_to_string(dir.join("promh.tbl")).unwrap();
+    let sym = std::fs::read_to_string(dir.join("promh.sym")).unwrap();
+    assert!(
+        tbl.contains(&format!("MICROCODE-ERROR-TABLE-VERSION-NUMBER {:o})", 2001)),
+        "version 2001 in promh.tbl"
+    );
+    assert!(sym.contains(&format!(" VERSION-NUMBER {:o} ", 2001)), "version 2001 in promh.sym");
+    assert!(sym.contains(&format!("GO I-MEM {GO:o} ")), "GO in promh.sym");
+    for (at, name) in HALTS_2001 {
+        assert!(tbl.contains(&format!("({at:o} {name})")), "{name} at {at:o} in promh.tbl");
         assert!(sym.contains(&format!("{name} I-MEM {at:o} ")), "{name} at {at:o} in promh.sym");
     }
 }

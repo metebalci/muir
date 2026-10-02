@@ -842,7 +842,7 @@ order**, MIT's with the two 16-bit halves of every 32-bit word swapped, as
 muir-sys's builder writes QUUX's PROM and microcode, with the program
 assembled at `36000`, where QUUX's PROM sits. A file in MIT's order is
 refused saying so, and so is one assembled at 0. Default: QUUX's own,
-built in, `data/quux-promh.mcr` ([QUUX](quux.md#its-boot-prom-in-its-own-addresses)).
+built in, `data/quux-promh-2000.mcr` ([QUUX](quux.md#its-boot-prom-in-its-own-addresses)).
 
 ### `--resume <file>`
 
@@ -1478,7 +1478,7 @@ The traps, each measured with qemu-img 10.2.1 and sgdisk 1.0.10:
   footer and says which it found.
 
 **Only the GPT PROM may meet a GPT disk.** QUUX's built-in PROM,
-`data/quux-promh.mcr`, is the GPT PROM: it takes the first microcode
+`data/quux-promh-2000.mcr`, is the GPT PROM: it takes the first microcode
 partition carrying bit 48 and writes no block of the disk, and on a disk
 with no GPT it halts at `ERROR-NO-GPT`, 36642
 ([QUUX](quux.md#its-boot-prom-in-its-own-addresses)). An older QUUX PROM

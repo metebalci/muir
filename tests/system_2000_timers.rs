@@ -14,7 +14,7 @@
 //! `tools/fetch-system-for-quux.sh` fetches into the gitignored `vendor/`
 //! and pins by digest (`tests/system_2000.rs`); without it the tests skip
 //! and say so. M9, M10 and M11 run on muir's built-in PROM,
-//! `data/quux-promh.mcr`, PROM 2000, the release's `release-2000-promh.mcr`
+//! `data/quux-promh-2000.mcr`, PROM 2000, the release's `release-2000-promh.mcr`
 //! byte for byte (with contract Q11's steps 2, 5 and 6). The runs on the PROM before
 //! Q11, M11's discriminating run and M12, booted revision 10's register
 //! page and cannot run on revision 11; their figures stay in
@@ -169,7 +169,7 @@ fn until_executed(e: &mut Micro, pc: u16, limit: u64) -> u64 {
 #[test]
 fn m9_the_prom_resets_the_devices_and_writes_timer_0_s_period() {
     let Some((_dir, pack, root)) = band("q11-m9") else { return };
-    let mut m = quux(&pack, &muir::prom::quux_boot_prom(), &root, &root);
+    let mut m = quux(&pack, &muir::prom::quux_12_boot_prom(), &root, &root);
     m.register_log = Some(Vec::new());
     let mut e = Micro::new(m);
     e.boot();
@@ -260,7 +260,7 @@ fn says_what_it_is(e: &mut Micro, k: &mut Keyboard, root: &Path) -> Option<Strin
 fn m10_the_band_ticks_and_says_it_is_system_2000() {
     let Some((_dir, pack, root)) = band("q11-m10") else { return };
     let tick = ucadr("INTR-TICK");
-    let mut e = Micro::new(quux(&pack, &muir::prom::quux_boot_prom(), &root, &root));
+    let mut e = Micro::new(quux(&pack, &muir::prom::quux_12_boot_prom(), &root, &root));
     e.boot();
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root.clone(), 400_000_000);
     eprintln!("listener after {ran} microcycles");
@@ -489,6 +489,6 @@ fn m11(name: &str, prom: &[Insn]) -> Option<(Reboot, Reboot)> {
 /// handle open, at location 6, and no queued command run.
 #[test]
 fn m11_a_reboot_resets_the_timers_and_the_file_device() {
-    let Some((base, run)) = m11("q11-m11", &muir::prom::quux_boot_prom()) else { return };
+    let Some((base, run)) = m11("q11-m11", &muir::prom::quux_12_boot_prom()) else { return };
     m11_verdict(&run, &base).unwrap();
 }

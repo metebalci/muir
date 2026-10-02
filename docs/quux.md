@@ -646,9 +646,9 @@ disk itself: block-disk moves blocks, and the partitions are the machine's
 software's to find. `diskpack`, MIT's label editor, is the CADR's; given a
 QUUX disk it says what the file is and that its partitions are made with
 sgdisk, and writes nothing (`quux_s_disk_is_named_and_left_alone` in
-`tests/diskpack.rs`). The boot PROM in `data/quux-promh.mcr`, the
-microcode and System 2000's band read the GPT; MIT's label in block 0 is
-the CADR's.
+`tests/diskpack.rs`). The boot PROMs, `data/quux-promh-2000.mcr` and
+revision 13's `data/quux-promh.mcr`, the microcode and the bands read the
+GPT; MIT's label in block 0 is the CADR's.
 
 **System 2000's band is on a GPT disk in a dynamic VHD**: QUUX's
 release, muir-sys's `release-2000`, which `tools/fetch-system-for-quux.sh`
@@ -838,7 +838,8 @@ its PROM covers 0-1777, the first 1K words, until `PROMDISABLE` in the
 mode register, written at Unibus `766012`, lets the RAM show through.
 
 The PROM is muir-sys's PROM 2000 for block-disk and a GPT
-(`data/quux-promh.mcr`), MIT's `promh.text` changed so that a PDL buffer
+(`data/quux-promh-2000.mcr`; revision 13's, PROM 2001, is in
+[Revision 13](#revision-13-the-40-bit-word)), MIT's `promh.text` changed so that a PDL buffer
 of any width boots, QUUX's 64 level-2 blocks are cleared, the disk is read
 by block number, nothing is saved, the microcode is found through the
 GPT, the devices are reset through the register page and timer 0 given
@@ -1691,7 +1692,7 @@ settle it.
 ## Revision 13: the 40-bit word
 
 muir has QUUX revision 13 beside revision 12: `Geometry::QUUX_13` in the
-library, whose system no test here boots. `quux` runs it when the
+library, which boots System 2001 (below). `quux` runs it when the
 environment variable `MUIR_QUUX_REVISION` is `13`; unset or `12` is
 revision 12, and any other value is refused at the start. The switch is not
 a documented flag: `--help` and the manual do not name it, since it goes
@@ -1776,6 +1777,43 @@ that resumes it (`tests/quux_revision.rs`).
 entries and A memory as section 5, each location two 32-bit words,
 `<31:0>` and then `<39:32>` in `<7:0>`; the parser reads both, in
 partition order as in MIT's.
+
+**Its boot PROM** is PROM 2001, `data/quux-promh.mcr`, which `quux`
+loads on revision 13; revision 12 keeps PROM 2000,
+`data/quux-promh-2000.mcr`, and each revision's `--prom` is held to its
+own (`tests/quux_revision.rs`). PROM 2001 is muir-sys's `promh.text`
+for revision 13, assembled at `36000` and in partition order as PROM
+2000: it maps the register page at `1777777400`, reads the GPT and the
+microcode partition by 4-byte transfers, 4 blocks a page, loads a
+dispatch memory of 4,096 entries and A memory as section 5, and stops at
+`ERROR-A-MEM-SECTION-32-BITS`, 36661, on a microcode partition whose A
+memory is section 4 (`tests/quux_prom.rs`, `data/README.md`). The guards
+of contract G2 §2.8 that a boot shows, each on both engines with a control
+that takes the halt's jumps out of the PROM and does not stop there
+(`tests/system_2001.rs`): System 2000's disk on revision 13 stops at
+`ERROR-A-MEM-SECTION-32-BITS` before any microcode runs, and System 2001's
+disk on revision 12 stops at PROM 2000's `ERROR-BAD-ADDRESS`, 36024, when
+the dispatch memory section reaches entry 2,048
+(`PROCESS-D-MEM-SECTION`).
+
+**System 2001**, muir-sys's first 40-bit band, boots on revision 13
+(`tests/system_2001.rs`, which skips without muir-sys's hand-over in the
+gitignored `ref/`): microcode 2001 in its current `MCR1` and the band in
+its current `LOD4` of a GPT disk in a dynamic VHD. At 2 M words of main
+memory it reaches its listener on both engines, after about 165 million
+microcycles on `micro` and 177 million on `rtl`, and at 32 M words on
+`micro`; it draws its listener at the video controller's words a line at
+1280 by 1024, 1024 by 768 and 1920 by 1080; `(si:disk-restore 4)` reads
+`LOD4` back through block-disk and boots it to the listener again; the
+PROM writes words 104 and 111 before the disk, and at the listener timer
+0 is on, periodic, under its interrupt enable, with `INTR-TICK` 600 times
+in 10 s of the machine's time; through the file device it reads a form
+and writes what it is, `(3 2001 "QUUX" "Experimental System 2001,
+microcode 2001")`, and `most-positive-fixnum`, 2147483647; and microcode
+2001 fills the MACRO DISPATCH MEMORY with 36 specialised entries and
+boots with returns fused under the checkers of
+`tests/support/macro_dispatch.rs`, with its own fill and with the
+generic one, finding nothing, and fills a stale memory again.
 
 **Main memory** is 32 M words by default, the boards' (G2 §3), 512 of
 `--main-memory-boards`' 64K-word boards, which reach 1,024, 64 M words

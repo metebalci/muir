@@ -696,7 +696,7 @@ fn quux_s_disk_is_block_disk_only() {
 /// word for word, and MIT's, in MIT's order, is refused saying so.
 #[test]
 fn quux_s_prom_is_assembled_at_36000() {
-    let own = concat!(env!("CARGO_MANIFEST_DIR"), "/data/quux-promh.mcr");
+    let own = concat!(env!("CARGO_MANIFEST_DIR"), "/data/quux-promh-2000.mcr");
     let out = quux().args(["--rtl", "--prom", own, "--stop-after", "1"]).run();
     let t = text(&out);
     assert!(out.status.success(), "{t}");
@@ -881,7 +881,7 @@ fn the_executable_is_the_machine_and_quux_has_no_netlist() {
         assert!(out.status.success(), "{engine}: {t}");
         assert!(t.contains("machine: quux"), "{engine} says which machine:\n{t}");
         assert!(
-            t.contains("QUUX's data/quux-promh.mcr, version 2000"),
+            t.contains("QUUX's data/quux-promh-2000.mcr, version 2000"),
             "{engine}: QUUX's PROM:\n{t}"
         );
         let out = cadr().args([engine, "--stop-after", "1"]).run();

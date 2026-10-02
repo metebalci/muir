@@ -142,7 +142,7 @@ fn system_2000_uses_the_clocks_codes_only_where_its_microcode_does() {
         return;
     };
     let mut m = Machine::new();
-    m.load_prom(&muir::prom::quux_boot_prom());
+    m.load_prom(&muir::prom::quux_12_boot_prom());
     let mut d = muir::block_disk::BlockDisk::new(muir::block_disk::BLOCK_NS);
     d.attach(muir::disk_image::Disk::open_rw(&pack).unwrap());
     m.block_disk = Some(d);

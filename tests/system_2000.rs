@@ -9,7 +9,7 @@
 //! disk as a dynamic VHD, which QUUX boots as it is, with microcode 2000 in
 //! its current `MCR1`, "MCR1 UCADR 2000", and the band, "LOD1 System 2000",
 //! in its current `LOD1`; PROM 2000, which is muir's built-in
-//! `data/quux-promh.mcr` byte for byte (`tests/quux_prom.rs`); and the
+//! `data/quux-promh-2000.mcr` byte for byte (`tests/quux_prom.rs`); and the
 //! sources it was built from, which unpack to `release-2000/`. No TV sync
 //! program, no speed bits, and no CADR disk controller: QUUX's disk is
 //! block-disk. The band takes the screen's size from the feature page at
@@ -120,14 +120,14 @@ fn quux(pack: &std::path::Path, root: &std::path::Path) -> Machine {
     quux_at(pack, root, BAND_SIZE)
 }
 
-/// QUUX with its own boot PROM at 36000 (`data/quux-promh.mcr`), the disk
+/// QUUX with its own boot PROM at 36000 (`data/quux-promh-2000.mcr`), the disk
 /// on block-disk, the video controller at `w` by `h`, and the file device serving
 /// `root` as HOST's `/` and the tree's `sys` and `site` as `/sys` and
 /// `/site`, where the band's `SYS:` is (`site/sys.translations`).
 fn quux_at(pack: &std::path::Path, root: &std::path::Path, (w, h): (usize, usize)) -> Machine {
     use muir::block_disk::{BLOCK_NS, BlockDisk};
     let mut m = Machine::new();
-    m.load_prom(&muir::prom::quux_boot_prom());
+    m.load_prom(&muir::prom::quux_12_boot_prom());
     let mut d = BlockDisk::new(BLOCK_NS);
     d.attach(muir::disk_image::Disk::open_rw(pack).expect("the pack"));
     m.block_disk = Some(d);

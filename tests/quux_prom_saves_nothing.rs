@@ -13,7 +13,7 @@
 //! to not clobber core" (`SAVE-A-PAGE`, `mit/sys/ucadr/promh.text`);
 //! muir-sys's `promh.text` for QUUX drops that save.
 //!
-//! The PROM is `data/quux-promh.mcr`, muir's built-in QUUX PROM, the GPT
+//! The PROM is `data/quux-promh-2000.mcr`, muir's built-in QUUX PROM, the GPT
 //! PROM: it finds the microcode through the disk's GPT, the first
 //! microcode partition with attribute bit 48 set, and not through MIT's
 //! `LABL` label, and on a disk with no GPT it stops at `ERROR-NO-GPT`
@@ -73,7 +73,7 @@ struct Run {
 fn quux(pack: &Path) -> Machine {
     let mut m = Machine::new();
     m.geometry = Geometry::QUUX;
-    m.load_prom(&muir::prom::quux_boot_prom());
+    m.load_prom(&muir::prom::quux_12_boot_prom());
     let mut d = BlockDisk::new(BLOCK_NS);
     d.attach(muir::disk_image::Disk::open_rw(pack).expect("the pack"));
     d.log = Some(Vec::new());

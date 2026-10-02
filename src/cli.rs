@@ -1617,7 +1617,9 @@ const HELP: &[(Whose, &str)] = &[
                                MIT's order is refused saying so, and so is one
                                assembled at 0. The start says how the file
                                stands to QUUX's own. [default: QUUX's own,
-                               built in --- data/quux-promh.mcr, version 2000]",
+                               built in --- data/quux-promh-2000.mcr, version
+                               2000; on revision 13 data/quux-promh.mcr,
+                               version 2001]",
     ),
     (
         Whose::Both,
@@ -2566,7 +2568,7 @@ fn boot_prom(file: Option<&Path>, geometry: crate::machine::Geometry) -> Vec<Ins
         return if geometry == crate::machine::Geometry::CADR {
             crate::prom::boot_prom()
         } else {
-            crate::prom::quux_boot_prom()
+            crate::prom::quux_boot_prom_for(geometry)
         };
     };
     let bytes =
@@ -2578,6 +2580,17 @@ fn boot_prom(file: Option<&Path>, geometry: crate::machine::Geometry) -> Vec<Ins
         crate::prom::parse_quux_mcr(&bytes)
     };
     parsed.unwrap_or_else(|e| usage(&format!("--prom {}: {e}", shown(path))))
+}
+
+/// The built-in PROM of a QUUX of `geometry`'s revision, as the setup
+/// names it: PROM 2001 on revision 13, PROM 2000 on revision 12
+/// ([`crate::prom::quux_boot_prom_for`]).
+fn quux_prom_shown(geometry: crate::machine::Geometry) -> &'static str {
+    if geometry.wide() {
+        "built in, QUUX's data/quux-promh.mcr, version 2001, at 36000"
+    } else {
+        "built in, QUUX's data/quux-promh-2000.mcr, version 2000, at 36000"
+    }
 }
 
 /// What the setup says the boot PROM is: which file, and how it stands to
@@ -2593,13 +2606,13 @@ fn prom_shown(file: Option<&Path>, prom: &[Insn], geometry: crate::machine::Geom
         return if geometry == crate::machine::Geometry::CADR {
             "built in, System 100's own sys/ubin/promh.mcr, version 9".to_string()
         } else {
-            "built in, QUUX's data/quux-promh.mcr, version 2000, at 36000".to_string()
+            quux_prom_shown(geometry).to_string()
         };
     };
     let (theirs, whose) = if geometry == crate::machine::Geometry::CADR {
         (crate::prom::boot_prom(), "MIT's own")
     } else {
-        (crate::prom::quux_boot_prom(), "QUUX's own")
+        (crate::prom::quux_boot_prom_for(geometry), "QUUX's own")
     };
     match prom.iter().zip(&theirs).filter(|(a, b)| a != b).count() {
         0 => format!("{}, {whose} word for word", shown(path)),
