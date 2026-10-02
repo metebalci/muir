@@ -1797,8 +1797,9 @@ the dispatch memory section reaches entry 2,048
 (`PROCESS-D-MEM-SECTION`).
 
 **System 2001**, muir-sys's first 40-bit band, boots on revision 13
-(`tests/system_2001.rs`, which skips without muir-sys's hand-over in the
-gitignored `ref/`): microcode 2001 in its current `MCR1` and the band in
+(`tests/system_2001.rs`, which skips without muir-sys's hand-over, the
+pre-release `handover-2001-y5` that `tools/fetch-handover-2001.sh` fetches
+into the gitignored `ref/band-2001-y5`): microcode 2001 in its current `MCR1` and the band in
 its current `LOD4` of a GPT disk in a dynamic VHD. At 2 M words of main
 memory it reaches its listener on both engines, after about 165 million
 microcycles on `micro` and 177 million on `rtl`, and at 32 M words on

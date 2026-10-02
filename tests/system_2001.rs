@@ -4,13 +4,15 @@
 //! System 2001 on QUUX revision 13: the first 40-bit band (contract G2).
 //!
 //! It is muir-sys's hand-over of System 2001, microcode 2001 and PROM 2001,
-//! none of them released, in the gitignored `ref/band-2001-y5`: a GPT disk
-//! as a dynamic VHD, which QUUX boots as it is, with microcode 2001 in its
-//! current `MCR1`, "MCR1 UCADR 2001", and the band, "LOD4 System 2001 y5",
-//! in its current `LOD4`; the microcode's and the PROM's files, the PROM
-//! being muir's built-in `data/quux-promh.mcr` byte for byte
-//! (`tests/quux_prom.rs`); and the tree the band was built from, which
-//! unpacks to `release-2001-y5/`. Without it the tests skip and say so.
+//! none of them released, published as the pre-release `handover-2001-y5`
+//! and fetched by `tools/fetch-handover-2001.sh` into the gitignored
+//! `ref/band-2001-y5`: a GPT disk as a dynamic VHD, which QUUX boots as it
+//! is, with microcode 2001 in its current `MCR1`, "MCR1 UCADR 2001", and the
+//! band, "LOD4 System 2001 y5", in its current `LOD4`; the microcode's and
+//! the PROM's files, the PROM being muir's built-in `data/quux-promh.mcr`
+//! byte for byte (`tests/quux_prom.rs`); and the sources the band was built
+//! from, which unpack to `release-2001-y5/`. Without it the tests skip and
+//! say so.
 //!
 //! The band boots on both engines at 2 M words of main memory, which G2 §3
 //! allows tests, and once at revision 13's 32 M; it restores its own band
@@ -33,8 +35,15 @@ mod support;
 /// LISPM-1 and OZ, as the tree's `site/hosts.text` gives them.
 const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
-/// muir-sys's hand-over of System 2001.
+/// muir-sys's hand-over of System 2001, as `tools/fetch-handover-2001.sh`
+/// leaves it.
 const BAND_2001: &str = "ref/band-2001-y5";
+
+/// The hand-over's disk, decompressed by the fetch.
+const DISK: &str = "handover-2001-y5-disk.vhd";
+
+/// The hand-over's sources.
+const SOURCES: &str = "handover-2001-y5-sys.tar.gz";
 
 /// The directory the hand-over's tree unpacks to.
 const TREE: &str = "release-2001-y5";
@@ -49,8 +58,11 @@ const BAND_SIZE: (usize, usize) = (1280, 1024);
 /// The hand-over's directory, or `None` with the skip line.
 fn hand_over() -> Option<PathBuf> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BAND_2001);
-    if !dir.join("pack-2001-y5.vhd").exists() {
-        eprintln!("skipped: {} is not present", dir.display());
+    if !dir.join(DISK).exists() || !dir.join(SOURCES).exists() {
+        eprintln!(
+            "skipped: {} is not present; tools/fetch-handover-2001.sh fetches it",
+            dir.join(DISK).display()
+        );
         return None;
     }
     Some(dir)
@@ -64,10 +76,10 @@ fn band_2001(name: &str) -> Option<(support::Scratch, PathBuf, PathBuf)> {
     let from = hand_over()?;
     let dir = support::scratch(name);
     let pack = dir.join("pack.vhd");
-    std::fs::copy(from.join("pack-2001-y5.vhd"), &pack).unwrap();
+    std::fs::copy(from.join(DISK), &pack).unwrap();
     let untar = std::process::Command::new("tar")
         .arg("xzf")
-        .arg(from.join("tree-2001-y5.tar.gz"))
+        .arg(from.join(SOURCES))
         .arg("-C")
         .arg(dir.path())
         .status()

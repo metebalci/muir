@@ -297,7 +297,9 @@ const HALTS_2001: [(u64, &str); 4] = [
 ];
 
 /// muir-sys's hand-over of System 2001, where PROM 2001 came from: the
-/// gitignored `ref/band-2001-y5` (`tests/system_2001.rs`).
+/// gitignored `ref/band-2001-y5`, which `tools/fetch-handover-2001.sh`
+/// fills with the pre-release `handover-2001-y5`, its sources' `sys/ubin/`
+/// files among them (`tests/system_2001.rs`).
 const BAND_2001: &str = "ref/band-2001-y5";
 
 /// **PROM 2001 is read from 36000, in partition order**, as PROM 2000 is
@@ -350,7 +352,10 @@ fn prom_2001_is_read_from_36000_in_partition_order() {
 fn prom_2001_is_the_hand_over_s() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(BAND_2001);
     if !dir.join("promh.mcr").exists() {
-        eprintln!("skipped: {} is not present", dir.display());
+        eprintln!(
+            "skipped: {} is not present; tools/fetch-handover-2001.sh fetches it",
+            dir.join("promh.mcr").display()
+        );
         return;
     }
     let bytes = std::fs::read(dir.join("promh.mcr")).unwrap();

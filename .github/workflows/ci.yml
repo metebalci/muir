@@ -18,6 +18,12 @@
 # hash, so a bump of the pin is one fresh download. Never the rolling
 # release: its bytes move, and a test run has to be repeatable.
 #
+# `handover-2001` does the same for revision 13 until System 2001 is
+# released (contract G2 §11.2): muir-sys's newest hand-over of System 2001,
+# a pre-release whose tag never moves, which the fetch script is pinned to by
+# digest, and QUUX's release beside it. It runs the tests that boot that
+# band and hold PROM 2001 to it, and fails if any of them skipped.
+#
 # The compiler version comes from rust-toolchain.toml, so it is pinned here
 # the same way it is pinned on a desk. `--locked` refuses to update
 # Cargo.lock, so a dependency added without regenerating it fails the build
@@ -152,6 +158,54 @@ jobs:
       # to the built-in one.
       - name: Tests, with QUUX's release
         run: cargo test --locked
+
+  handover-2001:
+    runs-on: ubuntu-latest
+    # A safety net, not a budget: the job takes far less. Without it a
+    # test that hangs runs until GitHub's six-hour limit.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-handover-2001-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # System 2000's disk too: the guard that revision 12's disk stops on
+      # revision 13 boots it.
+      - name: Cache QUUX's release
+        uses: actions/cache@v4
+        with:
+          path: vendor/system-2000
+          key: system-for-quux-${{ hashFiles('tools/fetch-system-for-quux.sh') }}
+
+      - name: Fetch QUUX's release
+        run: tools/fetch-system-for-quux.sh
+
+      - name: Cache the hand-over of System 2001
+        uses: actions/cache@v4
+        with:
+          path: ref/band-2001-y5
+          key: handover-2001-${{ hashFiles('tools/fetch-handover-2001.sh') }}
+
+      - name: Fetch the hand-over of System 2001
+        run: tools/fetch-handover-2001.sh
+
+      # System 2001 booted on revision 13 on both engines, restored, ticking,
+      # on the video controller and the file device, under H8a's checkers,
+      # and the guards between revisions; PROM 2001 held to the hand-over's.
+      # A test that found no band says "skipped:", which fails the job.
+      - name: Tests, with the hand-over of System 2001
+        run: |
+          cargo test --locked --test system_2001 --test quux_prom -- --nocapture 2>&1 | tee test.out
+          if grep -n 'skipped:' test.out; then exit 1; fi
 
   system-for-cadr:
     runs-on: ubuntu-latest
