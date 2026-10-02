@@ -123,6 +123,7 @@ const WORKLOADS: &[(&str, &str)] = &[
     ("intern", "(w-intern)"),
     ("print-scroll", "(w-print)"),
     ("compile-again", "(mapc #'compile '(w-ack w-fib w-cons w-muldiv))"),
+    ("bitblt", "(w-bitblt)"),
     // Not run unless named: the cost of switching stack groups, from the
     // listener's own shallow stack and from 500 frames deep, where every
     // switch has the PDL buffer's resident words to write out.
@@ -131,7 +132,7 @@ const WORKLOADS: &[(&str, &str)] = &[
 ];
 
 /// The workloads run when none is named: all but the switching ones.
-const DEFAULT_WORKLOADS: usize = 13;
+const DEFAULT_WORKLOADS: usize = 14;
 
 /// The definitions, typed once after login. `w-done` writes the marker.
 const DEFINITIONS: &[&str] = &[
@@ -146,6 +147,10 @@ const DEFINITIONS: &[&str] = &[
     "(defun w-bignum () (dotimes (i 21) (print (expt 3 300))))",
     "(defun w-intern () (dotimes (i 1500) (intern (format nil \"W-SYM-~D\" i))))",
     "(defun w-print () (dotimes (i 1000) (print i)))",
+    // BITBLT between two 512x256 one-bit arrays and within one, over a few
+    // sizes and alignments, with the ALU functions the window system uses;
+    // the last two overlap, as a scroll does, up and down.
+    "(defun w-bitblt () (let ((a (make-pixel-array 512 256 ':type 'art-1b)) (b (make-pixel-array 512 256 ':type 'art-1b))) (dotimes (i 40) (bitblt tv:alu-seta 480 200 a 0 0 b 0 0) (bitblt tv:alu-xor 480 200 a 3 5 b 17 1) (bitblt tv:alu-ior 100 50 a 1 0 b 40 9) (bitblt tv:alu-seta 32 32 a 0 0 b 33 2) (bitblt tv:alu-seta 480 200 b 0 8 b 0 0) (bitblt tv:alu-xor 480 200 b 0 0 b 5 8))))",
     "(defun w-switch (n) (if (zerop n) (progn (dotimes (i 2000) (process-allow-schedule)) 0) (1+ (w-switch (1- n)))))",
 ];
 
@@ -1087,7 +1092,7 @@ fn measure<E: Profiled>(
     type_echoed(
         &mut e,
         &mut k,
-        "(mapc #'compile '(w-done w-ack w-fib w-cons w-muldiv w-float w-array w-sort w-bignum w-intern w-print w-switch))",
+        "(mapc #'compile '(w-done w-ack w-fib w-cons w-muldiv w-float w-array w-sort w-bignum w-intern w-print w-bitblt w-switch))",
         &mut plain,
     );
     let ready = home.join("ready.done");
