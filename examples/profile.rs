@@ -41,9 +41,9 @@
 //! measurement, `MUIR_PREFETCH=page` fits it with the page's reach, which
 //! is no revision's, and `MUIR_PREFETCH=off` takes it out; `line` is
 //! revision 12's own.
-//! `MUIR_MAIN_MEMORY_BOARDS=<n>` gives QUUX `n` 64K-word boards of main
-//! memory, as `--main-memory-boards` does; 32, 2 M words, if not given, on
-//! every revision. Each revision boots its own built-in PROM, PROM 2001 on
+//! `MUIR_MAIN_MEMORY_SIZE=<n>MW` gives QUUX `n` megawords of main memory,
+//! as `--main-memory-size` does and written as it takes it; 2MW if not
+//! given, on every revision. Each revision boots its own built-in PROM, PROM 2001 on
 //! revision 13 and PROM 2000 below it.
 //! `MUIR_RTC=<s>`
 //! counts QUUX's real-time clock from second `s` of the Unix epoch in the
@@ -972,12 +972,30 @@ fn profile<E: Profiled + support::macro_dispatch::Executes>(
         // QUUX's own PROM at 36000, the pack on block-disk, the video controller, and
         // the file device serving the root as HOST's `/` and its `sys` and
         // `site` as `/sys` and `/site`, where the band's `SYS:` is.
-        // `MUIR_MAIN_MEMORY_BOARDS=<n>`: main memory in 64K-word boards, as
-        // `--main-memory-boards` counts it; 32, 2 M words, if not given, on
-        // every revision.
-        let boards = std::env::var("MUIR_MAIN_MEMORY_BOARDS")
-            .map(|v| v.parse().expect("MUIR_MAIN_MEMORY_BOARDS: a count of boards"))
-            .unwrap_or(muir::machine::MAIN_WORDS >> 16);
+        // `MUIR_MAIN_MEMORY_SIZE=<n>MW`: main memory in whole megawords, as
+        // `--main-memory-size` takes it, within the revision's range; 2MW if
+        // not given, on every revision.
+        let boards =
+            std::env::var("MUIR_MAIN_MEMORY_SIZE").map_or(muir::machine::MAIN_WORDS >> 16, |v| {
+                let n = v
+                    .strip_suffix("MW")
+                    .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "MUIR_MAIN_MEMORY_SIZE={v}: main memory is given in megawords, \
+                             with the unit MW, such as 32MW"
+                        )
+                    });
+                let range = geometry.main_memory_mw();
+                assert!(
+                    range.contains(&n),
+                    "MUIR_MAIN_MEMORY_SIZE={v}: this revision's main memory is {}MW to {}MW",
+                    range.start(),
+                    range.end()
+                );
+                n << 4
+            });
         let mut m = muir::machine::Machine::with_geometry(geometry, boards);
         // The revision's own PROM: PROM 2001 on revision 13, PROM 2000
         // below it.

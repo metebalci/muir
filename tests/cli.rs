@@ -913,7 +913,6 @@ const SHARED: &[&str] = &[
     "--keyboard-mapping",
     "--keyboard-mapping-dump",
     "--keyboard-mapping-trace",
-    "--main-memory-boards",
     "--no-auto-boot",
     "--no-pace",
     "--pace",
@@ -943,6 +942,7 @@ const CADR_ONLY: &[&str] = &[
     "--disk-multiplexor",
     "--io-board",
     "--main-memory",
+    "--main-memory-boards",
     "--no-debug-cable-listen",
     "--serial",
     "--timing-model",
@@ -950,8 +950,15 @@ const CADR_ONLY: &[&str] = &[
     "--tv-board",
     "--watch",
 ];
-const QUUX_ONLY: &[&str] =
-    &["--cache", "--file-root", "--memory-timing", "--rtc", "--sync-cycle-ticks", "--video-size"];
+const QUUX_ONLY: &[&str] = &[
+    "--cache",
+    "--file-root",
+    "--main-memory-size",
+    "--memory-timing",
+    "--rtc",
+    "--sync-cycle-ticks",
+    "--video-size",
+];
 
 /// **A flag of the other executable is refused by name, saying whose it
 /// is**, before anything it takes is read: `--cache is quux's, not

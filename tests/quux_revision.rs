@@ -85,7 +85,7 @@ fn the_switch_runs_revision_13() {
         assert_eq!(g.machine_id.map(|id| id >> 4 & 0o7777), Some(13), "{engine}: MACHINE-ID");
         assert_eq!(bits, 40, "{engine}: the word");
         assert_eq!(boards << 16, 32 << 20, "{engine}: 32 M words of main memory");
-        assert!(t.contains("memory: 512 boards, 32 MW"), "{engine}: {t}");
+        assert!(t.contains("memory: 32MW\n"), "{engine}: {t}");
         assert!(t.contains("machine: quux, revision 13: "), "{engine}: {t}");
         assert!(!t.contains("machine: quux, revision 12"), "{engine}: {t}");
         assert!(t.contains("QUUX's data/quux-promh.mcr, version 2001"), "{engine}: {t}");
@@ -120,7 +120,7 @@ fn unset_is_revision_12() {
             let (g, bits, boards) = checkpointed(&chk);
             assert_eq!(g, Geometry::QUUX, "{set:?} {engine}");
             assert_eq!((bits, boards), (32, 32), "{set:?} {engine}");
-            assert!(t.contains("memory: 32 boards, 2 MW"), "{set:?} {engine}: {t}");
+            assert!(t.contains("memory: 2MW\n"), "{set:?} {engine}: {t}");
             assert!(t.contains("machine: quux, revision 12: "), "{set:?} {engine}: {t}");
             assert!(
                 t.contains("QUUX's data/quux-promh-2000.mcr, version 2000"),
@@ -157,27 +157,6 @@ fn cadr_does_not_read_it() {
         assert!(t.contains("memory: 32 boards, 2 MW"), "{v}: {t}");
         assert!(!t.contains("revision"), "{v}: {t}");
     }
-}
-
-/// **Main memory by revision**: revision 13's is 1 to 1,024 boards, 64 M
-/// words (G1 §3.2); revision 12's stops at 60, where its Xbus I/O space
-/// begins.
-#[test]
-fn main_memory_by_revision() {
-    let out = quux()
-        .env(SWITCH, "13")
-        .args(["--micro", "--main-memory-boards", "64", "--stop-after", "1"])
-        .run();
-    let t = text(&out);
-    assert!(out.status.success(), "{t}");
-    assert!(t.contains("memory: 64 boards, 4 MW"), "{t}");
-    let out = quux()
-        .env(SWITCH, "13")
-        .args(["--micro", "--main-memory-boards", "1025", "--stop-after", "1"])
-        .run();
-    refused(&out, "--main-memory-boards wants a count from 1 to 1024");
-    let out = quux().args(["--micro", "--main-memory-boards", "61", "--stop-after", "1"]).run();
-    refused(&out, "--main-memory-boards wants a count from 1 to 60");
 }
 
 /// **Each revision refuses the other's checkpoint**, on both engines,

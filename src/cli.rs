@@ -26,10 +26,13 @@
 //! `rtl`'s twin of that board, the same timing, no gates --- which is how
 //! one board is taken out of the picture while something else is under
 //! investigation, rather than a machine to run for its own sake.
-//! `--main-memory` is main memory; `--main-memory-boards` is how many
-//! 64K-word boards the machine has --- main memory on every engine, the
-//! boards on the Xbus on `chip` --- 32 by default for the two million
-//! words. `--io-board` is the I/O board and `--tv` the display.
+//! On `cadr`, `--main-memory` is main memory's board and
+//! `--main-memory-boards` is how many 64K-word boards the machine has ---
+//! main memory on every engine, the boards on the Xbus on `chip` --- 32 by
+//! default for the two million words. QUUX has no memory boards: on
+//! `quux`, `--main-memory-size` is how much main memory, in whole
+//! megawords with the unit written, `--main-memory-size 32MW`.
+//! `--io-board` is the I/O board and `--tv` the display.
 //! `--tv-board` is which display, **on every engine**: the SIMPLE TV, the
 //! black-and-white board System 100 drives, or the LISPM TV that replaced
 //! it in December 1980. One model serves either board --- MIT's own
@@ -277,7 +280,7 @@ use crate::disk_unit::{Geometry, Unit};
 use crate::engine::Engine;
 use crate::isa::Insn;
 use crate::lashup::{CableEnd, Connector, FreeRunning, Lashup, Plug, Remote, Turn};
-use crate::machine::Machine;
+use crate::machine::{Machine, megawords};
 use crate::micro::Micro;
 use crate::netlist;
 use crate::part::Level;
@@ -1049,6 +1052,7 @@ const OWN_FLAGS: &[(&str, Whose)] = &[
     ("--disk-multiplexor", Whose::Cadr),
     ("--io-board", Whose::Cadr),
     ("--main-memory", Whose::Cadr),
+    ("--main-memory-boards", Whose::Cadr),
     ("--no-debug-cable-listen", Whose::Cadr),
     ("--serial", Whose::Cadr),
     ("--timing-model", Whose::Cadr),
@@ -1057,6 +1061,7 @@ const OWN_FLAGS: &[(&str, Whose)] = &[
     ("--watch", Whose::Cadr),
     ("--cache", Whose::Quux),
     ("--file-root", Whose::Quux),
+    ("--main-memory-size", Whose::Quux),
     ("--memory-timing", Whose::Quux),
     ("--rtc", Whose::Quux),
     ("--sync-cycle-ticks", Whose::Quux),
@@ -1101,7 +1106,7 @@ const USAGE_QUUX: &str = "usage: quux [--micro|--rtl] [--cache <words>] [--chaos
             [--file-root [<name>=]<folder>[,ro]]
             [--glass-tty [<endpoint>][,ro]] [--keyboard-boot <keys>]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
-            [--keyboard-mapping-trace] [--main-memory-boards <n>]
+            [--keyboard-mapping-trace] [--main-memory-size <n>MW]
             [--memory-timing <r>,<w>] [--no-auto-boot] [--no-pace]
             [--pace] [--prom <file>] [--resume <file>]
             [--rtc <unix-seconds>|host] [--stop-after <microcycles>]
@@ -1545,11 +1550,19 @@ const HELP: &[(Whose, &str)] = &[
                                netlist]",
     ),
     (
-        Whose::Both,
+        Whose::Cadr,
         "  --main-memory-boards <n>     how many 64K-word boards, 1 to 60: main
                                memory on every engine, and on chip the
                                boards on the backplane. [default: 32, the
                                two million words]",
+    ),
+    (
+        Whose::Quux,
+        "  --main-memory-size <n>MW     how much main memory, in whole megawords with
+                               the unit written: 1MW to 64MW on revision 13,
+                               1MW to 3MW on revision 12. No other unit and
+                               no fraction. [default: 32MW on revision 13,
+                               2MW on revision 12]",
     ),
     (
         Whose::Both,
@@ -1632,7 +1645,19 @@ const HELP: &[(Whose, &str)] = &[
                                version 2001]",
     ),
     (
-        Whose::Both,
+        Whose::Quux,
+        "  --resume <file>              start from a checkpoint instead of cold: the
+                               engine that wrote it, the same pack under it,
+                               the Chaosnet plugged in afresh, and as much
+                               main memory as it had, which
+                               --main-memory-size may not gainsay. The
+                               button is not pressed, and the stops count
+                               from here. A checkpoint taken halted resumes
+                               halted: continue at the prompt, or
+                               --continue, runs it on.",
+    ),
+    (
+        Whose::Cadr,
         "  --resume <file>              start from a checkpoint instead of cold: the
                                engine that wrote it, the same pack under it,
                                the Chaosnet plugged in afresh, and as many
@@ -1890,6 +1915,15 @@ fn executable_of(machine: crate::machine::Geometry) -> &'static str {
 /// said of the command line and of a file of flags alike.
 fn not_this_executables(flag: &str, exe: &str) -> Option<String> {
     match (whose(flag), exe) {
+        // QUUX's main memory is an amount, not boards, and the flag that
+        // gave it in boards went without an alias; `--main-memory` is the
+        // CADR's board, netlist or model.
+        (Whose::Cadr, "quux") if flag == "--main-memory-boards" || flag == "--main-memory" => {
+            Some(format!(
+                "{flag} is cadr's, not quux's: quux's main memory is an amount, \
+                 --main-memory-size <n>MW, such as --main-memory-size 32MW"
+            ))
+        }
         (Whose::Quux, "cadr") => Some(format!("{flag} is quux's, not cadr's")),
         (Whose::Cadr, "quux") => Some(format!("{flag} is cadr's, not quux's")),
         _ if flag == "--machine" => Some(format!(
@@ -2441,6 +2475,37 @@ fn shown(path: &Path) -> String {
         Ok(p) => p.display().to_string(),
         Err(_) => path.display().to_string(),
     }
+}
+
+/// QUUX's main memory from `--main-memory-size`'s word, in 64K-word boards
+/// as the machine is built: a whole number of megawords with the unit
+/// written, `32MW`, in [`Geometry::main_memory_mw`]'s range for the
+/// revision. Nothing else is taken --- no KW, no fraction, and never a
+/// bare M, which could be read as megabytes --- and the word is
+/// case-sensitive, as every flag's word is.
+///
+/// [`Geometry::main_memory_mw`]: crate::machine::Geometry::main_memory_mw
+fn main_memory_amount(
+    word: Option<&str>,
+    geometry: crate::machine::Geometry,
+) -> Result<usize, String> {
+    let unit = "main memory is given in megawords, with the unit MW, such as 32MW";
+    let Some(word) = word else { return Err(format!("--main-memory-size: {unit}")) };
+    let n = word
+        .strip_suffix("MW")
+        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|n| n.parse::<usize>().ok())
+        .ok_or_else(|| format!("--main-memory-size {word}: {unit}"))?;
+    let range = geometry.main_memory_mw();
+    if !range.contains(&n) {
+        return Err(format!(
+            "--main-memory-size {word}: revision {}'s main memory is {}MW to {}MW",
+            geometry.revision().unwrap_or(0),
+            range.start(),
+            range.end()
+        ));
+    }
+    Ok(n << 4)
 }
 
 /// Main memory's size for `boards` of 64K words, in KW, or in MW when it
@@ -4421,13 +4486,12 @@ fn resume_engine<E: Engine>(
     refuse_color_tv(path, e.machine().color_tv.is_some(), color_tv.fitted());
     refuse_rtc(path, e.machine().rtc, rtc);
     let m = e.machine();
-    eprintln!(
-        "resumed: {} at {} microcycles, {} ns, {} memory boards",
-        path.display(),
-        m.cycles,
-        m.ns,
-        m.memory_boards()
-    );
+    let memory = if m.geometry.revision().is_some() {
+        format!("{} of main memory", megawords(m.main.len()))
+    } else {
+        format!("{} memory boards", m.memory_boards())
+    };
+    eprintln!("resumed: {} at {} microcycles, {} ns, {memory}", path.display(), m.cycles, m.ns);
     // `--continue`: the prompt's `continue`, before the first microcycle.
     if go_on {
         if halted(e) { take_off(e) } else { say_running_already() }
@@ -5535,6 +5599,16 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                     Err(e) => usage(&format!("--chaos-udp-peer {arg}: {e}")),
                 }
             }
+            // QUUX's main memory is an amount, [`main_memory_amount`].
+            (None, "--main-memory-size") => {
+                match main_memory_amount(args.next().as_deref(), geometry) {
+                    Ok(b) => {
+                        boards = b;
+                        boards_given = true;
+                    }
+                    Err(e) => usage(&e),
+                }
+            }
             (None, "--main-memory") => match args.next().as_deref() {
                 Some("netlist") => main_memory_model = false,
                 Some("model") => main_memory_model = true,
@@ -5543,9 +5617,8 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
             // Main memory on every engine, and the backplane on chip: from
             // one board to the sixty the Xbus I/O space leaves room for
             // (`busint::MAX_MEMORY_BOARDS`). Zero is no memory; the model
-            // memory on chip is `--main-memory model`. Revision 13 has no
-            // Xbus, and its boards reach 64 M words
-            // (`Geometry::max_memory_boards`).
+            // memory on chip is `--main-memory model`. The CADR's alone:
+            // QUUX's main memory is `--main-memory-size <n>MW`.
             (None, "--main-memory-boards") => match args.next().and_then(|v| v.parse().ok()) {
                 Some(b) if (1..=geometry.max_memory_boards()).contains(&b) => {
                     boards = b;
@@ -6162,11 +6235,20 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
     }
     if let Some((path, c)) = &resume {
         if boards_given && boards != c.memory_boards {
-            usage(&format!(
-                "--resume {}: the checkpoint has {} memory boards, --main-memory-boards {boards}",
-                path.display(),
-                c.memory_boards
-            ));
+            usage(&if exe == "quux" {
+                format!(
+                    "--resume {}: the checkpoint has {} of main memory, --main-memory-size {}",
+                    path.display(),
+                    megawords(c.memory_boards << 16),
+                    megawords(boards << 16)
+                )
+            } else {
+                format!(
+                    "--resume {}: the checkpoint has {} memory boards, --main-memory-boards {boards}",
+                    path.display(),
+                    c.memory_boards
+                )
+            });
         }
         boards = c.memory_boards;
     }
@@ -6427,7 +6509,11 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
             Which::Chip => ", netlist boards on the Xbus",
             _ => "",
         };
-        writeln!(s, "memory: {boards} boards, {}{memory_kind}", memory_size(boards)).unwrap();
+        if exe == "quux" {
+            writeln!(s, "memory: {}", megawords(boards << 16)).unwrap();
+        } else {
+            writeln!(s, "memory: {boards} boards, {}{memory_kind}", memory_size(boards)).unwrap();
+        }
         if which == Which::Chip {
             let kind = |netlist: bool| if netlist { "netlist" } else { "model" };
             let tv_kind = tv_board.name();
@@ -6675,8 +6761,12 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
             writeln!(s, "checkpoint: {} at the stop", p.display()).unwrap();
         }
         if let Some((p, c)) = &resume {
-            writeln!(s, "resume: {}, {} with {} boards", p.display(), c.engine, c.memory_boards)
-                .unwrap();
+            let memory = if exe == "quux" {
+                format!("{} of main memory", megawords(c.memory_boards << 16))
+            } else {
+                format!("{} boards", c.memory_boards)
+            };
+            writeln!(s, "resume: {}, {} with {memory}", p.display(), c.engine).unwrap();
         }
         let mut stops = Vec::new();
         if let Some(n) = cycles {

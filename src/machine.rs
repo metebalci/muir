@@ -45,6 +45,18 @@ pub const MAIN_WORDS: usize = 2 * 1024 * 1024;
 /// have (contract G2 §3), 512 boards of 64K.
 pub const MAIN_WORDS_13: usize = 32 * 1024 * 1024;
 
+/// `words` of main memory in megawords, as QUUX says its memory and
+/// `--main-memory-size` takes it: `32MW`. An amount that is not whole MW, which
+/// only a checkpoint older than the flag can hold, is said with its
+/// fraction, `2.0625MW`.
+pub fn megawords(words: usize) -> String {
+    if words.is_multiple_of(1 << 20) {
+        format!("{}MW", words >> 20)
+    } else {
+        format!("{}MW", words as f64 / f64::from(1 << 20))
+    }
+}
+
 /// The most main memory revision 13 has: 64 M words, 1,024 boards of 64K
 /// (contract G1 §3.2, "32 M words to begin, up to 64 M"). Its physical
 /// space has nothing from there to the frame buffer window.
@@ -322,6 +334,14 @@ impl Geometry {
     /// [`MAX_MAIN_WORDS_13`] on a 40-bit machine.
     pub fn max_memory_boards(self) -> usize {
         if self.wide() { MAX_MAIN_WORDS_13 >> 16 } else { busint::MAX_MEMORY_BOARDS }
+    }
+
+    /// QUUX's main memory in whole megawords, as `--main-memory-size` takes
+    /// it: from 1MW to as many whole MW as [`Geometry::max_memory_boards`]
+    /// holds --- 64MW on revision 13, and on revision 12 3MW, its sixty
+    /// boards being 3.75 M words.
+    pub fn main_memory_mw(self) -> std::ops::RangeInclusive<usize> {
+        1..=self.max_memory_boards() >> 4
     }
 
     /// A word's bits, [`Geometry::word_bits`] of ones.
@@ -2721,10 +2741,18 @@ impl Machine {
         r.u32s_into(&mut self.l2_map[..l2])?;
         let boards = r.u32()? as usize;
         if boards != self.memory_boards() {
-            return Err(crate::checkpoint::bad(format!(
-                "{boards} memory boards, and this machine has {}: --main-memory-boards {boards}",
-                self.memory_boards()
-            )));
+            // QUUX's main memory is an amount, the CADR's boards.
+            return Err(crate::checkpoint::bad(if self.geometry.revision().is_some() {
+                let (had, has) = (megawords(boards << 16), megawords(self.main.len()));
+                format!(
+                    "{had} of main memory, and this machine has {has}: --main-memory-size {had}"
+                )
+            } else {
+                format!(
+                    "{boards} memory boards, and this machine has {}: --main-memory-boards {boards}",
+                    self.memory_boards()
+                )
+            }));
         }
         r.words_into(&mut self.main)?;
         self.bus_error = r.u16()?;

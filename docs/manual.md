@@ -727,7 +727,8 @@ Default: off --- and the first loss is said anyway.
 
 ### `--main-memory netlist|model`
 
-`cadr` only.
+`cadr` only. `quux`'s main memory is an amount,
+[`--main-memory-size`](#--main-memory-size-nmw).
 
 **chip:** main memory as MIT's board or as `rtl`'s model of it.
 
@@ -741,10 +742,33 @@ Default: `netlist`.
 
 ### `--main-memory-boards <n>`
 
-How many 64K-word boards, 1 to 60: main memory on every engine, and on
-`chip` the boards on the backplane.
+`cadr` only: how many 64K-word boards, 1 to 60: main memory on every
+engine, and on `chip` the boards on the backplane. `quux` refuses it,
+naming [`--main-memory-size`](#--main-memory-size-nmw).
 
 Default: 32, the two million words.
+
+### `--main-memory-size <n>MW`
+
+`quux` only: how much main memory, in whole megawords with the unit
+written, `--main-memory-size 32MW`. QUUX has no memory boards, so its
+memory is an amount. Revision 13 takes 1MW to 64MW and revision 12 1MW to 3MW, the
+whole megawords below its sixty 64K-word boards' 3.75 M words.
+
+Nothing else is taken: no other unit (`32KW`, `32MB`), no fraction
+(`1.5MW`), no bare number, and never a bare M (`32M`), which could be read
+as megabytes. The unit is case-sensitive, as every flag's word is, so
+`32mw` is refused too. Each is refused saying how the amount is written:
+
+```text
+quux: --main-memory-size 32M: main memory is given in megawords, with the unit MW, such as 32MW
+```
+
+and an amount outside the revision's range is refused naming the range.
+The start says the amount, `memory: 32MW`, and so do a resume and the
+prompt's `info`.
+
+Default: 32MW on revision 13, 2MW on revision 12.
 
 ### `--no-auto-boot`
 
@@ -858,9 +882,10 @@ built in, `data/quux-promh-2000.mcr` ([QUUX](quux.md#its-boot-prom-in-its-own-ad
 ### `--resume <file>`
 
 Start from a checkpoint instead of cold: the engine that wrote it, the same
-pack under it, the Chaosnet plugged in afresh, and as many memory boards as
-it had, which `--main-memory-boards` may not gainsay. On `chip` the boards
-on the backplane have to be the checkpoint's too.
+pack under it, the Chaosnet plugged in afresh, and as much main memory as it
+had, which `--main-memory-boards` on `cadr`, and `--main-memory-size` on
+`quux`, may not gainsay. On `chip` the boards on the backplane have to be the
+checkpoint's too.
 
 The boot button is not pressed: what it would set is what the checkpoint
 replaces. The stops count from here.

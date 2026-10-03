@@ -1816,9 +1816,9 @@ boots with returns fused under the checkers of
 `tests/support/macro_dispatch.rs`, with its own fill and with the
 generic one, finding nothing, and fills a stale memory again.
 
-**Main memory** is 32 M words by default, the boards' (G2 §3), 512 of
-`--main-memory-boards`' 64K-word boards, which reach 1,024, 64 M words
-(G1 §3.2), where revision 12's stop at 60 (`tests/quux_revision.rs`).
+**Main memory** is 32 M words by default, the boards' (G2 §3), and
+`--main-memory-size` gives it in whole megawords, 1MW to 64MW (G1 §3.2), where
+revision 12 takes 1MW to 3MW, 2MW by default (`tests/quux_main_memory.rs`).
 At 32 M words muir holds 256 MiB for it, 8 bytes a word. A
 checkpoint's body is 168,204,521 bytes, main memory 5 bytes a word; the
 file packs runs of zeros, and is 248 bytes of an empty memory and

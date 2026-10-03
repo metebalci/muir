@@ -417,8 +417,9 @@ pub struct Checkpoint {
     pub word_bits: u32,
     /// The engine that wrote it, `micro` or `rtl`.
     pub engine: String,
-    /// How many 64K-word memory boards the machine had: on revision 13,
-    /// main memory in 64K-word units.
+    /// How many 64K-word memory boards the machine had: on QUUX, which
+    /// has no boards, main memory in 64K-word units, sixteen to each MW
+    /// `--main-memory-size` gives.
     pub memory_boards: usize,
     pub body: Vec<u8>,
 }
