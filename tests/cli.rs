@@ -906,6 +906,7 @@ const SHARED: &[&str] = &[
     "--chaos-udp-peer",
     "--checkpoint",
     "--config",
+    "--continue",
     "--disk-pack",
     "--glass-tty",
     "--keyboard-boot",

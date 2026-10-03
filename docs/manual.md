@@ -399,6 +399,15 @@ Without it `cadr` reads `.cadrrc` and `quux` `.quuxrc`, in the directory it
 was run from, or failing that in the home directory. [Flags in a
 file](#flags-in-a-file) has the rest.
 
+### `--continue`
+
+With [`--resume`](#--resume-file), and refused without it: the prompt's
+[`continue`](#continue-c) at the start, before the first microcycle. A
+checkpoint taken with the machine halted, its `RUN` clear --- as a board's
+checkpoint is taken --- runs on at once from where it stood, with no
+reset and no prompt needed. On a checkpoint whose machine was running it
+does nothing, and says so. On all three engines and both machines.
+
 ### `--debug-cable-connect [<endpoint>|0x<address>]`
 
 `cadr` only.
@@ -745,7 +754,9 @@ engines.
 
 The run starts held at the prompt, so that the machine can be looked at as
 it came up; `boot` there presses the button, and the machine runs from that.
-Nothing else starts it: `continue` and `step` say so.
+`continue` sets `RUN` without the button, and the machine runs from the
+state the power left it in, with no boot trap; `step` does neither and says
+so.
 
 Default: muir presses the button for you.
 
@@ -853,6 +864,12 @@ on the backplane have to be the checkpoint's too.
 
 The boot button is not pressed: what it would set is what the checkpoint
 replaces. The stops count from here.
+
+A checkpoint carries `RUN` as it stood. One taken with the machine halted
+--- a board's checkpoint is --- resumes halted, and the prompt's
+[`continue`](#continue-c), or [`--continue`](#--continue) at the start,
+sets `RUN` and runs it on from where it stood; `boot` starts it afresh from
+the PROM.
 
 ### `--rtc <unix-seconds>|host`
 
@@ -1218,8 +1235,20 @@ No microcycle runs until `continue` or `step`. What ^C does.
 
 ### `continue, c`
 
-Run on. A halted machine, its `RUN` clear, says that this is not what starts
-one.
+Run on, from a hold. On a halted machine, its `RUN` clear, it sets `RUN` as
+a console does --- CC's `CC-START-MACH` ends `(SPY-WRITE SPY-CLK 1)`, "TAKE
+OFF", in System 100's `sys/cc/lcadrd.lisp` --- and the machine runs on from
+its PC, its pipeline and its memories as they stand: no reset, the PROM not
+put back, the console's other registers untouched. `SRUN` follows `RUN` at
+the next master clock edge, which runs no microcycle. That is how a
+checkpoint taken halted, as a board takes one, is run on; `boot` is the
+button and starts the machine afresh. On a machine that is running and not
+held it does nothing, and says so.
+
+On `rtl` and `micro` it is the clock control register's write, so `STEP`,
+`NOP11`, `IDEBUG` and `LDSTAT` go down with it; on `chip` it sets the 74S74
+at OLORD1 1A14 that holds `RUN` and leaves the 74S175 at 1A09 that holds
+the other four as it stands.
 
 ### `step [n]`
 

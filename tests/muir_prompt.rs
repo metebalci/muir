@@ -90,8 +90,9 @@ fn a_count_past_the_end_of_a_memory_is_the_rest_of_it() {
 }
 
 /// **`--no-auto-boot` leaves the boot button unpressed**: the run starts
-/// held with the machine halted, `continue` and `step` say that they are
-/// not what starts one, and `boot` presses the button and runs it.
+/// held with the machine halted, `step` says that it is not what starts
+/// one, and `boot` presses the button and runs it. (`continue` would set
+/// `RUN` without the button: `tests/muir_continue.rs`.)
 #[test]
 fn no_auto_boot_waits_for_the_boot_command() {
     let mut child = cadr()
@@ -99,7 +100,7 @@ fn no_auto_boot_waits_for_the_boot_command() {
         .stdin(Stdio::piped())
         .start();
     let mut stdin = child.stdin();
-    write!(stdin, "continue\nstep 2\nboot\n").unwrap();
+    write!(stdin, "step 2\nboot\n").unwrap();
     drop(stdin);
     let out = child.wait();
     let t = text(&out);
@@ -107,8 +108,8 @@ fn no_auto_boot_waits_for_the_boot_command() {
     assert!(t.contains("start: held, and the boot button not pressed"), "the start says so:\n{t}");
     assert_eq!(
         t.matches("the machine is halted, its RUN clear").count(),
-        2,
-        "continue and step each said why they did nothing:\n{t}"
+        1,
+        "step said why it did nothing:\n{t}"
     );
     let pcs: Vec<&str> = t.lines().filter(|l| l.starts_with("PC ")).collect();
     assert_eq!(pcs.len(), 1, "only the boot says where the machine is:\n{t}");

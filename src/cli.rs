@@ -212,10 +212,12 @@
 //! holds the machine at the prompt; ^C while held, or with no prompt to
 //! go on from, ends the run as `quit` does. `--no-auto-boot` leaves the
 //! boot button unpressed, as a CADR is when the power comes on, and
-//! starts the run held for the prompt's `boot` to press it --- which
-//! starts the machine, since the button is all that does; a hold
+//! starts the run held for the prompt's `boot` to press it; a hold
 //! nothing can run on --- stdin having ended --- ends the run rather
-//! than standing there.
+//! than standing there. `continue` on a halted machine, its `RUN`
+//! clear, sets `RUN` as a console does and runs it on from where it
+//! stands, with no reset: that is how a checkpoint taken halted, as a
+//! board takes one, runs on, and `--continue` does it at the start.
 //!
 //! A machine that stops itself is held at the prompt and says so, rather
 //! than being run on through: `HALT-CONS` under `ERRSTOP` --- what System
@@ -1067,7 +1069,7 @@ const USAGE_CADR: &str = "usage: cadr [--micro|--rtl|--chip] [--chaos-address <a
             [--chaos-udp-default-peer <host>[:<port>]]
             [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
             [--color-terminal [<endpoint>]] [--color-tv [netlist|model]]
-            [--color-tv-capture <gif>] [-c|--config <file>]
+            [--color-tv-capture <gif>] [-c|--config <file>] [--continue]
             [--debug-cable-connect [<endpoint>|0x<address>]]
             [--debug-cable-listen [<endpoint>]] [--debug-in-process]
             [--debuggee-chaos-address <address>]
@@ -1095,7 +1097,7 @@ const USAGE_QUUX: &str = "usage: quux [--micro|--rtl] [--cache <words>] [--chaos
             [--chaos-trace] [--chaos-udp [<endpoint>]]
             [--chaos-udp-default-peer <host>[:<port>]]
             [--chaos-udp-peer <address>@<host>:<port>] [--checkpoint <file>]
-            [-c|--config <file>] [--disk-pack <image>[,ro]]
+            [-c|--config <file>] [--continue] [--disk-pack <image>[,ro]]
             [--file-root [<name>=]<folder>[,ro]]
             [--glass-tty [<endpoint>][,ro]] [--keyboard-boot <keys>]
             [--keyboard-mapping <file>] [--keyboard-mapping-dump]
@@ -1259,6 +1261,14 @@ const HELP: &[(Whose, &str)] = &[
                                directory --- the first of the three there,
                                not all of them. MUIR_RC names a file in
                                place of the two that are looked for.",
+    ),
+    (
+        Whose::Both,
+        "  --continue                   with --resume: set RUN at the start, as the
+                               prompt's continue does, so that a checkpoint
+                               taken with the machine halted runs on from
+                               where it stood, with no reset. On a running
+                               checkpoint it does nothing and says so.",
     ),
     (
         Whose::Cadr,
@@ -1547,9 +1557,9 @@ const HELP: &[(Whose, &str)] = &[
                                when the power comes on: RUN clear and
                                nothing running. The run starts held at the
                                prompt, and boot there presses the button;
-                               nothing else starts it, and continue and step
-                               say so. [default: muir presses the button for
-                               you]",
+                               continue sets RUN without it, and step says
+                               it does neither. [default: muir presses the
+                               button for you]",
     ),
     (
         Whose::Cadr,
@@ -1630,7 +1640,9 @@ const HELP: &[(Whose, &str)] = &[
                                --main-memory-boards may not gainsay. On chip
                                the boards on the backplane have to be the
                                checkpoint's too. The button is not pressed,
-                               and the stops count from here.",
+                               and the stops count from here. A checkpoint
+                               taken halted resumes halted: continue at the
+                               prompt, or --continue, runs it on.",
     ),
     (
         Whose::Quux,
@@ -3242,11 +3254,14 @@ impl Hold {
                 }
                 Ok(Some(Command::Continue)) => {
                     if halted(e) {
-                        say_halted();
+                        take_off(e);
+                        self.on = false;
                     } else if let Some(why) = machrun_low(e) {
                         say_machrun_low(why);
-                    } else {
+                    } else if self.on {
                         self.on = false;
+                    } else {
+                        say_running_already();
                     }
                 }
                 Ok(Some(Command::Step(n))) => {
@@ -3693,10 +3708,48 @@ fn halted<E: Engine>(e: &E) -> bool {
     !e.machine().clock_control.run
 }
 
-/// Why `continue` and `step` do nothing for a halted machine.  Only the
-/// button starts one, on the board and here.
+/// Why `step` does nothing for a halted machine: `continue` sets `RUN`
+/// and runs it on from where it stands, and the button starts it afresh.
 fn say_halted() {
-    println!("the machine is halted, its RUN clear: boot presses the button that starts it");
+    println!(
+        "the machine is halted, its RUN clear: continue sets RUN and runs it on from where it stands, boot presses the button that starts it"
+    );
+}
+
+/// **`RUN` set as a console sets it, with no reset**: the prompt's
+/// `continue` and `--continue` on a halted machine, which is how a board's
+/// checkpoint comes, taken with `RUN` cleared.  CC's `CC-START-MACH` ends
+/// `(SPY-WRITE SPY-CLK 1) ;TAKE OFF` (System 100's `sys/cc/lcadrd.lisp`):
+/// the clock control register written with `RUN` alone up, `STEP`,
+/// `NOP11`, `IDEBUG` and `LDSTAT` down.  `SRUN` follows it at the next
+/// master clock edge, and the machine runs from its PC, its pipeline and
+/// its memories as they stand; nothing of the console's registers is
+/// reset and the PROM is not put back, which is what `boot` does.
+fn take_off<E: Engine>(e: &mut E) {
+    e.spy_write(crate::spy::CLK, 1);
+    let prom = if e.machine().in_prom(e.pc()) { " in the PROM" } else { "" };
+    say_took_off(e.pc(), prom);
+}
+
+/// [`take_off`] on a netlist machine: `RUN`, the 74S74 at OLORD1 1A14,
+/// set where `-LDCLK` would clock `SPY0` up into it, and the board settled
+/// on it.  The 74S175 at 1A09 that the same write strobe loads with
+/// `STEP`, `NOP11`, `IDEBUG` and `LDSTAT` is left as it stands, there
+/// being no write here to clock it; a halted checkpoint has them down.
+fn take_off_chip(c: &mut Chip, run: netlist::NetId, pc_nets: &[netlist::NetId], prom: bool) {
+    c.set_state_bit("OLORD1", "1A14", 0, true);
+    debug_assert_eq!(c.net(run), Level::High, "RUN is bit 0 of the 74S74 at 1A14, pin 5");
+    say_took_off(c.read(pc_nets) as u16, if prom { " in the PROM" } else { "" });
+}
+
+/// What [`take_off`] says, on every engine.
+fn say_took_off(pc: u16, prom: &str) {
+    println!("continue: RUN set; the machine runs on from PC {pc:o}{prom}, with no reset");
+}
+
+/// What `continue` says to a machine that is running and not held.
+fn say_running_already() {
+    println!("continue: the machine is running already");
 }
 
 /// Where a netlist machine is, for the prompt.  [`say_pc`]'s counterpart:
@@ -4330,6 +4383,7 @@ fn resume_engine<E: Engine>(
     color_tv: ColorTv,
     (geometry, rtc): (crate::machine::Geometry, crate::machine::Rtc),
     resume: &(PathBuf, Checkpoint),
+    go_on: bool,
 ) {
     let (path, c) = resume;
     if c.engine != name {
@@ -4374,6 +4428,10 @@ fn resume_engine<E: Engine>(
         m.ns,
         m.memory_boards()
     );
+    // `--continue`: the prompt's `continue`, before the first microcycle.
+    if go_on {
+        if halted(e) { take_off(e) } else { say_running_already() }
+    }
 }
 
 /// Writes a recording of the main screen to `path` and says how big it
@@ -4435,6 +4493,10 @@ struct ChipMachine {
     srun: netlist::NetId,
     errhalt: netlist::NetId,
     stathalt: netlist::NetId,
+    /// `RUN`, the 74S74 at OLORD1 1A14 that `-LDCLK` clocks `SPY0` into
+    /// and `-BOOT` presets: clear, the machine is halted, and the prompt's
+    /// `continue` sets it ([`take_off_chip`]).
+    run_net: netlist::NetId,
     /// `-BOOT2`, the light panel's boot button --- the MBCPIN drawing marks
     /// connector 1AJ2 "TO LIGHT PANEL" --- for the prompt's `boot` to press
     /// again. `-BOOT1` is the other input, the Unibus boot line the keyboard
@@ -4504,6 +4566,7 @@ fn chip_machine(
     let promdisable = n.by_name_id("PROMDISABLE").unwrap();
     let boot1 = n.by_name_id("-BOOT1").unwrap();
     let srun = n.by_name_id("SRUN").unwrap();
+    let run_net = n.by_name_id("RUN").unwrap();
     let errhalt = n.by_name_id("-ERRHALT").unwrap();
     let stathalt = n.by_name_id("-STATHALT").unwrap();
     let mut skipped = 0;
@@ -4524,6 +4587,7 @@ fn chip_machine(
         srun,
         errhalt,
         stathalt,
+        run_net,
         boot,
     }
 }
@@ -4669,7 +4733,7 @@ fn time_chip(
     mut glass: Option<&mut Glass>,
     serial: Option<&mut Endpoint>,
     run: Run,
-    resume: Option<(PathBuf, Checkpoint)>,
+    (resume, go_on): (Option<(PathBuf, Checkpoint)>, bool),
     tv_board: TvBoard,
     color_tv: ColorTv,
     watch: Option<WatchSpec>,
@@ -4698,6 +4762,7 @@ fn time_chip(
         srun,
         errhalt,
         stathalt,
+        run_net,
         boot,
         // A resume brings the board up but does not press the button: what
         // the button and the power-on set is what the checkpoint replaces.
@@ -4723,6 +4788,15 @@ fn time_chip(
         Some(p) => resume_chip(&mut cpu, &mut clk, &mut far, tv_board, color_tv, p),
         None => 0,
     };
+    // `--continue`: the prompt's `continue`, before the first microcycle.
+    if go_on {
+        if cpu.net(run_net) == Level::High {
+            say_running_already();
+        } else {
+            let prom = cpu.net(promdisable) != Level::High;
+            take_off_chip(&mut cpu, run_net, &pc_nets, prom);
+        }
+    }
     let mut serial = serial;
     // The far end of the null-modem cable goes on the netlist board's J9
     // only when `--serial` opened an endpoint: without one the board pays
@@ -4968,10 +5042,19 @@ fn time_chip(
                         held = true;
                         say_pc_chip(&m.cpu, &pc_nets, &ir_nets, ran, prom_enabled(&m.cpu));
                     }
-                    Ok(Some(Command::Continue)) => match stopped_itself(&m.cpu) {
-                        Some(why) => say_machrun_low(why),
-                        None => held = false,
-                    },
+                    Ok(Some(Command::Continue)) => {
+                        if m.cpu.net(run_net) != Level::High {
+                            let prom = prom_enabled(&m.cpu);
+                            take_off_chip(&mut m.cpu, run_net, &pc_nets, prom);
+                            held = false;
+                        } else if let Some(why) = stopped_itself(&m.cpu) {
+                            say_machrun_low(why);
+                        } else if held {
+                            held = false;
+                        } else {
+                            say_running_already();
+                        }
+                    }
                     Ok(Some(Command::Step(n))) => match stopped_itself(&m.cpu) {
                         Some(why) => say_machrun_low(why),
                         None => {
@@ -5246,6 +5329,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
     let mut keyboard_trace = false;
     let mut boot_keys = BootKeys::default();
     let mut resume: Option<PathBuf> = None;
+    let mut go_on = false;
     let mut stop_at: Option<u16> = None;
     let mut stop_at_prom: Option<u16> = None;
     let mut boards: usize = geometry.default_memory_boards();
@@ -5736,6 +5820,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                 Some(path) => resume = Some(PathBuf::from(path)),
                 None => usage("--resume wants a checkpoint to start from"),
             },
+            (None, "--continue") => go_on = true,
             (None, "--serial") => {
                 const WANT: &str = "--serial wants a port or address:port: the endpoint the serial port at J9 is reached at, which has no default";
                 let arg = args.next().unwrap_or_else(|| usage(WANT));
@@ -6056,6 +6141,13 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
     let pace = pace.unwrap_or(which != Which::Micro && cabled == 0);
     if resume.is_some() && debuggee {
         usage("--resume is one machine on its own, not the lashup in one process, which runs two");
+    }
+    // `--continue` is the prompt's `continue` at the start: it runs on a
+    // checkpoint's machine, and a cold start has the button for that.
+    if go_on && resume.is_none() {
+        usage(
+            "--continue wants --resume: it runs a checkpoint's halted machine on, and a cold start has the button",
+        );
     }
     // A checkpoint is read before the machine is built, so that the machine
     // can be built with as much memory as the checkpoint's had.
@@ -6713,6 +6805,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                     color_tv,
                     (geometry, rtc),
                     p,
+                    go_on,
                 );
             }
             let run = Run {
@@ -6821,6 +6914,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                         color_tv,
                         (geometry, rtc),
                         p,
+                        go_on,
                     );
                     refuse_timing_model(p, e.timing_model(), timing_model);
                 }
@@ -6869,6 +6963,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                         color_tv,
                         (geometry, rtc),
                         p,
+                        go_on,
                     );
                     refuse_timing_model(p, e.timing_model(), timing_model);
                 }
@@ -6954,7 +7049,7 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
                 Some(&mut glass),
                 serial.as_mut(),
                 run,
-                resume,
+                (resume, go_on),
                 tv_board,
                 color_tv,
                 watch,

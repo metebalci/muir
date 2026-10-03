@@ -154,7 +154,8 @@ pub const HELP: &str = "\
 boot                    the boot button, which is what starts a machine: it
                         presets RUN, and the machine runs from the PROM at 0
 hold                    no microcycle runs until continue or step
-continue, c             run on
+continue, c             run on; a halted machine, its RUN clear, has RUN
+                        set and runs on from where it stands, with no reset
 step [n]                n microcycles, one without n, then hold
 pc                      where the machine is: the PC, its microcycles and
                         its clock

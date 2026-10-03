@@ -2254,6 +2254,26 @@ impl Chip {
         self.mark_all();
     }
 
+    /// Sets or clears one bit of what the part at `page` and `reference`
+    /// holds, [`part::State::bits`], from outside the board, and settles
+    /// the board on it: a flip-flop left as a console's register write
+    /// leaves it, for the prompt's `continue`, which sets `RUN` at
+    /// OLORD1 1A14 without running the write strobe through the bus
+    /// interface.  The page names the part, a location holding a part on
+    /// more than one page (1A14 is a 74S240 elsewhere too).
+    pub fn set_state_bit(&mut self, page: &str, reference: &str, bit: u32, on: bool) {
+        let i = self
+            .instances
+            .iter()
+            .position(|inst| inst.page == page && inst.reference == reference)
+            .unwrap_or_else(|| panic!("no part at {page} {reference}"));
+        let bits = &mut self.state_mut(i).bits;
+        *bits = if on { *bits | 1 << bit } else { *bits & !(1 << bit) };
+        self.part_dirty[i] = true;
+        self.mark_all();
+        self.settle();
+    }
+
     /// Carries the VCTL1 delay lines forward to `now`.
     ///
     /// A tap follows its input by a fixed time, so a transition is scheduled
