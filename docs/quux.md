@@ -1806,14 +1806,17 @@ the dispatch memory section reaches entry 2,048
 
 **System 2001**, muir-sys's first 40-bit band, boots on revision 13
 (`tests/system_2001.rs`, which skips without muir-sys's hand-over, the
-pre-release `handover-2001-y5` that `tools/fetch-handover-2001.sh` fetches
-into the gitignored `ref/band-2001-y5`): microcode 2001 in its current `MCR1` and the band in
-its current `LOD4` of a GPT disk in a dynamic VHD. At 2 M words of main
+pre-release `handover-2001-c44fe06` that `tools/fetch-handover-2001.sh`
+fetches into the gitignored `ref/band-2001-c44fe06`): System 2001's
+release disk, a GPT disk of 853,359 blocks in a dynamic VHD, with
+microcode 2001 in its current `MCR1`, the band in its current `LOD1` and
+a `PAGE` partition of 655,360 blocks, 128MW. At 2MW of main
 memory it reaches its listener on both engines, after about 165 million
-microcycles on `micro` and 177 million on `rtl`, and at 32 M words on
-`micro`; it draws its listener at the video controller's words a line at
-1280 by 1024, 1024 by 768 and 1920 by 1080; `(si:disk-restore 4)` reads
-`LOD4` back through block-disk and boots it to the listener again; the
+microcycles on `micro` and 177 million on `rtl`, and at 32MW after
+about 168 million and 179 million; it draws its listener at the video
+controller's words a line at 1280 by 1024, 1024 by 768 and 1920 by 1080;
+`(si:disk-restore 1)` reads `LOD1` back through block-disk and boots it
+to the listener again; the
 PROM writes words 104 and 111 before the disk, and at the listener timer
 0 is on, periodic, under its interrupt enable, with `INTR-TICK` 600 times
 in 10 s of the machine's time; through the file device it reads a form

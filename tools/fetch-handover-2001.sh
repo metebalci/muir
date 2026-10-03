@@ -7,25 +7,26 @@
 # System 2001, microcode 2001 and PROM 2001 are not released. muir-sys
 # publishes each hand-over of them as a GitHub pre-release of
 # https://github.com/metebalci/muir-sys whose tag never moves; this script is
-# pinned to one, `handover-2001-y5`, by its tag and every file's SHA-256, and
+# pinned to one, `handover-2001-c44fe06`, by its tag and every file's SHA-256, and
 # a newer hand-over is taken by a commit that changes them. It goes when
 # release-2001 exists, and a fetch of that release takes its place.
 #
-# The pre-release's files, all kept in ref/band-2001-y5/, which is in
+# The pre-release's files, all kept in ref/band-2001-c44fe06/, which is in
 # .gitignore:
 #
 #   SHA256SUMS                     the pre-release's own sums
 #   README                         what the files are, and the hand-over's
 #                                  note: the commit it was built from and
 #                                  how it was checked
-#   handover-2001-y5-sys.tar.gz    the sources the band was built from, with
-#                                  the QFASLs and `sys/ubin/`; it unpacks to
-#                                  release-2001-y5/
-#   handover-2001-y5-disk.vhd.gz   the disk, a dynamic VHD holding a GPT,
-#                                  decompressed beside it to
-#                                  handover-2001-y5-disk.vhd
-#   handover-2001-y5-promh.mcr     PROM 2001; `quux`'s own revision-13 PROM,
-#                                  data/quux-promh.mcr, is the same
+#   handover-2001-c44fe06-sys.tar.gz   the sources the band was built from,
+#                                      with the QFASLs and `sys/ubin/`; it
+#                                      unpacks to release-2001-c44fe06/
+#   handover-2001-c44fe06-disk.vhd.gz  the disk, a dynamic VHD holding a
+#                                      GPT, decompressed beside it to
+#                                      handover-2001-c44fe06-disk.vhd
+#   handover-2001-c44fe06-promh.mcr    PROM 2001; `quux`'s own revision-13
+#                                      PROM, data/quux-promh.mcr, is the
+#                                      same
 #
 # and from the sources' `sys/ubin/`, copied beside them, the microcode's and
 # the PROM's files the tests read: ucadr.mcr, ucadr.sym, ucadr.tbl,
@@ -38,7 +39,10 @@
 # names another place to download from. Before anything is decompressed or
 # copied, the sources must unpack to one `release-2NNN-*/` directory, a
 # QUUX system's number, and the disk must be a dynamic VHD holding a GPT
-# (the same check as tools/fetch-system-for-quux.sh's).
+# (the same check as tools/fetch-system-for-quux.sh's) laid out as System
+# 2001's release disk is: 853,359 blocks of 1024 bytes, a PAGE partition
+# of 655,360 blocks (128MW), microcode 2001 in the current MCR1,
+# "MCR1 UCADR 2001", and the band in the current LOD1, "LOD1 System 2001".
 #
 # Re-running this is safe: whatever is already in place and checks is left
 # alone, and nothing else in ref/ is touched.
@@ -48,10 +52,10 @@
 
 set -eu
 muir=$(cd "$(dirname "$0")/.." && pwd)
-tag=handover-2001-y5
+tag=handover-2001-c44fe06
 base=${HANDOVER_2001_BASE:-https://github.com/metebalci/muir-sys/releases/download/$tag}
-dir=$muir/ref/band-2001-y5
-rdir=ref/band-2001-y5
+dir=$muir/ref/band-2001-c44fe06
+rdir=ref/band-2001-c44fe06
 sources=$tag-sys.tar.gz
 disk=$tag-disk.vhd
 prom=$tag-promh.mcr
@@ -61,12 +65,12 @@ ubin="ucadr.mcr ucadr.sym ucadr.tbl ucadr.locs promh.mcr promh.sym promh.tbl pro
 # The SHA-256 of each file, as the pre-release's SHA256SUMS gives them.
 sum_of() {
     case $1 in
-    SHA256SUMS) echo cd831be01406e65632a3830325e31c48f212dbe64d72ba641b0ea8bae5ba0248 ;;
-    README) echo d11ed0d1db275b33782db721087e54217d1e91033781234fe9ed7afa372d703f ;;
-    handover-2001-y5-sys.tar.gz) echo 536a497eacaaa1d4f073467496c25dcb29a0ee370f5422f69e2671adfe6c44df ;;
-    handover-2001-y5-disk.vhd.gz) echo 889c6e3ccf95685accb1c5f3db98b1f863d4582940bb253ea0c69dffee27a747 ;;
-    handover-2001-y5-disk.vhd) echo b663b145de2667db31f20e90785eadb8fea7a8a3184900b2e785099aeebef2b8 ;;
-    handover-2001-y5-promh.mcr) echo 5917bae4a5e21806acd40fa9af7bc89a307e45f49cc974ee880c9e4ba002b9ca ;;
+    SHA256SUMS) echo 8f747b112dfffb919cd288affb433d59086b320b46985546c16f05b16bfbb650 ;;
+    README) echo 4f6a90284d63854e786401380f80e4bf27f31e018113cd11074292a505309fe3 ;;
+    handover-2001-c44fe06-sys.tar.gz) echo e1c36292a87c7f38c6c246ddfde477577d500baa92e2afe39f3b17143975b652 ;;
+    handover-2001-c44fe06-disk.vhd.gz) echo 093326f99dc8f6c467e07cdfdc0276d79ff27145683b18e1343453beb03bfbbb ;;
+    handover-2001-c44fe06-disk.vhd) echo ed7486573e6078296e22c03a366b6e9f71f55f5291e52b820af3c8fd79fcb636 ;;
+    handover-2001-c44fe06-promh.mcr) echo 5917bae4a5e21806acd40fa9af7bc89a307e45f49cc974ee880c9e4ba002b9ca ;;
     esac
 }
 
@@ -91,6 +95,16 @@ be() {
 # The $3 bytes at offset $2 of file $1, as text.
 bytes_at() {
     dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null
+}
+
+# The unsigned little-endian number of $3 bytes at offset $2 of file $1.
+le() {
+    n=0 m=1
+    for b in $(od -An -v -tu1 -j "$2" -N "$3" "$1"); do
+        n=$((n + b * m))
+        m=$((m * 256))
+    done
+    echo "$n"
 }
 
 # Whether file $1 is a dynamic VHD whose disk holds a GPT, saying why not
@@ -128,6 +142,73 @@ vhd_holds_gpt() {
     at=$((first * 512 + bitmap + 512))
     if [ "$(bytes_at "$1" "$at" 8)" != "EFI PART" ]; then
         echo "$name is a VHD whose sector 1 is not a GPT header (no EFI PART): no GPT" >&2
+        return 1
+    fi
+}
+
+# The offset in the dynamic VHD $1 of its disk's 512-byte sector $2, or
+# nothing if the block holding it is not allocated: the block table entry
+# is the sector where the block's sector bitmap begins, and the sector's
+# data follows the bitmap (the fields vhd_holds_gpt reads).
+vhd_sector() {
+    foot=$(($(wc -c < "$1") - 512))
+    header=$(be "$1" $((foot + 16)) 8)
+    table=$(be "$1" $((header + 16)) 8)
+    block=$(be "$1" $((header + 32)) 4)
+    entry=$(be "$1" $((table + $2 * 512 / block * 4)) 4)
+    if [ "$entry" != 4294967295 ]; then
+        echo $((entry * 512 + (block / 512 + 4095) / 4096 * 512 + $2 * 512 % block))
+    fi
+}
+
+# Whether the dynamic VHD $1, which holds a GPT, is laid out as System
+# 2001's release disk, saying why not on stderr: the disk's size, the VHD
+# footer's current size at 48, is 853,359 blocks of 1024 bytes; the GPT's
+# PAGE partition is 655,360 blocks, 128MW; and the partitions whose
+# attribute bit 48 is set, the current ones, are "MCR1 UCADR 2001" and
+# "LOD1 System 2001". The GPT's fields are UEFI's (2.10, 5.3.2 and 5.3.3),
+# little-endian: the header at sector 1 gives the entry array's sector at
+# 72, the entry count at 80 and the entry size at 84; an entry has its
+# type GUID at 0, its first and last sector at 32 and 40, its attributes at
+# 48 and its UTF-16LE name, ASCII here, at 56.
+release_disk_layout() {
+    name=${1#"$muir"/}
+    foot=$(($(wc -c < "$1") - 512))
+    blocks=$(($(be "$1" $((foot + 48)) 8) / 1024))
+    if [ "$blocks" != 853359 ]; then
+        echo "$name's disk is $blocks blocks, not System 2001's 853,359" >&2
+        return 1
+    fi
+    gpt=$(vhd_sector "$1" 1)
+    array=$(le "$1" $((gpt + 72)) 8)
+    count=$(le "$1" $((gpt + 80)) 4)
+    size=$(le "$1" $((gpt + 84)) 4)
+    page= current=
+    k=0
+    while [ "$k" -lt "$count" ]; do
+        at=$((array * 512 + k * size))
+        k=$((k + 1))
+        sector=$(vhd_sector "$1" $((at / 512)))
+        [ -n "$sector" ] || continue
+        e=$((sector + at % 512))
+        [ "$(od -An -v -tx1 -N 16 -j "$e" "$1" | tr -d ' 0\n')" ] || continue
+        part=$(bytes_at "$1" $((e + 56)) 72 | tr -d '\000')
+        first=$(le "$1" $((e + 32)) 8)
+        last=$(le "$1" $((e + 40)) 8)
+        if [ "$part" = PAGE ]; then
+            page=$(((last + 1 - first) / 2))
+        fi
+        if [ $(($(be "$1" $((e + 54)) 1) & 1)) = 1 ]; then
+            current="$current${current:+, }$part"
+        fi
+    done
+    if [ "$page" != 655360 ]; then
+        echo "$name's PAGE partition is ${page:-no} blocks, not 655,360 (128MW)" >&2
+        return 1
+    fi
+    if [ "$current" != "MCR1 UCADR 2001, LOD1 System 2001" ]; then
+        echo "$name's current partitions are $current," >&2
+        echo "not MCR1 UCADR 2001 and LOD1 System 2001" >&2
         return 1
     fi
 }
@@ -174,8 +255,14 @@ else
         echo "$rdir/$disk is not QUUX's disk" >&2
         exit 1
     fi
+    if ! release_disk_layout "$dir/$disk.part"; then
+        rm -f "$dir/$disk.part"
+        echo "$rdir/$disk is not laid out as System 2001's release disk" >&2
+        exit 1
+    fi
     mv "$dir/$disk.part" "$dir/$disk"
-    echo "     $rdir/$disk checks, a dynamic VHD holding a GPT"
+    echo "     $rdir/$disk checks, a dynamic VHD holding a GPT, 853,359 blocks,"
+    echo "     PAGE 655,360 blocks, the band in the current LOD1"
 fi
 
 # The microcode's and the PROM's files, from the sources, replaced each

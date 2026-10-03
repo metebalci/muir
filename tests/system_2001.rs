@@ -4,18 +4,19 @@
 //! System 2001 on QUUX revision 13: the first 40-bit band (contract G2).
 //!
 //! It is muir-sys's hand-over of System 2001, microcode 2001 and PROM 2001,
-//! none of them released, published as the pre-release `handover-2001-y5`
-//! and fetched by `tools/fetch-handover-2001.sh` into the gitignored
-//! `ref/band-2001-y5`: a GPT disk as a dynamic VHD, which QUUX boots as it
-//! is, with microcode 2001 in its current `MCR1`, "MCR1 UCADR 2001", and the
-//! band, "LOD4 System 2001 y5", in its current `LOD4`; the microcode's and
-//! the PROM's files, the PROM being muir's built-in `data/quux-promh.mcr`
-//! byte for byte (`tests/quux_prom.rs`); and the sources the band was built
-//! from, which unpack to `release-2001-y5/`. Without it the tests skip and
-//! say so.
+//! none of them released, published as the pre-release
+//! `handover-2001-c44fe06` and fetched by `tools/fetch-handover-2001.sh`
+//! into the gitignored `ref/band-2001-c44fe06`: System 2001's release disk,
+//! a GPT disk of 853,359 blocks as a dynamic VHD, which QUUX boots as it is,
+//! with microcode 2001 in its current `MCR1`, "MCR1 UCADR 2001", the band,
+//! "LOD1 System 2001", in its current `LOD1`, and a `PAGE` partition of
+//! 128MW; the microcode's and the PROM's files, the PROM being muir's
+//! built-in `data/quux-promh.mcr` byte for byte (`tests/quux_prom.rs`); and
+//! the sources the band was built from, which unpack to
+//! `release-2001-c44fe06/`. Without it the tests skip and say so.
 //!
-//! The band boots on both engines at 2 M words of main memory, which G2 §3
-//! allows tests, and once at revision 13's 32 M; it restores its own band
+//! The band boots on both engines at 2MW of main memory, which G2 §3
+//! allows tests, and at revision 13's 32MW; it restores its own band
 //! (`%disk-restore`), ticks on timer 0, draws on the video controller at
 //! the size it is given, writes through the file device, and runs H8a's
 //! fused return under the checkers of `support::macro_dispatch`. The
@@ -37,16 +38,16 @@ const CHAOS: (u16, u16) = (0o177201, 0o177200);
 
 /// muir-sys's hand-over of System 2001, as `tools/fetch-handover-2001.sh`
 /// leaves it.
-const BAND_2001: &str = "ref/band-2001-y5";
+const BAND_2001: &str = "ref/band-2001-c44fe06";
 
 /// The hand-over's disk, decompressed by the fetch.
-const DISK: &str = "handover-2001-y5-disk.vhd";
+const DISK: &str = "handover-2001-c44fe06-disk.vhd";
 
 /// The hand-over's sources.
-const SOURCES: &str = "handover-2001-y5-sys.tar.gz";
+const SOURCES: &str = "handover-2001-c44fe06-sys.tar.gz";
 
 /// The directory the hand-over's tree unpacks to.
-const TREE: &str = "release-2001-y5";
+const TREE: &str = "release-2001-c44fe06";
 
 /// Main memory for most runs, in 64K-word boards: 2 M words (G2 §3: "tests
 /// may run at 2 M words").
@@ -150,16 +151,15 @@ fn shot(e: &impl Engine, name: &str) -> String {
     path.display().to_string()
 }
 
-/// **System 2001 reaches its listener on revision 13**, on both engines,
-/// at 2 M words: microcode 2001 in A memory, and the listener framed at the
+/// Boots the band at `boards` of main memory on both engines to the
+/// listener: microcode 2001 in A memory, and the listener framed at the
 /// video controller's words a line and at no other width.
-#[test]
-fn system_2001_boots_on_both_engines() {
+fn boots_on_both_engines(boards: usize) {
     for engine in ["micro", "rtl"] {
-        let Some((_dir, pack, root)) = band_2001(&format!("system-2001-{engine}")) else {
+        let Some((_dir, pack, root)) = band_2001(&format!("system-2001-{engine}-{boards}")) else {
             return;
         };
-        let m = quux(&pack, &root);
+        let m = quux_13(&pack, &root, boards, BAND_SIZE);
         let t = std::time::Instant::now();
         let (ran, drawn, version) = match engine {
             "micro" => {
@@ -176,12 +176,29 @@ fn system_2001_boots_on_both_engines() {
             }
         };
         eprintln!(
-            "{engine}: listener after {ran} microcycles, microcode {version}, {:.1} s",
+            "{engine}, {}MW: listener after {ran} microcycles, microcode {version}, {:.1} s",
+            boards >> 4,
             t.elapsed().as_secs_f64()
         );
         assert!(drawn, "{engine}: drawn at the screen's words a line");
         assert_eq!(version, 2001, "{engine}: the microcode's version");
     }
+}
+
+/// **System 2001 reaches its listener on revision 13**, on both engines,
+/// at 2MW.
+#[test]
+fn system_2001_boots_on_both_engines() {
+    boots_on_both_engines(BOARDS);
+}
+
+/// **System 2001 boots at revision 13's 32MW**, the boards' size and
+/// `quux`'s default (G2 §3), on both engines, to the same listener.
+#[test]
+fn system_2001_boots_at_32_m_words() {
+    let boards = Geometry::QUUX_13.default_memory_boards();
+    assert_eq!(boards << 16, 32 << 20, "32MW");
+    boots_on_both_engines(boards);
 }
 
 /// The hand-over's microcode's symbols, its `ucadr.sym`.
@@ -198,9 +215,11 @@ fn ucadr(name: &str, space: muir::sym::Space) -> u16 {
 /// **The band is System 2001 on microcode 2001**, as the disk says: its
 /// current `MCR1` is named "MCR1 UCADR 2001" and holds the hand-over's
 /// `ucadr.mcr`, whose `A-VERSION` is 2001, with zeros after it, and its
-/// current `LOD4` is named "LOD4 System 2001 y5". The microcode's A memory
-/// is the 40-bit section and its dispatch memory 4,096 entries (contract G2
-/// appendix A1.12, A1.4). No boot.
+/// current `LOD1` is named "LOD1 System 2001", the only current band. The
+/// microcode's A memory is the 40-bit section and its dispatch memory 4,096
+/// entries (contract G2 appendix A1.12, A1.4). Its `PAGE` partition is
+/// 655,360 blocks, 128MW of virtual memory at 5 blocks a 1024-word
+/// page, packed storage's 5 bytes a word. No boot.
 #[test]
 fn band_2001_is_system_2001_on_microcode_2001() {
     let Some((_dir, pack, _root)) = band_2001("system-2001-names") else { return };
@@ -218,7 +237,11 @@ fn band_2001_is_system_2001_on_microcode_2001() {
             .unwrap_or_else(|| panic!("no current {lisp}: {parts:?}"))
     };
     assert_eq!(current("MCR").name, "MCR1 UCADR 2001");
-    assert_eq!(current("LOD").name, "LOD4 System 2001 y5");
+    assert_eq!(current("LOD").name, "LOD1 System 2001");
+    let lods = parts.iter().filter(|p| p.current && p.name.starts_with("LOD")).count();
+    assert_eq!(lods, 1, "one current band: {parts:?}");
+    let page = parts.iter().find(|p| p.name == "PAGE").expect("a PAGE partition");
+    assert_eq!(page.blocks, 655_360, "PAGE: 128MW, 5 blocks a page");
     let mcr1 = current("MCR");
     for k in 0..mcr1.blocks as usize {
         let on_disk: Vec<u8> = d
@@ -233,21 +256,6 @@ fn band_2001_is_system_2001_on_microcode_2001() {
             None => assert!(on_disk.iter().all(|&b| b == 0), "MCR1's block {k} is zero"),
         }
     }
-}
-
-/// **System 2001 boots at revision 13's 32 M words**, the boards' size and
-/// `quux`'s default (G2 §3), on `micro`, to the same listener.
-#[test]
-fn system_2001_boots_at_32_m_words() {
-    let Some((_dir, pack, root)) = band_2001("system-2001-32m") else { return };
-    let boards = Geometry::QUUX_13.default_memory_boards();
-    assert_eq!(boards << 16, 32 << 20, "32 M words");
-    let mut e = Micro::new(quux_13(&pack, &root, boards, BAND_SIZE));
-    e.boot();
-    let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 600_000_000);
-    eprintln!("32 M words: listener after {ran} microcycles");
-    assert!(drawn_at_its_words_a_line(&e), "the listener; the screen is {}", shot(&e, "32m"));
-    assert_eq!(microcode_version(&e), 2001);
 }
 
 /// **System 2001 sizes its screen at boot, on the video controller**: the
@@ -279,7 +287,7 @@ fn system_2001_sizes_its_screen_at_boot() {
 }
 
 /// **System 2001 restores its own band and comes back to the listener**:
-/// booted, `(si:disk-restore 4)` answered `yes` reads LOD4 back in through
+/// booted, `(si:disk-restore 1)` answered `yes` reads LOD1 back in through
 /// block-disk's packed transfers and boots it to the listener again, on
 /// `micro`; the microcode restored writes the MACRO-DISPATCH register
 /// again and returns fuse again.
@@ -287,7 +295,7 @@ fn system_2001_sizes_its_screen_at_boot() {
 fn system_2001_restores_its_band_to_the_listener() {
     use muir::terminal::keyboard::Keyboard;
     let Some((_dir, pack, root)) = band_2001("system-2001-restore") else { return };
-    let lod4 = support::gpt_partition(&mut muir::disk_image::Disk::open(&pack).unwrap(), "LOD4");
+    let lod1 = support::gpt_partition(&mut muir::disk_image::Disk::open(&pack).unwrap(), "LOD1");
     let mut m = quux(&pack, &root);
     m.block_disk.as_mut().unwrap().log = Some(Vec::new());
     let mut e = Micro::new(m);
@@ -295,8 +303,8 @@ fn system_2001_restores_its_band_to_the_listener() {
     let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 600_000_000);
     eprintln!("listener after {ran} microcycles");
     let mut k = Keyboard::new();
-    support::type_at(&mut e, &mut k, "(si:disk-restore 4)");
-    // Time for the question, whether to reload LOD4, before its answer.
+    support::type_at(&mut e, &mut k, "(si:disk-restore 1)");
+    // Time for the question, whether to reload LOD1, before its answer.
     for _ in 0..20_000_000 {
         e.step().unwrap();
     }
@@ -322,10 +330,10 @@ fn system_2001_restores_its_band_to_the_listener() {
     let log = &e.machine().block_disk.as_ref().unwrap().log.as_ref().unwrap()[from..];
     let band_reads = log
         .iter()
-        .filter(|t| !t.write && (lod4.first..lod4.first + lod4.blocks).contains(&t.block))
+        .filter(|t| !t.write && (lod1.first..lod1.first + lod1.blocks).contains(&t.block))
         .count();
-    eprintln!("band read, {band_reads} transfers from LOD4, after {n} microcycles");
-    assert!(band_reads > 0, "LOD4 read");
+    eprintln!("band read, {band_reads} transfers from LOD1, after {n} microcycles");
+    assert!(band_reads > 0, "LOD1 read");
     let fused = e.machine().macro_dispatch.fused;
     let again = support::wait_for_the_prompt_within(&mut e, 600_000_000);
     eprintln!("listener again after {again} microcycles more");
