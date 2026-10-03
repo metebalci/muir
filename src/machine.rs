@@ -416,7 +416,9 @@ impl Geometry {
     /// word 15 the optional devices, a bit each, `<0>` the real-time clock
     /// and `<1>` the file device, a later optional device taking the next
     /// bit; word 16 the number of interval timers, 3; word 17 the MACRO
-    /// DISPATCH MEMORY's entries, 1,024; every other word 0.
+    /// DISPATCH MEMORY's entries, 1,024; on revision 13 words 20 to 24 the
+    /// board name, the machine's ([`Machine::set_board_name`]); every other
+    /// word 0.
     /// Below revision 9 word 15 reads 0, below revision 10 word 16 and below
     /// revision 12 word 17, as every unused word does. Read-only, as every
     /// word 0-77 is.
@@ -1298,6 +1300,11 @@ pub struct Machine {
     /// record by setting it to `Some`: the physical address, the word, and
     /// [`Machine::cycles`] then. Not kept in a checkpoint.
     pub register_log: Option<Vec<(u32, u32, u64)>>,
+    /// The board name, feature words 20-24 on revision 13: up to
+    /// [`BOARD_NAME_CHARS`] characters, zero bytes after them;
+    /// [`BOARD_NAME`] unless [`Machine::set_board_name`] sets another. Not
+    /// kept in a checkpoint.
+    board_name: [u8; BOARD_NAME_CHARS],
 }
 
 impl Machine {
@@ -1362,6 +1369,11 @@ impl Machine {
             write_buffer_empty_at: 0,
             store_log: None,
             register_log: None,
+            board_name: {
+                let mut n = [0; BOARD_NAME_CHARS];
+                n[..BOARD_NAME.len()].copy_from_slice(BOARD_NAME.as_bytes());
+                n
+            },
             l1_map: Box::new([0; L1_MAP_WORDS]),
             l2_map: Box::new([0; L2_MAP_WORDS]),
             main: vec![0; boards << 16],
@@ -1395,6 +1407,34 @@ impl Machine {
     /// backplane's and does not come and go under a running machine.
     pub fn fit_color_tv(&mut self) {
         self.color_tv = Some(Tv::color());
+    }
+
+    /// Sets the board name, feature words 20-24 on revision 13 (contract HD
+    /// §6): what a fabric under test was built with, so that its register
+    /// page and muir-sim's read the same. At most [`BOARD_NAME_CHARS`] characters, each printable
+    /// ASCII, `040`-`176`, the codes the Lisp Machine's character set shares
+    /// with ASCII; anything else is refused and the name is left as it was.
+    /// Not a flag, and not kept in a checkpoint: a name says what runs.
+    pub fn set_board_name(&mut self, name: &str) -> Result<(), String> {
+        if name.len() > BOARD_NAME_CHARS {
+            return Err(format!(
+                "the board name {name:?} is {} characters, over {BOARD_NAME_CHARS}",
+                name.len()
+            ));
+        }
+        if let Some(b) = name.bytes().find(|b| !(0o40..=0o176).contains(b)) {
+            return Err(format!("the board name {name:?} has the byte {b:o}, outside 040-176"));
+        }
+        self.board_name = [0; BOARD_NAME_CHARS];
+        self.board_name[..name.len()].copy_from_slice(name.as_bytes());
+        Ok(())
+    }
+
+    /// Feature word 20 + `k` of the board name, `k` from 0 to 4: characters
+    /// 4k to 4k + 3, the first in `<7:0>`; zero bytes after the name's end.
+    fn board_name_word(&self, k: u32) -> u32 {
+        let k = k as usize * 4;
+        u32::from_le_bytes(self.board_name[k..k + 4].try_into().unwrap())
     }
 
     /// Loads the boot PROM.  Words past the end of the image stay zero.
@@ -2136,6 +2176,8 @@ impl Machine {
                 0o12 => 1 << 16 | words_per_line as u32,
                 0o13 if self.geometry.wide() => WINDOW_13,
                 0o13 => tv::NORMAL_TV.buffer,
+                // The board name (contract HD §6.4), on revision 13.
+                k @ 0o20..=0o24 if self.geometry.wide() => self.board_name_word(k - 0o20),
                 // The register page (contract Q2): who interrupted, the
                 // bus errors, and the mode.
                 0o100 => self.interrupt_sources(),
@@ -2427,6 +2469,13 @@ pub const LVMO_AT_POWER_ON: u32 = (1 << 23) | (1 << 22) | 0x3fff;
 /// The register page, `1777777400`-`1777777777`: revision 12's offsets.
 pub const REGISTER_PAGE_13: u32 = 0o1777777400;
 
+/// The board name's most characters, 4 to a word in feature words 20-24
+/// (contract HD §6.4).
+pub const BOARD_NAME_CHARS: usize = 20;
+
+/// muir-sim's board name, on both engines.
+pub const BOARD_NAME: &str = "muir-sim";
+
 /// The frame buffer window, `1760000000`-`1777775777`: the video
 /// controller's buffer from its base, 4 bytes a word, the field only (G1
 /// §4.2). Main memory ends below it.
@@ -2515,6 +2564,7 @@ impl Machine {
             write_buffer_empty_at: _,
             store_log: _,
             register_log: _,
+            board_name: _,
             l1_map,
             l2_map,
             main,

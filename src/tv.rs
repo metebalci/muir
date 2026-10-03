@@ -123,7 +123,8 @@ pub const VIDEO_HEIGHT: usize = 1024;
 pub const VIDEO_WORDS_PER_LINE: usize = 40;
 /// The video controller's buffer at its default size, 40,960 words from [`BUFFER`]: it
 /// ends at `17117777`, below the color TV's strap at `17200000`. The size
-/// is the HDMI mode muir-fpga's two QUUX boards drive.
+/// is muir-fpga's Arty Z7-20's and DE25-Nano's; its Kria KR260's is 1920 by
+/// 1080, [`VIDEO_MAX_SIZE`].
 pub const VIDEO_WORDS: u32 = (VIDEO_HEIGHT * VIDEO_WORDS_PER_LINE) as u32;
 
 /// The most the video controller's buffer can be: from [`BUFFER`] up to

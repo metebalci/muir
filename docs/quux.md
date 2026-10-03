@@ -183,7 +183,8 @@ map:
 | 15 | the optional devices, a bit each: 3, bit 0 the real-time clock and bit 1 the file device; a later optional device takes the next bit |
 | 16 | the number of interval timers: 3 |
 | 17 | the MACRO DISPATCH MEMORY's entries: 1,024 |
-| 20-77 | 0 |
+| 20-24 | revision 13: the board name, 4 characters a word in 31:0; 0 below revision 13 |
+| 25-77 | 0 |
 
 Word 15 reads 0 below revision 9, as every unused word does, so software
 decides by it whether the real-time clock and the file device are there;
@@ -191,6 +192,22 @@ word 16 reads 0 below revision 10, and so says whether the interval timers
 and reset devices are; word 17 reads 0 below revision 12, and so says
 whether the fused return is there. Word 14 named Q1's interval timer too up to revision
 9, which revision 10 drops.
+
+**The board name**, words 20-24 on revision 13, names what runs the
+machine: up to 20 characters of printable ASCII, `040`-`176`, the codes the
+Lisp Machine's character set shares with ASCII. Character `i` is in word
+`20 + i / 4`, bits `8 (i mod 4) + 7` to `8 (i mod 4)`, the first character in
+`<7:0>`; the first zero byte ends the name and every byte after it is zero,
+so a 20-character name has none, and word 20 `<7:0>` 0 is no name. It is
+read-only, printed and never branched on: a program that needs a property
+reads the word that states it. muir-sim's is `muir-sim` on both engines.
+`Machine::set_board_name` sets another, so that a fabric under test and
+muir-sim read the same page, and refuses a name over 20 characters or with
+a byte outside `040`-`176`; it is not a flag, since a name says what runs,
+and a checkpoint does not keep it. `the_board_name_is_muir_sim_on_both_engines`,
+`set_board_name_fills_words_20_to_24` and
+`set_board_name_refuses_what_does_not_fit` in `tests/revision_13.rs` hold it,
+the first two on both engines.
 
 Words 11 to 13 describe whichever display is fitted: the video controller's 1280 by 1024,
 one bit a pixel, 40 words a line at `17000000`, or, on a QUUX run with a CADR
@@ -806,6 +823,14 @@ below the register page, `17777377`: 261,888 words
 (`the_buffer_reaches_up_to_the_page`), which no word states to the
 software. The feature page's words 11 to 13 give the size to the software.
 The table above is the default size.
+
+**The boards' sizes differ**, each fixed in its bitstream: muir-fpga's Arty
+Z7-20 and DE25-Nano are 1280 by 1024, its Kria KR260 1920 by 1080. A band
+reads the size from words 11 to 13 at boot, so one band runs on each. At
+1920 by 1080 the buffer is 60 words a line, 64,800 words; on revision 13 the
+window is `1760000000`-`1760176437`, and `1760176440` is nothing and sets
+word 101 `<0>` (`full_hd_s_window_ends_at_64800_words` in
+`tests/revision_13.rs`, on both engines).
 
 1280 bits a line is 40 whole words, which `BITBLT` needs of a screen array's
 first dimension (`BITBLT-DECODE-ARRAY` in `sys/ucadr/uc-tv.lisp`). The buffer
@@ -1733,7 +1758,7 @@ engines; `tests/revision_13_memory.rs`):
 |---|---|
 | `0` up to main memory's end | main memory, whole 40-bit words; revision 12's `17000000` and `17777400` are main memory when there is that much of it, and nothing when there is not |
 | `1760000000` up to the video controller's buffer's end | the frame buffer window: a write stores `<31:0>` and drops the tag, a read gives the field with tag `005` |
-| `1777777400`-`1777777777` | the register page, revision 12's offsets: feature word 0 MACHINE-ID, 1 the level-1 entry's 7 bits, 2 4,096 level-2 entries, 6 4,096 dispatch-memory entries, 13 `1760000000` |
+| `1777777400`-`1777777777` | the register page, revision 12's offsets: feature word 0 MACHINE-ID, 1 the level-1 entry's 7 bits, 2 4,096 level-2 entries, 6 4,096 dispatch-memory entries, 13 `1760000000`, 20-24 the board name |
 | anything else | nothing: reads 0 and sets word 101's NXM bit. Revision 12's Unibus window and its diagnostic registers are not there |
 
 **The memory cache** has lines of 8 words, the lines of packed storage,
@@ -1814,7 +1839,8 @@ a `PAGE` partition of 655,360 blocks, 128MW. At 2MW of main
 memory it reaches its listener on both engines, after about 165 million
 microcycles on `micro` and 177 million on `rtl`, and at 32MW after
 about 168 million and 179 million; it draws its listener at the video
-controller's words a line at 1280 by 1024, 1024 by 768 and 1920 by 1080;
+controller's words a line at 1280 by 1024 and 1024 by 768, and at 1920 by
+1080, 60 words a line, on both engines (`system_2001_sizes_its_screen_at_boot`);
 `(si:disk-restore 1)` reads `LOD1` back through block-disk and boots it
 to the listener again; the
 PROM writes words 104 and 111 before the disk, and at the listener timer

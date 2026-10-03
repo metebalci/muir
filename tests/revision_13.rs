@@ -24,6 +24,7 @@ use muir::isa::asm::{
 use muir::machine::{Geometry, Machine, Word, macro_dispatch};
 use muir::micro::Micro;
 use muir::rtl::Rtl;
+use muir::tv::Board;
 
 mod support;
 
@@ -1156,4 +1157,168 @@ fn on_rtl_high_memory_and_the_window_are_cached() {
     let c = r.cache().unwrap();
     assert!(c.hits - before >= 2, "the second reads hit: {} hits, {} misses", c.hits, c.misses);
     assert!(c.holds(WINDOW + 3) && c.holds(HIGH + 3), "both lines held");
+}
+
+// --- full HD and the board name ---------------------------------------------
+
+/// The video controller at full HD, 1920 by 1080: 60 words a line, 64,800
+/// words, `1760000000`-`1760176437`.
+const FULL_HD: (usize, usize) = (1920, 1080);
+const FULL_HD_WORDS: u32 = 64_800;
+
+/// The video controller fitted at `size`.
+fn video_at(m: &mut Machine, (w, h): (usize, usize)) {
+    m.tv.set_board(Board::Video);
+    m.tv.set_video_size(w, h);
+}
+
+/// **At 1920 by 1080 the window ends at its 64,800th word** (G2 §4.3, the
+/// full-HD contract §1.2): the last word, `1760176437`, is written and read
+/// back with the unboxed tag; the next, `1760176440`, is nothing, and sets
+/// word 101 `<0>`, which the reads before it have left clear; feature words
+/// 11-13 say 1920 by 1080, one bit a pixel and 60 words a line, and the
+/// window's address.
+#[test]
+fn full_hd_s_window_ends_at_64800_words() {
+    assert_eq!(FULL_HD_WORDS, 0o176440);
+    let last = WINDOW + FULL_HD_WORDS - 1;
+    let va = |m: &mut Machine| [through(m, 1, REGISTER_PAGE), through(m, 3, last & !0o1777)];
+    let mut p = Prog::default();
+    let mut probe = Machine::new();
+    let [reg, page] = va(&mut probe);
+    let off = |phys: u32| page + (phys & 0o1777) as Word;
+    for (k, word) in [0o11u64, 0o12, 0o13].into_iter().enumerate() {
+        p.a(0o60 + k as u64, reg + word);
+        p.read_to(0o60 + k as u64, 0o10 + k as u64);
+    }
+    p.a(0o63, off(last)).a(0o64, w(0o025, 0x1234_5678)).a(0o65, off(last + 1));
+    p.a(0o66, reg + 0o101);
+    p.write_from(0o64, 0o63).read_to(0o63, 0o13).read_to(0o66, 0o14);
+    p.read_to(0o65, 0o15).read_to(0o66, 0o16);
+    p.stop();
+    let setup = |m: &mut Machine| {
+        va(m);
+        video_at(m, FULL_HD);
+    };
+    let ms = run_with(&p, &setup, &|_| {});
+    expect(
+        &ms,
+        &[
+            (0o10, 1920 << 16 | 1080, "word 11: 1920 by 1080"),
+            (0o11, 1 << 16 | 60, "word 12: one bit, 60 words a line"),
+            (0o12, WINDOW as Word, "word 13: the window"),
+            (0o13, w(0o005, 0x1234_5678), "1760176437: the field, tag 005"),
+            (0o14, 0, "word 101: no NXM yet"),
+            (0o15, 0, "1760176440: nothing"),
+            (0o16, 1, "word 101: NXM"),
+        ],
+    );
+    for (engine, m) in &ms {
+        assert_eq!(m.tv.buffer_words(), FULL_HD_WORDS, "{engine}: the buffer's words");
+        let last_word = m.tv.read_buffer(FULL_HD_WORDS - 1);
+        assert_eq!(last_word, 0x1234_5678, "{engine}: the buffer's last word holds the field");
+    }
+}
+
+/// The feature words of a name, 4 characters a word in `<31:0>`, the low
+/// byte first, zero after its end: words 20-24, and word 25.
+fn name_words(name: &str) -> [Word; 6] {
+    let mut words = [0; 6];
+    for (i, c) in name.bytes().enumerate() {
+        words[i / 4] |= Word::from(c) << (8 * (i % 4));
+    }
+    words
+}
+
+/// Feature words 20-25 on both engines, read by a program after `setup`,
+/// into M 10-15.
+fn board_name_words(setup: &dyn Fn(&mut Machine)) -> [(&'static str, Machine); 2] {
+    let va = |m: &mut Machine| through(m, 1, REGISTER_PAGE);
+    let mut p = Prog::default();
+    let reg = va(&mut Machine::new());
+    for k in 0..6u64 {
+        p.a(0o60 + k, reg + 0o20 + k);
+        p.read_to(0o60 + k, 0o10 + k);
+    }
+    p.stop();
+    run_with(
+        &p,
+        &|m| {
+            va(m);
+            setup(m);
+        },
+        &|_| {},
+    )
+}
+
+/// The board name the engines' M 10-15 hold, as `expect` checks it.
+fn expect_name(ms: &[(&str, Machine)], name: &str) {
+    let words = name_words(name);
+    let rows: Vec<(u64, Word, String)> = (0..6)
+        .map(|k| (0o10 + k as u64, words[k], format!("word {:o} of {name:?}", 0o20 + k)))
+        .collect();
+    let rows: Vec<(u64, Word, &str)> = rows.iter().map(|(s, v, t)| (*s, *v, t.as_str())).collect();
+    expect(ms, &rows);
+}
+
+/// **The board name, feature words 20-24** (the full-HD contract §6.4,
+/// Q-HD7): on both engines muir-sim names itself "muir-sim", 4 characters
+/// a word in `<31:0>`, the low byte first, ended by a zero byte, and word
+/// 25 reads 0. Below revision 13 the words read 0
+/// (`tests/quux_registers.rs`).
+#[test]
+fn the_board_name_is_muir_sim_on_both_engines() {
+    let ms = board_name_words(&|_| {});
+    assert_eq!(name_words("muir-sim")[0], 0x7269_756d, "\"muir\", m in <7:0>");
+    expect_name(&ms, "muir-sim");
+    for (engine, m) in &ms {
+        assert_eq!(m.mmem[0o12], 0, "{engine}: word 22 ends the name with zero bytes");
+    }
+}
+
+/// **`set_board_name` sets the name a fabric is built with** (§6.6): 20
+/// characters fill words 20-24 with no zero byte, word 24 holding
+/// characters 17-20; 9 characters end in word 22, whose `<15:8>` is the
+/// zero byte, and every byte after it is zero. Both engines read it.
+#[test]
+fn set_board_name_fills_words_20_to_24() {
+    let twenty = "QUUX on a test board";
+    assert_eq!(twenty.len(), 20);
+    let ms = board_name_words(&|m| m.set_board_name(twenty).unwrap());
+    expect_name(&ms, twenty);
+    for (engine, m) in &ms {
+        let bytes: Vec<u8> = (0o10..0o15).flat_map(|k| (m.mmem[k] as u32).to_le_bytes()).collect();
+        assert_eq!(bytes, twenty.as_bytes(), "{engine}: the 20 characters, no zero byte");
+        assert_eq!(m.mmem[0o14], Word::from(u32::from_le_bytes(*b"oard")), "{engine}: 17-20");
+        assert_eq!(m.mmem[0o15], 0, "{engine}: word 25");
+    }
+
+    let ms = board_name_words(&|m| m.set_board_name("DE25-Nano").unwrap());
+    expect_name(&ms, "DE25-Nano");
+    for (engine, m) in &ms {
+        assert_eq!(m.mmem[0o12], Word::from(b'o'), "{engine}: word 22, the ninth character");
+        assert_eq!(m.mmem[0o12] >> 8 & 0o377, 0, "{engine}: word 22 <15:8>, the end");
+        assert_eq!((m.mmem[0o13], m.mmem[0o14]), (0, 0), "{engine}: words 23 and 24");
+    }
+}
+
+/// **A name is at most 20 characters of printable ASCII, `040`-`176`**
+/// (§6.4): longer, or with any other byte, it is refused and the name
+/// stays as it was; `040` and `176` themselves are taken.
+#[test]
+fn set_board_name_refuses_what_does_not_fit() {
+    let mut m = Machine::new();
+    m.geometry = REV13;
+    let page = |m: &mut Machine| -> Vec<u32> {
+        (0o20..=0o25).map(|k| m.bus_read(REGISTER_PAGE + k) as u32).collect()
+    };
+    let default = page(&mut m);
+    for bad in ["QUUX on a test board!", "tab\there", "nul\0", "del\x7f", "newline\n", "caf\u{e9}"]
+    {
+        let e = m.set_board_name(bad).unwrap_err();
+        assert!(!e.is_empty(), "{bad:?} refused with a reason");
+        assert_eq!(page(&mut m), default, "{bad:?}: the name stays");
+    }
+    m.set_board_name(" ~").unwrap();
+    assert_eq!(page(&mut m)[0], 0x7e20, "040 and 176 are taken");
 }

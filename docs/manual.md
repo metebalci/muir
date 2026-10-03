@@ -1079,7 +1079,8 @@ checkpoint carries it; a resume at another size is refused.
 `--mono-tv-size` is refused by both executables, the refusal naming
 `--video-size`.
 
-Default: `1280x1024`, the HDMI mode muir-fpga's QUUX boards drive.
+Default: `1280x1024`, the size of muir-fpga's Arty Z7-20 and DE25-Nano;
+its Kria KR260 is `1920x1080`.
 
 ### `--tv-capture <gif>`
 

@@ -262,28 +262,41 @@ fn band_2001_is_system_2001_on_microcode_2001() {
 /// band, booted at other sizes than [`BAND_SIZE`], draws its listener at
 /// each size's own words a line; the feature page's word 13 says where the
 /// frame buffer is, revision 13's window at `1760000000` (G2 §4.3). 1920 by
-/// 1080 is the largest screen QUUX supports.
+/// 1080, full HD, the largest screen QUUX supports and the Kria KR260's, is
+/// booted on both engines, to its listener at 60 words a line; 1024 by 768
+/// on `micro`.
 #[test]
 fn system_2001_sizes_its_screen_at_boot() {
-    for size in [(1024, 768), (1920, 1080)] {
-        let Some((_dir, pack, root)) = band_2001(&format!("system-2001-{}x{}", size.0, size.1))
-        else {
+    for (engine, size) in [("micro", (1024, 768)), ("micro", (1920, 1080)), ("rtl", (1920, 1080))] {
+        let name = format!("system-2001-{engine}-{}x{}", size.0, size.1);
+        let Some((_dir, pack, root)) = band_2001(&name) else {
             return;
         };
-        let mut e = Micro::new(quux_13(&pack, &root, BOARDS, size));
-        e.boot();
-        let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 600_000_000);
-        eprintln!("{size:?}: listener after {ran} microcycles");
-        assert_eq!(e.machine().tv.screen().2, size.0 / 32, "{size:?}: the screen's words a line");
-        assert!(
-            drawn_at_its_words_a_line(&e),
-            "{size:?}: drawn at the screen's words a line; the screen is {}",
-            shot(&e, &format!("{}x{}", size.0, size.1))
-        );
-        let m = e.machine_mut();
-        let word_13 = m.bus_read(muir::machine::REGISTER_PAGE_13 + 0o13);
-        assert_eq!(word_13, 0o1760000000, "{size:?}: feature word 13");
+        let m = quux_13(&pack, &root, BOARDS, size);
+        let t = std::time::Instant::now();
+        match engine {
+            "micro" => sized_at_boot(Micro::new(m), root, size, &name),
+            _ => sized_at_boot(Rtl::new(m), root, size, &name),
+        }
+        eprintln!("{engine}, {size:?}: {:.1} s", t.elapsed().as_secs_f64());
     }
+}
+
+/// Boots `e` to the listener and checks it drawn at `size`'s words a line,
+/// and feature word 13.
+fn sized_at_boot(mut e: impl Engine, root: PathBuf, size: (usize, usize), name: &str) {
+    e.boot();
+    let ran = support::boot_to_the_prompt_within(&mut e, CHAOS, root, 600_000_000);
+    eprintln!("{name}: listener after {ran} microcycles");
+    assert_eq!(e.machine().tv.screen().2, size.0 / 32, "{name}: the screen's words a line");
+    assert!(
+        drawn_at_its_words_a_line(&e),
+        "{name}: drawn at the screen's words a line; the screen is {}",
+        shot(&e, name)
+    );
+    let m = e.machine_mut();
+    let word_13 = m.bus_read(muir::machine::REGISTER_PAGE_13 + 0o13);
+    assert_eq!(word_13, 0o1760000000, "{name}: feature word 13");
 }
 
 /// **System 2001 restores its own band and comes back to the listener**:
