@@ -59,6 +59,14 @@ cache is in [the memory cache](#the-memory-cache).
 
 ## The map
 
+**A frame is a page-sized slot of physical memory, and a page is a page of
+virtual memory.** "Frame" (page frame) is what MIT's CADR code calls a
+"physical page": the `PHYSICAL-PAGE-DATA` region has a word for each one
+(muir-sys `sys/sys/qmisc.lisp:32`), and a map entry's "physical page (frame)
+number" is its `vma-phys-page-addr-part` (`sys/ucadr/uc-page-fault.lisp:165`).
+"Page" alone is virtual. MIT's symbols keep their names. The frame buffer is
+the video controller's memory, not a frame in this sense.
+
 **A level-1 entry is six bits, not five.** The level-1 map names, for each
 8K-word region of virtual memory, a block of 32 level-2 entries. On the CADR
 the entry is five bits, so there are 32 blocks, and the microcode keeps the
