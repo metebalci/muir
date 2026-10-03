@@ -3667,9 +3667,10 @@ impl Engine for Rtl {
                 Bus::Cadr(Box::new(b))
             }
             1 => {
-                // The prefetch's reach is this engine's setting; its word
-                // is the checkpoint's.
-                let mut p = MemoryPort::new();
+                // The machine's own port, its layout the geometry's, read
+                // above; the prefetch's reach is this engine's setting, and
+                // its word the checkpoint's.
+                let mut p = MemoryPort::for_geometry(&self.m.geometry);
                 p.set_prefetch(self.prefetch());
                 p.load(r)?;
                 Bus::Quux(Box::new(p))

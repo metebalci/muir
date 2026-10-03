@@ -207,3 +207,22 @@ fn each_revision_refuses_the_other_s_checkpoint() {
         assert!(out.status.success(), "{engine}: 13 resumes 13: {}", text(&out));
     }
 }
+
+/// **`--cache` takes no size smaller than a set of the revision's lines**:
+/// on revision 13, whose lines are 8 words, 2-way, 8 words is refused at the
+/// start, as a shape of no sets, and 16 is taken; revision 12, whose lines
+/// are 4 words, takes 8.
+#[test]
+fn the_cache_is_at_least_a_set_of_the_revision_s_lines() {
+    let out = quux().env(SWITCH, "13").args(["--rtl", "--cache", "8", "--stop-after", "1"]).run();
+    refused(&out, "--cache: ");
+    refused(&out, "fewer words than one set's lines");
+    let out = quux().env(SWITCH, "13").args(["--rtl", "--cache", "16", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("cache: 16 words, lines of 8, 2-way"), "{t}");
+    let out = quux().args(["--rtl", "--cache", "8", "--stop-after", "1"]).run();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("cache: 8 words, lines of 4, 2-way"), "{t}");
+}

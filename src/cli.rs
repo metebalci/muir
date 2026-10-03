@@ -5648,8 +5648,11 @@ pub fn run(geometry: crate::machine::Geometry, netlists: Option<&Netlists>) {
             },
             (None, "--cache") => match args.next().as_deref().and_then(|v| v.parse::<u32>().ok()) {
                 Some(words) => {
+                    // As the revision's memory port fits it: revision 13
+                    // keeps its 8-word line.
                     let c = crate::cache::CacheConfig::with_words(words);
-                    if let Err(e) = c.check() {
+                    let layout = crate::memory_port::Layout::of(&geometry);
+                    if let Err(e) = layout.cache(c).check() {
                         usage(&format!("--cache: {e}"));
                     }
                     cache = Some(c);

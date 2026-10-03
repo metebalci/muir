@@ -400,6 +400,65 @@ fn a_revision_12_checkpoint_is_refused_on_revision_13() {
     assert!(err.to_string().contains("revision 12"), "{err}");
 }
 
+/// **`rtl` resumes revision 13 on revision 13's memory port** (G2 §3): a
+/// program reading main memory a line of 8 apart, every read a miss and a
+/// fill of 5 beats, saved at its microcycle 200 and loaded into a fresh
+/// engine, runs on to the same end as the run never saved: the same
+/// nanoseconds, and the checkpoint at the end byte for byte. A port the
+/// restore rebuilt with 4-word lines' layout would fill in 2 beats and end
+/// sooner.
+#[test]
+fn rtl_resumes_revision_13_on_its_own_memory_port() {
+    use muir::checkpoint::Reader;
+    use muir::isa::Insn;
+    use muir::isa::asm::{
+        ADD, ALU, ALWAYS, JUMP, SETM, SRC_MD, START_READ, a_dest, a_src, filler, m_dest, m_src,
+        target,
+    };
+    use muir::rtl::Rtl;
+    let prom = [
+        Insn::new(ALU | SETM | m_src(1) | START_READ),
+        filler(),
+        filler(),
+        Insn::new(ALU | ADD | SRC_MD | a_src(3) | a_dest(3)),
+        Insn::new(ALU | ADD | m_src(1) | a_src(5) | m_dest(1)),
+        Insn::new(JUMP | target(0) | ALWAYS),
+    ];
+    let make = || {
+        let mut m = rev13(1 << 16);
+        let mut words = vec![filler(); 1024];
+        words[..prom.len()].copy_from_slice(&prom);
+        m.load_prom(&words);
+        support::prom_program_in_ram(&mut m);
+        // Virtual pages 0-31, of 1024 words, onto the same physical pages.
+        for p in 0..32u32 {
+            m.l2_map[p as usize] = 1 << 27 | 1 << 26 | p;
+        }
+        m.amem[5] = 8;
+        let mut e = Rtl::new(m);
+        e.boot();
+        e
+    };
+    let end = |e: &Rtl| {
+        let mut w = Writer::new();
+        e.save(&mut w);
+        (e.ns(), w.finish())
+    };
+    let mut straight = make();
+    straight.run(200);
+    let mut w = Writer::new();
+    straight.save(&mut w);
+    let body = w.finish();
+    let mut resumed = make();
+    resumed.load(&mut Reader::for_word_bits(&body, 40)).unwrap();
+    straight.run(2000);
+    resumed.run(2000);
+    let (a, b) = (end(&straight), end(&resumed));
+    assert!(straight.cache().unwrap().misses > 100, "the reads missed");
+    assert_eq!(b.0, a.0, "the resumed run's nanoseconds");
+    assert!(b.1 == a.1, "the resumed run ends as the straight one, byte for byte");
+}
+
 // --- the .mcr -------------------------------------------------------------------
 
 /// A 32-bit word as MIT's `.mcr` puts it out: the high half, then the low,
